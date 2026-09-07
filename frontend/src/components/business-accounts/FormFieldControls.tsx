@@ -191,6 +191,11 @@ export function getPhoneCountryByDialCode(countryCode: string) {
     ?? phoneCountries[0];
 }
 
+export function getPhoneCountryByIso2(countryIso2: CountryIso2) {
+  return phoneCountries.find((country) => country.iso2 === countryIso2)
+    ?? getPhoneCountryByDialCode("");
+}
+
 export function getCurrencyCode(value: string) {
   return value.split(" - ")[0] || value;
 }

@@ -62,6 +62,7 @@ import {
   autocompleteAddress,
   autocompleteConsignorAddress,
   confirmAddress,
+  createManualShipmentDraft,
   createShipment,
   type CounterPaymentInput,
   deleteShipmentKycDocument,
@@ -436,6 +437,7 @@ export default function DpdLabelDraftPage() {
   // locks while any of them runs- booking is irreversible, so a second click
   // anywhere must not land- but only the one that was clicked shows progress.
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const [creatingNewShipment, setCreatingNewShipment] = useState(false);
   /**
    * The DPD label failure currently being offered a way past.
    *
@@ -1195,6 +1197,38 @@ export default function DpdLabelDraftPage() {
   }
 }
 
+  async function handleCreateNewShipment() {
+    // This action is only rendered after a successful business shipment. Keep
+    // the guard here as well so it cannot be triggered by a stale event.
+    if (!draft || !result || draft.customerType === "INDIVIDUAL") return;
+
+    const businessAccountId = draft.businessAccountId.trim();
+    const branchId = draft.branchId.trim();
+    if (!businessAccountId || !branchId) {
+      const message = "The previous shipment account or branch is unavailable. Start a new shipment from the selector.";
+      setError(message);
+      toast.error(message);
+      return;
+    }
+
+    setCreatingNewShipment(true);
+    setError("");
+
+    try {
+      const next = await createManualShipmentDraft({ businessAccountId, branchId });
+      toast.success("New blank shipment draft created for the same account and branch.");
+      router.push(`/dashboard/dpd-labels/${next.shipmentDraft._id}`);
+    } catch (caughtError) {
+      const message = caughtError instanceof Error
+        ? caughtError.message
+        : "Unable to create a new shipment for the same account and branch.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setCreatingNewShipment(false);
+    }
+  }
+
   /** Re-books at the price that has just been shown and approved. */
   async function handleAcceptChangedPrice() {
     if (!priceChange) return;
@@ -1695,12 +1729,16 @@ export default function DpdLabelDraftPage() {
                     getAccessUrl={(labelId, disposition) => getDpdLabelAccessUrl(result.dpdShipment.id, labelId, disposition)}
                   />
                 </div>
+                {draft.customerType === "INDIVIDUAL" ? null : (
+                  <p className="border-t border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-900">
+                    The next shipment will use this shipment&apos;s same business account and sender branch.
+                  </p>
+                )}
                 <div className="grid gap-2 border-t border-emerald-200 p-4 sm:grid-cols-3">
                   <Link
                     href={`/dashboard/shipments/${draft._id}`}
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-3 text-xs py-1 font-semibold text-emerald-800 transition hover:border-emerald-600"
+                    className="inline-flex h-11 items-center justify-center text-center gap-2 rounded-xl border border-emerald-300 bg-white px-3 text-xs py-1 font-semibold text-emerald-800 transition hover:border-emerald-600"
                   >
-                    <FiExternalLink aria-hidden="true" className="h-4 w-4" />
                     Open Shipment
                   </Link>
                   {result.shipmentInvoice ? (
@@ -1708,17 +1746,27 @@ export default function DpdLabelDraftPage() {
                       href={`/dashboard/shipments/${draft._id}/invoice`}
                       className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-3 text-xs py-1 font-semibold text-emerald-800 transition hover:border-emerald-600"
                     >
-                      <FiExternalLink aria-hidden="true" className="h-4 w-4 " />
                       View Invoice
                     </Link>
                   ) : null}
-                  <Link
-                    href="/dashboard/dpd-labels"
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-3 text-xs py-1 font-semibold text-emerald-800 transition hover:border-emerald-600"
-                  >
-                    <FiTruck aria-hidden="true" className="h-4 w-4" />
-                    Create Another
-                  </Link>
+                  {draft.customerType === "INDIVIDUAL" ? (
+                    <Link
+                      href="/dashboard/dpd-labels"
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-3 text-xs py-1 font-semibold text-emerald-800 transition hover:border-emerald-600"
+                    >
+                      Create New Shipment
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void handleCreateNewShipment()}
+                      disabled={busy || creatingNewShipment}
+                      title="Create a blank shipment for the same business account and sender branch"
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-3 py-1 text-xs font-semibold text-emerald-800 transition hover:border-emerald-600 disabled:cursor-not-allowed disabled:border-emerald-200 disabled:text-emerald-400"
+                    >
+                      {creatingNewShipment ? "Creating..." : "Create New Shipment"}
+                    </button>
+                  )}
                 </div>
               </section>
             ) : null}

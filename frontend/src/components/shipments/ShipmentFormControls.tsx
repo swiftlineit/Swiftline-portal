@@ -1,13 +1,14 @@
 "use client";
 
-import { ChangeEvent, ReactNode, useEffect, useState } from "react";
-import { CountrySelector, FlagImage } from "react-international-phone";
+import { ChangeEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { CountrySelector, FlagImage, type CountryIso2 } from "react-international-phone";
 import { FiChevronDown } from "react-icons/fi";
 import InfoTooltip from "@/components/ui/InfoTooltip";
 import { toast } from "react-toastify";
 import { csbTypeOptions, type CsbType } from "@/lib/csbType";
 import {
   getPhoneCountryByDialCode,
+  getPhoneCountryByIso2,
   preferredPhoneCountries
 } from "@/components/business-accounts/FormFieldControls";
 
@@ -201,14 +202,29 @@ export function ShipmentPhoneCodeField({
   defaultDialCode?: string;
 }) {
   const [touched, setTouched] = useState(false);
-  const selectedCountry = getPhoneCountryByDialCode(value.trim() || defaultDialCode || "");
+  const defaultCountry = getPhoneCountryByDialCode(defaultDialCode || "");
+  const initialCountry = getPhoneCountryByDialCode(value.trim() || defaultDialCode || "");
+  const [selectedCountryIso2, setSelectedCountryIso2] = useState<CountryIso2>(() => initialCountry.iso2);
+  const previousValueRef = useRef(value.trim() || defaultDialCode || "");
+  const selectedCountry = getPhoneCountryByIso2(selectedCountryIso2);
   const showError = touched || revealError;
+
+  // A dial code is not a unique country identifier (+1 is shared by the US and
+  // Canada). Keep the user's selected ISO code locally so the display does not
+  // fall back to whichever country appears first in the phone library.
+  useEffect(() => {
+    const nextValue = value.trim() || defaultDialCode || "";
+    if (previousValueRef.current === nextValue) return;
+
+    previousValueRef.current = nextValue;
+    setSelectedCountryIso2(getPhoneCountryByDialCode(nextValue).iso2);
+  }, [defaultDialCode, value]);
 
   // Keep the controlled form value in sync with the visible default so the
   // pre-selected code is also a valid submission value.
   useEffect(() => {
-    if (!value.trim()) onChange(`+${selectedCountry.dialCode}`);
-  }, [onChange, selectedCountry.dialCode, value]);
+    if (!value.trim()) onChange(`+${defaultCountry.dialCode}`);
+  }, [defaultCountry.dialCode, onChange, value]);
 
   return (
     <div className="min-w-0">
@@ -217,7 +233,12 @@ export function ShipmentPhoneCodeField({
         <CountrySelector
           selectedCountry={selectedCountry.iso2}
           preferredCountries={preferredPhoneCountries}
-          onSelect={(country) => onChange(`+${country.dialCode}`)}
+          onSelect={(country) => {
+            const nextValue = `+${country.dialCode}`;
+            previousValueRef.current = nextValue;
+            setSelectedCountryIso2(country.iso2);
+            onChange(nextValue);
+          }}
           renderButtonWrapper={({ rootProps }) => (
             <button
               {...rootProps}

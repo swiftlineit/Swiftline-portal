@@ -575,189 +575,117 @@ function OverviewTab({
   detail: FlightDetail;
 }) {
   const flight = detail.flight;
+  const allocatedWeightKg = Math.max(0, Number(detail.stats.allocatedWeightKg) || 0);
+  const capacityKg = Math.max(0, Number(flight.capacityKg) || 0);
+  const utilisationPercent =
+    capacityKg > 0 ? (allocatedWeightKg / capacityKg) * 100 : 0;
+  const donutPercent = Math.min(utilisationPercent, 100);
+  const remainingWeightKg = Math.max(capacityKg - allocatedWeightKg, 0);
+  const overCapacityKg = Math.max(allocatedWeightKg - capacityKg, 0);
+  const capacityTone =
+    utilisationPercent > 100
+      ? { text: "text-red-700", fill: "#DC2626" }
+      : utilisationPercent >= 90
+        ? { text: "text-amber-700", fill: "#D97706" }
+        : { text: "text-[#0D1282]", fill: "#0D1282" };
+  const donutBackground =
+    capacityKg > 0
+      ? `conic-gradient(${capacityTone.fill} 0 ${donutPercent}%, #EEF1F4 ${donutPercent}% 100%)`
+      : "conic-gradient(#EEF1F4 0 100%)";
   const activeExceptions = detail.exceptions.filter((e) =>
     ["OPEN", "ACKNOWLEDGED", "IN_PROGRESS"].includes(e.status),
   ).length;
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[1.25fr_0.85fr]">
-      {/* Flight information */}
-      <section className="overflow-hidden rounded-xl border border-[#DDE3EC] bg-white">
-        <div className="border-b border-[#EEF1F4] bg-[#FBFCFD] px-4 py-3.5 sm:px-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-bold text-slate-950">
-              Flight information
-            </h3>
+    <div className="grid items-start gap-4 xl:grid-cols-[1.25fr_0.85fr]">
+      <div className="space-y-4">
+        {/* Flight information */}
+        <section className="overflow-hidden rounded-xl border border-[#DDE3EC] bg-white shadow-[0_4px_16px_rgba(15,23,42,0.035)]">
+          <div className="border-b border-[#DDE3EC] bg-[#F5F7FF] px-4 py-3.5 sm:px-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-sm font-bold text-slate-950">
+                Flight information
+              </h3>
 
-            <div className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
-              <span>{flight.originIataCode || "???"}</span>
-              <FiArrowRight className="h-3.5 w-3.5 text-slate-400" />
-              {flight.transitIataCode ? (
-                <>
-                  <span className="text-amber-700">{flight.transitIataCode}</span>
-                  <FiArrowRight className="h-3.5 w-3.5 text-slate-400" />
-                </>
-              ) : null}
-              <span>{flight.destinationIataCode || "???"}</span>
+              <div className="inline-flex items-center gap-1.5 rounded-lg border border-[#DCE3FF] bg-white px-2 py-1 text-[11px] font-bold tracking-[0.04em] text-[#0D1282]">
+                <span className="rounded-md bg-[#0D1282] px-1.5 py-0.5 text-white">
+                  {flight.originIataCode || "???"}
+                </span>
+                <FiArrowRight className="h-3.5 w-3.5 text-[#8290C4]" />
+                {flight.transitIataCode ? (
+                  <>
+                    <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-amber-800">
+                      {flight.transitIataCode}
+                    </span>
+                    <FiArrowRight className="h-3.5 w-3.5 text-[#8290C4]" />
+                  </>
+                ) : null}
+                <span className="rounded-md bg-[#E8ECFF] px-1.5 py-0.5">
+                  {flight.destinationIataCode || "???"}
+                </span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <dl className="grid sm:grid-cols-2">
-          <OverviewRow
-            label="Flight"
-            value={normalizeFlightNumber(flight.flightNumber)}
-            strong
-          />
-          <OverviewRow label="Airline" value={flight.airlineName || "—"} />
-          <OverviewRow label="MAWB" value={flight.mawbNumber || "Pending"} />
-          <OverviewRow
-            label="Branch"
-            value={
-              flight.branch?.name
-                ? `${flight.branch.name} (${flight.branch?.code ?? ""})`
-                : "—"
-            }
-          />
-          <OverviewRow
-            label="Scheduled departure"
-            value={new Date(flight.scheduledDepartureAt).toLocaleString("en-IN", {
-              timeZone: "Asia/Kolkata",
-            })}
-          />
-          <OverviewRow
-            label="Scheduled arrival"
-            value={new Date(flight.scheduledArrivalAt).toLocaleString("en-IN", {
-              timeZone: "Asia/Kolkata",
-            })}
-          />
-          {flight.actualDepartureAt ? (
+          <dl className="grid sm:grid-cols-2">
             <OverviewRow
-              label="Actual departure"
-              value={new Date(flight.actualDepartureAt).toLocaleString("en-IN", {
+              label="Flight"
+              value={normalizeFlightNumber(flight.flightNumber)}
+              strong
+            />
+            <OverviewRow label="Airline" value={flight.airlineName || "—"} />
+            <OverviewRow label="MAWB" value={flight.mawbNumber || "Pending"} />
+            <OverviewRow
+              label="Branch"
+              value={
+                flight.branch?.name
+                  ? `${flight.branch.name} (${flight.branch?.code ?? ""})`
+                  : "—"
+              }
+            />
+            <OverviewRow
+              label="Scheduled departure"
+              value={new Date(flight.scheduledDepartureAt).toLocaleString("en-IN", {
                 timeZone: "Asia/Kolkata",
               })}
-              tone="warning"
             />
-          ) : null}
-        </dl>
-      </section>
-
-      <div className="space-y-4">
-        {/* Capacity */}
-        <section className="overflow-hidden rounded-xl border border-[#DDE3EC] bg-white">
-          <div className="flex items-center justify-between gap-3 border-b border-[#EEF1F4] bg-[#FBFCFD] px-4 py-3.5">
-            <h3 className="text-sm font-bold text-slate-950">Capacity</h3>
-            <span
-              className={`text-xs font-bold ${
-                detail.stats.utilisationPercent > 100
-                  ? "text-red-700"
-                  : detail.stats.utilisationPercent > 90
-                    ? "text-amber-700"
-                    : "text-[#0D1282]"
-              }`}
-            >
-              {detail.stats.utilisationPercent.toFixed(1)}%
-            </span>
-          </div>
-
-          <div className="p-4">
-            <div className="flex items-end justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-medium text-slate-500">
-                  Allocated weight
-                </p>
-                <p className="mt-1 text-lg font-bold text-slate-950">
-                  {flight.allocatedWeightKg.toFixed(1)} /{" "}
-                  {flight.capacityKg.toFixed(1)} kg
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#EEF1F4]">
-              <div
-                className={`h-full rounded-full ${
-                  detail.stats.utilisationPercent > 100
-                    ? "bg-red-600"
-                    : detail.stats.utilisationPercent > 90
-                      ? "bg-amber-500"
-                      : "bg-[#0D1282]"
-                }`}
-                style={{
-                  width: `${Math.min(detail.stats.utilisationPercent, 100)}%`,
-                }}
+            <OverviewRow
+              label="Scheduled arrival"
+              value={new Date(flight.scheduledArrivalAt).toLocaleString("en-IN", {
+                timeZone: "Asia/Kolkata",
+              })}
+            />
+            {flight.actualDepartureAt ? (
+              <OverviewRow
+                label="Actual departure"
+                value={new Date(flight.actualDepartureAt).toLocaleString("en-IN", {
+                  timeZone: "Asia/Kolkata",
+                })}
+                tone="warning"
               />
-            </div>
-
-            <div className="mt-4 grid grid-cols-4 gap-px overflow-hidden rounded-lg border border-[#E7EBF0] bg-[#E7EBF0]">
-              <MiniMetric label="Shipments" value={detail.stats.totalShipments} />
-              <MiniMetric label="Pieces" value={detail.stats.totalPieces} />
-              <MiniMetric label="Bags" value={detail.stats.totalBags} />
-              <MiniMetric label="Manifests" value={detail.stats.manifestCount} />
-            </div>
-
-            {flight.allocatedWeightKg > flight.capacityKg ? (
-              <p className="mt-3 text-xs font-semibold text-red-700">
-                Over capacity — action required before departure.
-              </p>
-            ) : detail.stats.utilisationPercent >= 90 ? (
-              <p className="mt-3 text-xs font-semibold text-amber-700">
-                Capacity is at or above 90%.
-              </p>
             ) : null}
-
-            <div className="mt-4 flex items-center justify-between gap-3 border-t border-[#EEF1F4] pt-3">
-              <div>
-                <p className="text-[11px] font-semibold text-slate-500">
-                  Connection
-                </p>
-                <p className="mt-0.5 text-xs font-semibold text-slate-800">
-                  {flight.connection?.transitAirportCode
-                    ? `${flight.connection.transitAirportCode} · ${
-                        flight.connection.layoverMinutes ?? "—"
-                      } min`
-                    : "Direct flight"}
-                </p>
-              </div>
-
-              {flight.connection?.transitAirportCode ? (
-                <span
-                  className={`rounded-md px-2 py-1 text-[10px] font-bold ${
-                    ["HIGH", "CRITICAL", "MISSED"].includes(
-                      flight.connection.riskLevel,
-                    )
-                      ? "bg-red-50 text-red-700"
-                      : flight.connection.riskLevel === "MEDIUM"
-                        ? "bg-amber-50 text-amber-700"
-                        : "bg-emerald-50 text-emerald-700"
-                  }`}
-                >
-                  {flight.connection.riskLevel}
-                </span>
-              ) : null}
-            </div>
-          </div>
+          </dl>
         </section>
 
         {/* Destination */}
-        <section className="overflow-hidden rounded-xl border border-[#DDE3EC] bg-white">
-          <div className="flex items-center justify-between gap-3 border-b border-[#EEF1F4] bg-[#FBFCFD] px-4 py-3.5">
+        <section className="overflow-hidden rounded-xl border border-[#DDE3EC] bg-white shadow-[0_4px_16px_rgba(15,23,42,0.035)]">
+          <div className="flex items-center justify-between gap-3 border-b border-[#DDE3EC] bg-[#FBFCFD] px-4 py-3.5">
             <h3 className="text-sm font-bold text-slate-950">
               Destination &amp; handover
             </h3>
 
             {activeExceptions ? (
-              <span className="rounded-md bg-red-50 px-2 py-1 text-[10px] font-bold text-red-700">
+              <span className="rounded-full bg-red-100 px-2.5 py-1 text-[10px] font-bold text-red-800 ring-1 ring-red-200">
                 {activeExceptions} action required
               </span>
             ) : (
-              <span className="rounded-md bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700">
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold text-emerald-800 ring-1 ring-emerald-200">
                 Clear
               </span>
             )}
           </div>
 
-          <dl className="grid sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+          <dl className="grid sm:grid-cols-2">
             <OverviewRow
               label="Agent"
               value={flight.destinationAgent || "—"}
@@ -796,6 +724,139 @@ function OverviewTab({
           </dl>
         </section>
       </div>
+
+      {/* Capacity */}
+      <section className="overflow-hidden rounded-xl border border-[#DDE3EC] bg-white shadow-[0_4px_16px_rgba(15,23,42,0.035)]">
+        <div className="flex items-center justify-between gap-3 border-b border-[#DDE3EC] bg-[#F5F7FF] px-4 py-3.5">
+          <div>
+            <h3 className="text-sm font-bold text-slate-950">Capacity</h3>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Active allocated weight against flight capacity
+            </p>
+          </div>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ring-1 ${capacityTone.text} ${
+            utilisationPercent > 100
+              ? "bg-red-100 ring-red-200"
+              : utilisationPercent >= 90
+                ? "bg-amber-100 ring-amber-200"
+                : "bg-[#E8ECFF] ring-[#D5DCFF]"
+          }`}>
+            {utilisationPercent.toFixed(1)}%
+          </span>
+        </div>
+
+        <div className="p-4 sm:p-5">
+          <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-center">
+            <div
+              role="img"
+              aria-label={`Capacity utilisation ${utilisationPercent.toFixed(1)} percent: ${allocatedWeightKg.toFixed(1)} of ${capacityKg.toFixed(1)} kilograms allocated`}
+              className="relative h-36 w-36 shrink-0 rounded-full p-3 shadow-sm ring-1 ring-[#E7EBF0]"
+              style={{ background: donutBackground }}
+            >
+              <div className="grid h-full w-full place-items-center rounded-full bg-white text-center ring-1 ring-[#EEF1F4]">
+                <div>
+                  <p className={`text-2xl font-bold tabular-nums ${capacityTone.text}`}>
+                    {utilisationPercent.toFixed(1)}%
+                  </p>
+                  <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                    utilised
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="w-full min-w-0 space-y-3">
+              <CapacityLegendRow
+                label="Allocated"
+                value={`${allocatedWeightKg.toFixed(1)} kg`}
+                color={capacityTone.fill}
+              />
+              <CapacityLegendRow
+                label="Remaining"
+                value={`${remainingWeightKg.toFixed(1)} kg`}
+                color="#CBD5E1"
+              />
+              <CapacityLegendRow
+                label="Total capacity"
+                value={`${capacityKg.toFixed(1)} kg`}
+                color="#64748B"
+              />
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            <MiniMetric label="Shipments" value={detail.stats.totalShipments} tone="blue" />
+            <MiniMetric label="Pieces" value={detail.stats.totalPieces} tone="green" />
+            <MiniMetric label="Bags" value={detail.stats.totalBags} tone="amber" />
+            <MiniMetric label="Manifests" value={detail.stats.manifestCount} tone="slate" />
+          </div>
+
+          {overCapacityKg > 0 ? (
+            <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+              Over capacity by {overCapacityKg.toFixed(1)} kg — action required before departure.
+            </p>
+          ) : utilisationPercent >= 90 ? (
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+              Capacity is at or above 90%.
+            </p>
+          ) : null}
+
+          <div className="mt-5 flex items-center justify-between gap-3 rounded-xl border border-[#DCE3FF] bg-[#F7F8FF] px-3.5 py-3">
+            <div>
+              <p className="text-[11px] font-semibold text-[#5262B6]">
+                Connection
+              </p>
+              <p className="mt-0.5 text-xs font-bold text-slate-800">
+                {flight.connection?.transitAirportCode
+                  ? `${flight.connection.transitAirportCode} · ${
+                      flight.connection.layoverMinutes ?? "—"
+                    } min`
+                  : "Direct flight"}
+              </p>
+            </div>
+
+            {flight.connection?.transitAirportCode ? (
+              <span
+          className={`rounded-full px-2.5 py-1 text-[10px] font-bold ring-1 ${
+            ["HIGH", "CRITICAL", "MISSED"].includes(
+              flight.connection.riskLevel,
+            )
+              ? "bg-red-100 text-red-800 ring-red-200"
+              : flight.connection.riskLevel === "MEDIUM"
+                ? "bg-amber-100 text-amber-800 ring-amber-200"
+                : "bg-emerald-100 text-emerald-800 ring-emerald-200"
+          }`}
+              >
+                {flight.connection.riskLevel}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CapacityLegendRow({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <span className="inline-flex min-w-0 items-center gap-2 font-semibold text-slate-600">
+        <span
+          aria-hidden="true"
+          className="h-2.5 w-2.5 shrink-0 rounded-full"
+          style={{ backgroundColor: color }}
+        />
+        {label}
+      </span>
+      <span className="font-bold tabular-nums text-slate-950">{value}</span>
     </div>
   );
 }
@@ -814,7 +875,7 @@ function OverviewRow({
   tone?: "warning";
 }) {
   return (
-    <div className="min-w-0 border-b border-r border-[#EEF1F4] px-4 py-3.5 last:border-b-0">
+    <div className="min-w-0 border-b border-r border-[#EEF1F4] bg-white px-4 py-3.5 odd:bg-[#FCFDFE] last:border-b-0">
       <dt className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-400">
         {label}
       </dt>
@@ -831,13 +892,44 @@ function OverviewRow({
   );
 }
 
-function MiniMetric({ label, value }: { label: string; value: number }) {
+function MiniMetric({
+  label,
+  value,
+  tone = "blue",
+}: {
+  label: string;
+  value: number;
+  tone?: "blue" | "green" | "amber" | "slate";
+}) {
+  const toneClasses = {
+    blue: {
+      surface: "bg-[#F3F5FF]",
+      label: "text-[#5262B6]",
+      value: "text-[#0D1282]",
+    },
+    green: {
+      surface: "bg-[#F1FAF6]",
+      label: "text-emerald-700",
+      value: "text-emerald-900",
+    },
+    amber: {
+      surface: "bg-[#FFF8EB]",
+      label: "text-amber-700",
+      value: "text-amber-900",
+    },
+    slate: {
+      surface: "bg-[#F8FAFC]",
+      label: "text-slate-500",
+      value: "text-slate-900",
+    },
+  }[tone];
+
   return (
-    <div className="bg-[#FBFCFD] px-2.5 py-2.5 text-center">
-      <p className="text-[9px] font-semibold uppercase tracking-[0.05em] text-slate-400">
+    <div className={`px-2.5 py-2.5 text-center ${toneClasses.surface}`}>
+      <p className={`text-[9px] font-semibold uppercase tracking-[0.05em] ${toneClasses.label}`}>
         {label}
       </p>
-      <p className="mt-1 text-sm font-bold text-slate-900 tabular-nums">
+      <p className={`mt-1 text-sm font-bold tabular-nums ${toneClasses.value}`}>
         {value}
       </p>
     </div>
