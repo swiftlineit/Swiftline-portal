@@ -1,11 +1,12 @@
 import mongoose from "mongoose";
+import { performance } from "node:perf_hooks";
 import { AuditLog } from "../models/auditLog.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentCancellation } from "../models/shipmentCancellation.model.js";
 import { ShipmentEvent, shipmentMilestoneKey } from "../models/shipmentEvent.model.js";
 import { resolveShipmentEventNote } from "./shipmentEventCopy.service.js";
-import { chargeFinalizingStatuses, markShipmentChargeFinalized } from "./shipmentInvoice.service.js";
+import { chargeFinalizingStatuses, markShipmentChargesFinalized } from "./shipmentInvoice.service.js";
 import {
   canonicalShipmentStatus,
   describeEventDateProblem,
@@ -19,12 +20,24 @@ import {
   type ShipmentOperationalStatus
 } from "./shipmentStatusSequence.service.js";
 import { resolveBulkTrackingGatewayCode } from "./shipmentGateway.service.js";
+import { formatShipmentStatusLabel } from "./shipmentListing.service.js";
 
 export type BulkStatusSkip = {
   shipmentDraftId: string;
   swiftlineTrackingNumber?: string;
   reason: string;
   missingStatuses?: ShipmentOperationalStatus[];
+};
+
+export type BulkStatusUpdate = {
+  shipmentDraftId: string;
+  status: ShipmentOperationalStatus;
+  statusLabel: string;
+  lastScan: {
+    statusLabel: string;
+    location: string;
+    at: Date;
+  };
 };
 
 export type BulkStatusBlock = {
@@ -172,6 +185,15 @@ export function statusUpdateBlockReason(input: {
   return null;
 }
 
+function isDuplicateKeyError(error: unknown) {
+  if (typeof error !== "object" || error === null) return false;
+  return "code" in error && error.code === 11000;
+}
+
+function roundedDuration(startedAt: number) {
+  return Math.round((performance.now() - startedAt) * 10) / 10;
+}
+
 /**
  * Records one operational status across many shipments at once.
  *
@@ -194,196 +216,288 @@ export async function bulkRecordOperationalStatus(input: {
   /** Browser snapshot used only to detect rows that changed before submission. */
   expectedStatuses?: BulkStatusExpectation[];
   userId: mongoose.Types.ObjectId;
-}): Promise<{ updatedCount: number; skipped: BulkStatusSkip[] }> {
+}): Promise<{ updatedCount: number; skipped: BulkStatusSkip[]; updated: BulkStatusUpdate[] }> {
+  const operationStartedAt = performance.now();
+  const timings = {
+    readMs: 0,
+    validationMs: 0,
+    eventWriteMs: 0,
+    invoiceWriteMs: 0,
+    auditWriteMs: 0
+  };
+  let outcome = "failed";
+  let updatedCount = 0;
+  let skippedCount = 0;
   const uniqueIds = [...new Set(input.shipmentDraftIds)];
   const draftObjectIds = uniqueIds.map((id) => new mongoose.Types.ObjectId(id));
+  const targetStatuses = [...equivalentMilestoneStatuses(input.status)];
 
-  const shipments = await DpdShipment.find({ shipmentDraftId: { $in: draftObjectIds } }).lean().exec();
-  const shipmentByDraft = new Map(shipments.map((shipment) => [String(shipment.shipmentDraftId), shipment]));
+  try {
+    const readStartedAt = performance.now();
+    const [shipments, drafts, cancellations, eventSummaries] = await Promise.all([
+      DpdShipment.find({ shipmentDraftId: { $in: draftObjectIds } })
+        .select("shipmentDraftId swiftlineTrackingNumber")
+        .lean()
+        .exec(),
+      ShipmentDraft.find({ _id: { $in: draftObjectIds } })
+        .select("consigneeEnteredAddress.countryCode")
+        .lean()
+        .exec(),
+      ShipmentCancellation.find({
+        shipmentDraftId: { $in: draftObjectIds },
+        status: { $in: ["REQUESTED", "COMPLETED"] }
+      })
+        .select("shipmentDraftId status")
+        .lean()
+        .exec(),
+      // Collapse history inside MongoDB. The service needs the latest scan and
+      // the set of milestones, not every event document and its unused fields.
+      ShipmentEvent.aggregate<{
+        _id: mongoose.Types.ObjectId;
+        latestStatus: string;
+        latestEventAt: Date;
+        recordedStatuses: string[];
+        targetEventAt: Date | null;
+      }>([
+        { $match: { shipmentDraftId: { $in: draftObjectIds } } },
+        { $sort: { shipmentDraftId: 1, eventAt: -1, createdAt: -1 } },
+        {
+          $group: {
+            _id: "$shipmentDraftId",
+            latestStatus: { $first: "$status" },
+            latestEventAt: { $first: "$eventAt" },
+            recordedStatuses: { $addToSet: "$status" },
+            targetEventAt: {
+              $max: {
+                $cond: [{ $in: ["$status", targetStatuses] }, "$eventAt", null]
+              }
+            }
+          }
+        }
+      ]).exec()
+    ]);
+    timings.readMs = roundedDuration(readStartedAt);
 
-  const [drafts, cancellations, events] = await Promise.all([
-    ShipmentDraft.find({ _id: { $in: draftObjectIds } })
-      .select("consigneeEnteredAddress.countryCode")
-      .lean()
-      .exec(),
-    ShipmentCancellation.find({
-      shipmentDraftId: { $in: draftObjectIds },
-      status: { $in: ["REQUESTED", "COMPLETED"] }
-    })
-      .select("shipmentDraftId status")
-      .lean()
-      .exec(),
-    ShipmentEvent.find({ shipmentDraftId: { $in: draftObjectIds } })
-      .sort({ eventAt: -1, createdAt: -1 })
-      .select("shipmentDraftId status eventAt")
-      .lean()
-      .exec()
-  ]);
+    const validationStartedAt = performance.now();
+    const shipmentByDraft = new Map(shipments.map((shipment) => [String(shipment.shipmentDraftId), shipment]));
 
-  const cancellationByDraft = new Map<string, string>(
-    cancellations.map((cancellation) => [String(cancellation.shipmentDraftId), cancellation.status])
-  );
-  const destinationCountryByDraft = new Map(
-    drafts.map((draft) => [String(draft._id), draft.consigneeEnteredAddress?.countryCode ?? ""])
-  );
-
-  // The event list is newest-first, so the first row per draft is its latest
-  // status and the distinct set is its recorded history- both in one query.
-  const latestStatusByDraft = new Map<string, string>();
-  const latestEventAtByDraft = new Map<string, Date>();
-  const recordedByDraft = new Map<string, Set<string>>();
-  const targetEventAtByDraft = new Map<string, Date>();
-  const targetStatuses = new Set(equivalentMilestoneStatuses(input.status));
-  for (const event of events) {
-    const draftId = String(event.shipmentDraftId);
-    if (!latestStatusByDraft.has(draftId)) {
-      latestStatusByDraft.set(draftId, event.status);
-      latestEventAtByDraft.set(draftId, event.eventAt);
-    }
-    const recorded = recordedByDraft.get(draftId) ?? new Set<string>();
-    recorded.add(event.status);
-    recordedByDraft.set(draftId, recorded);
-    if (targetStatuses.has(event.status) && !targetEventAtByDraft.has(draftId)) {
-      targetEventAtByDraft.set(draftId, event.eventAt);
-    }
-  }
-
-  const selectedIdSet = new Set(uniqueIds);
-  const changedSelections = findBulkStatusChanges(
-    (input.expectedStatuses ?? []).filter((item) => selectedIdSet.has(item.shipmentDraftId)),
-    latestStatusByDraft
-  );
-  if (changedSelections.length) {
-    const visible = changedSelections.slice(0, 8).map((change) => {
-      const shipment = shipmentByDraft.get(change.shipmentDraftId);
-      const reference = shipment?.swiftlineTrackingNumber || change.shipmentDraftId;
-      return `${reference} is now ${formatShipmentEventLabel(change.currentStatus)}`
-        + ` (was ${formatShipmentEventLabel(change.expectedStatus)})`;
-    });
-    const remainder = changedSelections.length - visible.length;
-    throw new BulkStatusSelectionError(
-      `Shipment statuses changed after they were selected. ${visible.join("; ")}.`
-        + (remainder > 0 ? ` ${remainder} more shipment(s) changed.` : "")
-        + " Refresh the list and select the current rows again."
+    const cancellationByDraft = new Map<string, string>(
+      cancellations.map((cancellation) => [String(cancellation.shipmentDraftId), cancellation.status])
     );
-  }
+    const destinationCountryByDraft = new Map(
+      drafts.map((draft) => [String(draft._id), draft.consigneeEnteredAddress?.countryCode ?? ""])
+    );
+    const latestStatusByDraft = new Map(
+      eventSummaries.map((summary) => [String(summary._id), summary.latestStatus])
+    );
+    const latestEventAtByDraft = new Map(
+      eventSummaries.map((summary) => [String(summary._id), summary.latestEventAt])
+    );
+    const recordedByDraft = new Map(
+      eventSummaries.map((summary) => [String(summary._id), new Set(summary.recordedStatuses)])
+    );
+    const targetEventAtByDraft = new Map(
+      eventSummaries.flatMap((summary) => summary.targetEventAt
+        ? [[String(summary._id), summary.targetEventAt] as const]
+        : [])
+    );
 
-  // Judged only over shipments that are actually booked. An unbooked row stays
-  // a reported skip, exactly as before, rather than failing the whole batch.
-  const selectionBlock = bulkSelectionBlockReason(
-    uniqueIds
-      .filter((draftId) => shipmentByDraft.has(draftId))
-      .map((draftId) => latestStatusByDraft.get(draftId) ?? NOT_YET_SCANNED),
-    input.status
-  );
-  if (selectionBlock) throw new BulkStatusSelectionError(selectionBlock);
-
-  const gateway = resolveBulkTrackingGatewayCode({
-    status: input.status,
-    destinationCountryCodes: uniqueIds
-      .filter((draftId) => shipmentByDraft.has(draftId))
-      .map((draftId) => destinationCountryByDraft.get(draftId) ?? ""),
-    gatewayCode: input.gatewayCode
-  });
-  if (gateway.error) throw new BulkStatusSelectionError(gateway.error);
-
-  const note = resolveShipmentEventNote(input.note, input.status);
-  let updatedCount = 0;
-  const skipped: BulkStatusSkip[] = [];
-
-  for (const draftId of uniqueIds) {
-    const shipment = shipmentByDraft.get(draftId);
-    if (!shipment) {
-      skipped.push({ shipmentDraftId: draftId, reason: "Shipment is not booked." });
-      continue;
+    const selectedIdSet = new Set(uniqueIds);
+    const changedSelections = findBulkStatusChanges(
+      (input.expectedStatuses ?? []).filter((item) => selectedIdSet.has(item.shipmentDraftId)),
+      latestStatusByDraft
+    );
+    if (changedSelections.length) {
+      const visible = changedSelections.slice(0, 8).map((change) => {
+        const shipment = shipmentByDraft.get(change.shipmentDraftId);
+        const reference = shipment?.swiftlineTrackingNumber || change.shipmentDraftId;
+        return `${reference} is now ${formatShipmentEventLabel(change.currentStatus)}`
+          + ` (was ${formatShipmentEventLabel(change.expectedStatus)})`;
+      });
+      const remainder = changedSelections.length - visible.length;
+      throw new BulkStatusSelectionError(
+        `Shipment statuses changed after they were selected. ${visible.join("; ")}.`
+          + (remainder > 0 ? ` ${remainder} more shipment(s) changed.` : "")
+          + " Refresh the list and select the current rows again."
+      );
     }
 
-    const block = statusUpdateBlockReason({
-      shipmentExists: true,
-      cancellationStatus: cancellationByDraft.get(draftId),
-      onHold: latestStatusByDraft.get(draftId) === "ON_HOLD",
-      alreadyRecordedAt: targetEventAtByDraft.get(draftId),
-      missingPrerequisites: findMissingPrerequisites(input.status, recordedByDraft.get(draftId) ?? []),
-      laterMilestones: findRecordedLaterMilestones(input.status, recordedByDraft.get(draftId) ?? []),
-      eventDateProblem: input.eventAt
-        ? describeEventDateProblem({
-          eventAt: input.eventAt,
-          previousEventAt: latestEventAtByDraft.get(draftId) ?? null
-        })
-        : null,
-      status: input.status
+    // Judged only over shipments that are actually booked. An unbooked row
+    // stays a reported skip rather than failing the whole batch.
+    const selectionBlock = bulkSelectionBlockReason(
+      uniqueIds
+        .filter((draftId) => shipmentByDraft.has(draftId))
+        .map((draftId) => latestStatusByDraft.get(draftId) ?? NOT_YET_SCANNED),
+      input.status
+    );
+    if (selectionBlock) throw new BulkStatusSelectionError(selectionBlock);
+
+    const gateway = resolveBulkTrackingGatewayCode({
+      status: input.status,
+      destinationCountryCodes: uniqueIds
+        .filter((draftId) => shipmentByDraft.has(draftId))
+        .map((draftId) => destinationCountryByDraft.get(draftId) ?? ""),
+      gatewayCode: input.gatewayCode
     });
+    if (gateway.error) throw new BulkStatusSelectionError(gateway.error);
 
-    if (block) {
-      skipped.push({
-        shipmentDraftId: draftId,
-        swiftlineTrackingNumber: shipment.swiftlineTrackingNumber,
-        reason: block.reason,
-        missingStatuses: block.missingStatuses
-      });
-      continue;
-    }
+    const note = resolveShipmentEventNote(input.note, input.status);
+    const skipped: BulkStatusSkip[] = [];
+    const prepared: Array<{
+      draftId: string;
+      shipment: (typeof shipments)[number];
+      eventId: mongoose.Types.ObjectId;
+      eventAt: Date;
+    }> = [];
 
-    let event;
-    try {
-      event = await ShipmentEvent.create({
-        shipmentDraftId: shipment.shipmentDraftId,
-        dpdShipmentId: shipment._id,
-        status: input.status,
-        milestoneKey: shipmentMilestoneKey(input.status),
-        note,
-        location: input.location ?? "",
-        source: "MANUAL",
-        gatewayCode: gateway.gatewayCode,
-        partnerName: input.partnerName ?? "",
-        partnerCode: input.partnerCode ?? "",
-        customerVisible: true,
-        createdBy: input.userId,
-        // One stated date across the batch- the same-day, same-flight scan they
-        // are all recording. Omitted, each row is stamped as it is written.
-        eventAt: input.eventAt ?? new Date()
+    for (const draftId of uniqueIds) {
+      const shipment = shipmentByDraft.get(draftId);
+      if (!shipment) {
+        skipped.push({ shipmentDraftId: draftId, reason: "Shipment is not booked." });
+        continue;
+      }
+
+      const block = statusUpdateBlockReason({
+        shipmentExists: true,
+        cancellationStatus: cancellationByDraft.get(draftId),
+        onHold: latestStatusByDraft.get(draftId) === "ON_HOLD",
+        alreadyRecordedAt: targetEventAtByDraft.get(draftId),
+        missingPrerequisites: findMissingPrerequisites(input.status, recordedByDraft.get(draftId) ?? []),
+        laterMilestones: findRecordedLaterMilestones(input.status, recordedByDraft.get(draftId) ?? []),
+        eventDateProblem: input.eventAt
+          ? describeEventDateProblem({
+            eventAt: input.eventAt,
+            previousEventAt: latestEventAtByDraft.get(draftId) ?? null
+          })
+          : null,
+        status: input.status
       });
-    } catch (error) {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === 11000) {
+
+      if (block) {
         skipped.push({
           shipmentDraftId: draftId,
           swiftlineTrackingNumber: shipment.swiftlineTrackingNumber,
-          reason: describeAlreadyRecorded(input.status)
+          reason: block.reason,
+          missingStatuses: block.missingStatuses
         });
         continue;
       }
-      throw error;
-    }
 
-    // Collection settles the charge, exactly as it does on the single-shipment
-    // update- see chargeFinalizingStatuses.
-    if ((chargeFinalizingStatuses as readonly string[]).includes(input.status)) {
-      await markShipmentChargeFinalized({
-        shipmentDraftId: shipment.shipmentDraftId,
-        finalizedAt: event.eventAt
+      prepared.push({
+        draftId,
+        shipment,
+        eventId: new mongoose.Types.ObjectId(),
+        eventAt: input.eventAt ?? new Date()
       });
     }
+    timings.validationMs = roundedDuration(validationStartedAt);
+    skippedCount = skipped.length;
 
-    await AuditLog.create({
-      action: "SHIPMENT_STATUS_UPDATED",
-      entityType: "DPD_SHIPMENT",
-      entityId: shipment._id,
-      performedBy: input.userId,
-      performedAt: new Date(),
-      metadata: {
-        shipmentDraftId: draftId,
-        status: input.status,
-        note,
-        gatewayCode: gateway.gatewayCode,
-        // performedAt above stays the real moment; together the two show a
-        // backdated batch for what it is.
-        eventAt: event.eventAt,
-        source: "BULK"
+    const eventDocuments = prepared.map(({ shipment, eventId, eventAt }) => ({
+      _id: eventId,
+      shipmentDraftId: shipment.shipmentDraftId,
+      dpdShipmentId: shipment._id,
+      status: input.status,
+      milestoneKey: shipmentMilestoneKey(input.status),
+      note,
+      location: input.location ?? "",
+      source: "MANUAL",
+      gatewayCode: gateway.gatewayCode,
+      partnerName: input.partnerName ?? "",
+      partnerCode: input.partnerCode ?? "",
+      customerVisible: true,
+      createdBy: input.userId,
+      // One stated date across the batch- the same-day, same-flight scan they
+      // are all recording. Omitted, each row is stamped as it is prepared.
+      eventAt
+    }));
+
+    if (eventDocuments.length) {
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          const eventWriteStartedAt = performance.now();
+          await ShipmentEvent.insertMany(eventDocuments, { session });
+          timings.eventWriteMs += roundedDuration(eventWriteStartedAt);
+
+          // Collection settles the charge, exactly as it does on the
+          // single-shipment update- see chargeFinalizingStatuses.
+          const invoiceWriteStartedAt = performance.now();
+          if ((chargeFinalizingStatuses as readonly string[]).includes(input.status)) {
+            await markShipmentChargesFinalized(prepared.map((item) => ({
+              shipmentDraftId: item.shipment.shipmentDraftId,
+              finalizedAt: item.eventAt
+            })), session);
+          }
+          timings.invoiceWriteMs += roundedDuration(invoiceWriteStartedAt);
+
+          const auditWriteStartedAt = performance.now();
+          const performedAt = new Date();
+          await AuditLog.insertMany(prepared.map((item) => ({
+            action: "SHIPMENT_STATUS_UPDATED" as const,
+            entityType: "DPD_SHIPMENT" as const,
+            entityId: item.shipment._id,
+            performedBy: input.userId,
+            performedAt,
+            metadata: {
+              shipmentDraftId: item.draftId,
+              status: input.status,
+              note,
+              gatewayCode: gateway.gatewayCode,
+              // performedAt above stays the real moment; together the two show
+              // a backdated batch for what it is.
+              eventAt: item.eventAt,
+              source: "BULK"
+            }
+          })), { session });
+          timings.auditWriteMs += roundedDuration(auditWriteStartedAt);
+        });
+      } catch (error) {
+        // The unique milestone index is the final race guard. A second request
+        // reaching it first aborts this transaction, so it cannot leave events,
+        // invoice stamps and audit rows out of sync.
+        if (isDuplicateKeyError(error)) {
+          throw new BulkStatusSelectionError(
+            "One or more shipment statuses changed while this batch was being saved. "
+              + "Refresh the list and select the current rows again."
+          );
+        }
+        throw error;
+      } finally {
+        await session.endSession();
       }
+    }
+
+    const statusLabel = formatShipmentStatusLabel(input.status, {
+      gatewayCode: gateway.gatewayCode,
+      location: input.location ?? ""
     });
-
-    updatedCount += 1;
+    const updated: BulkStatusUpdate[] = prepared.map((item) => ({
+      shipmentDraftId: item.draftId,
+      status: input.status,
+      statusLabel,
+      lastScan: {
+        statusLabel,
+        location: input.location ?? "",
+        at: item.eventAt
+      }
+    }));
+    updatedCount = updated.length;
+    skippedCount = skipped.length;
+    outcome = "succeeded";
+    return { updatedCount, skipped, updated };
+  } catch (error) {
+    outcome = error instanceof BulkStatusSelectionError ? "rejected" : "failed";
+    throw error;
+  } finally {
+    console.info("[performance] bulk shipment status", {
+      outcome,
+      status: input.status,
+      requestedCount: uniqueIds.length,
+      updatedCount,
+      skippedCount,
+      ...timings,
+      totalMs: roundedDuration(operationStartedAt)
+    });
   }
-
-  return { updatedCount, skipped };
 }

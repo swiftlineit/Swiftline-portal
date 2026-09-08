@@ -350,7 +350,7 @@ export default function OperationsManifestWorkspace() {
 
   return (
     <>
-      <div className="mx-auto max-w-[1500px]">
+      <div className="mx-auto max-w-375">
         <ManifestHeader
           data={data}
           busy={busy}
@@ -666,7 +666,7 @@ function PhoneScannerPanel({
             width={180}
             height={180}
             unoptimized
-            className="h-[180px] w-[180px] border border-slate-200 bg-white p-2"
+            className="h-45 w-45 border border-slate-200 bg-white p-2"
           />
           <div className="text-xs leading-5 text-slate-600">
             <p className="font-semibold text-slate-900">On the phone:</p>
@@ -909,13 +909,13 @@ function ConsignmentTable({
                   </p>
                 ) : null}
               </td>
-              <td className="max-w-[200px] whitespace-pre-line px-3 py-3 text-[11px] leading-4 text-slate-700">
+              <td className="max-w-50 whitespace-pre-line px-3 py-3 text-[11px] leading-4 text-slate-700">
                 {item.consigneeSnapshot.formatted}
               </td>
-              <td className="max-w-[160px] px-3 py-3 text-xs text-slate-700">
+              <td className="max-w-40 px-3 py-3 text-xs text-slate-700">
                 {item.description}
               </td>
-              <td className="min-w-[210px] px-3 py-3">
+              <td className="min-w-52.5 px-3 py-3">
                 {/* A held-back box is normal, so this count is a record rather than a warning. */}
                 <p className="mb-1.5 text-[11px] font-semibold text-slate-600">
                   {item.scannedParcelNumbers.length} of{" "}

@@ -1036,11 +1036,18 @@ export async function getDpdLabelAccessUrl(
  * tracking searches one number and wants it, the dashboard feeds pull many rows
  * and never read it.
  */
-export async function listDpdShipments(limit = 25, trackingNumber = "", withEstimate = false, withJourney = false) {
+export async function listDpdShipments(
+  limit = 25,
+  trackingNumber = "",
+  withEstimate = false,
+  withJourney = false,
+  summaryOnly = false
+) {
   const url = new URL(apiUrl("/api/v1/dpd-shipments"));
   url.searchParams.set("limit", String(limit));
   if (withEstimate) url.searchParams.set("withEstimate", "1");
   if (withJourney) url.searchParams.set("withJourney", "1");
+  if (summaryOnly) url.searchParams.set("summary", "1");
   if (trackingNumber.trim()) url.searchParams.set("trackingNumber", trackingNumber.trim());
   const response = await fetchWithAuth(url.toString());
 
@@ -1149,6 +1156,20 @@ export type BulkShipmentStatusResult = {
   message: string;
   updatedCount: number;
   skipped: BulkShipmentStatusSkip[];
+  /**
+   * Compact server-confirmed row changes. Optional during a rolling deploy so
+   * a new frontend can still fall back to refreshing against an older API.
+   */
+  updated?: Array<{
+    shipmentDraftId: string;
+    status: ShipmentOperationalStatus;
+    statusLabel: string;
+    lastScan: {
+      statusLabel: string;
+      location: string;
+      at: string;
+    };
+  }>;
 };
 
 /**

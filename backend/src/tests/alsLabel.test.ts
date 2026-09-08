@@ -238,13 +238,14 @@ describe("ALS create_docket payload", () => {
 
 describe("ALS response handling", () => {
   test("keeps a multi-parcel booking as the single document it arrives as", () => {
+    const rawLabel = '<div data-secret="must-not-be-persisted">page one</div><div style="page-break-after: always"></div><div>page two</div>';
     const result = parseAlsCreateDocketResponse(
       {
         success: true,
         data: { docket_id: "D-1", awb_no: "1017351262", forwording_no: "F-9", entry_number: "E-3" },
         parcels: [{ parcel_no: "P1" }, { parcel_no: "P2" }, { parcel_no: "P3" }],
         labels: [{
-          label: '<div>page one</div><div style="page-break-after: always"></div><div>page two</div>',
+          label: rawLabel,
           file_type: "html",
           filename: "labels.html"
         }]
@@ -262,6 +263,22 @@ describe("ALS response handling", () => {
     const html = result.labels[0]!.content.toString("utf8");
     assert.match(html, /<!doctype html>/i, "the fragment is wrapped so it prints standalone");
     assert.match(html, /page-break-after/);
+
+    assert.deepEqual(result.responseSnapshot, {
+      provider: "ALS",
+      outcome: "ACCEPTED",
+      docketId: "D-1",
+      awbNumber: "1017351262",
+      forwardingNumber: "F-9",
+      entryNumber: "E-3",
+      parcelNumbers: ["P1", "P2", "P3"],
+      labelCount: 1,
+      labelFormats: ["HTML"]
+    });
+    assert.ok(
+      !JSON.stringify(result.responseSnapshot).includes("must-not-be-persisted"),
+      "the MongoDB receipt must not duplicate carrier label content"
+    );
   });
 
   test("treats an accepted booking with no label as a failure", () => {

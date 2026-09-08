@@ -160,7 +160,7 @@ export default function PublicTrackingLanding() {
         <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/40 to-transparent" />
         <div className="absolute left-0 top-0 h-1 w-full bg-[#d71920]" /> */}
 
-        <div className="relative mx-auto flex min-h-[500px] max-w-7xl items-center justify-center px-4 py-14 sm:min-h-[560px] sm:px-6 sm:py-16 lg:min-h-[620px] lg:px-8 lg:py-20">
+        <div className="relative mx-auto flex min-h-125 max-w-7xl items-center justify-center px-4 py-14 sm:min-h-140 sm:px-6 sm:py-16 lg:min-h-155 lg:px-8 lg:py-20">
           <div className="mx-auto w-full max-w-3xl text-center">
             <div className="mb-5 flex items-center justify-center gap-3">
               <span className="h-px w-8 bg-[#d71920] sm:w-10" />
@@ -206,17 +206,17 @@ export default function PublicTrackingLanding() {
               return (
                 <article
                   key={service.title}
-                  className="group relative flex min-h-[195px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 transition duration-300 hover:-translate-y-1 hover:border-[#0D1282]/20 hover:shadow-[0_20px_50px_rgba(15,23,42,0.10)] sm:p-6"
+                  className="group relative flex min-h-48.75 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 transition duration-300 hover:-translate-y-1 hover:border-[#0D1282]/20 hover:shadow-[0_20px_50px_rgba(15,23,42,0.10)] sm:p-6"
                 >
                   {/* Premium top accent */}
-                  {/* <div className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-[#d71920] via-[#d71920] to-[#0D1282]" /> */}
+                  {/* <div className="absolute inset-x-0 top-0 h-0.75 bg-linear-to-r from-[#d71920] via-[#d71920] to-[#0D1282]" /> */}
 
                   {/* Subtle decorative red glow */}
-                  <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-[#d71920]/[0.04] blur-2xl transition duration-300 group-hover:bg-[#d71920]/[0.08]" />
+                  <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-[#d71920]/4 blur-2xl transition duration-300 group-hover:bg-[#d71920]/8" />
 
                   <div className="relative flex items-start justify-between gap-4">
-                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#0D1282]/10 bg-[#0D1282]/[0.06] text-[#0D1282] transition duration-300 group-hover:border-[#0D1282] group-hover:bg-[#0D1282] group-hover:text-white">
-                      <Icon className="h-[19px] w-[19px]" />
+                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#0D1282]/10 bg-[#0D1282]/6 text-[#0D1282] transition duration-300 group-hover:border-[#0D1282] group-hover:bg-[#0D1282] group-hover:text-white">
+                      <Icon className="h-4.75 w-4.75" />
                     </span>
 
                     {/* <span className="mt-1 text-[11px] font-semibold tracking-[0.16em] text-[#d71920]/70">
@@ -247,7 +247,7 @@ export default function PublicTrackingLanding() {
         <div className="mx-auto max-w-7xl">
           <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_55px_rgba(15,23,42,0.06)]">
             {/* Top accent */}
-            <div className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-[#d71920] via-[#d71920] to-[#0D1282]" />
+            <div className="absolute inset-x-0 top-0 h-0.75 bg-linear-to-r from-[#d71920] via-[#d71920] to-[#0D1282]" />
 
             {/* Background detail */}
             <div className="pointer-events-none absolute -right-20 -top-20 h-56 w-56 rounded-full bg-[#d71920]/[0.035] blur-3xl" />
@@ -256,10 +256,10 @@ export default function PublicTrackingLanding() {
               {faqs.map((faq, index) => (
                 <details
                   key={faq.question}
-                  className="group border-b border-slate-100 last:border-b-0 open:bg-[#0D1282]/[0.025]"
+                  className="group border-b border-slate-100 last:border-b-0 open:bg-[#0D1282]/2.5"
                 >
                   <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-4 marker:hidden transition duration-200 hover:bg-slate-50/70 sm:gap-4 sm:px-6 sm:py-5">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-[11px] font-semibold text-slate-500 shadow-sm transition duration-200 group-open:border-[#d71920]/25 group-open:bg-[#d71920]/[0.08] group-open:text-[#d71920]">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-[11px] font-semibold text-slate-500 shadow-sm transition duration-200 group-open:border-[#d71920]/25 group-open:bg-[#d71920]/8 group-open:text-[#d71920]">
                       {String(index + 1).padStart(2, "0")}
                     </span>
 
@@ -267,14 +267,14 @@ export default function PublicTrackingLanding() {
                       {faq.question}
                     </span>
 
-                    <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 transition duration-200 group-open:border-[#d71920]/20 group-open:bg-[#d71920]/[0.06] group-open:text-[#d71920]">
+                    <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 transition duration-200 group-open:border-[#d71920]/20 group-open:bg-[#d71920]/6 group-open:text-[#d71920]">
                       <span className="absolute h-px w-3 bg-current" />
                       <span className="absolute h-3 w-px bg-current transition duration-200 group-open:rotate-90 group-open:opacity-0" />
                     </span>
                   </summary>
 
-                  <div className="relative px-4 pb-5 sm:pl-[80px] sm:pr-8">
-                    <div className="mb-3 h-px w-full bg-gradient-to-r from-[#d71920]/20 via-slate-200 to-transparent" />
+                  <div className="relative px-4 pb-5 sm:pl-20 sm:pr-8">
+                    <div className="mb-3 h-px w-full bg-linear-to-r from-[#d71920]/20 via-slate-200 to-transparent" />
 
                     <p className="max-w-5xl text-sm leading-6 text-slate-600">
                       {faq.answer}
@@ -288,8 +288,8 @@ export default function PublicTrackingLanding() {
       </section>
       {/* About Swiftline */}
       <section className="relative left-1/2 mt-16 w-screen -translate-x-1/2 overflow-hidden bg-[#07113f] sm:mt-20 lg:mt-24">
-        <div className="absolute right-0 top-0 h-64 w-64 rounded-full bg-white/[0.03] blur-3xl" />
-        <div className="absolute bottom-0 left-0 h-72 w-72 rounded-full bg-[#d71920]/[0.05] blur-3xl" />
+        <div className="absolute right-0 top-0 h-64 w-64 rounded-full bg-white/3 blur-3xl" />
+        <div className="absolute bottom-0 left-0 h-72 w-72 rounded-full bg-[#d71920]/5 blur-3xl" />
 
         <div className="relative mx-auto max-w-7xl px-4 py-14 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
           <div className="grid gap-12 lg:grid-cols-[1.05fr_0.95fr] lg:items-end lg:gap-20">
@@ -345,7 +345,7 @@ export default function PublicTrackingLanding() {
                   <div
                     key={item.country}
                     className={[
-                      "p-5 transition duration-200 hover:bg-white/[0.05] sm:p-6",
+                      "p-5 transition duration-200 hover:bg-white/5 sm:p-6",
                       index === 0 ? "border-b border-white/10" : "",
                       index === 1
                         ? "border-b border-white/10 sm:border-l sm:border-white/10"

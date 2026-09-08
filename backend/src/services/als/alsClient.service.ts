@@ -33,7 +33,8 @@ export interface AlsCreateDocketResult {
   parcelNumbers: string[];
   labels: AlsLabel[];
   requestSnapshot: Record<string, unknown>;
-  rawResponse: Record<string, unknown>;
+  /** Compact receipt only. Label bodies belong in object storage, not MongoDB. */
+  responseSnapshot: Record<string, unknown>;
 }
 
 /**
@@ -320,15 +321,31 @@ export function parseAlsCreateDocketResponse(
     throw new AlsRequestError("DPD accepted the booking but returned no label.", 502, body);
   }
 
-  return {
+  // The carrier response can contain a complete HTML/base64 label for every
+  // parcel. Persisting that response would duplicate the same document stored
+  // in object storage and make each booking row unnecessarily large. Keep only
+  // the identifiers and document metadata required for audit/reconciliation.
+  const responseSnapshot = {
+    provider: "ALS",
+    outcome: "ACCEPTED",
     docketId,
     awbNumber,
     forwardingNumber: asString(data.forwording_no),
     entryNumber: asString(data.entry_number),
     parcelNumbers,
+    labelCount: labels.length,
+    labelFormats: [...new Set(labels.map((label) => label.format))]
+  };
+
+  return {
+    docketId,
+    awbNumber,
+    forwardingNumber: responseSnapshot.forwardingNumber,
+    entryNumber: responseSnapshot.entryNumber,
+    parcelNumbers,
     labels,
     requestSnapshot,
-    rawResponse: body
+    responseSnapshot
   };
 }
 

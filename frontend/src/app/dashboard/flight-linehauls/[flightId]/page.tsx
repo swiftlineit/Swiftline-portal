@@ -188,7 +188,7 @@ export default function FlightDetailPage() {
         <div className="flex flex-col gap-4 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-7">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-bold uppercase tracking-[0.1em] text-[#0D1282]">
+              <span className="text-[11px] font-bold uppercase tracking-widest text-[#0D1282]">
                 {flight.flightLinehaulNumber}
               </span>
               <span className={statusBadge(flight.status)}>
@@ -557,7 +557,7 @@ function Stat({
         {label}
       </p>
       <p
-        className={`mt-1.5 break-words text-[15px] font-bold leading-5 ${
+        className={`mt-1.5 wrap-break-words text-[15px] font-bold leading-5 ${
           alert ? "text-red-700" : "text-slate-950"
         }`}
       >
@@ -880,7 +880,7 @@ function OverviewRow({
         {label}
       </dt>
       <dd
-        className={`mt-1.5 min-w-0 break-words text-xs leading-5 ${
+        className={`mt-1.5 min-w-0 wrap-break-words text-xs leading-5 ${
           strong ? "font-bold text-slate-950" : "font-semibold text-slate-700"
         } ${mono ? "font-mono" : ""} ${
           tone === "warning" ? "text-amber-700" : ""
@@ -926,7 +926,7 @@ function MiniMetric({
 
   return (
     <div className={`px-2.5 py-2.5 text-center ${toneClasses.surface}`}>
-      <p className={`text-[9px] font-semibold uppercase tracking-[0.05em] ${toneClasses.label}`}>
+      <p className={`text-[9px] font-semibold uppercase tracking-wider ${toneClasses.label}`}>
         {label}
       </p>
       <p className={`mt-1 text-sm font-bold tabular-nums ${toneClasses.value}`}>
@@ -1130,7 +1130,7 @@ function ShipmentsTab({
           </button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[800px] text-left text-sm">
+          <table className="w-full min-w-200 text-left text-sm">
             <thead className="bg-white text-xs text-slate-500">
               <tr>
                 <th className="px-4 py-3">AWB</th>
@@ -2045,7 +2045,7 @@ function OffloadSection({
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-left text-sm">
+          <table className="w-full min-w-180 text-left text-sm">
             <thead className="bg-white text-xs text-slate-500">
               <tr>
                 <th className="px-3 py-2.5">Reason</th>
@@ -2192,7 +2192,7 @@ function DocumentsTab({
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] text-left text-sm">
+          <table className="w-full min-w-190 text-left text-sm">
             <thead className="bg-white text-xs text-slate-500">
               <tr>
                 <th className="px-4 py-3">File</th>

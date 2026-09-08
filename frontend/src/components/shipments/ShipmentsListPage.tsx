@@ -318,9 +318,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     setPage(1);
   }
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const load = useCallback(async (options: { background?: boolean } = {}) => {
+    if (!options.background) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const data = await listShipments(audience, {
         page,
@@ -355,9 +357,13 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         return next;
       });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to load shipments.");
+      // A background reconciliation must not replace a successful optimistic
+      // update with a full-page error. The next normal load will try again.
+      if (!options.background) {
+        setError(caught instanceof Error ? caught.message : "Unable to load shipments.");
+      }
     } finally {
-      setLoading(false);
+      if (!options.background) setLoading(false);
     }
   }, [attentionOnly, audience, bookedDate, businessAccountId, dateRange, destinationRegions, limit, page, rebookedOnly, search, sort, status]);
 
@@ -615,6 +621,20 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         eventAt: dateTimeLocalToIso(bulkStatusAt)
       });
       setBulkStatusResult(result);
+      if (result.updated?.length) {
+        const updatedByDraft = new Map(result.updated.map((item) => [item.shipmentDraftId, item]));
+        setShipments((current) => current.map((shipment) => {
+          const updated = updatedByDraft.get(shipment.id);
+          return updated
+            ? {
+              ...shipment,
+              status: updated.status,
+              statusLabel: updated.statusLabel,
+              lastScan: updated.lastScan
+            }
+            : shipment;
+        }));
+      }
       toast.success(result.message);
       setActiveFlow(null);
       setBulkStatusNote("");
@@ -622,7 +642,10 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       setBulkStatusGatewayCode("");
       setBulkStatusAt("");
       setSelected(new Map());
-      await load();
+      // The API already returned the exact changed rows, so the operator can
+      // continue immediately. Reconcile filters, pagination and estimates in
+      // the background without putting the whole table back into loading.
+      void load({ background: true });
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : "The bulk status update could not be completed.");
     } finally {
@@ -1228,7 +1251,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   key={option.code}
                   className={`inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition ${
                     checked
-                      ? "border-[#0D1282]/25 bg-[#0D1282]/[0.06] text-[#0D1282]"
+                      ? "border-[#0D1282]/25 bg-[#0D1282]/6 text-[#0D1282]"
                       : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
                   }`}
                 >

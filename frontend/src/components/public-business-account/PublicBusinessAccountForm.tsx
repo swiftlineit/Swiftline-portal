@@ -1032,12 +1032,12 @@ export default function PublicBusinessAccountPage() {
     <>
       {/* Page content theme */}
       <div className="">
-        <div className="mx-auto w-full max-w-[1450px] px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+        <div className="mx-auto w-full max-w-362.5 px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
           <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)] lg:items-start xl:grid-cols-[350px_minmax(0,1fr)] xl:gap-8 2xl:grid-cols-[390px_minmax(0,952px)] 2xl:justify-center">
             <PublicBusinessAccountSidebar />
 
             {/* Right application workspace */}
-            <div className="flex min-w-0 w-full flex-col rounded-xl px-3 lg:min-h-[720px] xl:max-w-[952px] xl:min-h-[760px]  2xl:max-w-none">
+            <div className="flex min-w-0 w-full flex-col rounded-xl px-3 lg:min-h-180 xl:max-w-238 xl:min-h-190  2xl:max-w-none">
               <main className="mt-4 flex min-h-0 flex-1 flex-col lg:mt-0">
                 {error ? (
                   <div
@@ -1055,14 +1055,14 @@ export default function PublicBusinessAccountPage() {
                   {/* Decorative illustration */}
                   <div
                     aria-hidden="true"
-                    className="pointer-events-none absolute bottom-0 right-4 hidden h-full w-[210px] items-end justify-end lg:flex"
+                    className="pointer-events-none absolute bottom-0 right-4 hidden h-full w-52.5 items-end justify-end lg:flex"
                   >
                     <Image
                       src="/steps_header.png"
                       alt=""
                       width={220}
                       height={170}
-                      className="max-h-[125px] w-auto object-contain opacity-90"
+                      className="max-h-31.25 w-auto object-contain opacity-90"
                     />
                   </div>
 
@@ -1763,7 +1763,7 @@ export default function PublicBusinessAccountPage() {
                       <button
                       type="button"
                       onClick={clearDraft}
-                      className="relative z-20 inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-900 lg:mr-[215px]"
+                      className="relative z-20 inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-900 lg:mr-53.75"
                       title="Clear saved draft"
                     >
                       Clear draft

@@ -14,6 +14,7 @@ import {
   DpdLabelUnavailableError,
   createLabelForShipmentDraft,
   generateDpdLabelForExistingShipment,
+  hasCompleteSwiftlineLabelSet,
   regenerateShipmentLabels
 } from "../services/dpdShipment.service.js";
 import {
@@ -119,6 +120,21 @@ after(async () => {
 });
 
 describe("Swiftline tracking sequence", () => {
+  test("counts parcel labels without treating the carrier document as another parcel", () => {
+    assert.equal(hasCompleteSwiftlineLabelSet({
+      parcelCount: 2,
+      labels: [
+        { labelType: "SWIFTLINE" },
+        { labelType: "SWIFTLINE" },
+        { labelType: "DPD" }
+      ]
+    }), true);
+    assert.equal(hasCompleteSwiftlineLabelSet({
+      parcelCount: 2,
+      labels: [{ labelType: "SWIFTLINE" }, { labelType: "DPD" }]
+    }), false);
+  });
+
   test("allocates unique daily numbers during concurrent bookings", async () => {
     const date = new Date("2026-07-20T06:30:00.000Z");
     const numbers = await Promise.all(Array.from({ length: 12 }, () => (

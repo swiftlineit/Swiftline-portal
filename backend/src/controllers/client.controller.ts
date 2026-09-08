@@ -144,6 +144,12 @@ type ClientDpdShipmentSnapshot = {
   updatedAt?: Date;
 };
 
+type ClientShipmentEventSnapshot = {
+  shipmentDraftId: unknown;
+  status: string;
+  holdReason?: string | null;
+};
+
 function bumpShipmentSummary(
   summary: ReturnType<typeof makeEmptyShipmentSummary>,
   draft: ClientShipmentDraftSnapshot,
@@ -180,6 +186,22 @@ async function buildClientShipmentDashboard(accountId: string, branchIds: string
     ...(branchObjectIds.length ? { branchId: { $in: branchObjectIds } } : {})
   };
   const drafts = await ShipmentDraft.find(query)
+    .select([
+      "branchId",
+      "parcelList.shipmentReference1",
+      "parcelCount",
+      "status",
+      "bookingState",
+      "addressValidationStatus",
+      "consigneeEnteredAddress.companyName",
+      "consigneeEnteredAddress.contactName",
+      "consigneeEnteredAddress.countryName",
+      "consigneeEnteredAddress.countryCode",
+      "consigneeEnteredAddress.townOrCity",
+      "consigneeEnteredAddress.postcode",
+      "createdAt",
+      "updatedAt"
+    ].join(" "))
     .sort({ updatedAt: -1 })
     .limit(50)
     .lean<ClientShipmentDraftSnapshot[]>()
@@ -188,34 +210,35 @@ async function buildClientShipmentDashboard(accountId: string, branchIds: string
     .map((draft) => String(draft._id ?? ""))
     .filter((draftId) => mongoose.Types.ObjectId.isValid(draftId))
     .map((draftId) => new mongoose.Types.ObjectId(draftId));
-  const dpdShipments = draftIds.length
-    ? await DpdShipment.find({ shipmentDraftId: { $in: draftIds } })
+  const recentDraftIds = draftIds.slice(0, 6);
+  const [dpdShipments, shipmentInvoices, latestEvents] = draftIds.length
+    ? await Promise.all([
+      DpdShipment.find({ shipmentDraftId: { $in: draftIds } })
+        .select("shipmentDraftId dpdShipmentId swiftlineTrackingNumber parcelNumbers status updatedAt")
         .lean<ClientDpdShipmentSnapshot[]>()
-        .exec()
-    : [];
-  const shipmentInvoices = draftIds.length
-    ? await ShipmentInvoice.find({ shipmentDraftId: { $in: draftIds } })
+        .exec(),
+      ShipmentInvoice.find({ shipmentDraftId: { $in: draftIds } })
         .select("shipmentDraftId invoiceNumber currency totalAmountMinor status revision")
         .lean()
-        .exec()
-    : [];
+        .exec(),
+      ShipmentEvent.aggregate<{ _id: mongoose.Types.ObjectId; event: ClientShipmentEventSnapshot }>([
+        { $match: { shipmentDraftId: { $in: recentDraftIds }, customerVisible: true } },
+        { $sort: { shipmentDraftId: 1, eventAt: -1, createdAt: -1 } },
+        { $group: { _id: "$shipmentDraftId", event: { $first: "$$ROOT" } } },
+        { $project: { "event.shipmentDraftId": 1, "event.status": 1, "event.holdReason": 1 } }
+      ]).exec()
+    ])
+    : [[], [], []] as [ClientDpdShipmentSnapshot[], Array<{
+      shipmentDraftId: unknown;
+      invoiceNumber: string;
+      currency: string;
+      totalAmountMinor: number;
+      status: string;
+      revision: number;
+    }>, Array<{ _id: mongoose.Types.ObjectId; event: ClientShipmentEventSnapshot }>];
   const dpdByDraftId = new Map(dpdShipments.map((shipment) => [String(shipment.shipmentDraftId), shipment]));
   const shipmentInvoiceByDraftId = new Map(shipmentInvoices.map((invoice) => [String(invoice.shipmentDraftId), invoice]));
-  const events = draftIds.length
-    ? await ShipmentEvent.find({
-        shipmentDraftId: { $in: draftIds },
-        customerVisible: true
-      })
-        .sort({ eventAt: -1, createdAt: -1 })
-        .lean()
-        .exec()
-    : [];
-  const eventsByDraftId = new Map<string, typeof events>();
-
-  for (const event of events) {
-    const key = String(event.shipmentDraftId);
-    eventsByDraftId.set(key, [...(eventsByDraftId.get(key) ?? []), event]);
-  }
+  const currentEventByDraftId = new Map(latestEvents.map((item) => [String(item._id), item.event]));
   const branchSummaryMap = new Map(branchIds.map((branchId) => [branchId, makeEmptyShipmentSummary(branchId)]));
   const summary = makeEmptyShipmentSummary();
 
@@ -233,8 +256,7 @@ async function buildClientShipmentDashboard(accountId: string, branchIds: string
     branchSummaries: Array.from(branchSummaryMap.values()),
     recentShipments: drafts.slice(0, 6).map((draft) => {
       const dpdShipment = dpdByDraftId.get(String(draft._id));
-      const draftEvents = eventsByDraftId.get(String(draft._id)) ?? [];
-      const currentEvent = draftEvents[0] ?? null;
+      const currentEvent = currentEventByDraftId.get(String(draft._id)) ?? null;
       const shipmentInvoice = shipmentInvoiceByDraftId.get(String(draft._id));
 
       return {

@@ -117,7 +117,7 @@ export default function FlightLinehaulDashboardPage() {
                 Flight operations
               </p>
 
-              <h1 className="mt-1 text-2xl font-bold tracking-[-0.025em] text-slate-950 sm:text-[27px]">
+              <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950 sm:text-[27px]">
                 Flight &amp; Linehaul Control Centre
               </h1>
 
@@ -329,7 +329,7 @@ export default function FlightLinehaulDashboardPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1180px] text-left text-sm">
+          <table className="w-full min-w-295 text-left text-sm">
             <thead className="border-b border-[#E7EBF0] bg-[#F8FAFC]">
               <tr className="text-[11px] font-bold uppercase tracking-[0.07em] text-slate-500">
                 <th className="px-5 py-3.5">Flight</th>
@@ -378,7 +378,7 @@ export default function FlightLinehaulDashboardPage() {
                         {normalizeFlightNumber(item.flightNumber)}
                       </p>
 
-                      <p className="mt-1 max-w-[260px] truncate text-xs text-slate-500">
+                      <p className="mt-1 max-w-65 truncate text-xs text-slate-500">
                         {item.airlineName || "Airline pending"} ·{" "}
                         {item.mawbNumber || "MAWB pending"}
                       </p>
@@ -407,7 +407,7 @@ export default function FlightLinehaulDashboardPage() {
                         </span>
                       ) : null}
 
-                      <p className="mt-2 max-w-[250px] truncate text-xs text-slate-500">
+                      <p className="mt-2 max-w-62.5 truncate text-xs text-slate-500">
                         {item.destinationAgent
                           ? `Agent: ${item.destinationAgent.slice(0, 32)}`
                           : "No destination agent"}
@@ -630,7 +630,7 @@ function Card({
 
   return (
     <article
-      className={`group min-h-[110px] rounded-xl border p-4 transition duration-200 hover:border-[#C9D1DC] hover:shadow-[0_6px_16px_rgba(15,23,42,0.05)] ${classes.card}`}
+      className={`group min-h-27.5 rounded-xl border p-4 transition duration-200 hover:border-[#C9D1DC] hover:shadow-[0_6px_16px_rgba(15,23,42,0.05)] ${classes.card}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -638,7 +638,7 @@ function Card({
             {label}
           </p>
           <p
-            className={`mt-3 text-[26px] font-bold leading-none tracking-[-0.025em] tabular-nums ${classes.value}`}
+            className={`mt-3 text-[26px] font-bold leading-none tracking-tight tabular-nums ${classes.value}`}
           >
             {value}
           </p>

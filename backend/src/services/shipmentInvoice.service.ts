@@ -508,6 +508,26 @@ export async function markShipmentChargeFinalized(input: {
   ).exec();
 }
 
+/**
+ * Batch form used when one operational action settles many shipment charges.
+ *
+ * Each invoice keeps its own event timestamp and the same write-once filter as
+ * the single-shipment path, but MongoDB receives the updates in one round trip.
+ */
+export async function markShipmentChargesFinalized(inputs: Array<{
+  shipmentDraftId: mongoose.Types.ObjectId;
+  finalizedAt: Date;
+}>, session?: mongoose.ClientSession) {
+  if (!inputs.length) return;
+
+  await ShipmentInvoice.bulkWrite(inputs.map((input) => ({
+    updateOne: {
+      filter: { shipmentDraftId: input.shipmentDraftId, chargeFinalizedAt: null },
+      update: { $set: { chargeFinalizedAt: input.finalizedAt } }
+    }
+  })), { ordered: false, session });
+}
+
 export function serializeShipmentInvoice(
   invoice: InstanceType<typeof ShipmentInvoice>,
   requestedRevision = invoice.revision

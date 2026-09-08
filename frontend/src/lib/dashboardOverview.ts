@@ -515,7 +515,7 @@ export async function loadDashboardOverview(role?: string): Promise<DashboardOve
     tickets,
     creditAccounts
   ] = await Promise.all([
-    can("shipments") ? load("Shipments", () => listDpdShipments(SHIPMENT_WINDOW)) : null,
+    can("shipments") ? load("Shipments", () => listDpdShipments(SHIPMENT_WINDOW, "", false, false, true)) : null,
     can("shipments") ? load("Shipment totals", getShipmentDashboardSummary) : null,
     can("accounts") ? load("Business accounts", () => listBusinessAccounts("", "", 1, 5)) : null,
     can("accounts") ? load("Business accounts", () => listBusinessAccounts("", "", 1, 1, "active")) : null,

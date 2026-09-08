@@ -180,6 +180,10 @@ const shipmentEventSchema = new mongoose.Schema<IShipmentEvent>(
 );
 
 shipmentEventSchema.index({ shipmentDraftId: 1, eventAt: -1 });
+shipmentEventSchema.index(
+  { shipmentDraftId: 1, eventAt: -1, createdAt: -1 },
+  { name: "shipmentEvent_draft_event_created_desc" }
+);
 shipmentEventSchema.index({ dpdShipmentId: 1, eventAt: -1 });
 shipmentEventSchema.index(
   { shipmentDraftId: 1, status: 1, source: 1, sourceReference: 1 },

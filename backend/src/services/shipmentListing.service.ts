@@ -191,27 +191,52 @@ function indiaDayString(value: Date, offsetDays = 0) {
 }
 
 /**
+ * Resolves the intersection between live drafts and carrier bookings without
+ * first materialising every booking document in the database.
+ *
+ * Account, branch, date and destination filters can reduce the draft set
+ * substantially. Applying that set to the booking query is especially
+ * important for client and branch-scoped pages: their response time should be
+ * based on their own shipments, not the total size of the portal.
+ */
+async function findBookedDraftIds(
+  draftFilter: Record<string, unknown>,
+  bookingFilter: Record<string, unknown>
+): Promise<mongoose.Types.ObjectId[]> {
+  const hasNarrowDraftScope = Object.keys(draftFilter).some((key) => key !== "deletedAt");
+  let scopedDraftIds: mongoose.Types.ObjectId[] | null = null;
+
+  if (hasNarrowDraftScope) {
+    scopedDraftIds = await ShipmentDraft.distinct("_id", draftFilter).exec() as mongoose.Types.ObjectId[];
+    if (!scopedDraftIds.length) return [];
+  }
+
+  return DpdShipment.distinct("shipmentDraftId", {
+    ...bookingFilter,
+    ...(scopedDraftIds ? { shipmentDraftId: { $in: scopedDraftIds } } : {})
+  }).exec() as Promise<mongoose.Types.ObjectId[]>;
+}
+
+/**
  * Exact dashboard shipment totals. The drill-down table uses the same booked
  * scope and latest-event rules; keeping these totals here prevents a capped
  * recent-history feed from disagreeing with the table's pagination total.
  */
 export async function summarizeBookedShipments(filter: Pick<ShipmentListingFilter, "actorRole" | "businessAccountIds" | "branchIds" | "bookingStatuses">): Promise<ShipmentDashboardSummary> {
   const bookingStatuses = filter.bookingStatuses ?? bookedShipmentStatuses;
-  const bookings = await DpdShipment.find({ status: { $in: bookingStatuses } })
-    .select("shipmentDraftId")
-    .lean()
-    .exec();
-  const bookedDraftIds = bookings.map((booking) => booking.shipmentDraftId);
+  const draftScope: Record<string, unknown> = { deletedAt: null };
+  if (filter.businessAccountIds) draftScope.businessAccountId = { $in: filter.businessAccountIds };
+  if (filter.branchIds) draftScope.branchId = { $in: filter.branchIds };
+
+  const bookedDraftIds = await findBookedDraftIds(draftScope, { status: { $in: bookingStatuses } });
   if (!bookedDraftIds.length) {
     return { bookedToday: 0, bookedYesterday: 0, inTransit: 0, delivered: 0, onHold: 0, exceptions: 0 };
   }
 
   const draftFilter: Record<string, unknown> = {
-    _id: { $in: bookedDraftIds },
-    deletedAt: null
+    ...draftScope,
+    _id: { $in: bookedDraftIds }
   };
-  if (filter.businessAccountIds) draftFilter.businessAccountId = { $in: filter.businessAccountIds };
-  if (filter.branchIds) draftFilter.branchId = { $in: filter.branchIds };
 
   const candidates = await ShipmentDraft.find(draftFilter).select("_id").lean().exec();
   const candidateIds = candidates.map((draft) => draft._id);
@@ -234,7 +259,9 @@ export async function summarizeBookedShipments(filter: Pick<ShipmentListingFilte
     }).exec(),
     ShipmentEvent.aggregate<{ _id: mongoose.Types.ObjectId; status: string }>([
       { $match: { shipmentDraftId: { $in: candidateIds }, ...eventVisibilityFilter } },
-      { $sort: { eventAt: -1, createdAt: -1 } },
+      // The draft id comes first so the compound event index can stream each
+      // draft's newest row directly into the group stage.
+      { $sort: { shipmentDraftId: 1, eventAt: -1, createdAt: -1 } },
       { $group: { _id: "$shipmentDraftId", status: { $first: "$status" } } }
     ]).exec(),
     DpdShipment.find({
@@ -283,15 +310,10 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   if (createdAt) draftFilter.createdAt = createdAt;
 
   const bookingCreatedAt = indiaBookingDayCondition(filter.bookedDate);
-  const bookedDraftIds = await DpdShipment.find({
+  let allowedDraftIds = await findBookedDraftIds(draftFilter, {
     status: { $in: filter.bookingStatuses ?? bookedShipmentStatuses },
     ...(bookingCreatedAt ? { createdAt: bookingCreatedAt } : {})
-  })
-    .select("shipmentDraftId")
-    .lean()
-    .exec();
-
-  let allowedDraftIds = bookedDraftIds.map((item) => item.shipmentDraftId);
+  });
 
   if (filter.search?.trim()) {
     // Escaped because these are identifiers people paste: a stray bracket from
@@ -363,68 +385,83 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   // that single option so old records remain findable without exposing old
   // flight/customs names as separate stages.
   let matchingIds: mongoose.Types.ObjectId[] | null = null;
-  if (filter.status) {
-    const candidates = await ShipmentDraft.find(candidateFilter).select("_id").lean().exec();
-    const latest = await ShipmentEvent.aggregate<{ _id: mongoose.Types.ObjectId; status: string }>([
-      { $match: { shipmentDraftId: { $in: candidates.map((draft) => draft._id) }, ...eventVisibilityFilter } },
-      { $sort: { eventAt: -1, createdAt: -1 } },
-      { $group: { _id: "$shipmentDraftId", status: { $first: "$status" } } },
-      {
-        $match: {
-          status: {
-            $in: filter.status === "IN_TRANSIT"
-              ? inTransitEventStatuses
-              : equivalentCurrentStatusValues(filter.status)
-          }
-        }
-      }
-    ]).exec();
-    matchingIds = latest.map((item) => item._id);
-  }
-
-  if (filter.attention) {
-    const candidates = await ShipmentDraft.find(candidateFilter).select("_id").lean().exec();
-    const [latestExceptions, unresolvedBookings] = await Promise.all([
+  if (filter.status || filter.attention) {
+    const candidateIds = await ShipmentDraft.distinct("_id", candidateFilter).exec() as mongoose.Types.ObjectId[];
+    const [latest, unresolvedBookings] = await Promise.all([
       ShipmentEvent.aggregate<{ _id: mongoose.Types.ObjectId; status: string }>([
-        { $match: { shipmentDraftId: { $in: candidates.map((draft) => draft._id) }, ...eventVisibilityFilter } },
-        { $sort: { eventAt: -1, createdAt: -1 } },
-        { $group: { _id: "$shipmentDraftId", status: { $first: "$status" } } },
-        { $match: { status: { $in: ["ON_HOLD", "RETURNED", "LOST", "DAMAGED", "SHIPMENT_CANCELLED"] } } }
+      { $match: { shipmentDraftId: { $in: candidateIds }, ...eventVisibilityFilter } },
+      { $sort: { shipmentDraftId: 1, eventAt: -1, createdAt: -1 } },
+      { $group: { _id: "$shipmentDraftId", status: { $first: "$status" } } }
       ]).exec(),
-      DpdShipment.find({
-        shipmentDraftId: { $in: candidates.map((draft) => draft._id) },
+      filter.attention ? DpdShipment.distinct("shipmentDraftId", {
+        shipmentDraftId: { $in: candidateIds },
         status: { $in: ["DPD_REJECTED", "DPD_STATUS_UNKNOWN"] }
-      }).select("shipmentDraftId").lean().exec()
+      }).exec() as Promise<mongoose.Types.ObjectId[]> : Promise.resolve([])
     ]);
-    const attentionIds = new Set([
-      ...latestExceptions.map((item) => String(item._id)),
-      ...unresolvedBookings.map((item) => String(item.shipmentDraftId))
-    ]);
-    matchingIds = matchingIds
-      ? matchingIds.filter((id) => attentionIds.has(String(id)))
-      : candidates.map((draft) => draft._id).filter((id) => attentionIds.has(String(id)));
+
+    if (filter.status) {
+      const acceptedStatuses = new Set(filter.status === "IN_TRANSIT"
+        ? inTransitEventStatuses
+        : equivalentCurrentStatusValues(filter.status));
+      matchingIds = latest
+        .filter((item) => acceptedStatuses.has(item.status))
+        .map((item) => item._id);
+    }
+
+    if (filter.attention) {
+      const attentionStatuses = new Set(["ON_HOLD", "RETURNED", "LOST", "DAMAGED", "SHIPMENT_CANCELLED"]);
+      const attentionIds = new Set([
+        ...latest.filter((item) => attentionStatuses.has(item.status)).map((item) => String(item._id)),
+        ...unresolvedBookings.map((draftId) => String(draftId))
+      ]);
+      matchingIds = (matchingIds ?? candidateIds).filter((id) => attentionIds.has(String(id)));
+    }
   }
 
   const query = matchingIds ? { ...candidateFilter, _id: { $in: matchingIds } } : candidateFilter;
-  const total = await ShipmentDraft.countDocuments(query).exec();
-  const totalPages = Math.max(1, Math.ceil(total / filter.limit));
-  const page = Math.min(Math.max(1, filter.page), totalPages);
-  const drafts = await ShipmentDraft.find(query)
+  const requestedPage = Math.max(1, filter.page);
+  const draftProjection = [
+    "businessAccountId",
+    "branchId",
+    "customerType",
+    "consignorAddress.contactName",
+    "consigneeEnteredAddress",
+    "consigneeValidatedAddress",
+    "parcelList.weightKg",
+    "parcelList.shipmentContentType",
+    "parcelList.shipmentReference1",
+    "serviceType",
+    "csbType",
+    "createdAt",
+    "updatedAt"
+  ].join(" ");
+  const loadPage = (pageNumber: number) => ShipmentDraft.find(query)
+    .select(draftProjection)
     .sort(sortSpec(filter.sort))
-    .skip((page - 1) * filter.limit)
+    .skip((pageNumber - 1) * filter.limit)
     .limit(filter.limit)
     .lean()
     .exec();
+  const [total, requestedDrafts] = await Promise.all([
+    ShipmentDraft.countDocuments(query).exec(),
+    loadPage(requestedPage)
+  ]);
+  const totalPages = Math.max(1, Math.ceil(total / filter.limit));
+  const page = Math.min(requestedPage, totalPages);
+  const drafts = page === requestedPage ? requestedDrafts : await loadPage(page);
 
   const draftIds = drafts.map((draft) => draft._id);
   const [bookings, events, branches, accounts, manifests, invoices] = await Promise.all([
-    DpdShipment.find({ shipmentDraftId: { $in: draftIds } }).lean().exec(),
+    DpdShipment.find({ shipmentDraftId: { $in: draftIds } })
+      .select("shipmentDraftId swiftlineTrackingNumber status currentShipmentSnapshot bookingSnapshot")
+      .lean()
+      .exec(),
     ShipmentEvent.find({ shipmentDraftId: { $in: draftIds }, ...eventVisibilityFilter })
-      .sort({ eventAt: -1, createdAt: -1 })
+      .sort({ shipmentDraftId: 1, eventAt: -1, createdAt: -1 })
       .select("shipmentDraftId status statusLabel eventAt location gatewayCode gatewayName")
       .lean()
       .exec(),
-    Branch.find({ _id: { $in: drafts.map((draft) => draft.branchId) } }).select("name code address").lean().exec(),
+    Branch.find({ _id: { $in: drafts.map((draft) => draft.branchId) } }).select("name code address.city").lean().exec(),
     BusinessAccount.find({ _id: { $in: drafts.map((draft) => draft.businessAccountId) } })
       .select("accountId company.companyName")
       .lean()
@@ -458,7 +495,9 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   const eventsByDraft = new Map<string, typeof events>();
   for (const event of events) {
     const key = String(event.shipmentDraftId);
-    eventsByDraft.set(key, [...(eventsByDraft.get(key) ?? []), event]);
+    const draftEvents = eventsByDraft.get(key);
+    if (draftEvents) draftEvents.push(event);
+    else eventsByDraft.set(key, [event]);
   }
   /**
    * One estimate per row, in a handful of queries rather than two per row.

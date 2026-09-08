@@ -44,8 +44,8 @@ export default function RequestBusinessAccountRoute() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
       />
-      <section className="mx-auto w-full max-w-[1450px] px-4 pt-6 sm:px-6 sm:pt-8 lg:px-8">
-        <div className="mx-auto max-w-4xl text-center">
+      <section className="mx-auto w-full max-w-362.5 px-4 py-10 pt-6 sm:px-6 sm:pt-8 lg:px-8">
+        <div className="max-w-4xl text-start">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#0D1282]">
             Swiftline Business Account
           </p>
@@ -54,7 +54,7 @@ export default function RequestBusinessAccountRoute() {
             Open a Swiftline Business Shipping Account
           </h1>
 
-          <p className="mx-auto mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-[15px]">
+          <p className=" mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-[15px]">
             Apply online for a Swiftline business account for international
             courier and cargo services. Complete your business details and KYC
             information to submit your application for review.

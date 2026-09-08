@@ -811,6 +811,7 @@ export async function listDpdShipments(request: Request, response: Response): Pr
   const limit = Number.isFinite(limitValue) ? Math.min(Math.max(limitValue, 1), 100) : 25;
   const status = typeof request.query.status === "string" ? request.query.status : "";
   const trackingNumber = typeof request.query.trackingNumber === "string" ? request.query.trackingNumber.trim() : "";
+  const summaryOnly = request.query.summary === "1";
   const filters: Record<string, unknown> = {};
 
   if (status) filters.status = status;
@@ -829,9 +830,155 @@ export async function listDpdShipments(request: Request, response: Response): Pr
     filters.$or = trackingFilters;
   }
 
-  const shipments = await DpdShipment.find(filters).sort({ createdAt: -1 }).limit(limit).lean().exec();
+  const shipmentQuery = DpdShipment.find(filters).sort({ createdAt: -1 }).limit(limit);
+  if (summaryOnly) {
+    shipmentQuery.select([
+      "shipmentDraftId",
+      "idempotencyKey",
+      "dpdShipmentId",
+      "dpdTransactionId",
+      "forwardingNumber",
+      "entryNumber",
+      "swiftlineTrackingNumber",
+      "parcelNumbers",
+      "serviceCode",
+      "status",
+      "snapshotRevision",
+      "bookingSnapshot.consignee",
+      "currentShipmentSnapshot.consignee",
+      "createdAt",
+      "updatedAt"
+    ].join(" "));
+  }
+  const shipments = await shipmentQuery.lean().exec();
   const shipmentIds = shipments.map((shipment) => shipment._id);
   const draftIds = shipments.map((shipment) => shipment.shipmentDraftId);
+
+  if (summaryOnly) {
+    const [drafts, shipmentInvoices, latestEvents] = await Promise.all([
+      ShipmentDraft.find({ _id: { $in: draftIds } })
+        .select("branchId consigneeEnteredAddress status addressValidationStatus")
+        .lean()
+        .exec(),
+      ShipmentInvoice.find({ shipmentDraftId: { $in: draftIds } })
+        .select("shipmentDraftId invoiceNumber currency totalAmountMinor status revision")
+        .lean()
+        .exec(),
+      ShipmentEvent.aggregate<{
+        _id: mongoose.Types.ObjectId;
+        event: {
+          _id: mongoose.Types.ObjectId;
+          shipmentDraftId: mongoose.Types.ObjectId;
+          dpdShipmentId?: mongoose.Types.ObjectId;
+          status: string;
+          holdReason?: string | null;
+          note?: string;
+          location?: string;
+          customerVisible: boolean;
+          eventAt: Date;
+          createdBy: mongoose.Types.ObjectId;
+          source?: string;
+          sourceReference?: string;
+          gatewayCode?: string;
+          gatewayName?: string;
+          partnerName?: string;
+          partnerCode?: string;
+          statusLabel?: string;
+        };
+      }>([
+        { $match: { shipmentDraftId: { $in: draftIds } } },
+        { $sort: { shipmentDraftId: 1, eventAt: -1, createdAt: -1 } },
+        { $group: { _id: "$shipmentDraftId", event: { $first: "$$ROOT" } } },
+        {
+          $project: {
+            "event._id": 1,
+            "event.shipmentDraftId": 1,
+            "event.dpdShipmentId": 1,
+            "event.status": 1,
+            "event.holdReason": 1,
+            "event.note": 1,
+            "event.location": 1,
+            "event.customerVisible": 1,
+            "event.eventAt": 1,
+            "event.createdBy": 1,
+            "event.source": 1,
+            "event.sourceReference": 1,
+            "event.gatewayCode": 1,
+            "event.gatewayName": 1,
+            "event.partnerName": 1,
+            "event.partnerCode": 1,
+            "event.statusLabel": 1
+          }
+        }
+      ]).exec()
+    ]);
+    const branches = await Branch.find({ _id: { $in: drafts.map((draft) => draft.branchId) } })
+      .select("name code address.city")
+      .lean()
+      .exec();
+    const draftsById = new Map(drafts.map((draft) => [String(draft._id), draft]));
+    const branchesById = new Map(branches.map((branch) => [String(branch._id), branch]));
+    const shipmentInvoicesByDraftId = new Map(shipmentInvoices.map((invoice) => [String(invoice.shipmentDraftId), invoice]));
+    const latestEventByDraftId = new Map(latestEvents.map((item) => [String(item._id), item.event]));
+
+    return response.status(200).json({
+      success: true,
+      shipments: shipments.map((shipment) => {
+        const draft = draftsById.get(String(shipment.shipmentDraftId));
+        const branch = draft ? branchesById.get(String(draft.branchId)) : null;
+        const shipmentInvoice = shipmentInvoicesByDraftId.get(String(shipment.shipmentDraftId));
+        const currentEvent = latestEventByDraftId.get(String(shipment.shipmentDraftId));
+        const snapshotValue = shipmentInvoice
+          && (shipmentInvoice.revision ?? 1) <= (shipment.snapshotRevision || 1)
+          ? shipment.currentShipmentSnapshot || shipment.bookingSnapshot
+          : null;
+        const consigneeFromSnapshot = (value: unknown) => {
+          if (!value || typeof value !== "object" || !("consignee" in value)) return null;
+          const consignee = value.consignee;
+          return consignee && typeof consignee === "object"
+            ? consignee as Record<string, unknown>
+            : null;
+        };
+        const snapshotConsignee = snapshotValue === shipment.currentShipmentSnapshot
+          ? consigneeFromSnapshot(shipment.currentShipmentSnapshot) ?? consigneeFromSnapshot(shipment.bookingSnapshot)
+          : consigneeFromSnapshot(snapshotValue);
+        const draftForSummary = draft && snapshotConsignee
+          ? {
+            ...draft,
+            consigneeEnteredAddress: {
+              ...draft.consigneeEnteredAddress,
+              ...snapshotConsignee
+            }
+          }
+          : draft;
+
+        return {
+          dpdShipment: serializeDpdShipment(shipment),
+          bookingConfirmation: null,
+          shipmentDraft: serializeShipmentDraftSummary(draftForSummary, null),
+          branch: serializeBranchSummary(branch),
+          shipmentInvoice: shipmentInvoice ? {
+            invoiceNumber: shipmentInvoice.invoiceNumber,
+            currency: shipmentInvoice.currency,
+            totalAmountMinor: shipmentInvoice.totalAmountMinor,
+            chargeableAmountMinor: shipmentInvoice.totalAmountMinor,
+            status: shipmentInvoice.status,
+            revision: shipmentInvoice.revision
+          } : null,
+          labels: [],
+          currentEvent: currentEvent ? serializeShipmentEvent(currentEvent) : null,
+          events: [],
+          trackingJourney: null,
+          deliveryEstimate: null,
+          trackingSummary: null,
+          trackingAttention: null,
+          parcelActivities: [],
+          trackingPosition: null
+        };
+      })
+    });
+  }
+
   const [labels, drafts] = await Promise.all([
     LabelDocument.find({ dpdShipmentId: { $in: shipmentIds } }).lean().exec(),
     ShipmentDraft.find({ _id: { $in: draftIds } }).lean().exec()

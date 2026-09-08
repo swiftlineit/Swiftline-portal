@@ -561,6 +561,21 @@ const shipmentDraftSchema = new mongoose.Schema<IShipmentDraft>(
 );
 
 shipmentDraftSchema.index({ businessAccountId: 1, branchId: 1, status: 1 });
+// Booked lists are soft-deleted, draft-backed and ordered by booking time.
+// These indexes keep account, branch and dashboard reads from sorting a large
+// live-draft set in memory after the query has already scanned it.
+shipmentDraftSchema.index(
+  { deletedAt: 1, createdAt: -1 },
+  { name: "shipmentDraft_live_createdAt_desc" }
+);
+shipmentDraftSchema.index(
+  { businessAccountId: 1, branchId: 1, deletedAt: 1, createdAt: -1 },
+  { name: "shipmentDraft_account_branch_live_createdAt_desc" }
+);
+shipmentDraftSchema.index(
+  { businessAccountId: 1, deletedAt: 1, updatedAt: -1 },
+  { name: "shipmentDraft_account_live_updatedAt_desc" }
+);
 shipmentDraftSchema.index(
   { shipmentImportEntryId: 1 },
   {

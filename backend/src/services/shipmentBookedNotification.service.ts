@@ -120,7 +120,7 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
     const idempotencyKey = `SHIPMENT_BOOKED:${String(dpdShipment._id)}`;
     const parcelLabel = `${payload.parcelCount} parcel${payload.parcelCount === 1 ? "" : "s"}`;
 
-    await notifyBusinessShipmentMembers(draft.businessAccountId, {
+    const clientNotification = notifyBusinessShipmentMembers(draft.businessAccountId, {
       type: "SHIPMENT_BOOKED",
       title: "Shipment booked",
       message: `${trackingNumber} is booked (${parcelLabel}). Invoice ${payload.invoiceNumber} is ready.`,
@@ -140,7 +140,7 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
       }
     });
 
-    await notifyOperationsStaff({
+    const staffNotification = notifyOperationsStaff({
       type: "SHIPMENT_BOOKED",
       title: "New shipment booked",
       message: `${payload.businessAccountName || "A client"} booked ${trackingNumber} (${parcelLabel}) at ${payload.branchName || "the portal"}.`,
@@ -160,6 +160,24 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
         attachmentRefs: attachments
       }
     });
+
+    // These audiences are independent. Queue both together, but wait for both
+    // to settle so no database work continues after booking returns and one
+    // audience failing cannot prevent the other from receiving its notice.
+    const notificationResults = await Promise.allSettled([
+      clientNotification,
+      staffNotification
+    ]);
+    const failedAudiences = notificationResults.flatMap((result, index) => (
+      result.status === "rejected" ? [index === 0 ? "client" : "operations"] : []
+    ));
+    if (failedAudiences.length) {
+      console.error("Shipment booked notification failed for one or more audiences.", {
+        shipmentDraftId: String(draft._id),
+        dpdShipmentId: String(dpdShipment._id),
+        failedAudiences
+      });
+    }
   } catch (error) {
     console.error("Shipment booked notification failed.", {
       shipmentDraftId: String(draft._id),

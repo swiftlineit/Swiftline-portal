@@ -66,6 +66,21 @@ const dpdShipmentSchema = new mongoose.Schema<IDpdShipment>(
 );
 
 dpdShipmentSchema.index({ status: 1, updatedAt: -1 });
+// The dashboard/list endpoint orders by creation time, with or without a
+// carrier-status filter. The status-plus-draft index also covers the distinct
+// booked-draft lookup used by scoped shipment lists and summaries.
+dpdShipmentSchema.index(
+  { createdAt: -1 },
+  { name: "dpdShipment_createdAt_desc" }
+);
+dpdShipmentSchema.index(
+  { status: 1, createdAt: -1 },
+  { name: "dpdShipment_status_createdAt_desc" }
+);
+dpdShipmentSchema.index(
+  { status: 1, shipmentDraftId: 1 },
+  { name: "dpdShipment_status_draft" }
+);
 dpdShipmentSchema.index(
   { swiftlineTrackingNumber: 1 },
   { unique: true, partialFilterExpression: { swiftlineTrackingNumber: { $type: "string", $gt: "" } } }
