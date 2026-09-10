@@ -50,9 +50,13 @@ async function createAccount(suffix: string) {
   return account._id as mongoose.Types.ObjectId;
 }
 
-async function createBookedDraft(accountId: mongoose.Types.ObjectId, reference: string) {
+async function createBookedDraft(
+  accountId: mongoose.Types.ObjectId,
+  reference: string,
+  creationSource: "MANUAL" | "PUBLIC_ONLINE" = "MANUAL"
+) {
   const draft = await ShipmentDraft.create({
-    creationSource: "MANUAL",
+    creationSource,
     businessAccountId: accountId,
     branchId,
     consigneeEnteredAddress: {
@@ -208,6 +212,27 @@ describe("shipment listing read path", () => {
     const clientResult = await listBookedShipments({ ...base, actorRole: "client" });
     assert.ok(clientResult.shipments.length > 0);
     assert.ok(clientResult.shipments.every((shipment) => !("dpdLabelStatus" in shipment)));
+  });
+
+  test("filters staff shipments by public online creation source", async () => {
+    const publicBooking = await createBookedDraft(accountOneId, "PUBLIC-SOURCE", "PUBLIC_ONLINE");
+    await createBookedDraft(accountOneId, "MANUAL-SOURCE");
+
+    const result = await listBookedShipments({
+      page: 1,
+      limit: 50,
+      actorRole: "admin",
+      status: "",
+      search: "",
+      sort: "",
+      bookingStatuses: allShipmentStatuses,
+      businessAccountIds: [accountOneId],
+      creationSource: "PUBLIC_ONLINE"
+    });
+
+    assert.ok(result.shipments.length > 0);
+    assert.ok(result.shipments.every((shipment) => shipment.creationSource === "PUBLIC_ONLINE"));
+    assert.ok(result.shipments.some((shipment) => shipment.id === String(publicBooking.draft._id)));
   });
 
   test("dashboard summary mode preserves the visible shipment fields without loading detail collections", async () => {

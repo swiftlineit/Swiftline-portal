@@ -172,6 +172,8 @@ export function shipmentListParams(input: {
   search?: string;
   dateRange?: DateRange;
   businessAccountId?: string;
+  /** Staff-only filter for self-serve public bookings. */
+  creationSource?: "PUBLIC_ONLINE";
   branchId?: string;
   sort?: string;
   destinationRegions?: ShipmentDestinationRegionCode[];
@@ -186,6 +188,7 @@ export function shipmentListParams(input: {
   if (input.search?.trim()) params.set("search", input.search.trim());
   setDateRangeParams(params, input.dateRange);
   if (input.businessAccountId) params.set("businessAccountId", input.businessAccountId);
+  if (input.creationSource) params.set("creationSource", input.creationSource);
   if (input.branchId) params.set("branchId", input.branchId);
   if (input.sort) params.set("sort", input.sort);
   if (input.destinationRegions?.length) params.set("destinationRegions", input.destinationRegions.join(","));
@@ -203,6 +206,8 @@ export async function listShipments(audience: ShipmentAudience, input: {
   search?: string;
   dateRange?: DateRange;
   businessAccountId?: string;
+  /** Staff-only filter for self-serve public bookings. */
+  creationSource?: "PUBLIC_ONLINE";
   branchId?: string;
   /** `field:asc|desc`, limited to the columns the server can order by. */
   sort?: string;

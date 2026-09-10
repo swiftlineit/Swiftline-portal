@@ -57,6 +57,10 @@ function destinationRegionsParam(request: Request): ShipmentDestinationRegionCod
   return normalizeShipmentDestinationRegions(values);
 }
 
+function creationSourceParam(request: Request): "PUBLIC_ONLINE" | undefined {
+  return request.query.creationSource === "PUBLIC_ONLINE" ? "PUBLIC_ONLINE" : undefined;
+}
+
 function pagination(request: Request) {
   return {
     page: Math.max(1, Number.parseInt(String(request.query.page ?? "1"), 10) || 1),
@@ -87,7 +91,8 @@ function sendShipmentExport(
       Search: request.query.search,
       From: request.query.dateFrom,
       To: request.query.dateTo,
-      Rebooked: request.query.rebooked === "1" || request.query.rebooked === "true" ? "Yes" : undefined
+      Rebooked: request.query.rebooked === "1" || request.query.rebooked === "true" ? "Yes" : undefined,
+      "Booking source": request.query.creationSource === "PUBLIC_ONLINE" ? "Public online" : undefined
     })
   });
 }
@@ -107,6 +112,7 @@ export async function listAdminBookedShipments(request: Request, response: Respo
     search: typeof request.query.search === "string" ? request.query.search.slice(0, 80) : "",
     sort: typeof request.query.sort === "string" ? request.query.sort : "",
     destinationRegions: destinationRegionsParam(request),
+    creationSource: creationSourceParam(request),
     ...dateRangeParams(request.query),
     businessAccountIds: businessAccountId ? [businessAccountId] : undefined,
     branchIds: staffBranchIds(request, branchId),

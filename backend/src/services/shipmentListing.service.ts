@@ -23,6 +23,8 @@ import {
 
 export type ShipmentListingFilter = {
   businessAccountIds?: mongoose.Types.ObjectId[];
+  /** Staff-only source filter for self-serve public bookings. */
+  creationSource?: "PUBLIC_ONLINE";
   branchIds?: mongoose.Types.ObjectId[];
   status?: string;
   /**
@@ -302,6 +304,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   // and both audiences and the exports read this same filter.
   const draftFilter: Record<string, unknown> = { deletedAt: null };
   if (filter.businessAccountIds) draftFilter.businessAccountId = { $in: filter.businessAccountIds };
+  if (filter.creationSource) draftFilter.creationSource = filter.creationSource;
   if (filter.branchIds) draftFilter.branchId = { $in: filter.branchIds };
   if (filter.rebookedOnly) {
     draftFilter.rebookedFromDraftId = { $exists: true, $ne: null };

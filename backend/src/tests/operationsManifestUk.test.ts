@@ -178,12 +178,58 @@ type MutableSealedSnapshot = {
 };
 
 describe("UK operations manifest entry rules", () => {
-  it("uses non-overlapping bag bands and extends the final band", () => {
+  it("uses the configured inclusive bag bands and extends the final band", () => {
     assert.deepEqual(
-      [1, 10, 11, 14, 15, 18, 19, 24, 25, 34, 35, 49, 50, 64, 65, 85, 86, 100]
+      [1, 9, 10, 15, 16, 19, 20, 25, 26, 35, 36, 50, 51, 65, 66, 85, 86, 100]
         .map(ukManifestConfiguredEntryCount),
-      [1, 10, 11, 11, 13, 13, 15, 15, 18, 18, 20, 20, 26, 26, 33, 33, 34, 39]
+      [1, 9, 11, 11, 13, 13, 15, 15, 18, 18, 20, 20, 26, 26, 33, 33, 34, 39]
     );
+  });
+
+  it("uses eleven entries for fifteen bags when enough consignments exist", () => {
+    const entries = buildUkManifestEntries({
+      manifestNumber: "SLC018",
+      totalBags: 15,
+      totalPhysicalParcels: 15,
+      totalWeightKg: 270,
+      bags: Array.from({ length: 15 }, (_, index) => ({
+        sequence: index + 1,
+        bagNumber: `SLC018${String(index + 1).padStart(2, "0")}`,
+        pieces: 1,
+        weightGrams: 18_000
+      })),
+      consignments: Array.from({ length: 11 }, (_, index) => consignmentCandidate(index + 1))
+    });
+
+    assert.equal(entries.length, 11);
+    assert.deepEqual(entries.map((entry) => entry.bags.length), [2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1]);
+    assert.equal(Math.max(...entries.map((entry) => entry.bags.length)), 2);
+  });
+
+  it("uses up to three bags only when fewer unique consignments require it", () => {
+    const base = {
+      manifestNumber: "SLC018",
+      totalBags: 15,
+      totalPhysicalParcels: 15,
+      totalWeightKg: 270,
+      bags: Array.from({ length: 15 }, (_, index) => ({
+        sequence: index + 1,
+        bagNumber: `SLC018${String(index + 1).padStart(2, "0")}`,
+        pieces: 1,
+        weightGrams: 18_000
+      }))
+    };
+    const entries = buildUkManifestEntries({
+      ...base,
+      consignments: Array.from({ length: 5 }, (_, index) => consignmentCandidate(index + 1))
+    });
+
+    assert.equal(entries.length, 5);
+    assert.deepEqual(entries.map((entry) => entry.bags.length), [3, 3, 3, 3, 3]);
+    assert.throws(() => buildUkManifestEntries({
+      ...base,
+      consignments: Array.from({ length: 4 }, (_, index) => consignmentCandidate(index + 1))
+    }), /at least 5 unique real consignments/);
   });
 
   it("caps entries at the available unique real consignments", () => {
@@ -271,13 +317,13 @@ describe("UK operations manifest entry rules", () => {
     ]), ["A1", "B1", "C2", "A2"]);
   });
 
-  it("shortens unusually long actual descriptions without inventing placeholder text", () => {
+  it("shortens unusually long actual descriptions without ellipses or placeholder text", () => {
     const descriptions = conciseUkDescriptionItems([
       "THIS IS AN EXTREMELY LONG GOODS DESCRIPTION THAT CANNOT FIT IN ONE CFL CELL"
     ]);
     assert.equal(descriptions.length, 1);
-    assert.ok(descriptions[0]!.length <= 40);
-    assert.equal(descriptions[0]!.endsWith("..."), true);
+    assert.equal(descriptions[0], "THIS IS AN EXTREMELY LONG GOODS");
+    assert.equal(descriptions[0]!.includes("..."), false);
     assert.equal(descriptions.some((description) => description.includes("MIXED GOODS")), false);
   });
 });
@@ -346,7 +392,7 @@ describe("CFL UK workbook", () => {
     assert.equal(sheet.getCell("B156").value, 15, "the entry block must extend beyond the demo template rows");
   });
 
-  it("rebalances bags so combined entry values stay below GBP 41 where possible", async () => {
+  it("rebalances bags so combined entry values stay at or below GBP 40 where possible", async () => {
     const sourceManifest = ukManifestFixture({
       bagCount: 15,
       consignmentCount: 15,
@@ -357,9 +403,9 @@ describe("CFL UK workbook", () => {
     await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
     const sheet = workbook.getWorksheet("CFL Manifest Template");
     assert.ok(sheet);
-    const entryRows = Array.from({ length: 13 }, (_, index) => 16 + index * 10);
+    const entryRows = Array.from({ length: 11 }, (_, index) => 16 + index * 10);
     const valuesGbpMinor = entryRows.map((row) => Math.round(Number(sheet.getCell(row, 9).value) * 100));
-    assert.ok(valuesGbpMinor.every((value) => value < 4_100));
+    assert.ok(valuesGbpMinor.every((value) => value <= 4_000));
     assert.equal(valuesGbpMinor.reduce((sum, value) => sum + value, 0), 6_300);
     const bagGroups = entryRows.map((row) => String(sheet.getCell(row, 11).value).split(",").map(Number));
     assert.equal(bagGroups.some((bags) => bags.includes(1) && bags.includes(2)), false);
@@ -369,8 +415,8 @@ describe("CFL UK workbook", () => {
     assert.equal(entryRows.reduce((sum, row) => sum + Number(sheet.getCell(row, 5).value), 0), 452);
   });
 
-  it("leaves the value empty when a combined entry reaches or exceeds GBP 41", async () => {
-    for (const parcelValueMinor of [205_000, 205_050]) {
+  it("writes the CFL GBP 38 default when a combined entry exceeds GBP 40", async () => {
+    for (const parcelValueMinor of [200_050, 204_950, 205_000]) {
       const sourceManifest = ukManifestFixture({
         bagCount: 3,
         consignmentCount: 5,
@@ -381,22 +427,22 @@ describe("CFL UK workbook", () => {
       await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
       const sheet = workbook.getWorksheet("CFL Manifest Template");
       assert.ok(sheet);
-      assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 9).value), ["", "", ""]);
+      assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 9).value), [38, 38, 38]);
     }
   });
 
-  it("writes a combined entry value of GBP 40.99", async () => {
+  it("keeps a combined entry value of exactly GBP 40", async () => {
     const sourceManifest = ukManifestFixture({
       bagCount: 3,
       consignmentCount: 5,
-      parcelValueMinor: () => 204_950
+      parcelValueMinor: () => 200_000
     });
     const bytes = await buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 });
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
     const sheet = workbook.getWorksheet("CFL Manifest Template");
     assert.ok(sheet);
-    assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 9).value), [40.99, 40.99, 40.99]);
+    assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 9).value), [40, 40, 40]);
   });
 
   it("supports populated and manual GBP values in the same workbook", async () => {
@@ -410,7 +456,7 @@ describe("CFL UK workbook", () => {
     await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
     const sheet = workbook.getWorksheet("CFL Manifest Template");
     assert.ok(sheet);
-    assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 9).value), [10, "", 20]);
+    assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 9).value), [10, 38, 20]);
     assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 10).value), ["GBP", "GBP", "GBP"]);
     assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 12).value), ["EXP", "EXP", "EXP"]);
   });
