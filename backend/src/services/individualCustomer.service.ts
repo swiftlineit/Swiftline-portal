@@ -86,8 +86,8 @@ export function isIndividualSentinel(account: { accountKind?: string } | null | 
 export async function getOrCreateIndividualSentinel(createdBy: mongoose.Types.ObjectId) {
   const existing = await BusinessAccount.findOne({ accountKind: "INDIVIDUAL_SENTINEL" }).exec();
   if (existing) {
-    if (existing.rateCardBand !== "BAND_A") {
-      existing.rateCardBand = "BAND_A";
+    if (existing.rateCardBand !== "BAND_D") {
+      existing.rateCardBand = "BAND_D";
       await existing.save();
     }
     return existing;
@@ -99,7 +99,7 @@ export async function getOrCreateIndividualSentinel(createdBy: mongoose.Types.Ob
       $setOnInsert: {
         accountId: INDIVIDUAL_SENTINEL_ACCOUNT_ID,
         accountKind: "INDIVIDUAL_SENTINEL",
-        rateCardBand: "BAND_A",
+        rateCardBand: "BAND_D",
         // Approved so it never enters the KYC queue, and left without an assigned
         // branch because it serves every branch. The individual draft flow skips
         // the branch-match check that ordinary accounts go through.

@@ -455,11 +455,12 @@ async function resolveAccountPricingContext(input: Pick<ShipmentPricingInput, "b
   if (input.session) query.session(input.session);
   const account = await query.exec();
 
-  // Counter shipments use the system sentinel and deliberately preserve the
-  // legacy tariff, including before the backfill has run in a fresh dev DB.
+  // Counter and portal individual shipments use the same approved public
+  // individual tariff as online bookings. The sentinel is handled before the
+  // Band D guard below so a real business account can never opt into Band D.
   if (!account) throw new RateCardAccountNotFoundError();
   if (account.accountKind === "INDIVIDUAL_SENTINEL") return {
-    rateCardBand: "BAND_A",
+    rateCardBand: publicBookingRateCardBand,
     noGstEligible: false,
     gstBillingVersion: account.gstBilling?.version ?? 1,
     gstBillingEffectiveFrom: null

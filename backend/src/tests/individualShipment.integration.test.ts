@@ -100,6 +100,7 @@ describe("individual shipment sentinel", () => {
     assert.equal(await BusinessAccount.countDocuments({ accountKind: "INDIVIDUAL_SENTINEL" }), 1);
     assert.equal(first.status, "approved", "The sentinel must never enter the KYC queue.");
     assert.equal(first.assignedBranch ?? null, null, "The sentinel serves every branch.");
+    assert.equal(first.rateCardBand, "BAND_D", "Individual shipments must use the dedicated Band D tariff.");
   });
 
   test("is hidden from the business account list while real accounts still show", async () => {

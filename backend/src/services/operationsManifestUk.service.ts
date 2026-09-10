@@ -17,6 +17,9 @@ const firstEntryRow = 16;
 const rowsPerEntry = 10;
 const firstTemplateColumn = 2;
 const lastTemplateColumn = 12;
+const ukAutomaticEntryValueLimitGbpMinor = 4_100;
+const ukDescriptionItemLimit = 4;
+const ukDescriptionItemMaximumLength = 40;
 
 type UkManifestBag = {
   sequence: number;
@@ -145,7 +148,51 @@ export function uniqueUkDescriptionItems(descriptions: string[]) {
   return items;
 }
 
-function allocateBagGroups(bags: UkManifestBag[], entryCount: number) {
+function conciseDescriptionItem(value: string) {
+  if (value.length <= ukDescriptionItemMaximumLength) return value;
+  const shortened = value.slice(0, ukDescriptionItemMaximumLength - 3);
+  const lastSpace = shortened.lastIndexOf(" ");
+  return `${(lastSpace >= 12 ? shortened.slice(0, lastSpace) : shortened).trimEnd()}...`;
+}
+
+export function conciseUkDescriptionItems(descriptions: string[]) {
+  const candidates = descriptions.map((description) => {
+    const items = uniqueUkDescriptionItems([description]);
+    const limit = items.length <= 3 ? items.length : items.length <= 5 ? 3 : 4;
+    return items.slice(0, limit).map(conciseDescriptionItem);
+  });
+  const cursors = candidates.map(() => 0);
+  const seen = new Set<string>();
+  const selected: string[] = [];
+
+  const takeNextUnique = (parcelIndex: number) => {
+    const items = candidates[parcelIndex]!;
+    while (cursors[parcelIndex]! < items.length) {
+      const item = items[cursors[parcelIndex]!]!;
+      cursors[parcelIndex] = cursors[parcelIndex]! + 1;
+      const key = item.toLocaleUpperCase("en-GB");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      selected.push(item);
+      return true;
+    }
+    return false;
+  };
+
+  for (let parcelIndex = 0; parcelIndex < candidates.length && selected.length < ukDescriptionItemLimit; parcelIndex += 1) {
+    takeNextUnique(parcelIndex);
+  }
+  while (selected.length < ukDescriptionItemLimit) {
+    let added = false;
+    for (let parcelIndex = 0; parcelIndex < candidates.length && selected.length < ukDescriptionItemLimit; parcelIndex += 1) {
+      added = takeNextUnique(parcelIndex) || added;
+    }
+    if (!added) break;
+  }
+  return selected;
+}
+
+function balancedBagGroups(bags: UkManifestBag[], entryCount: number) {
   const minimumSize = Math.floor(bags.length / entryCount);
   const extraBags = bags.length % entryCount;
   const groups: UkManifestBag[][] = [];
@@ -158,6 +205,41 @@ function allocateBagGroups(bags: UkManifestBag[], entryCount: number) {
   return groups;
 }
 
+function bagGroupDeclaredValueMinor(bags: UkManifestBag[]) {
+  return bags.reduce((sum, bag) => sum + (bag.declaredValueMinor ?? 0), 0);
+}
+
+function allocateBagGroups(bags: UkManifestBag[], entryCount: number, gbpToInr?: number) {
+  const balanced = balancedBagGroups(bags, entryCount);
+  if (gbpToInr === undefined || balanced.every((group) =>
+    Math.floor(bagGroupDeclaredValueMinor(group) / gbpToInr) < ukAutomaticEntryValueLimitGbpMinor)) {
+    return balanced;
+  }
+
+  const groups = Array.from({ length: entryCount }, () => [] as UkManifestBag[]);
+  const groupValues = Array.from({ length: entryCount }, () => 0);
+  const orderedBags = [...bags].sort((left, right) =>
+    (right.declaredValueMinor ?? 0) - (left.declaredValueMinor ?? 0)
+    || left.sequence - right.sequence);
+  for (const bag of orderedBags) {
+    const bagValue = bag.declaredValueMinor ?? 0;
+    const orderedGroups = groupValues
+      .map((value, index) => ({ value, index }))
+      .sort((left, right) => left.value - right.value || left.index - right.index);
+    const groupIndex = (orderedGroups.find(({ value }) =>
+      Math.floor((value + bagValue) / gbpToInr) < ukAutomaticEntryValueLimitGbpMinor)
+      ?? orderedGroups[0])!.index;
+    groups[groupIndex]!.push(bag);
+    groupValues[groupIndex] = (groupValues[groupIndex] ?? 0) + bagValue;
+  }
+  if (groups.some((group) => !group.length)) {
+    throw new OperationsManifestServiceError("The UK manifest bags could not be allocated across its entries.", 409);
+  }
+  return groups
+    .map((group) => group.sort((left, right) => left.sequence - right.sequence))
+    .sort((left, right) => left[0]!.sequence - right[0]!.sequence);
+}
+
 export function buildUkManifestEntries(input: {
   manifestNumber: string;
   totalBags: number;
@@ -165,6 +247,7 @@ export function buildUkManifestEntries(input: {
   totalWeightKg: number;
   bags: UkManifestBag[];
   consignments: ManifestDocumentConsignment[];
+  gbpToInr?: number;
 }) {
   if (input.bags.length !== input.totalBags) {
     throw new OperationsManifestServiceError("UK manifest bag totals do not match the sealed manifest.", 409);
@@ -221,14 +304,14 @@ export function buildUkManifestEntries(input: {
     throw new OperationsManifestServiceError("The UK manifest has no unique real consignments to display.", 409);
   }
 
-  return allocateBagGroups(input.bags, entryCount).map<UkManifestEntry>((bags, index) => ({
+  return allocateBagGroups(input.bags, entryCount, input.gbpToInr).map<UkManifestEntry>((bags, index) => ({
     serial: index + 1,
     consignment: candidates[index]!,
     bags,
     pieces: bags.reduce((sum, bag) => sum + bag.pieces, 0),
     weightKg: bags.reduce((sum, bag) => sum + bag.weightGrams, 0) / 1000,
     declaredValueMinor: bags.reduce((sum, bag) => sum + (bag.declaredValueMinor ?? 0), 0),
-    descriptions: uniqueUkDescriptionItems(bags.flatMap((bag) => bag.descriptions ?? []))
+    descriptions: conciseUkDescriptionItems(bags.flatMap((bag) => bag.descriptions ?? []))
   }));
 }
 
@@ -360,15 +443,16 @@ export async function buildOperationsManifestUkExcel(
   const displayBags = [...bagByNumber.values()]
     .sort((left, right) => left.sequence - right.sequence)
     .map((bag, index) => ({ ...bag, sequence: index + 1 }));
+  const gbpToInr = await resolveGbpToInrRate(options.gbpToInr);
   const entries = buildUkManifestEntries({
     manifestNumber: model.manifestNumber,
     totalBags: model.totals.totalBags,
     totalPhysicalParcels: model.totals.totalPhysicalParcels,
     totalWeightKg: model.totals.totalWeightKg,
     bags: displayBags,
-    consignments: model.consignments
+    consignments: model.consignments,
+    gbpToInr
   });
-  const gbpToInr = await resolveGbpToInrRate(options.gbpToInr);
   const entryValuesGbpMinor = reconcileGbpMinorValues(
     entries.map((entry) => entry.declaredValueMinor),
     gbpToInr
@@ -404,7 +488,10 @@ export async function buildOperationsManifestUkExcel(
     worksheet.getCell(rowNumber, 3).value = entry.consignment.formattedConsignmentNumber;
     worksheet.getCell(rowNumber, 4).value = entry.pieces;
     worksheet.getCell(rowNumber, 5).value = entry.weightKg;
-    worksheet.getCell(rowNumber, 9).value = entryValuesGbpMinor[index]! / 100;
+    const entryValueGbpMinor = entryValuesGbpMinor[index]!;
+    worksheet.getCell(rowNumber, 9).value = entryValueGbpMinor < ukAutomaticEntryValueLimitGbpMinor
+      ? entryValueGbpMinor / 100
+      : "";
     worksheet.getCell(rowNumber, 10).value = "GBP";
     worksheet.getCell(rowNumber, 11).value = entry.bags.map((bag) => bag.sequence).join(",");
     worksheet.getCell(rowNumber, 12).value = "EXP";

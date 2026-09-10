@@ -7,6 +7,7 @@ import type { ManifestDocumentConsignment } from "../types/manifestDocument.js";
 import {
   buildOperationsManifestUkExcel,
   buildUkManifestEntries,
+  conciseUkDescriptionItems,
   convertInrMinorToGbpMinor,
   reconcileGbpMinorValues,
   uniqueUkDescriptionItems,
@@ -35,7 +36,12 @@ function consignmentCandidate(number: number): ManifestDocumentConsignment {
   };
 }
 
-function ukManifestFixture(options: { bagCount?: number; consignmentCount?: number } = {}) {
+function ukManifestFixture(options: {
+  bagCount?: number;
+  consignmentCount?: number;
+  parcelValueMinor?: (bagIndex: number, parcelIndex: number) => number;
+  parcelDescription?: (bagIndex: number, parcelIndex: number) => string;
+} = {}) {
   const bagCount = options.bagCount ?? 21;
   const consignmentCount = options.consignmentCount ?? 15;
   const bagDocuments = Array.from({ length: bagCount }, (_, index) => ({
@@ -98,9 +104,11 @@ function ukManifestFixture(options: { bagCount?: number; consignmentCount?: numb
       owner.parcels.push({
         parcelNumber: `${bag.bagNumber}P${parcelIndex + 1}`,
         weightKg,
-        description: parcelIndex === 0 ? "HONEY, CHOCOLATE" : "honey; RAKHI",
+        description: options.parcelDescription?.(bagIndex, parcelIndex)
+          ?? (parcelIndex === 0 ? "HONEY, CHOCOLATE" : "honey; RAKHI"),
         bagNumber: bag.bagNumber,
-        valueMinor: (bagIndex * 2 + parcelIndex + 1) * 100
+        valueMinor: options.parcelValueMinor?.(bagIndex, parcelIndex)
+          ?? (bagIndex * 2 + parcelIndex + 1) * 100
       });
       owner.weightKg += weightKg;
     });
@@ -162,9 +170,10 @@ function ukManifestFixture(options: { bagCount?: number; consignmentCount?: numb
 }
 
 type MutableSealedSnapshot = {
+  header?: { destinationCountryCode?: string };
   consignments: Array<{
     declaredValueMinor: number;
-    parcels: Array<{ valueMinor: number | null }>;
+    parcels?: Array<{ valueMinor: number | null }>;
   }>;
 };
 
@@ -235,6 +244,42 @@ describe("UK operations manifest entry rules", () => {
       ["HONEY", "CHOCOLATE", "RAKHI", "CLOTHING"]
     );
   });
+
+  it("keeps every item when a parcel has one to three descriptions", () => {
+    assert.deepEqual(conciseUkDescriptionItems(["ONE"]), ["ONE"]);
+    assert.deepEqual(conciseUkDescriptionItems(["ONE, TWO"]), ["ONE", "TWO"]);
+    assert.deepEqual(conciseUkDescriptionItems(["ONE, TWO, THREE"]), ["ONE", "TWO", "THREE"]);
+  });
+
+  it("takes only the first three items when a parcel has four or five descriptions", () => {
+    assert.deepEqual(conciseUkDescriptionItems(["ONE, TWO, THREE, FOUR"]), ["ONE", "TWO", "THREE"]);
+    assert.deepEqual(conciseUkDescriptionItems(["ONE, TWO, THREE, FOUR, FIVE"]), ["ONE", "TWO", "THREE"]);
+  });
+
+  it("takes only the first four items when a parcel has more than five descriptions", () => {
+    assert.deepEqual(
+      conciseUkDescriptionItems(["ONE, TWO, THREE, FOUR, FIVE, SIX"]),
+      ["ONE", "TWO", "THREE", "FOUR"]
+    );
+  });
+
+  it("represents different parcels before filling the remaining description slots", () => {
+    assert.deepEqual(conciseUkDescriptionItems([
+      "A1, A2, A3, A4, A5, A6",
+      "B1, B2, B3, B4",
+      "A1, C2, C3, C4, C5, C6"
+    ]), ["A1", "B1", "C2", "A2"]);
+  });
+
+  it("shortens unusually long actual descriptions without inventing placeholder text", () => {
+    const descriptions = conciseUkDescriptionItems([
+      "THIS IS AN EXTREMELY LONG GOODS DESCRIPTION THAT CANNOT FIT IN ONE CFL CELL"
+    ]);
+    assert.equal(descriptions.length, 1);
+    assert.ok(descriptions[0]!.length <= 40);
+    assert.equal(descriptions[0]!.endsWith("..."), true);
+    assert.equal(descriptions.some((description) => description.includes("MIXED GOODS")), false);
+  });
 });
 
 describe("CFL UK workbook", () => {
@@ -301,11 +346,125 @@ describe("CFL UK workbook", () => {
     assert.equal(sheet.getCell("B156").value, 15, "the entry block must extend beyond the demo template rows");
   });
 
+  it("rebalances bags so combined entry values stay below GBP 41 where possible", async () => {
+    const sourceManifest = ukManifestFixture({
+      bagCount: 15,
+      consignmentCount: 15,
+      parcelValueMinor: (bagIndex) => bagIndex < 2 ? 125_000 : 5_000
+    });
+    const bytes = await buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+    const sheet = workbook.getWorksheet("CFL Manifest Template");
+    assert.ok(sheet);
+    const entryRows = Array.from({ length: 13 }, (_, index) => 16 + index * 10);
+    const valuesGbpMinor = entryRows.map((row) => Math.round(Number(sheet.getCell(row, 9).value) * 100));
+    assert.ok(valuesGbpMinor.every((value) => value < 4_100));
+    assert.equal(valuesGbpMinor.reduce((sum, value) => sum + value, 0), 6_300);
+    const bagGroups = entryRows.map((row) => String(sheet.getCell(row, 11).value).split(",").map(Number));
+    assert.equal(bagGroups.some((bags) => bags.includes(1) && bags.includes(2)), false);
+    assert.deepEqual(bagGroups.flat().sort((left, right) => left - right),
+      Array.from({ length: 15 }, (_, index) => index + 1));
+    assert.equal(entryRows.reduce((sum, row) => sum + Number(sheet.getCell(row, 4).value), 0), 30);
+    assert.equal(entryRows.reduce((sum, row) => sum + Number(sheet.getCell(row, 5).value), 0), 452);
+  });
+
+  it("leaves the value empty when a combined entry reaches or exceeds GBP 41", async () => {
+    for (const parcelValueMinor of [205_000, 205_050]) {
+      const sourceManifest = ukManifestFixture({
+        bagCount: 3,
+        consignmentCount: 5,
+        parcelValueMinor: () => parcelValueMinor
+      });
+      const bytes = await buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 });
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+      const sheet = workbook.getWorksheet("CFL Manifest Template");
+      assert.ok(sheet);
+      assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 9).value), ["", "", ""]);
+    }
+  });
+
+  it("writes a combined entry value of GBP 40.99", async () => {
+    const sourceManifest = ukManifestFixture({
+      bagCount: 3,
+      consignmentCount: 5,
+      parcelValueMinor: () => 204_950
+    });
+    const bytes = await buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+    const sheet = workbook.getWorksheet("CFL Manifest Template");
+    assert.ok(sheet);
+    assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 9).value), [40.99, 40.99, 40.99]);
+  });
+
+  it("supports populated and manual GBP values in the same workbook", async () => {
+    const sourceManifest = ukManifestFixture({
+      bagCount: 3,
+      consignmentCount: 5,
+      parcelValueMinor: (bagIndex) => [50_000, 205_000, 100_000][bagIndex]!
+    });
+    const bytes = await buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+    const sheet = workbook.getWorksheet("CFL Manifest Template");
+    assert.ok(sheet);
+    assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 9).value), [10, "", 20]);
+    assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 10).value), ["GBP", "GBP", "GBP"]);
+    assert.deepEqual([16, 26, 36].map((row) => sheet.getCell(row, 12).value), ["EXP", "EXP", "EXP"]);
+  });
+
+  it("writes no more than four actual description items into each workbook entry", async () => {
+    const sourceManifest = ukManifestFixture({
+      bagCount: 3,
+      consignmentCount: 5,
+      parcelDescription: (_bagIndex, parcelIndex) => parcelIndex === 0
+        ? "HONEY, CLOTHES, SHOES, BOOKS, TOYS, WATCH"
+        : "honey, CHOCOLATE, RAKHI, BAG, SHIRT"
+    });
+    const bytes = await buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+    const sheet = workbook.getWorksheet("CFL Manifest Template");
+    assert.ok(sheet);
+    for (const row of [16, 26, 36]) {
+      const descriptionText: string = Array.from(
+        { length: 10 },
+        (_, offset): string => String(sheet.getCell(row + offset, 8).value ?? "")
+      )
+        .join(" ");
+      const items: string[] = descriptionText.split(",").map((item: string) => item.trim()).filter(Boolean);
+      assert.ok(items.length <= 4);
+      assert.equal(descriptionText.includes("MIXED GOODS"), false);
+    }
+  });
+
+  it("generates the same selected consignments and bag groups on repeated downloads", async () => {
+    const sourceManifest = ukManifestFixture({ bagCount: 15, consignmentCount: 15 });
+    const [firstBytes, secondBytes] = await Promise.all([
+      buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 }),
+      buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 })
+    ]);
+    const workbooks = await Promise.all([firstBytes, secondBytes].map(async (bytes) => {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
+      return workbook.getWorksheet("CFL Manifest Template")!;
+    }));
+    const firstSheet = workbooks[0]!;
+    const secondSheet = workbooks[1]!;
+    const entryRows = Array.from({ length: 13 }, (_, index) => 16 + index * 10);
+    assert.deepEqual(
+      entryRows.map((row) => [firstSheet.getCell(row, 3).value, firstSheet.getCell(row, 11).value]),
+      entryRows.map((row) => [secondSheet.getCell(row, 3).value, secondSheet.getCell(row, 11).value])
+    );
+  });
+
   it("preserves legacy consignment totals when parcel-level values are absent", async () => {
     const sourceManifest = ukManifestFixture({ bagCount: 3, consignmentCount: 5 });
     const snapshot = sourceManifest.sealedSnapshot as unknown as MutableSealedSnapshot;
     snapshot.consignments.forEach((consignment) => {
-      consignment.parcels.forEach((parcel) => { parcel.valueMinor = null; });
+      consignment.parcels!.forEach((parcel) => { parcel.valueMinor = null; });
     });
     const bytes = await buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 });
     const workbook = new ExcelJS.Workbook();
@@ -326,9 +485,44 @@ describe("CFL UK workbook", () => {
     );
   });
 
+  it("rejects invalid parcel values before creating a workbook", async () => {
+    const sourceManifest = ukManifestFixture({ bagCount: 3, consignmentCount: 5 });
+    const snapshot = sourceManifest.sealedSnapshot as unknown as MutableSealedSnapshot;
+    snapshot.consignments[0]!.parcels![0]!.valueMinor = -1;
+    await assert.rejects(
+      buildOperationsManifestUkExcel(sourceManifest, { gbpToInr: 100 }),
+      /parcel contains an invalid declared value/
+    );
+  });
+
+  it("rejects non-UK, pre-parcel, and invalid-rate exports", async () => {
+    const nonUkManifest = ukManifestFixture({ bagCount: 3, consignmentCount: 5 });
+    const nonUkSnapshot = nonUkManifest.sealedSnapshot as unknown as MutableSealedSnapshot;
+    nonUkSnapshot.header!.destinationCountryCode = "DE";
+    await assert.rejects(
+      buildOperationsManifestUkExcel(nonUkManifest, { gbpToInr: 100 }),
+      /available only for United Kingdom/
+    );
+
+    const historicalManifest = ukManifestFixture({ bagCount: 3, consignmentCount: 5 });
+    const historicalSnapshot = historicalManifest.sealedSnapshot as unknown as MutableSealedSnapshot;
+    historicalSnapshot.consignments[0]!.parcels = undefined;
+    await assert.rejects(
+      buildOperationsManifestUkExcel(historicalManifest, { gbpToInr: 100 }),
+      /does not contain parcel-level bag data/
+    );
+
+    await assert.rejects(
+      buildOperationsManifestUkExcel(ukManifestFixture({ bagCount: 3, consignmentCount: 5 }), { gbpToInr: 0 }),
+      /exchange rate is unavailable/
+    );
+  });
+
   it("rounds INR minor units to GBP minor units", () => {
     assert.equal(convertInrMinorToGbpMinor(130_000, 117.5), 1_106);
     assert.equal(convertInrMinorToGbpMinor(100_000, 117.5), 851);
+    assert.throws(() => convertInrMinorToGbpMinor(-1, 117.5), /invalid declared value/);
+    assert.throws(() => convertInrMinorToGbpMinor(100_000, 0), /exchange rate is unavailable/);
   });
 
   it("reconciles entry pennies to the exactly converted manifest total", () => {

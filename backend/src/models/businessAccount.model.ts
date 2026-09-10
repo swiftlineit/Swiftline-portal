@@ -430,8 +430,8 @@ const businessAccountSchema = new mongoose.Schema<IBusinessAccount>(
     ledgerViewedAt: { type: Date, default: null },
     assignedBranch: { type: mongoose.Schema.Types.ObjectId, ref: "Branch", default: null, index: true },
     // New business accounts stay paused until an authorised team member assigns
-    // their commercial rate card. The individual-shipment sentinel is backfilled
-    // to BAND_A and continues to use the legacy counter tariff.
+    // their commercial rate card. The individual-shipment sentinel always uses
+    // the dedicated Band D individual tariff.
     rateCardBand: { type: String, enum: [...rateCardBandValues, null], default: null, index: true },
     // Public self-serve accounts have no internal creator; admin creates with a user.
     origin: { type: String, enum: ["STAFF", "PUBLIC"], default: "STAFF", index: true },
@@ -493,7 +493,7 @@ businessAccountSchema.pre("validate", function normalizeLegacyWorkflowStatus() {
   const status = String(account.status);
 
   if (account.accountKind === "INDIVIDUAL_SENTINEL") {
-    account.rateCardBand = "BAND_A";
+    account.rateCardBand = "BAND_D";
     account.gstBilling = {
       requestedTreatment: "GST_APPLICABLE",
       status: "NOT_REQUIRED",

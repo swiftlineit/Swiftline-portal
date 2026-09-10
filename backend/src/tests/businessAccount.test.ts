@@ -145,14 +145,14 @@ describe("business account GST billing permission", () => {
 });
 
 describe("individual shipment rate-card guard", () => {
-  it("forces the system sentinel to Band A", async () => {
+  it("forces the system sentinel to Band D", async () => {
     const account = new BusinessAccount(validAccountData({
       accountKind: "INDIVIDUAL_SENTINEL",
       rateCardBand: "BAND_C"
     }));
 
     await account.validate();
-    assert.equal(account.rateCardBand, "BAND_A");
+    assert.equal(account.rateCardBand, "BAND_D");
   });
 });
 

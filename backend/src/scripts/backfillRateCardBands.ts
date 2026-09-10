@@ -98,7 +98,7 @@ async function auditRateCardBands() {
       routeCharges: missingRouteCharges,
       businessAccounts: missingAccountBands,
       shares: missingShareBands,
-      sentinel: sentinel && sentinel.rateCardBand !== "BAND_A" ? 1 : 0
+      sentinel: sentinel && sentinel.rateCardBand !== "BAND_D" ? 1 : 0
     },
     conflicts: {
       exactDuplicateSlabs: slabConflicts.exactDuplicates,
@@ -149,8 +149,8 @@ async function backfillRateCardBands() {
       ).exec(),
       RateCardShare.collection.updateMany({ band: { $exists: false } }, { $set: { band: "BAND_A" } }),
       BusinessAccount.updateMany(
-        { accountKind: "INDIVIDUAL_SENTINEL", rateCardBand: { $ne: "BAND_A" } },
-        { $set: { rateCardBand: "BAND_A" } }
+        { accountKind: "INDIVIDUAL_SENTINEL", rateCardBand: { $ne: "BAND_D" } },
+        { $set: { rateCardBand: "BAND_D" } }
       ).exec()
     ]);
 

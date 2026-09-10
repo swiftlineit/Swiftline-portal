@@ -25,6 +25,8 @@
     "migrate:client-identities": "tsx src/scripts/migrateClientIdentity.ts --apply",
     "audit:rate-card-bands": "tsx src/scripts/backfillRateCardBands.ts",
     "backfill:rate-card-bands": "tsx src/scripts/backfillRateCardBands.ts --apply",
+    "audit:individual-rate-card-band": "tsx src/scripts/migrateIndividualRateCardBand.ts",
+    "migrate:individual-rate-card-band": "tsx src/scripts/migrateIndividualRateCardBand.ts --apply",
     "backfill:manifest-party-snapshots": "tsx src/scripts/backfillManifestPartySnapshots.ts",
     "audit:shipment-event-notes": "tsx src/scripts/backfillShipmentEventNotes.ts",
     "backfill:shipment-event-notes": "tsx src/scripts/backfillShipmentEventNotes.ts --apply",

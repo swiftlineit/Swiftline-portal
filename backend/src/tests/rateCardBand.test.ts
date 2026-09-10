@@ -87,10 +87,13 @@ describe("rate-card band resolution", () => {
     );
   });
 
-  test("the individual counter sentinel preserves Band A before or after backfill", async () => {
+  test("the individual sentinel always resolves to Band D", async () => {
     mockAccount({ rateCardBand: null, accountKind: "INDIVIDUAL_SENTINEL" });
-    assert.equal(await resolveRateCardBand({ businessAccountId: "507f1f77bcf86cd799439011" }), "BAND_A");
-    assert.equal(await resolveRateCardBand({ businessAccountId: "507f1f77bcf86cd799439011", rateCardBand: "BAND_C" }), "BAND_A");
+    assert.equal(await resolveRateCardBand({ businessAccountId: "507f1f77bcf86cd799439011" }), "BAND_D");
+    assert.equal(await resolveRateCardBand({ businessAccountId: "507f1f77bcf86cd799439011", rateCardBand: "BAND_C" }), "BAND_D");
+
+    mockAccount({ rateCardBand: "BAND_D", accountKind: "INDIVIDUAL_SENTINEL" });
+    assert.equal(await resolveRateCardBand({ businessAccountId: "507f1f77bcf86cd799439011" }), "BAND_D");
   });
 });
 
@@ -136,6 +139,21 @@ describe("band-aware pricing", () => {
     assert.equal(pricing.totalAmount, 450);
     assert.deepEqual(pricing.lines.map((line) => line.code), ["FREIGHT", "GST"]);
     assert.equal(pricing.pricingBasis.rateCardBand, "BAND_D");
+  });
+
+  test("individual sentinel pricing uses the same Band D GST-inclusive tariff", async () => {
+    mockCommercialData();
+    mockAccount({ rateCardBand: "BAND_A", accountKind: "INDIVIDUAL_SENTINEL" });
+    const pricing = await calculateShipmentPricingEstimate({
+      businessAccountId: "507f1f77bcf86cd799439011",
+      countryCode: "GB",
+      serviceType: "COURIER",
+      parcels: [{ weightKg: 1 }]
+    });
+
+    assert.equal(pricing.pricingBasis.rateCardBand, "BAND_D");
+    assert.equal(pricing.totalAmount, 450);
+    assert.equal(pricing.gstAmount, 68.64);
   });
 });
 
