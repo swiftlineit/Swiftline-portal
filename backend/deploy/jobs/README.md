@@ -1,6 +1,6 @@
 # Scheduled jobs
 
-The portal has eight pieces of recurring maintenance work. Each is a standalone
+The portal has nine pieces of recurring maintenance work. Each is a standalone
 script under `src/scripts/` that connects to MongoDB, does its work, and
 disconnects- the shape an OS scheduler expects. Nothing inside the API runs
 them, by design: a job that runs in the API process would stop when the API
@@ -13,6 +13,7 @@ This directory is what actually schedules them on the EC2 host.
 | `job:credit:expire-reservations` | every 5 min | Abandoned bookings hold the client's credit for ever, so their available limit shrinks with every one |
 | `job:email:drain` | every 5 min | Failed sends are never retried. First attempts still happen in-process, so this is the backoff ladder behind them |
 | `job:flight:exceptions` | every 10 min | Flight delays, customs deadlines, manifest gaps, and connection risks are missed when nobody opens the flight page |
+| `job:public-bookings:purge-expired` | hourly | Expired unpaid public drafts and their KYC uploads remain stored |
 | `job:credit:mark-overdue` | hourly | Facilities live past their expiry date, statement status stays stale, utilisation warnings are never sent |
 | `job:credit:close-billing` | daily 02:00 IST | No statement is ever issued, so no credit customer is ever billed |
 | `job:claims:sweep-deadlines` | daily 02:30 IST | Clients are never warned their appeal window is closing; overdue reviews are never flagged |

@@ -25,6 +25,15 @@ import {
   sendTableExport,
   type TableExportFormat
 } from "../services/export/tableExportHttp.js";
+import { allowedBranchIds } from "../middleware/branchAccess.middleware.js";
+
+function staffBranchIds(request: Request, requested: mongoose.Types.ObjectId | null) {
+  const allowed = allowedBranchIds(request);
+  if (allowed === null) return requested ? [requested] : undefined;
+  const ids = allowed.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id));
+  if (!requested) return ids;
+  return ids.some((id) => String(id) === String(requested)) ? [requested] : [];
+}
 
 function getUserId(request: Request) {
   const value = (request as Request & { user?: { _id?: unknown } }).user?._id;
@@ -100,7 +109,7 @@ export async function listAdminBookedShipments(request: Request, response: Respo
     destinationRegions: destinationRegionsParam(request),
     ...dateRangeParams(request.query),
     businessAccountIds: businessAccountId ? [businessAccountId] : undefined,
-    branchIds: branchId ? [branchId] : undefined,
+    branchIds: staffBranchIds(request, branchId),
     // Staff see every booking that reached the carrier, so this table and the DPD
     // labels panel no longer disagree about which shipments exist.
     bookingStatuses: allShipmentStatuses
@@ -116,7 +125,7 @@ export async function summarizeAdminBookedShipments(request: Request, response: 
   const summary = await summarizeBookedShipments({
     actorRole: "admin",
     businessAccountIds: businessAccountId ? [businessAccountId] : undefined,
-    branchIds: branchId ? [branchId] : undefined,
+    branchIds: staffBranchIds(request, branchId),
     bookingStatuses: allShipmentStatuses
   });
 

@@ -296,3 +296,19 @@ export const publicEmailOtpVerifyLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+
+export const publicShipmentBookingLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: env.NODE_ENV === "production" ? 45 : 500,
+  message: { success: false, message: "Too many booking requests. Please wait a moment and try again." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+export const publicShipmentPaymentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: env.NODE_ENV === "production" ? 10 : 200,
+  message: { success: false, message: "Too many payment attempts. Please wait before trying again." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});

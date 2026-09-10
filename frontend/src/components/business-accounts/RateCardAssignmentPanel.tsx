@@ -10,7 +10,7 @@ import {
 } from "@/lib/businessAccounts";
 import {
   formatRateCardBand,
-  rateCardBands,
+  internalRateCardBands,
   type RateCardBand,
 } from "@/lib/countryRateCards";
 
@@ -112,7 +112,7 @@ export default function RateCardAssignmentPanel({
     >
       <option value="">Unassigned - pause pricing</option>
 
-      {rateCardBands.map((band) => (
+      {internalRateCardBands.map((band) => (
         <option key={band} value={band}>
           {formatRateCardBand(band)}
         </option>

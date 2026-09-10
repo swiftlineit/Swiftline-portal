@@ -8,6 +8,7 @@ import { pickupOtpTemplate } from "./pickupOtp.js";
 import { rateCardSharedTemplate } from "./rateCardShared.js";
 import { claimDecisionTemplate } from "./claimDecision.js";
 import { businessAccountOtpTemplate } from "./businessAccountOtp.js";
+import { publicShipmentBookedTemplate } from "./publicShipmentBooked.js";
 
 export type EmailTemplateContext = {
   recipientName: string;
@@ -45,6 +46,7 @@ const genericNotificationTemplate: EmailTemplate = ({ recipientName, payload, ap
 const registry: Record<string, EmailTemplate> = {
   SHIPMENT_BOOKED_CLIENT: shipmentBookedClientTemplate,
   SHIPMENT_BOOKED_STAFF: shipmentBookedStaffTemplate,
+  PUBLIC_SHIPMENT_BOOKED: publicShipmentBookedTemplate,
   CLIENT_INVITATION: clientInvitationTemplate,
   PASSWORD_RESET: passwordResetTemplate,
   LOGIN_OTP: loginOtpTemplate,

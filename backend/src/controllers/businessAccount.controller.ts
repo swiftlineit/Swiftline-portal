@@ -21,7 +21,11 @@ import { Branch } from "../models/branch.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { AuditLog } from "../models/auditLog.model.js";
-import { CountryRateCard, rateCardBandValues } from "../models/countryRateCard.model.js";
+import {
+  CountryRateCard,
+  internalRateCardBandValues,
+  rateCardBandValues,
+} from "../models/countryRateCard.model.js";
 import { businessAccountBranchFilter } from "../middleware/businessAccountBranchAccess.middleware.js";
 import { excludeSentinel } from "../services/individualCustomer.service.js";
 import { isSupportedDocument } from "../services/storage/fileSignature.js";
@@ -123,7 +127,11 @@ const assignBranchBodySchema = z.object({
   branchId: z.string().trim().refine((value) => mongoose.Types.ObjectId.isValid(value), "Invalid branch ID")
 });
 const assignRateCardBodySchema = z.object({
-  rateCardBand: z.enum(rateCardBandValues).nullable(),
+  // Band D is reserved for public online bookings and must never be assigned
+  // to an internal business account.
+  rateCardBand: z.enum(internalRateCardBandValues).nullable(),
+  // Accept a historical Band D value for optimistic-concurrency checks so a
+  // manually migrated account can still be cleared safely.
   expectedRateCardBand: z.enum(rateCardBandValues).nullable(),
   reason: z.string().trim().min(3, "Enter a reason for this rate-card change.").max(500)
 });

@@ -15,6 +15,7 @@ type BannerSlide = {
 export default function DashboardBanner() {
   const [slides, setSlides] = useState<BannerSlide[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -75,14 +76,14 @@ export default function DashboardBanner() {
   }, []);
 
   useEffect(() => {
-    if (slides.length < 2) return undefined;
+    if (slides.length < 2 || isPaused) return undefined;
 
     const timer = window.setInterval(() => {
       setCurrentIndex((index) => (index + 1) % slides.length);
-    }, 6000);
+    }, 2000);
 
     return () => window.clearInterval(timer);
-  }, [slides.length]);
+  }, [isPaused, slides.length]);
 
   const slide = slides[currentIndex] ?? null;
 
@@ -212,6 +213,8 @@ export default function DashboardBanner() {
   return (
     <section
       aria-label="Dashboard banner"
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
       className="group relative h-full min-h-52.5 overflow-hidden bg-slate-900 sm:min-h-55 lg:min-h-[240px]"
     >
       {/* Banner image */}

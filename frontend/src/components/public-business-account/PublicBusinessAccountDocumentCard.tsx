@@ -54,9 +54,9 @@ export default function PublicBusinessAccountDocumentCard({
       <div className="border-t border-[#E8EFEF] bg-[#FAFCFC] px-3.5 py-3">
         {file ? (
           <div className="flex min-w-0 items-center gap-3">
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 overflow-hidden">
               <p
-                className="truncate text-xs font-semibold text-slate-800"
+                className="block max-w-full truncate text-xs font-semibold text-slate-800"
                 title={file.name}
               >
                 {file.name}

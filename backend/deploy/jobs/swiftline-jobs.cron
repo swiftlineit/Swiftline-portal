@@ -25,6 +25,10 @@ MAILTO=""
 # in-process; this is what walks the 1m/5m/30m/2h/12h backoff ladder behind them.
 */5 * * * *   ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:email:drain
 
+# Delete expired unpaid public booking drafts and their sensitive KYC uploads.
+# Paid and payment-review records are deliberately outside this sweep.
+17 * * * *    ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:public-bookings:purge-expired
+
 # Alert admin and operations when a support ticket misses its first-response
 # deadline. Nothing else can raise this: every other ticket notification hangs
 # off somebody acting, and a breach happens precisely because nobody did- so

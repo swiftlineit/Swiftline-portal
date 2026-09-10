@@ -10,6 +10,7 @@
 import { fetchWithAuth } from "@/lib/shipmentsList";
 import { readJsonSafely } from "@/lib/auth";
 import { resolveCountry } from "@/lib/countryLookup";
+import { apiUrl } from "@/lib/api";
 
 export type GeographyState = { name: string; code: string };
 
@@ -22,7 +23,8 @@ const inFlight = new Map<string, Promise<unknown>>();
 // thing that used to stop Croatia getting a real state dropdown was a name this
 // lookup did not recognise. A country the dataset does not cover still returns
 // an empty list, and the caller falls back to a free-text field.
-const getCountryCode = (countryName: string) => resolveCountry(countryName)?.iso2.toUpperCase() ?? "";
+const getCountryCode = (countryName: string) =>
+  resolveCountry(countryName)?.iso2.toUpperCase() ?? "";
 
 // One request per key, even when several controls mount at once.
 function dedupe<T>(key: string, run: () => Promise<T>): Promise<T> {
@@ -36,19 +38,32 @@ function dedupe<T>(key: string, run: () => Promise<T>): Promise<T> {
   return promise;
 }
 
-export async function fetchStates(countryName: string): Promise<GeographyState[]> {
+export async function fetchStates(
+  countryName: string,
+  endpointRoot = "/api/v1/reference",
+): Promise<GeographyState[]> {
   const countryCode = getCountryCode(countryName);
+  const cacheKey = `${endpointRoot}:${countryCode}`;
 
   if (!countryCode) return [];
-  if (statesCache.has(countryCode)) return statesCache.get(countryCode) ?? [];
+  if (statesCache.has(cacheKey)) return statesCache.get(cacheKey) ?? [];
 
-  return dedupe(`states:${countryCode}`, async () => {
+  return dedupe(`states:${endpointRoot}:${countryCode}`, async () => {
     try {
-      const response = await fetchWithAuth(`/api/v1/reference/countries/${countryCode}/states`);
-      const payload = await readJsonSafely(response) as { success?: boolean; states?: GeographyState[] };
-      const states = response.ok && payload.success && Array.isArray(payload.states) ? payload.states : [];
+      const path = `${endpointRoot}/countries/${countryCode}/states`;
+      const response = endpointRoot.includes("/public/")
+        ? await fetch(apiUrl(path), { credentials: "include" })
+        : await fetchWithAuth(path);
+      const payload = (await readJsonSafely(response)) as {
+        success?: boolean;
+        states?: GeographyState[];
+      };
+      const states =
+        response.ok && payload.success && Array.isArray(payload.states)
+          ? payload.states
+          : [];
 
-      statesCache.set(countryCode, states);
+      statesCache.set(cacheKey, states);
       return states;
     } catch {
       // A lookup failure must not block the form: the caller falls back to a
@@ -58,23 +73,34 @@ export async function fetchStates(countryName: string): Promise<GeographyState[]
   });
 }
 
-export async function fetchCities(countryName: string, stateCode: string): Promise<string[]> {
+export async function fetchCities(
+  countryName: string,
+  stateCode: string,
+  endpointRoot = "/api/v1/reference",
+): Promise<string[]> {
   const countryCode = getCountryCode(countryName);
   const state = stateCode.trim();
 
   if (!countryCode || !state) return [];
 
-  const key = `${countryCode}:${state}`;
+  const key = `${endpointRoot}:${countryCode}:${state}`;
 
   if (citiesCache.has(key)) return citiesCache.get(key) ?? [];
 
-  return dedupe(`cities:${key}`, async () => {
+  return dedupe(`cities:${endpointRoot}:${key}`, async () => {
     try {
-      const response = await fetchWithAuth(
-        `/api/v1/reference/countries/${countryCode}/states/${encodeURIComponent(state)}/cities`
-      );
-      const payload = await readJsonSafely(response) as { success?: boolean; cities?: string[] };
-      const cities = response.ok && payload.success && Array.isArray(payload.cities) ? payload.cities : [];
+      const path = `${endpointRoot}/countries/${countryCode}/states/${encodeURIComponent(state)}/cities`;
+      const response = endpointRoot.includes("/public/")
+        ? await fetch(apiUrl(path), { credentials: "include" })
+        : await fetchWithAuth(path);
+      const payload = (await readJsonSafely(response)) as {
+        success?: boolean;
+        cities?: string[];
+      };
+      const cities =
+        response.ok && payload.success && Array.isArray(payload.cities)
+          ? payload.cities
+          : [];
 
       citiesCache.set(key, cities);
       return cities;
@@ -89,7 +115,9 @@ export async function fetchCities(countryName: string, stateCode: string): Promi
 export function findStateCode(states: GeographyState[], stateName: string) {
   const target = stateName.trim().toLowerCase();
 
-  return states.find((state) => state.name.toLowerCase() === target)?.code ?? "";
+  return (
+    states.find((state) => state.name.toLowerCase() === target)?.code ?? ""
+  );
 }
 
 function normalizePlaceName(value: string) {
@@ -114,8 +142,11 @@ export function matchStateName(states: GeographyState[], stateName: string) {
 
   if (!target) return "";
 
-  const match = states.find((state) =>
-    normalizePlaceName(state.name) === target || normalizePlaceName(state.code) === target);
+  const match = states.find(
+    (state) =>
+      normalizePlaceName(state.name) === target ||
+      normalizePlaceName(state.code) === target,
+  );
 
   return match?.name ?? "";
 }

@@ -57,6 +57,7 @@ import { dashboardBannerRouter } from "./routes/dashboardBanner.routes.js";
 import { bookingPauseRouter } from "./routes/bookingPause.routes.js";
 import { flightLinehaulRouter } from "./routes/flightLinehaul.routes.js";
 import { publicBusinessAccountRouter } from "./routes/publicBusinessAccount.routes.js";
+import { publicShipmentBookingRouter } from "./routes/publicShipmentBooking.routes.js";
 
 export const app = express();
 
@@ -141,6 +142,8 @@ app.use("/api/v1/public/rate-cards", publicRateCardRouter);
 app.use("/api/v1/public/tracking", publicTrackingRouter);
 // Public business account self-serve - no session, email OTP + captcha gated.
 app.use("/api/v1/public/business-accounts", publicBusinessAccountRouter);
+// Public booking uses its own HttpOnly session and Razorpay-backed fulfilment.
+app.use("/api/v1/public/shipment-bookings", publicShipmentBookingRouter);
 app.use("/api/v1/dpd-shipments", dpdShipmentRouter);
 app.use("/api/v1/shipment-imports", shipmentImportRouter);
 app.use("/api/v1/shipment-drafts", shipmentDraftRouter);

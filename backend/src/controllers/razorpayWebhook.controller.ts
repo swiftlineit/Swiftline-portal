@@ -11,6 +11,7 @@ import {
   markCreditPaymentFailed
 } from "../services/creditPayment.service.js";
 import { SYSTEM_ACTOR_ID } from "../utils/systemActor.js";
+import { applyCapturedPublicPaymentWebhook, markPublicPaymentFailed } from "../services/publicShipmentBooking.service.js";
 
 function getHeaderValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
@@ -142,6 +143,17 @@ export async function handleRazorpayWebhook(request: Request, response: Response
         return response.status(200).json({ success: true });
       }
 
+      const handledPublicBooking = await applyCapturedPublicPaymentWebhook({
+        orderId,
+        paymentId: payment.id,
+        amountMinor: payment.amount,
+        currency: payment.currency,
+      });
+      if (handledPublicBooking) {
+        await markWebhookProcessed(providerEventId, "PROCESSED");
+        return response.status(200).json({ success: true });
+      }
+
       const creditPayment = await findCreditPaymentByRazorpayOrderId(orderId);
       if (!creditPayment) {
         await markWebhookProcessed(providerEventId, "IGNORED", "No matching portal payment found.");
@@ -173,7 +185,7 @@ export async function handleRazorpayWebhook(request: Request, response: Response
           failureCode: payment?.error_code,
           failureDescription: payment?.error_description
         });
-      } else {
+      } else if (!await markPublicPaymentFailed(orderId, payment?.error_description || payment?.error_code || "Razorpay payment failed.")) {
         await markCreditPaymentFailed(orderId, payment?.error_description || payment?.error_code || "Razorpay payment failed.");
       }
       await markWebhookProcessed(providerEventId, "PROCESSED");

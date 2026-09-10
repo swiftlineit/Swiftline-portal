@@ -54,8 +54,8 @@ const faqs = [
   {
     question: "Do I need an account to track a shipment?",
     answer:
-      "No. Tracking is open to anyone holding the number. Accounts are only needed to book " +
-      "shipments, download invoices and manage documents.",
+      "No. Tracking is open to anyone holding the number, and individuals can book and pay " +
+      "online without an account. A business account adds team, invoice and document management tools.",
   },
   {
     question: "My shipment has several parcels. Can I track just one?",
@@ -198,9 +198,9 @@ export default function PublicTrackingLanding() {
 
       {/* Services */}
       <section className="mt-14 sm:mt-16 lg:mt-20">
-        <div className="mx-auto max-w-7xl">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {services.map((service, index) => {
+            {services.map((service) => {
               const Icon = service.icon;
 
               return (
@@ -244,7 +244,7 @@ export default function PublicTrackingLanding() {
 
       {/* FAQ */}
       <section className="mt-14 pt-14 sm:mt-16 sm:pt-16 lg:mt-10 lg:pt-10">
-        <div className="mx-auto max-w-7xl">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_55px_rgba(15,23,42,0.06)]">
             {/* Top accent */}
             <div className="absolute inset-x-0 top-0 h-0.75 bg-linear-to-r from-[#d71920] via-[#d71920] to-[#0D1282]" />

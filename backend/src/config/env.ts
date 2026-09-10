@@ -93,6 +93,14 @@ const environmentSchema = z.object({
   // How long an unpaid order still counts against the daily total. Without this
   // an abandoned checkout would hold its share of the allowance until midnight.
   RAZORPAY_TOPUP_PENDING_TTL_MINUTES: z.coerce.number().int().positive().default(30),
+  // Public online bookings are assigned server-side to this active branch. The
+  // customer never chooses a branch and the value is frozen on the draft,
+  // payment and shipment. A missing value keeps checkout safely unavailable.
+  PUBLIC_BOOKING_BRANCH_ID: z.preprocess(
+    (value) => value === "" ? undefined : value,
+    z.string().regex(/^[a-f\d]{24}$/i, "PUBLIC_BOOKING_BRANCH_ID must be a MongoDB ObjectId").optional(),
+  ),
+  PUBLIC_BOOKING_SESSION_HOURS: z.coerce.number().int().positive().max(168).default(24),
   // "Sign in with Google" verifies the ID token's audience against this client ID.
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   // reCAPTCHA v3 siteverify secret for the email/password login form.

@@ -5,6 +5,7 @@ import { env } from "../config/env.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
+import { LabelDocument } from "../models/labelDocument.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
@@ -100,6 +101,7 @@ before(async () => {
     BusinessAccount.init(),
     ShipmentDraft.init(),
     DpdShipment.init(),
+    LabelDocument.init(),
     ShipmentEvent.init()
   ]);
   branchId = await createBranch();
@@ -148,6 +150,64 @@ describe("shipment listing read path", () => {
     const clamped = await listBookedShipments({ ...base, page: 99, limit: 1 });
     assert.equal(clamped.pagination.page, 1);
     assert.equal(clamped.pagination.total, 1);
+  });
+
+  test("reports route-aware DPD label status to staff without exposing it to clients", async () => {
+    const available = await createBookedDraft(accountOneId, "DPD-AVAILABLE");
+    const missing = await createBookedDraft(accountOneId, "DPD-MISSING");
+    const notApplicable = await createBookedDraft(accountOneId, "DPD-NA");
+
+    await Promise.all([
+      LabelDocument.create({
+        dpdShipmentId: available.booking._id,
+        parcelNumber: "DPD-AVAILABLE",
+        labelType: "DPD",
+        format: "PDF",
+        labelSize: "A4",
+        storageKey: "tests/dpd-available.pdf",
+        fileChecksum: "dpd-available-checksum"
+      }),
+      ShipmentDraft.updateOne(
+        { _id: notApplicable.draft._id },
+        {
+          $set: {
+            "consigneeEnteredAddress.countryCode": "US",
+            "consigneeEnteredAddress.countryName": "United States"
+          }
+        }
+      ).exec()
+    ]);
+
+    const base = {
+      page: 1,
+      limit: 50,
+      actorRole: "admin" as const,
+      status: "",
+      search: "",
+      sort: "",
+      bookingStatuses: allShipmentStatuses,
+      businessAccountIds: [accountOneId]
+    };
+    const staffResult = await listBookedShipments(base);
+    const staffById = new Map(staffResult.shipments.map((shipment) => [shipment.id, shipment]));
+
+    assert.equal(staffById.get(String(available.draft._id))?.dpdLabelStatus, "AVAILABLE");
+    assert.equal(staffById.get(String(missing.draft._id))?.dpdLabelStatus, "NOT_AVAILABLE");
+    assert.equal(staffById.get(String(notApplicable.draft._id))?.dpdLabelStatus, "NOT_APPLICABLE");
+
+    await LabelDocument.updateOne(
+      { dpdShipmentId: available.booking._id, labelType: "DPD" },
+      { $set: { voidedAt: new Date() } }
+    ).exec();
+    const afterVoid = await listBookedShipments(base);
+    assert.equal(
+      afterVoid.shipments.find((shipment) => shipment.id === String(available.draft._id))?.dpdLabelStatus,
+      "NOT_AVAILABLE"
+    );
+
+    const clientResult = await listBookedShipments({ ...base, actorRole: "client" });
+    assert.ok(clientResult.shipments.length > 0);
+    assert.ok(clientResult.shipments.every((shipment) => !("dpdLabelStatus" in shipment)));
   });
 
   test("dashboard summary mode preserves the visible shipment fields without loading detail collections", async () => {

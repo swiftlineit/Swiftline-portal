@@ -23,7 +23,7 @@ afterEach(() => {
   CountryRouteCharge.findOne = originalRouteFindOne;
 });
 
-function mockAccount(account: { rateCardBand?: "BAND_A" | "BAND_B" | "BAND_C" | null; accountKind?: string } | null) {
+function mockAccount(account: { rateCardBand?: "BAND_A" | "BAND_B" | "BAND_C" | "BAND_D" | null; accountKind?: string } | null) {
   BusinessAccount.findById = (() => ({
     select: () => ({
       lean: () => ({ session() { return this; }, exec: async () => account })
@@ -32,11 +32,13 @@ function mockAccount(account: { rateCardBand?: "BAND_A" | "BAND_B" | "BAND_C" | 
 }
 
 function mockCommercialData() {
-  CountryRateCard.find = ((filter: { band: "BAND_A" | "BAND_B" | "BAND_C" }) => ({
+  CountryRateCard.find = ((filter: { band: "BAND_A" | "BAND_B" | "BAND_C" | "BAND_D" }) => ({
     sort: () => ({
       lean: () => ({
         session() { return this; },
-        exec: async () => filter.band === "BAND_C"
+        exec: async () => filter.band === "BAND_D"
+          ? [{ _id: "d-rate", fromKg: 0, toKg: 30, chargesPerKg: 450, maxBoxKg: 30, gstTreatment: "EXCLUDED", gstRatePercent: 18 }]
+          : filter.band === "BAND_C"
           ? [{ _id: "c-rate", fromKg: 0, toKg: 30, chargesPerKg: 100, maxBoxKg: 30 }]
           : filter.band === "BAND_A"
             ? [{ _id: "a-rate", fromKg: 0, toKg: 30, chargesPerKg: 200, maxBoxKg: 30 }]
@@ -45,10 +47,12 @@ function mockCommercialData() {
     })
   })) as unknown as typeof CountryRateCard.find;
 
-  CountryRouteCharge.findOne = ((filter: { band: "BAND_A" | "BAND_B" | "BAND_C" }) => ({
+  CountryRouteCharge.findOne = ((filter: { band: "BAND_A" | "BAND_B" | "BAND_C" | "BAND_D" }) => ({
     lean: () => ({
       session() { return this; },
-      exec: async () => filter.band === "BAND_C"
+      exec: async () => filter.band === "BAND_D"
+        ? { fuelSurchargePercent: 0, remoteAreaCharge: 0, remoteAreaPostcodes: [], handlingCharge: 0, insurancePercent: 0, insuranceMinimum: 0, discountPercent: 0, updatedAt: new Date("2026-08-05T00:00:00.000Z") }
+        : filter.band === "BAND_C"
         ? { fuelSurchargePercent: 8, remoteAreaCharge: 0, remoteAreaPostcodes: [], handlingCharge: 0, insurancePercent: 0, insuranceMinimum: 0, discountPercent: 0, updatedAt: new Date("2026-08-05T00:00:00Z") }
         : { fuelSurchargePercent: 18, remoteAreaCharge: 0, remoteAreaPostcodes: [], handlingCharge: 0, insurancePercent: 0, insuranceMinimum: 0, discountPercent: 0, updatedAt: new Date("2026-08-05T00:00:00Z") }
     })
@@ -75,6 +79,12 @@ describe("rate-card band resolution", () => {
       resolveRateCardBand({ businessAccountId: "507f1f77bcf86cd799439011" }),
       (error: unknown) => error instanceof RateCardRequiredError && error.code === "RATE_CARD_REQUIRED"
     );
+
+    mockAccount({ rateCardBand: "BAND_D", accountKind: "BUSINESS" });
+    await assert.rejects(
+      resolveRateCardBand({ businessAccountId: "507f1f77bcf86cd799439011" }),
+      (error: unknown) => error instanceof RateCardRequiredError && error.code === "PUBLIC_RATE_CARD_NOT_FOR_INTERNAL_ACCOUNT"
+    );
   });
 
   test("the individual counter sentinel preserves Band A before or after backfill", async () => {
@@ -92,9 +102,11 @@ describe("band-aware pricing", () => {
     const bandC = await calculateShipmentPricingEstimate({ ...common, rateCardBand: "BAND_C" });
 
     assert.equal(bandA.parcels[0]?.chargesPerKg, 200);
-    assert.equal(bandA.fuelSurchargeAmount, 360);
+    // Route charges are GST-inclusive too, so the persisted breakdown allocates
+    // their tax-exclusive share while the total remains the commercial amount.
+    assert.equal(bandA.fuelSurchargeAmount, 305.08);
     assert.equal(bandC.parcels[0]?.chargesPerKg, 100);
-    assert.equal(bandC.fuelSurchargeAmount, 80);
+    assert.equal(bandC.fuelSurchargeAmount, 67.8);
     assert.equal(bandA.pricingBasis.rateCardBand, "BAND_A");
     assert.equal(bandC.pricingBasis.rateCardBand, "BAND_C");
     assert.notEqual(buildPricingHash(bandA), buildPricingHash(bandC));
@@ -105,6 +117,25 @@ describe("band-aware pricing", () => {
     const input = { countryCode: "GB", serviceType: "COURIER" as const, parcels: [{ weightKg: 10 }] };
     assert.equal((await calculateShipmentPricingEstimate({ ...input, rateCardBand: "BAND_B" })).missingRate, true);
     assert.equal((await calculateShipmentPricingEstimate({ ...input, rateCardBand: "BAND_C" })).missingRate, false);
+  });
+
+  test("Band D treats the entered public rate as GST-inclusive", async () => {
+    mockCommercialData();
+    const pricing = await calculateShipmentPricingEstimate({
+      countryCode: "GB",
+      serviceType: "COURIER",
+      parcels: [{ weightKg: 1 }],
+      rateCardBand: "BAND_D",
+      gstRate: 0.18,
+    });
+
+    assert.equal(pricing.parcels[0]?.chargesPerKg, 450);
+    assert.equal(pricing.inclusiveAmounts?.freightAmount, 450);
+    assert.equal(pricing.freightAmount, 381.36);
+    assert.equal(pricing.gstAmount, 68.64);
+    assert.equal(pricing.totalAmount, 450);
+    assert.deepEqual(pricing.lines.map((line) => line.code), ["FREIGHT", "GST"]);
+    assert.equal(pricing.pricingBasis.rateCardBand, "BAND_D");
   });
 });
 

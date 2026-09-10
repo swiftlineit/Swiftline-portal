@@ -1031,9 +1031,9 @@ export default function PublicBusinessAccountPage() {
   return (
     <>
       {/* Page content theme */}
-      <div className="">
-        <div className="mx-auto w-full max-w-362.5 px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
-          <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)] lg:items-start xl:grid-cols-[350px_minmax(0,1fr)] xl:gap-8 2xl:grid-cols-[390px_minmax(0,952px)] 2xl:justify-center">
+      <div className="bg-gray-200">
+        <div className="mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+          <div className="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)] lg:items-start xl:grid-cols-[20rem_minmax(0,1fr)] xl:gap-8">
             <PublicBusinessAccountSidebar />
 
             {/* Right application workspace */}
@@ -1051,7 +1051,7 @@ export default function PublicBusinessAccountPage() {
                 ) : null}
 
                 {/* Current step heading */}
-                <div className="relative mb-4 overflow-hidden rounded-xl border border-slate-200 bg-[#F7F9F9] px-5 py-5 sm:px-6 sm:py-6">
+                <div className="relative mb-4 overflow-hidden rounded-xl border border-slate-200 bg-[#F7F9F9] px-4 py-5 sm:px-6 sm:py-6">
                   {/* Decorative illustration */}
                   <div
                     aria-hidden="true"
@@ -1081,7 +1081,6 @@ export default function PublicBusinessAccountPage() {
                       </p>
                     </div>
 
-                  
                   </div>
                 </div>
 
@@ -1102,8 +1101,7 @@ export default function PublicBusinessAccountPage() {
                   <div className="flex-1 bg-white px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
                     {/* Step 1: contact details */}
                     {step === 0 ? (
-                      <div className="space-y-5 rounded-xl border border-[#D6E5E7] bg-[#F8FBFB] px-5 py-5 sm:px-6">
-                        {/* Contact name */}
+<div className="space-y-5 rounded-none border-0 bg-transparent px-0 py-5 sm:rounded-xl sm:border sm:border-[#D6E5E7] sm:bg-[#F8FBFB] sm:px-6">                        {/* Contact name */}
                         <div className="grid gap-4 md:grid-cols-3">
                           <SearchableSelect
                             label="Title"
@@ -1651,12 +1649,12 @@ export default function PublicBusinessAccountPage() {
                                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-emerald-100 text-emerald-700">
                                       <FiCheck className="h-4 w-4" />
                                     </span>
-                                    <div className="min-w-0">
+                                    <div className="min-w-0 flex-1 overflow-hidden">
                                       <p className="text-xs font-semibold text-slate-800">
                                         {getDocumentLabel(df.type)}
                                       </p>
                                       <p
-                                        className="mt-1 truncate text-[11px] font-medium text-emerald-700"
+                                        className="mt-1 block max-w-full truncate text-[11px] font-medium text-emerald-700"
                                         title={file.name}
                                       >
                                         {file.name}
@@ -1763,7 +1761,7 @@ export default function PublicBusinessAccountPage() {
                       <button
                       type="button"
                       onClick={clearDraft}
-                      className="relative z-20 inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-900 lg:mr-53.75"
+                      className="relative z-20 inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-900"
                       title="Clear saved draft"
                     >
                       Clear draft

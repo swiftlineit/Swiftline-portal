@@ -2,11 +2,13 @@ import mongoose from "mongoose";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { DpdShipment, type DpdShipmentStatus } from "../models/dpdShipment.model.js";
+import { LabelDocument } from "../models/labelDocument.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent, shipmentOperationalStatusValues } from "../models/shipmentEvent.model.js";
 import { buildDeliveryEstimates } from "./shipmentTracking.service.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
+import { isDpdLabelDestination } from "./als/alsPayload.service.js";
 import { dateRangeCondition } from "../utils/dateRangeFilter.js";
 import { normalizeCsbType } from "./csbType.service.js";
 import { readShipmentBookingSnapshot } from "./shipmentBookingSnapshot.service.js";
@@ -423,6 +425,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   const draftProjection = [
     "businessAccountId",
     "branchId",
+    "creationSource",
     "customerType",
     "consignorAddress.contactName",
     "consigneeEnteredAddress",
@@ -515,6 +518,28 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     .filter((event) => event.status === "SHIPMENT_CANCELLED")
     .map((event) => String(event.shipmentDraftId)));
 
+  // Carrier-label readiness is internal operational data. Only load it for the
+  // staff list, and only for routes where a DPD label is actually applicable.
+  // A carrier booking id alone is not proof that the document was stored.
+  const dpdLabelDraftIds = new Set(filter.actorRole === "admin"
+    ? drafts
+      .filter((draft) => isDpdLabelDestination(
+        (draft.consigneeValidatedAddress ?? draft.consigneeEnteredAddress)?.countryCode
+      ))
+      .map((draft) => String(draft._id))
+    : []);
+  const bookingIdsForLabelCheck = bookings
+    .filter((booking) => dpdLabelDraftIds.has(String(booking.shipmentDraftId)))
+    .map((booking) => booking._id);
+  const dpdShipmentIdsWithLabel = bookingIdsForLabelCheck.length
+    ? await LabelDocument.distinct("dpdShipmentId", {
+      dpdShipmentId: { $in: bookingIdsForLabelCheck },
+      labelType: "DPD",
+      voidedAt: null
+    }).exec() as mongoose.Types.ObjectId[]
+    : [];
+  const dpdLabelShipmentIdSet = new Set(dpdShipmentIdsWithLabel.map((id) => String(id)));
+
   const shipments = drafts.map((draft) => {
     const draftId = String(draft._id);
     const booking = bookingByDraft.get(draftId);
@@ -531,6 +556,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
 
     return {
       id: draftId,
+      creationSource: draft.creationSource,
       businessAccountId: String(draft.businessAccountId),
       // A walk-in is booked against the system sentinel, whose name is bookkeeping.
       // The list shows the person who actually sent the shipment instead.
@@ -601,6 +627,15 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
         && booking?.status === "LABEL_RECEIVED"
         && Boolean(snapshot)
         && cancelledDraftIds.has(draftId) === false,
+      ...(filter.actorRole === "admin"
+        ? {
+          dpdLabelStatus: isDpdLabelDestination(consignee?.countryCode)
+            ? booking && dpdLabelShipmentIdSet.has(String(booking._id))
+              ? "AVAILABLE" as const
+              : "NOT_AVAILABLE" as const
+            : "NOT_APPLICABLE" as const
+        }
+        : {}),
       createdAt: draft.createdAt ?? null,
       updatedAt: draft.updatedAt ?? null
     };

@@ -10,6 +10,7 @@ export default function PublicHeader() {
 
   const isTrack = pathname?.startsWith("/track");
   const isBusiness = pathname?.startsWith("/request/business-account");
+  const isBooking = pathname?.startsWith("/book-shipment-online");
 
   const desktopNavClass =
     "relative inline-flex h-11 items-center px-3 text-sm font-semibold transition-colors";
@@ -20,7 +21,7 @@ export default function PublicHeader() {
   return (
     <header className="border-b border-white/10 bg-[#10175A] text-white">
       {/* Main header row */}
-      <div className="mx-auto flex w-full max-w-[1450px] items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
         {/* Brand */}
         <Link
           href="/"
@@ -51,6 +52,13 @@ export default function PublicHeader() {
           aria-label="Public navigation"
           className="hidden items-center gap-5 md:flex"
         >
+          <Link
+            href="/book-shipment-online"
+            className={`${desktopNavClass} ${isBooking ? "text-white" : "text-white/65 hover:text-white"}`}
+          >
+            Book shipment
+            {isBooking ? <span aria-hidden="true" className="absolute inset-x-3 bottom-0 h-0.5 bg-[#d71920]" /> : null}
+          </Link>
           <Link
             href="/track"
             className={`${desktopNavClass} ${
@@ -151,6 +159,11 @@ export default function PublicHeader() {
         aria-label="Public mobile navigation"
         className="flex border-t border-white/10 bg-[#0C124B] px-4 md:hidden"
       >
+        <Link href="/book-shipment-online" className={`${mobileNavClass} ${isBooking ? "text-white" : "text-white/55 hover:text-white"}`}>
+          Book
+          {isBooking ? <span aria-hidden="true" className="absolute inset-x-8 bottom-0 h-0.5 bg-[#d71920]" /> : null}
+        </Link>
+        <span aria-hidden="true" className="my-2.5 w-px bg-white/10" />
         <Link
           href="/track"
           className={`${mobileNavClass} ${

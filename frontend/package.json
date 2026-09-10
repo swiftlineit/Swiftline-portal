@@ -13,7 +13,8 @@
     "test:rate-card-import-match": "tsx --test src/lib/rateCardImportMatch.test.ts",
     "test:shipment-quotes": "tsx --test src/lib/shipmentQuotes.test.ts",
     "sync:countries": "node scripts/sync-country-catalogue.mjs",
-    "test:regions": "tsx --test src/lib/rateCardRegions.test.ts"
+    "test:regions": "tsx --test src/lib/rateCardRegions.test.ts",
+    "test:e2e:public-booking": "playwright test e2e/public-shipment-booking.spec.ts"
   },
   "dependencies": {
     "@zxing/browser": "^0.2.1",

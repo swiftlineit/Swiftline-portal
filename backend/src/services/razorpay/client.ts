@@ -16,6 +16,14 @@ export type RazorpayPaymentResponse = {
   status: string;
 };
 
+export type RazorpayRefundResponse = {
+  id: string;
+  payment_id: string;
+  amount: number;
+  currency: string;
+  status: string;
+};
+
 function getRazorpayCredentials() {
   if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
     throw new Error("Razorpay credentials are not configured.");
@@ -106,4 +114,31 @@ export async function captureRazorpayPayment(input: {
   }
 
   return data as RazorpayPaymentResponse;
+}
+
+/** Idempotent refund for a captured payment whose shipment never became durable. */
+export async function createRazorpayRefund(input: {
+  paymentId: string;
+  amountMinor: number;
+  idempotencyKey: string;
+}) {
+  const credentials = getRazorpayCredentials();
+  const auth = Buffer.from(`${credentials.keyId}:${credentials.keySecret}`).toString("base64");
+  const response = await fetch(
+    `https://api.razorpay.com/v1/payments/${encodeURIComponent(input.paymentId)}/refund`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/json",
+        "X-Razorpay-Idempotency-Key": input.idempotencyKey,
+      },
+      body: JSON.stringify({ amount: input.amountMinor, speed: "normal" }),
+    },
+  );
+  const data = await response.json() as Partial<RazorpayRefundResponse> & { error?: { description?: string } };
+  if (!response.ok || !data.id || typeof data.amount !== "number") {
+    throw new Error(data.error?.description || "Razorpay refund could not be created.");
+  }
+  return data as RazorpayRefundResponse;
 }

@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { FiSearch } from "react-icons/fi";
-import { Field, type FieldStatus } from "@/components/business-accounts/FormFieldControls";
+import {
+  Field,
+  type FieldStatus,
+} from "@/components/business-accounts/FormFieldControls";
 import {
   MIN_LOOKUP_LENGTH,
   autocompleteAddress,
@@ -11,7 +14,7 @@ import {
   getLookupPlaceholder,
   supportsAddressLookup,
   type AddressPrediction,
-  type LookupAddress
+  type LookupAddress,
 } from "@/lib/addressLookup";
 
 /**
@@ -33,7 +36,8 @@ export function AddressAutocompleteField({
   error,
   status = "idle",
   disabled = false,
-  required = false
+  required = false,
+  endpointRoot,
 }: {
   label: string;
   value: string;
@@ -46,13 +50,17 @@ export function AddressAutocompleteField({
   status?: FieldStatus;
   disabled?: boolean;
   required?: boolean;
+  endpointRoot?: string;
 }) {
   // Results carry the query they answered, so a slower response for an older
   // query can never be shown against a newer one- and "searching" falls out of
   // the same comparison instead of being toggled in an effect.
-  const [results, setResults] = useState<{ query: string; predictions: AddressPrediction[] }>({
+  const [results, setResults] = useState<{
+    query: string;
+    predictions: AddressPrediction[];
+  }>({
     query: "",
-    predictions: []
+    predictions: [],
   });
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -75,7 +83,12 @@ export function AddressAutocompleteField({
     let cancelled = false;
     // Debounced so a lookup runs per pause, not per keystroke.
     const timer = setTimeout(() => {
-      void autocompleteAddress(trimmedQuery, countryName, sessionTokenRef.current).then((predictions) => {
+      void autocompleteAddress(
+        trimmedQuery,
+        countryName,
+        sessionTokenRef.current,
+        endpointRoot,
+      ).then((predictions) => {
         if (!cancelled) setResults({ query: trimmedQuery, predictions });
       });
     }, 400);
@@ -84,7 +97,7 @@ export function AddressAutocompleteField({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [trimmedQuery, countryName, searchable]);
+  }, [trimmedQuery, countryName, searchable, endpointRoot]);
 
   useEffect(() => {
     if (!open) return;
@@ -100,7 +113,12 @@ export function AddressAutocompleteField({
   async function handleSelect(prediction: AddressPrediction) {
     setOpen(false);
 
-    const address = await getLookupAddress(prediction.placeId, countryName, sessionTokenRef.current);
+    const address = await getLookupAddress(
+      prediction.placeId,
+      countryName,
+      sessionTokenRef.current,
+      endpointRoot,
+    );
 
     // The token is spent once details are fetched; the next search starts a new
     // billable session.
@@ -119,13 +137,20 @@ export function AddressAutocompleteField({
           setQuery(next);
           setOpen(true);
         }}
-        onBlur={onBlur}
+        onBlur={() => {
+          // A suggestion uses mousedown, so closing on the next task keeps that
+          // selection working while removing stale results after keyboard tab.
+          setTimeout(() => setOpen(false), 0);
+          onBlur?.();
+        }}
         error={error}
         status={searching ? "validating" : status}
         placeholder={enabled ? getLookupPlaceholder(countryName) : undefined}
-        info={enabled
-          ? "Start typing and pick your address to fill the fields below, or type the whole address yourself."
-          : "Enter the address manually. Search is not available for the selected country."}
+        info={
+          enabled
+            ? "Start typing and pick your address to fill the fields below, or type the whole address yourself."
+            : "Enter the address manually. Search is not available for the selected country."
+        }
         disabled={disabled}
         required={required}
       />
@@ -145,7 +170,10 @@ export function AddressAutocompleteField({
                 }}
                 className="flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left hover:bg-[#EEEDED]/60"
               >
-                <FiSearch aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                <FiSearch
+                  aria-hidden="true"
+                  className="mt-0.5 h-4 w-4 shrink-0 text-slate-400"
+                />
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-semibold text-slate-950">
                     {prediction.mainText || prediction.text}

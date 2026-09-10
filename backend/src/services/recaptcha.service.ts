@@ -16,11 +16,13 @@ type SiteverifyResponse = {
  * Google-side outage shouldn't lock every user out of the portal. The score
  * cutoff is only enforced when siteverify actually answers.
  */
-export async function verifyRecaptcha(token: string | undefined, remoteIp?: string): Promise<boolean> {
-  if (!isRecaptchaEnabled() || !env.RECAPTCHA_SECRET_KEY) return true;
+export async function verifyRecaptcha(token: string | undefined, remoteIp?: string, options: { failOpen?: boolean } = {}): Promise<boolean> {
+  const failOpen = options.failOpen ?? true;
+  if (!isRecaptchaEnabled()) return true;
+  if (!env.RECAPTCHA_SECRET_KEY) return failOpen;
   if (!token) {
-    console.warn("reCAPTCHA token missing on login attempt; allowing through (fail-open).");
-    return true;
+    console.warn(`reCAPTCHA token missing; ${failOpen ? "allowing through" : "blocking request"}.`);
+    return failOpen;
   }
 
   try {
@@ -69,10 +71,10 @@ export async function verifyRecaptcha(token: string | undefined, remoteIp?: stri
     }
     return true;
   } catch (error) {
-    console.error("reCAPTCHA siteverify request failed; allowing login through (fail-open).", {
+    console.error(`reCAPTCHA siteverify request failed; ${failOpen ? "allowing request" : "blocking request"}.`, {
       message: error instanceof Error ? error.message : "Unknown error"
     });
-    return true;
+    return failOpen;
   }
 }
 

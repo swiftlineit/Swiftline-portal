@@ -8,6 +8,7 @@
 
 import { fetchWithAuth } from "@/lib/shipmentsList";
 import { readJsonSafely } from "@/lib/auth";
+import { apiUrl } from "@/lib/api";
 
 export type HsCodeSuggestion = { code: string; description: string };
 
@@ -16,21 +17,31 @@ const cache = new Map<string, HsCodeSuggestion[]>();
 /** Shortest description worth searching; below this everything matches. */
 export const minHsCodeQueryLength = 3;
 
-export async function fetchHsCodeSuggestions(query: string): Promise<HsCodeSuggestion[]> {
+export async function fetchHsCodeSuggestions(
+  query: string,
+  endpointRoot = "/api/v1/reference",
+): Promise<HsCodeSuggestion[]> {
   const trimmed = query.trim();
 
   if (trimmed.length < minHsCodeQueryLength) return [];
 
-  const key = trimmed.toLowerCase();
+  const key = `${endpointRoot}:${trimmed.toLowerCase()}`;
   const cached = cache.get(key);
   if (cached) return cached;
 
   try {
-    const response = await fetchWithAuth(`/api/v1/reference/hs-codes?query=${encodeURIComponent(trimmed)}`);
-    const payload = await readJsonSafely(response) as { success?: boolean; suggestions?: HsCodeSuggestion[] };
-    const suggestions = response.ok && payload.success && Array.isArray(payload.suggestions)
-      ? payload.suggestions
-      : [];
+    const path = `${endpointRoot}/hs-codes?query=${encodeURIComponent(trimmed)}`;
+    const response = endpointRoot.includes("/public/")
+      ? await fetch(apiUrl(path), { credentials: "include" })
+      : await fetchWithAuth(path);
+    const payload = (await readJsonSafely(response)) as {
+      success?: boolean;
+      suggestions?: HsCodeSuggestion[];
+    };
+    const suggestions =
+      response.ok && payload.success && Array.isArray(payload.suggestions)
+        ? payload.suggestions
+        : [];
 
     cache.set(key, suggestions);
     return suggestions;

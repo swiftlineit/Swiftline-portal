@@ -9,9 +9,11 @@
 import { fetchWithAuth } from "@/lib/shipmentsList";
 import { readJsonSafely } from "@/lib/auth";
 import { resolveCountry } from "@/lib/countryLookup";
+import { apiUrl } from "@/lib/api";
 
 /** ISO-2 for a country name, uppercased, or "" when the name is not a country. */
-const countryCodeFor = (countryName: string) => resolveCountry(countryName)?.iso2.toUpperCase() ?? "";
+const countryCodeFor = (countryName: string) =>
+  resolveCountry(countryName)?.iso2.toUpperCase() ?? "";
 
 export type AddressPrediction = {
   placeId: string;
@@ -41,7 +43,8 @@ export const MIN_LOOKUP_LENGTH = 3;
  * discards it after picking a suggestion.
  */
 export function createSessionToken() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto)
+    return crypto.randomUUID();
 
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -61,20 +64,33 @@ export function getLookupPlaceholder(countryName: string) {
 export async function autocompleteAddress(
   input: string,
   countryName: string,
-  sessionToken: string
+  sessionToken: string,
+  endpointRoot = "/api/v1/address-lookup",
 ): Promise<AddressPrediction[]> {
   const countryCode = countryCodeFor(countryName);
 
   if (!countryCode || input.trim().length < MIN_LOOKUP_LENGTH) return [];
 
   try {
-    const response = await fetchWithAuth("/api/v1/address-lookup/autocomplete", {
+    const request = endpointRoot.includes("/public/")
+      ? (path: string, init?: RequestInit) =>
+          fetch(apiUrl(path), {
+            ...init,
+            credentials: "include",
+            headers: { "Content-Type": "application/json", ...init?.headers },
+          })
+      : fetchWithAuth;
+    const response = await request(`${endpointRoot}/autocomplete`, {
       method: "POST",
-      body: JSON.stringify({ input: input.trim(), countryCode, sessionToken })
+      body: JSON.stringify({ input: input.trim(), countryCode, sessionToken }),
     });
-    const payload = await readJsonSafely(response) as { success?: boolean; predictions?: AddressPrediction[] };
+    const payload = (await readJsonSafely(response)) as {
+      success?: boolean;
+      predictions?: AddressPrediction[];
+    };
 
-    if (!response.ok || !payload.success || !Array.isArray(payload.predictions)) return [];
+    if (!response.ok || !payload.success || !Array.isArray(payload.predictions))
+      return [];
 
     return payload.predictions;
   } catch {
@@ -87,7 +103,8 @@ export async function autocompleteAddress(
 export async function getLookupAddress(
   placeId: string,
   countryName: string,
-  sessionToken: string
+  sessionToken: string,
+  endpointRoot = "/api/v1/address-lookup",
 ): Promise<LookupAddress | null> {
   const countryCode = countryCodeFor(countryName);
 
@@ -95,10 +112,16 @@ export async function getLookupAddress(
 
   try {
     const query = new URLSearchParams({ countryCode, sessionToken });
-    const response = await fetchWithAuth(
-      `/api/v1/address-lookup/places/${encodeURIComponent(placeId)}?${query.toString()}`
+    const request = endpointRoot.includes("/public/")
+      ? (path: string) => fetch(apiUrl(path), { credentials: "include" })
+      : fetchWithAuth;
+    const response = await request(
+      `${endpointRoot}/places/${encodeURIComponent(placeId)}?${query.toString()}`,
     );
-    const payload = await readJsonSafely(response) as { success?: boolean; address?: LookupAddress };
+    const payload = (await readJsonSafely(response)) as {
+      success?: boolean;
+      address?: LookupAddress;
+    };
 
     if (!response.ok || !payload.success || !payload.address) return null;
 

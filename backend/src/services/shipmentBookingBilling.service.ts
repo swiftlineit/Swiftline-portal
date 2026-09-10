@@ -106,6 +106,38 @@ export async function recordCounterShipmentCharge(input: {
   ).exec();
 }
 
+/**
+ * Records a Razorpay charge that was captured before shipment fulfilment.
+ * Public money never enters the business credit ledger; this row only gives the
+ * invoice, amendment and staff reconciliation flows the settled charge they
+ * already expect for every booked shipment.
+ */
+export async function recordPublicShipmentCharge(input: {
+  draft: ShipmentDraftDocument;
+  pricing: ShipmentPricingEstimate;
+  session?: mongoose.ClientSession;
+}) {
+  const amountMinor = toMinor(input.pricing.totalAmount);
+  if (amountMinor <= 0) throw new Error("BOOKING_AMOUNT_INVALID");
+
+  return ShipmentCharge.findOneAndUpdate(
+    { shipmentDraftId: input.draft._id },
+    {
+      businessAccountId: input.draft.businessAccountId,
+      branchId: input.draft.branchId,
+      shipmentDraftId: input.draft._id,
+      balanceReservationId: null,
+      parcelCount: Math.max(input.draft.parcelList.length || input.draft.parcelCount || 1, 1),
+      paymentSource: "PUBLIC_RAZORPAY",
+      customerChargeMinor: amountMinor,
+      customerCurrency: "INR",
+      customerChargeStatus: "COMPLETED",
+      pricingSnapshot: input.pricing,
+    },
+    { returnDocument: "after", upsert: true, runValidators: true, setDefaultsOnInsert: true, session: input.session ?? null },
+  ).exec();
+}
+
 async function getReservedCharge(shipmentDraftId: mongoose.Types.ObjectId) {
   return ShipmentCharge.findOne({ shipmentDraftId }).exec();
 }

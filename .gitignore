@@ -32,6 +32,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Local review output and planning notes (never release artifacts)
+.impeccable/
+PRODUCT.md
+
 # OS files
 .DS_Store
 Thumbs.db

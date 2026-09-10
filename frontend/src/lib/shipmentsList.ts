@@ -5,9 +5,11 @@ import type { CsbType } from "@/lib/csbType";
 import type { ShipmentDestinationRegionCode } from "@/lib/shipmentDestinationRegions";
 
 export type ShipmentAudience = "admin" | "client";
+export type DpdLabelStatus = "AVAILABLE" | "NOT_AVAILABLE" | "NOT_APPLICABLE";
 
 export type ShipmentListItem = {
   id: string;
+  creationSource: "MANUAL" | "INDIVIDUAL" | "PUBLIC_ONLINE" | "SHIPMENT_IMPORT";
   businessAccountId: string;
   businessAccountName: string;
   businessAccountCode: string;
@@ -63,6 +65,8 @@ export type ShipmentListItem = {
   bookingStatusLabel: string;
   manifest: { id: string; manifestNumber: string } | null;
   manifestEligible: boolean;
+  /** Internal staff-only carrier-label state; omitted from client responses. */
+  dpdLabelStatus?: DpdLabelStatus;
   createdAt: string | null;
   updatedAt: string | null;
 };

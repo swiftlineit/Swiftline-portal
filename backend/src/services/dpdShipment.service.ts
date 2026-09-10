@@ -14,7 +14,12 @@ import {
   validateShipmentPayload
 } from "./shipmentPayload.service.js";
 import { saveLabelBuffer } from "./labelStorage.service.js";
-import { buildPricingInputFromDraft, calculateShipmentPricingEstimate } from "./shipmentPricing.service.js";
+import {
+  buildPricingInputFromDraft,
+  calculateShipmentPricingEstimate,
+  publicBookingGstRate,
+  publicBookingRateCardBand,
+} from "./shipmentPricing.service.js";
 import { assertPriceLockUnchanged } from "./shipmentCostEstimate.service.js";
 import { renderSwiftlineLabelPdf } from "./shipmentLabelPdf.service.js";
 import {
@@ -38,6 +43,7 @@ import {
 import {
   completeShipmentBookingCharge,
   recordCounterShipmentCharge,
+  recordPublicShipmentCharge,
   markShipmentBookingChargeConsuming,
   markShipmentBookingChargeReviewRequired,
   releaseShipmentBookingCharge,
@@ -163,6 +169,12 @@ type LabelPaymentContext =
   | ({
       actor: "client";
       paymentSource: Extract<PaymentSource, "BUSINESS_ACCOUNT">;
+    } & AcceptedPricing & DpdLabelChoice)
+  | ({
+      actor: "public";
+      paymentSource: Extract<PaymentSource, "PUBLIC_RAZORPAY">;
+      acceptedPricingHash: string;
+      skipDpdLabel: true;
     } & AcceptedPricing & DpdLabelChoice);
 
 function normalizePaymentContext(context?: LabelPaymentContext): LabelPaymentContext {
@@ -411,8 +423,7 @@ async function createLabelForShipmentDraftInternal(
   // Only account-backed bookings reserve capacity. TEST never did; ADMIN_DIRECT is
   // a counter sale that was paid before the booking was made, so there is nothing
   // to reserve, convert or release for it.
-  const usesBusinessAccountBilling = paymentContext.paymentSource !== "TEST"
-    && paymentContext.paymentSource !== "ADMIN_DIRECT";
+  const usesBusinessAccountBilling = paymentContext.paymentSource === "BUSINESS_ACCOUNT";
   const [draft, existingByDraft] = await measureShipmentBookingStage(
     timings,
     "initialReadMs",
@@ -560,7 +571,17 @@ async function createLabelForShipmentDraftInternal(
   const pricing = await measureShipmentBookingStage(
     timings,
     "preparationMs",
-    () => calculateShipmentPricingEstimate(buildPricingInputFromDraft(lockedDraft))
+    () => calculateShipmentPricingEstimate(
+      paymentContext.paymentSource === "PUBLIC_RAZORPAY"
+        ? {
+            ...buildPricingInputFromDraft(lockedDraft),
+            businessAccountId: undefined,
+            rateCardBand: publicBookingRateCardBand,
+            gstRate: publicBookingGstRate,
+            insuranceOptIn: false
+          }
+        : buildPricingInputFromDraft(lockedDraft)
+    )
   );
   if (pricing.missingRate) {
     await transitionShipmentDraftBooking({
@@ -607,7 +628,7 @@ async function createLabelForShipmentDraftInternal(
     assertPriceLockUnchanged({
       acceptedPricingHash: paymentContext.acceptedPricingHash,
       currentPricing: pricing,
-      requireAcceptedPricing: usesBusinessAccountBilling
+      requireAcceptedPricing: usesBusinessAccountBilling || paymentContext.paymentSource === "PUBLIC_RAZORPAY"
     });
   } catch (error) {
     await transitionShipmentDraftBooking({
@@ -642,6 +663,14 @@ async function createLabelForShipmentDraftInternal(
         timings,
         "billingMs",
         () => recordCounterShipmentCharge({ draft: lockedDraft, pricing })
+      );
+      advanceAmountMinor = Math.round(pricing.totalAmount * 100);
+      creditAmountMinor = 0;
+    } else if (paymentContext.paymentSource === "PUBLIC_RAZORPAY") {
+      await measureShipmentBookingStage(
+        timings,
+        "billingMs",
+        () => recordPublicShipmentCharge({ draft: lockedDraft, pricing })
       );
       advanceAmountMinor = Math.round(pricing.totalAmount * 100);
       creditAmountMinor = 0;

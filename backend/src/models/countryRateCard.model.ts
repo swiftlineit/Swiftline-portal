@@ -2,8 +2,11 @@ import mongoose from "mongoose";
 
 export const countryRateServiceValues = ["COURIER", "CARGO"] as const;
 export type CountryRateService = (typeof countryRateServiceValues)[number];
-export const rateCardBandValues = ["BAND_A", "BAND_B", "BAND_C"] as const;
+/** Band D is reserved for GST-inclusive public online booking rates. */
+export const rateCardBandValues = ["BAND_A", "BAND_B", "BAND_C", "BAND_D"] as const;
 export type RateCardBand = (typeof rateCardBandValues)[number];
+export const internalRateCardBandValues = ["BAND_A", "BAND_B", "BAND_C"] as const;
+export type InternalRateCardBand = (typeof internalRateCardBandValues)[number];
 export const rateCardGstTreatmentValues = ["INCLUDED", "EXCLUDED"] as const;
 export type RateCardGstTreatment = (typeof rateCardGstTreatmentValues)[number];
 

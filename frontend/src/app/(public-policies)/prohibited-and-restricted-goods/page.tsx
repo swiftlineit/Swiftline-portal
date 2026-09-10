@@ -1,0 +1,10 @@
+import type { Metadata } from "next";
+import PublicPolicyPage from "@/components/public/PublicPolicyPage";
+
+const items = ["Alcohol, liquor and alcoholic beverages", "Tobacco, nicotine and vape products", "Cash, currency and banknotes", "Gold, silver, precious metals, gems and diamonds", "Arms, ammunition, weapons, explosives and fireworks", "Flammable goods, fuels, gases, corrosives, dangerous chemicals, poisons and toxic material", "Prescription medicines, narcotics and illegal drugs", "Live animals, plants and seeds", "Pornographic or obscene material", "Counterfeit goods", "Loose batteries, lithium batteries and power banks", "Perishable fresh food", "Human remains and ashes"];
+export const metadata: Metadata = { title: "Prohibited and Restricted Goods | Swiftline Cargo", description: "Goods that cannot be booked through Swiftline's public international shipment service.", alternates: { canonical: "/prohibited-and-restricted-goods" } };
+export default function ProhibitedGoodsPage() { return <PublicPolicyPage eyebrow="Safety and compliance" title="Prohibited and restricted goods" summary="Do not place these goods in a public online shipment. Route-specific laws, airline, customs and carrier rules may prohibit additional items.">
+  <h2>Not accepted through public online booking</h2><ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>
+  <h2>Restricted goods not listed here</h2><p>Some goods require licences, declarations, specialist packaging, temperature control, dangerous-goods handling or prior written approval even when they are not named above. The online form is not an approval channel. Contact Swiftline before paying if there is any doubt.</p>
+  <h2>Your declaration</h2><p>By confirming the declaration at checkout, you state that the parcel contains no prohibited item and that every description, quantity, value and HS code is accurate. Swiftline may inspect, hold, return or report goods where required for safety, security, customs or law enforcement.</p>
+</PublicPolicyPage>; }

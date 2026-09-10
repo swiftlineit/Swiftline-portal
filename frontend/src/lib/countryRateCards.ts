@@ -3,8 +3,11 @@ import { getAccessToken, refreshAccessToken } from "@/lib/auth";
 
 export const countryRateServices = ["COURIER", "CARGO"] as const;
 export type CountryRateService = (typeof countryRateServices)[number];
-export const rateCardBands = ["BAND_A", "BAND_B", "BAND_C"] as const;
+/** Band D is maintained for GST-inclusive public online booking rates. */
+export const rateCardBands = ["BAND_A", "BAND_B", "BAND_C", "BAND_D"] as const;
 export type RateCardBand = (typeof rateCardBands)[number];
+export const internalRateCardBands = ["BAND_A", "BAND_B", "BAND_C"] as const;
+export type InternalRateCardBand = (typeof internalRateCardBands)[number];
 export const rateCardGstTreatments = ["INCLUDED", "EXCLUDED"] as const;
 export type RateCardGstTreatment = (typeof rateCardGstTreatments)[number];
 

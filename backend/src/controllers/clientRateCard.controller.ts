@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
-import { CountryRateCard } from "../models/countryRateCard.model.js";
+import { CountryRateCard, type InternalRateCardBand } from "../models/countryRateCard.model.js";
 import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
 
 function userId(request: Request) {
@@ -25,7 +25,7 @@ export async function listClientCountryRateCards(request: Request, response: Res
     ...(requestedAccount ? { businessAccount: requestedAccount } : {})
   }).populate("businessAccount", "rateCardBand").exec();
 
-  const account = membership?.businessAccount as unknown as { rateCardBand?: "BAND_A" | "BAND_B" | "BAND_C" | null } | undefined;
+  const account = membership?.businessAccount as unknown as { rateCardBand?: InternalRateCardBand | null } | undefined;
   if (!membership) {
     return response.status(404).json({ success: false, message: "Business account access is not available." });
   }

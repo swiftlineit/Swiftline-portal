@@ -110,7 +110,7 @@ export default function PublicTrackingResult({
         <Timeline tracking={tracking} />
       </div>
 
-      <section className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <section className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="grid gap-6 p-5 sm:p-6 lg:grid-cols-[1fr_520px] lg:items-center">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#0D1282]">
@@ -175,7 +175,7 @@ function statusChipClass(status: string) {
 
 function TrackingHeader({ tracking }: { tracking: PublicTracking }) {
   return (
-    <section className="relative overflow-hidden rounded-3xl bg-[#07113f] text-white shadow-[0_24px_70px_rgba(7,17,63,0.16)]">
+    <section className="relative overflow-hidden rounded-lg bg-[#07113f] text-white shadow-[0_24px_70px_rgba(7,17,63,0.16)]">
       <div className="absolute inset-x-0 top-0 h-0.75 bg-[#d71920]" />
 
       <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-white/4 blur-3xl" />
@@ -321,7 +321,7 @@ function SummaryCard({
   accent?: boolean;
 }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5">
+    <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white p-5">
       {accent ? (
         <span className="absolute inset-y-0 left-0 w-0.75 bg-[#d71920]" />
       ) : null}
@@ -377,7 +377,7 @@ function JourneyRail({ tracking }: { tracking: PublicTracking }) {
   const stages = resolveJourneyStages(tracking.events, tracking.journey);
 
   return (
-   <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+   <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
   <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6">
     <div className="min-w-0">
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#d71920]">
@@ -498,7 +498,7 @@ function JourneyRail({ tracking }: { tracking: PublicTracking }) {
 
 function StatusCard({ tracking }: { tracking: PublicTracking }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
       <div className="p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -634,7 +634,7 @@ function EstimateCard({ estimate }: { estimate: DeliveryEstimate | null }) {
       : "calendar days";
 
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
+    <section className="relative overflow-hidden rounded-lg border border-slate-200 bg-white p-5 sm:p-6">
       <div className="absolute right-0 top-0 h-24 w-24 rounded-full bg-[#d71920]/[0.035] blur-2xl" />
 
       <div className="relative">
@@ -708,7 +708,7 @@ function FactsGrid({ tracking }: { tracking: PublicTracking }) {
   ];
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
       <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#d71920]">
           Shipment information
@@ -752,7 +752,7 @@ function Timeline({ tracking }: { tracking: PublicTracking }) {
   );
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
       <div className="flex flex-col gap-2 border-b border-slate-100 px-5 py-5 sm:px-6">
         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#d71920]">
           Tracking history

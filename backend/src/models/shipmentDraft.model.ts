@@ -37,6 +37,7 @@ export const shipmentDraftBookingStateValues = [
 export const shipmentDraftSourceValues = [
   "MANUAL",
   "INDIVIDUAL",
+  "PUBLIC_ONLINE",
   "SHIPMENT_IMPORT",
 ] as const;
 

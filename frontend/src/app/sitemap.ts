@@ -27,6 +27,10 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "monthly",
       priority: 0.9
     },
+    { url: siteUrl("/book-shipment-online"), changeFrequency: "monthly", priority: 1 },
+    { url: siteUrl("/terms-and-conditions"), changeFrequency: "yearly", priority: 0.3 },
+    { url: siteUrl("/cancellation-and-refund-policy"), changeFrequency: "yearly", priority: 0.3 },
+    { url: siteUrl("/prohibited-and-restricted-goods"), changeFrequency: "yearly", priority: 0.4 },
     {
       url: siteUrl("/privacy-policy"),
       changeFrequency: "yearly",

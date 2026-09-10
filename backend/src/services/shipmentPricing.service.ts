@@ -13,6 +13,9 @@ import {
 import { getDeclaredGoodsValue } from "./parcelItems.service.js";
 
 export const defaultShipmentGstRate = 0.18;
+/** Public online bookings always use the dedicated GST-inclusive card. */
+export const publicBookingRateCardBand = "BAND_D" as const;
+export const publicBookingGstRate = 0.18;
 export const shipmentTaxTreatmentValues = ["GST_APPLICABLE", "NO_GST"] as const;
 export type ShipmentTaxTreatment = (typeof shipmentTaxTreatmentValues)[number];
 
@@ -461,6 +464,13 @@ async function resolveAccountPricingContext(input: Pick<ShipmentPricingInput, "b
     gstBillingVersion: account.gstBilling?.version ?? 1,
     gstBillingEffectiveFrom: null
   };
+  if (account.rateCardBand === publicBookingRateCardBand) {
+    throw new RateCardRequiredError(
+      "Band D is reserved for public online bookings and cannot price an internal business account.",
+      409,
+      "PUBLIC_RATE_CARD_NOT_FOR_INTERNAL_ACCOUNT"
+    );
+  }
   if (!account.rateCardBand) throw new RateCardRequiredError();
   if (explicitBand && explicitBand !== account.rateCardBand) throw new RateCardAssignmentMismatchError();
   return {

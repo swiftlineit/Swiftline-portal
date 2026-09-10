@@ -59,7 +59,7 @@ function sendDraftPolicyError(response: Response, error: unknown) {
 }
 
 /** Best effort: an orphaned object costs storage, a failed request costs work. */
-async function discardStoredObject(storageKey: string | undefined) {
+export async function discardStoredObject(storageKey: string | undefined) {
   if (!storageKey) return;
   await deleteObject(storageKey).catch(() => undefined);
 }
@@ -71,7 +71,7 @@ async function discardStoredObject(storageKey: string | undefined) {
  * beneath one prefix- which is what lets account deletion and retention work on
  * a prefix rather than an enumerated file list.
  */
-async function storeKycDocument(input: {
+export async function storeKycDocument(input: {
   file: Express.Multer.File;
   draftId: string;
   type: ShipmentKycDocumentType;

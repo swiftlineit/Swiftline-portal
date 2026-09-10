@@ -48,7 +48,7 @@ export default function PublicBusinessAccountSidebar() {
               </span>
               <div>
                 <p className="text-xs font-medium text-slate-500">Keep ready</p>
-                <p className="mt-0.5 text-sm font-semibold text-slate-900">Company registration and address details</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-900">Company details</p>
               </div>
             </div>
           </div>

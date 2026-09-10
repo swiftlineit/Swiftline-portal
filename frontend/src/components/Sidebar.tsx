@@ -112,7 +112,9 @@ const staffNavigation: Array<
     items: [
       {
         label: "All Shipments",
-        href: "/dashboard/shipments",
+        // Explicitly clear saved dashboard drill-down filters such as
+        // "Needs attention" when the operator chooses the canonical list.
+        href: "/dashboard/shipments?view=all",
         icon: FiPackage,
         roles: withAdmin(SHIPMENT_VIEW_AREA),
       },

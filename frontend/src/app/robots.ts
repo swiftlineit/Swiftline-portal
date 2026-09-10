@@ -15,7 +15,7 @@ export default function robots(): MetadataRoute.Robots {
          * ever fetching them- so the tag would never be read and a URL picked
          * up from a forwarded link could still be indexed URL-only.
          */
-        disallow: ["/dashboard/", "/client/", "/driver/"],
+        disallow: ["/dashboard/", "/client/", "/driver/", "/book-shipment-online/status"],
       },
     ],
     sitemap: siteUrl("/sitemap.xml"),

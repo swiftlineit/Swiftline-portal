@@ -37,6 +37,7 @@ import {
   shipmentListParams,
   shipmentListPath,
   shipmentStatusOptions,
+  type DpdLabelStatus,
   type ShipmentAudience,
   type ShipmentListItem,
   type ShipmentListPagination
@@ -57,6 +58,7 @@ const shipmentViewQueryKeys = [
   "dateTo",
   "businessAccountId",
   "destinationRegions",
+  "view",
   "page",
   "limit",
   "sort"
@@ -132,6 +134,21 @@ function formatMoney(shipment: ShipmentListItem) {
   }).format(shipment.shipmentInvoice.chargeableAmountMinor / 100);
 }
 
+const dpdLabelPresentation: Record<DpdLabelStatus, { label: string; className: string }> = {
+  AVAILABLE: { label: "DPD label available", className: "text-emerald-700" },
+  NOT_AVAILABLE: { label: "DPD label not available", className: "text-red-600" },
+  NOT_APPLICABLE: { label: "DPD label not applicable", className: "text-slate-500" }
+};
+
+function DpdLabelAvailability({ status }: { status: DpdLabelStatus }) {
+  const presentation = dpdLabelPresentation[status];
+  return (
+    <p className={`mt-1 text-[10px] font-semibold leading-4 ${presentation.className}`}>
+      {presentation.label}
+    </p>
+  );
+}
+
 function getAccountLabel(account: BusinessAccount) {
   return `${account.accountId} - ${account.company.companyName || account.contact.email}`;
 }
@@ -197,6 +214,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const searchFromQuery = searchParams.get("search")?.trim() ?? "";
   const businessAccountFromQuery = searchParams.get("businessAccountId") ?? "";
   const destinationRegionsFromQuery = parseShipmentDestinationRegions(searchParams.get("destinationRegions"));
+  const allShipmentsViewFromQuery = searchParams.get("view") === "all";
   const pageFromQuery = parsePositiveInteger(searchParams.get("page"), 1);
   const limitFromQuery = parsePageSize(searchParams.get("limit"));
   const sortFromQuery = parseShipmentSort(searchParams.get("sort"));
@@ -285,6 +303,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const previousSelectionScope = useRef(selectionScope);
 
   const createShipmentHref = audience === "client" ? "/client/dpd-labels" : "/dashboard/dpd-labels";
+  const shipmentPagePath = audience === "client" ? "/client/shipments" : "/dashboard/shipments";
   // Staff table only, and only for an administrator. Operations and delivery
   // work this list daily but do not remove rows from it.
   const canDelete = audience === "admin" && role === "admin";
@@ -403,19 +422,49 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     return () => window.clearTimeout(timer);
   }, [audience, hasShipmentViewQuery]);
 
+  // The sidebar's All Shipments link is an explicit reset command. It must win
+  // over both the current in-memory filters and the tab's saved view, otherwise
+  // a previous attention-only KPI drill-down can make the canonical list look
+  // empty when there are simply no attention shipments.
+  useEffect(() => {
+    if (!allShipmentsViewFromQuery) return;
+
+    const timer = window.setTimeout(() => {
+      // Mark this reset complete only when the deferred callback runs, matching
+      // the Strict Mode-safe restoration path above.
+      restoredView.current = true;
+      setSearchInput("");
+      setSearch("");
+      setStatus("");
+      setRebookedOnly(false);
+      setAttentionOnly(false);
+      setBookedDate("");
+      setDateRange(emptyDateRange);
+      setBusinessAccountId("");
+      setDestinationRegions([]);
+      setPage(1);
+      setLimit(defaultPageSizeOptions[0]);
+      setSort("booked:desc");
+      setRestoringView(false);
+      router.replace(shipmentPagePath, { scroll: false });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [allShipmentsViewFromQuery, router, shipmentPagePath]);
+
   // Deferred so the fetch's setState lands after the first paint rather than
   // cascading a render, matching the other listing screens.
   useEffect(() => {
-    if (restoringView) return;
+    if (restoringView || allShipmentsViewFromQuery) return;
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
-  }, [load, restoringView]);
+  }, [allShipmentsViewFromQuery, load, restoringView]);
 
   // Keep the view addressable for refreshes/browser history and keep a
   // tab-scoped fallback for navigation links that return to the bare list
   // route. Only controls are saved; shipment rows are always reloaded.
   useEffect(() => {
-    if (restoringView) return;
+    if (restoringView || allShipmentsViewFromQuery) return;
 
     const savedState: ShipmentViewState = {
       search,
@@ -463,7 +512,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         { scroll: false }
       );
     }
-  }, [attentionOnly, audience, bookedDate, businessAccountId, dateRange.from, dateRange.to, destinationRegions, limit, page, rebookedOnly, restoringView, router, search, sort, status]);
+  }, [allShipmentsViewFromQuery, attentionOnly, audience, bookedDate, businessAccountId, dateRange.from, dateRange.to, destinationRegions, limit, page, rebookedOnly, restoringView, router, search, sort, status]);
 
   useEffect(() => {
     if (previousSelectionScope.current === selectionScope) return;
@@ -1375,6 +1424,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                       <p className="font-semibold text-slate-950">
                         {shipment.swiftlineTrackingNumber || "AWB Pending"}
                       </p>
+                      {shipment.creationSource === "PUBLIC_ONLINE" ? (
+                        <span className="mt-1 inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-sky-700">
+                          Public online
+                        </span>
+                      ) : null}
                       <div
                         className="mt-1 flex min-w-0 items-center gap-1.5 text-xs"
                         aria-label={`Business account ${shipment.businessAccountName || "not available"}; ${shipment.pieces} pieces`}
@@ -1424,6 +1478,9 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     <span className="inline-flex py-1 text-xs font-semibold text-slate-700">
                       {shipment.statusLabel}
                     </span>
+                    {audience === "admin" && shipment.dpdLabelStatus ? (
+                      <DpdLabelAvailability status={shipment.dpdLabelStatus} />
+                    ) : null}
                     {/* A booking that reached the carrier but has not completed is
                         shown here rather than being hidden from this table. */}
                     {shipment.bookingStatus !== "LABEL_RECEIVED" ? (

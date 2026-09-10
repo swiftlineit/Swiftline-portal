@@ -44,8 +44,6 @@ async function insertNotifications(
   session?: mongoose.ClientSession
 ) {
   const uniqueRecipients = [...new Map(recipientUserIds.map((id) => [String(id), id])).values()];
-  if (!uniqueRecipients.length) return;
-
   const operations = uniqueRecipients.map((recipientUserId) => ({
     updateOne: {
       filter: { idempotencyKey: `${input.idempotencyKey}:${String(recipientUserId)}` },
@@ -67,7 +65,9 @@ async function insertNotifications(
     }
   }));
 
-  await PortalNotification.bulkWrite(operations, { ordered: false, session });
+  if (operations.length) {
+    await PortalNotification.bulkWrite(operations, { ordered: false, session });
+  }
 
   // Email is a delivery channel on the notification, not a parallel system: one
   // audience resolution feeds both. Every notify* helper therefore emails too,
@@ -231,6 +231,9 @@ export async function notifyFlightOperationsStaff(
     .exec();
   await insertNotifications(staff.map((member) => member._id), input, session);
 }
+
+/** Branch-owned operational events such as public bookings and payment holds. */
+export const notifyBranchOperationsStaff = notifyFlightOperationsStaff;
 
 export function serializePortalNotification(notification: InstanceType<typeof PortalNotification>) {
   return {

@@ -7,7 +7,7 @@ import type { IEmailAttachmentRef } from "../models/emailOutbox.model.js";
 import type { IDpdShipment } from "../models/dpdShipment.model.js";
 import type { IShipmentDraft } from "../models/shipmentDraft.model.js";
 import type { IShipmentInvoice } from "../models/shipmentInvoice.model.js";
-import { notifyBusinessShipmentMembers, notifyOperationsStaff } from "./portalNotification.service.js";
+import { notifyBranchOperationsStaff, notifyBusinessShipmentMembers, notifyOperationsStaff } from "./portalNotification.service.js";
 
 type ShipmentBookedInput = {
   draft: IShipmentDraft;
@@ -72,7 +72,11 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
       BusinessAccount.findById(draft.businessAccountId).select("company.companyName").lean().exec(),
       Branch.findById(draft.branchId).select("name").lean().exec(),
       User.findById(input.bookedBy).select("name firstName lastName").lean().exec(),
-      LabelDocument.find({ dpdShipmentId: dpdShipment._id, voidedAt: null })
+      LabelDocument.find({
+        dpdShipmentId: dpdShipment._id,
+        voidedAt: null,
+        ...(draft.creationSource === "PUBLIC_ONLINE" ? { labelType: "SWIFTLINE" } : {}),
+      })
         .select("_id labelType parcelNumber format")
         // labelType descending puts SWIFTLINE after DPD, which is the order the
         // attachments are wanted in - see the size-budget note below.
@@ -140,7 +144,10 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
       }
     });
 
-    const staffNotification = notifyOperationsStaff({
+    const notifyStaff = draft.creationSource === "PUBLIC_ONLINE"
+      ? notifyBranchOperationsStaff.bind(null, draft.branchId)
+      : notifyOperationsStaff;
+    const staffNotification = notifyStaff({
       type: "SHIPMENT_BOOKED",
       title: "New shipment booked",
       message: `${payload.businessAccountName || "A client"} booked ${trackingNumber} (${parcelLabel}) at ${payload.branchName || "the portal"}.`,
