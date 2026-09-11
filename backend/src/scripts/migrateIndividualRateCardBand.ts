@@ -15,10 +15,12 @@ async function migrateIndividualRateCardBand() {
   await connectDatabase();
   try {
     const sentinels = await BusinessAccount.find({ accountKind: "INDIVIDUAL_SENTINEL" })
-      .select("_id accountId rateCardBand")
+      .select("_id accountId rateCardBand company.noCompany")
       .lean()
       .exec();
-    const needsUpdate = sentinels.filter((account) => account.rateCardBand !== "BAND_D");
+    const needsUpdate = sentinels.filter(
+      (account) => account.rateCardBand !== "BAND_D" || !account.company?.noCompany
+    );
     const report = {
       mode: applyChanges ? "APPLY" : "DRY_RUN",
       migrationId: MIGRATION_ID,
@@ -34,14 +36,19 @@ async function migrateIndividualRateCardBand() {
     }
 
     const result = await BusinessAccount.updateMany(
-      { accountKind: "INDIVIDUAL_SENTINEL", rateCardBand: { $ne: "BAND_D" } },
-      { $set: { rateCardBand: "BAND_D" } }
+      {
+        accountKind: "INDIVIDUAL_SENTINEL",
+        $or: [{ rateCardBand: { $ne: "BAND_D" } }, { "company.noCompany": { $ne: true } }]
+      },
+      { $set: { rateCardBand: "BAND_D", "company.noCompany": true } }
     ).exec();
     const verification = await BusinessAccount.find({ accountKind: "INDIVIDUAL_SENTINEL" })
-      .select("_id accountId rateCardBand")
+      .select("_id accountId rateCardBand company.noCompany")
       .lean()
       .exec();
-    const invalid = verification.filter((account) => account.rateCardBand !== "BAND_D");
+    const invalid = verification.filter(
+      (account) => account.rateCardBand !== "BAND_D" || !account.company?.noCompany
+    );
     if (invalid.length > 0) {
       throw new Error(`Individual sentinel verification failed for ${invalid.length} account(s).`);
     }

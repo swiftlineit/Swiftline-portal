@@ -246,7 +246,10 @@ function sealedMultiParcelManifest() {
   const snapshot = manifest.sealedSnapshot as Record<string, unknown>;
   const bagOne = new mongoose.Types.ObjectId();
   const bagTwo = new mongoose.Types.ObjectId();
-  snapshot.bags = [{ _id: bagOne, bagNumber: "SLC00101" }, { _id: bagTwo, bagNumber: "SLC00102" }];
+  snapshot.bags = [
+    { _id: bagOne, sequence: 1, bagNumber: "SLC00101" },
+    { _id: bagTwo, sequence: 2, bagNumber: "SLC00102" }
+  ];
   snapshot.totals = { totalBags: 2, totalConsignments: 1, totalPhysicalParcels: 3, totalWeightKg: 44 };
   const consignments = snapshot.consignments as Array<Record<string, unknown>>;
   const first = consignments[0];
@@ -288,7 +291,7 @@ describe("operations manifest safeguards", () => {
     await assert.rejects(row.validate(), /manifestPieces/);
   });
 
-  it("gives every parcel its own row, with its own weight, contents and bag number", async () => {
+  it("keeps each parcel row intact while ordering the standard Excel by bag sequence", async () => {
     const sheet = await manifestSheetRows(sealedMultiParcelManifest());
     const dataRows: Array<{ serial: unknown; weight: unknown; description: unknown; bag: unknown }> = [];
     sheet.eachRow((row, rowNumber) => {
@@ -301,11 +304,11 @@ describe("operations manifest safeguards", () => {
 
     assert.equal(dataRows.length, 3, "each of the three boxes needs its own row");
     assert.deepEqual(dataRows.map((row) => row.serial), [1, 2, 3]);
-    assert.deepEqual(dataRows.map((row) => row.weight), [20, 19, 5]);
+    assert.deepEqual(dataRows.map((row) => row.weight), [20, 5, 19]);
     // Each row describes only its own box, never the whole shipment.
-    assert.deepEqual(dataRows.map((row) => row.description), ["Clothing", "Footwear", "Books"]);
-    // The two boxes packed together must show the same bag number.
-    assert.deepEqual(dataRows.map((row) => row.bag), ["SLC00101", "SLC00102", "SLC00101"]);
+    assert.deepEqual(dataRows.map((row) => row.description), ["Clothing", "Books", "Footwear"]);
+    // Complete rows move together: the two boxes packed in Bag 01 are adjacent.
+    assert.deepEqual(dataRows.map((row) => row.bag), ["SLC00101", "SLC00101", "SLC00102"]);
   });
 
   it("expands the Excel description row for wrapped contents", async () => {

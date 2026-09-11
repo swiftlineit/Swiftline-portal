@@ -86,8 +86,9 @@ export function isIndividualSentinel(account: { accountKind?: string } | null | 
 export async function getOrCreateIndividualSentinel(createdBy: mongoose.Types.ObjectId) {
   const existing = await BusinessAccount.findOne({ accountKind: "INDIVIDUAL_SENTINEL" }).exec();
   if (existing) {
-    if (existing.rateCardBand !== "BAND_D") {
+    if (existing.rateCardBand !== "BAND_D" || !existing.company.noCompany) {
       existing.rateCardBand = "BAND_D";
+      existing.company.noCompany = true;
       await existing.save();
     }
     return existing;
@@ -119,6 +120,7 @@ export async function getOrCreateIndividualSentinel(createdBy: mongoose.Types.Ob
         company: {
           registrationCountry: "India",
           companyName: "Individual Customers",
+          noCompany: true,
           // No GSTIN: each individual invoice takes its buyer details from the
           // shipment's own snapshot, never from this record.
           gstin: ""

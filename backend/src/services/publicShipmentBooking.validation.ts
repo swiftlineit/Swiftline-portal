@@ -21,7 +21,7 @@ const addressSchema = z.object({
   addressLine1: requiredText("Address line 1", 160),
   addressLine2: cleanText(160).default(""),
   townOrCity: requiredText("Town or city", 100),
-  county: cleanText(100).default(""),
+  county: requiredText("State or county", 100),
   deliveryInstructions: cleanText(300).default(""),
 }).superRefine((value, context) => {
   if (value.entityType === "COMPANY" && !value.companyName) {

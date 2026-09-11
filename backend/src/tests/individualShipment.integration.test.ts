@@ -101,6 +101,23 @@ describe("individual shipment sentinel", () => {
     assert.equal(first.status, "approved", "The sentinel must never enter the KYC queue.");
     assert.equal(first.assignedBranch ?? null, null, "The sentinel serves every branch.");
     assert.equal(first.rateCardBand, "BAND_D", "Individual shipments must use the dedicated Band D tariff.");
+    assert.equal(first.company.noCompany, true, "The sentinel must not be validated as a real company.");
+  });
+
+  test("repairs a legacy sentinel without weakening real-account validation", async () => {
+    const sentinel = await getOrCreateIndividualSentinel(adminId);
+    await BusinessAccount.collection.updateOne(
+      { _id: sentinel._id },
+      {
+        $set: { rateCardBand: "BAND_A", "company.operatingCountries": [] },
+        $unset: { "company.noCompany": "" }
+      }
+    );
+
+    const repaired = await getOrCreateIndividualSentinel(adminId);
+    assert.equal(repaired.rateCardBand, "BAND_D");
+    assert.equal(repaired.company.noCompany, true);
+    assert.deepEqual(repaired.company.operatingCountries, []);
   });
 
   test("is hidden from the business account list while real accounts still show", async () => {

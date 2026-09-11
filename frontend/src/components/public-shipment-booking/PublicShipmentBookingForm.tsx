@@ -113,6 +113,8 @@ function validateAddressStep(data: PublicShipmentFormData) {
       errors[`${prefix}.addressLine1`] = "Address line 1 is required.";
     if (!address.townOrCity.trim())
       errors[`${prefix}.townOrCity`] = "Town or city is required.";
+    if (!address.county.trim())
+      errors[`${prefix}.county`] = "State or county is required.";
     if (
       prefix === "consignee" &&
       (!address.countryCode || address.countryCode === "IN")

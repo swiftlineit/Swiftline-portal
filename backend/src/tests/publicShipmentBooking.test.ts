@@ -9,7 +9,7 @@ import { validateShipmentDraftFields } from "../services/shipmentValidation.serv
 function validPayload() {
   return {
     sender: { entityType: "INDIVIDUAL", companyName: "", contactName: "Ravi Kumar", email: "ravi@example.com", mobileCountryCode: "+91", mobileNumber: "9876543210", countryCode: "IN", countryName: "India", postcode: "110001", addressLine1: "10 Market Road", addressLine2: "", townOrCity: "Delhi", county: "Delhi", deliveryInstructions: "", aadhaarNumber: "234567890124" },
-    consignee: { entityType: "INDIVIDUAL", companyName: "", contactName: "Alex Smith", email: "alex@example.com", mobileCountryCode: "+44", mobileNumber: "7400123456", countryCode: "GB", countryName: "United Kingdom", postcode: "SW1A 1AA", addressLine1: "10 Downing Street", addressLine2: "", townOrCity: "London", county: "", deliveryInstructions: "" },
+    consignee: { entityType: "INDIVIDUAL", companyName: "", contactName: "Alex Smith", email: "alex@example.com", mobileCountryCode: "+44", mobileNumber: "7400123456", countryCode: "GB", countryName: "United Kingdom", postcode: "SW1A 1AA", addressLine1: "10 Downing Street", addressLine2: "", townOrCity: "London", county: "Greater London", deliveryInstructions: "" },
     serviceType: "COURIER",
     csbType: "CSB_IV",
     kycUseForAllParcels: true,
@@ -34,6 +34,24 @@ describe("public shipment booking validation", () => {
 
   it("accepts an individual CSB-IV booking without a company or HS code", () => {
     assert.equal(publicShipmentDraftPayloadSchema.safeParse(validPayload()).success, true);
+  });
+
+  it("requires sender and receiver state or county", () => {
+    const missingSenderState = validPayload();
+    missingSenderState.sender.county = "";
+    const senderResult = publicShipmentDraftPayloadSchema.safeParse(missingSenderState);
+    assert.equal(senderResult.success, false);
+    if (!senderResult.success) {
+      assert.ok(senderResult.error.issues.some((issue) => issue.path.join(".") === "sender.county"));
+    }
+
+    const missingReceiverState = validPayload();
+    missingReceiverState.consignee.county = "";
+    const receiverResult = publicShipmentDraftPayloadSchema.safeParse(missingReceiverState);
+    assert.equal(receiverResult.success, false);
+    if (!receiverResult.success) {
+      assert.ok(receiverResult.error.issues.some((issue) => issue.path.join(".") === "consignee.county"));
+    }
   });
 
   it("produces a draft that also passes the quote validator", () => {

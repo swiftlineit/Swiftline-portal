@@ -661,8 +661,7 @@ export default function Home() {
           </div>
 
           {sessionEndedNotice ? (
-            <p className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12.5px] font-medium leading-relaxed text-amber-800">
-              <FiAlertCircle size={15} className="mt-px shrink-0" aria-hidden="true" />
+            <p className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-[11.5px] font-medium leading-relaxed text-amber-800">
               {sessionEndedNotice}
             </p>
           ) : null}
@@ -730,11 +729,7 @@ export default function Home() {
                 Create business account <FiArrowLeft className="h-3 w-3 rotate-180" aria-hidden="true" />
               </Link>
             </p>
-            <p className="mt-1 text-xs text-slate-500">
-              <Link href="/track" className="font-semibold text-[#0D1282] tracking-wide hover:underline">
-                Track your shipment
-              </Link>
-            </p>
+           
           </div>
 
           <p className="mt-2 text-center text-[10.5px] leading-relaxed text-slate-500">
@@ -750,7 +745,7 @@ export default function Home() {
             .
           </p>
 
-          <ul className="mt-2.5 grid grid-cols-4 gap-1.5 border-t border-slate-100 pt-2.5">
+          {/* <ul className="mt-2.5 grid grid-cols-4 gap-1.5 border-t border-slate-100 pt-2.5">
             {TRUST_SIGNALS.map(({ icon: Icon, label, sublabel }) => (
               <li key={label} className="text-center">
                 <Icon size={16} className="mx-auto text-[#0D1282]" aria-hidden="true" />
@@ -761,7 +756,7 @@ export default function Home() {
                 </span>
               </li>
             ))}
-          </ul>
+          </ul> */}
 
         </section>
       </main>

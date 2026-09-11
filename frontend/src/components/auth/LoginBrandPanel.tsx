@@ -1,4 +1,15 @@
-import { FiBarChart2, FiFileText, FiMapPin, FiPackage, FiUsers } from "react-icons/fi";
+"use client";
+
+import Image from "next/image";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import {
+  FiBarChart2,
+  FiFileText,
+  FiMapPin,
+  FiPackage,
+  FiUsers,
+} from "react-icons/fi";
 
 /** What the portal actually does, in the order a new client meets it. Each
  *  gets its own accent color, applied to both the icon and its label. */
@@ -105,12 +116,15 @@ const PLANE_ANGLE = bezierAngle(PLANE_T);
 const PLANE_PATH =
   "M16 10h4a2 2 0 0 1 0 4h-4l-4 7h-3l2 -7h-4l-2 2h-3l2 -4l-2 -4h3l2 2h4l-2 -7h3l4 7";
 
+const SLIDE_COUNT = 3;
+const AUTOPLAY_DELAY_MS = 3000;
+
 function WorldMapBackdrop() {
   return (
     <svg
       viewBox="0 0 400 166"
       aria-hidden="true"
-      className="pointer-events-none absolute right-4 top-[30%] hidden w-[44%] max-w-lg -translate-y-1/2 lg:block"
+      className="pointer-events-none absolute right-4 top-[30%] hidden w-[44%] max-w-lg -translate-y-1/2 xl:block"
     >
       <defs>
         <radialGradient id="world-map-fade" cx="54%" cy="40%" r="70%">
@@ -158,67 +172,235 @@ function WorldMapBackdrop() {
 }
 
 export function LoginBrandPanel() {
-  return (
-    <section className="relative order-2 flex h-auto w-full min-w-0 overflow-hidden rounded-2xl border border-slate-200/80 bg-[linear-gradient(135deg,#ffffff_0%,#f9faff_52%,#f2f5ff_100%)] p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_14px_36px_-18px_rgba(13,18,130,0.16)] sm:p-5 lg:order-1 lg:self-stretch lg:p-5 lg:pr-7 xl:p-6 xl:pr-8">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 bottom-28 top-42.5 hidden overflow-hidden lg:block xl:bottom-29.5"
-      >
-        <span className="absolute mt-20 left-[4%] top-1/2 -translate-y-1/2 whitespace-nowrap text-[clamp(26.75rem,6.5vw,6rem)] font-semibold leading-none tracking-[-0.04em] text-[#0D1282]/[0.028]">
-          SLC
-        </span>
-      </div>
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const [autoplayEnabled, setAutoplayEnabled] = useState(false);
+  const touchStartX = useRef<number | null>(null);
 
-      <WorldMapBackdrop />
+  useEffect(() => {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updateAutoplay = () => setAutoplayEnabled(!reducedMotion.matches);
+
+    updateAutoplay();
+    reducedMotion.addEventListener("change", updateAutoplay);
+    return () => reducedMotion.removeEventListener("change", updateAutoplay);
+  }, []);
+
+  useEffect(() => {
+    if (!autoplayEnabled || isPaused) return;
+
+    const timer = window.setInterval(() => {
+      setActiveSlide((current) => (current + 1) % SLIDE_COUNT);
+    }, AUTOPLAY_DELAY_MS);
+
+    return () => window.clearInterval(timer);
+  }, [autoplayEnabled, isPaused]);
+
+  const showPreviousSlide = () => {
+    setActiveSlide((current) => (current - 1 + SLIDE_COUNT) % SLIDE_COUNT);
+  };
+
+  const showNextSlide = () => {
+    setActiveSlide((current) => (current + 1) % SLIDE_COUNT);
+  };
+
+  const slideClassName = (index: number) =>
+    `col-start-1 row-start-1 flex h-full min-h-0 w-full flex-col transition-[opacity,transform,filter] duration-500 ease-out motion-reduce:transition-none ${
+      activeSlide === index
+        ? "relative z-10 translate-x-0 opacity-100 blur-0"
+        : "pointer-events-none translate-x-5 opacity-0 blur-[2px]"
+    }`;
+
+  const panelGradient =
+    "bg-[linear-gradient(135deg,#ffffff_0%,#f4f6ff_56%,#fff4f4_100%)]";
+
+  return (
+    <section
+      aria-label="Swiftline portal highlights"
+      aria-roledescription="carousel"
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
+      onFocusCapture={() => setIsPaused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setIsPaused(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          showPreviousSlide();
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          showNextSlide();
+        }
+      }}
+      onTouchStart={(event) => {
+        touchStartX.current = event.touches[0]?.clientX ?? null;
+      }}
+      onTouchEnd={(event) => {
+        if (touchStartX.current === null) return;
+        const distance = (event.changedTouches[0]?.clientX ?? touchStartX.current) - touchStartX.current;
+        touchStartX.current = null;
+        if (Math.abs(distance) < 48) return;
+        if (distance > 0) showPreviousSlide();
+        else showNextSlide();
+      }}
+      className={`relative order-2 flex w-full min-w-0 overflow-hidden rounded-2xl border border-slate-200/80 p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_18px_44px_-22px_rgba(13,18,130,0.20)] transition-colors duration-500 sm:p-5 lg:order-1 lg:self-stretch ${activeSlide === 0 ? "h-auto" : "h-[min(480px,65svh)] min-h-100 lg:h-auto lg:min-h-0"} ${panelGradient}`}
+    >
+      {activeSlide === 0 ? (
+        <>
+          <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+            <span className="absolute -right-20 -top-24 h-72 w-72 rounded-full bg-[#0D1282]/8 blur-3xl" />
+            <span className="absolute -bottom-28 left-[28%] h-64 w-64 rounded-full bg-[#D81F26]/7 blur-3xl" />
+          </div>
+
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-24 top-36 hidden overflow-hidden lg:block xl:bottom-26"
+          >
+            <span className="absolute left-[3%] top-1/2 -translate-y-1/2 whitespace-nowrap text-[clamp(22rem,25vw,30rem)] font-semibold leading-none tracking-[-0.04em] text-[#0D1282]/[0.022]">
+              SLC
+            </span>
+          </div>
+        </>
+      ) : null}
+
+      {activeSlide === 0 ? <WorldMapBackdrop /> : null}
 
       <div className="relative flex h-full min-h-0 w-full flex-col">
-        <p className="hidden text-[11px] font-semibold uppercase tracking-[0.22em] text-[#0D1282]/70 lg:block">
-          Secure international logistics
-        </p>
+        <div className="grid min-h-0 flex-1 px-1 py-0.5">
+          <div className={slideClassName(0)} aria-hidden={activeSlide !== 0} inert={activeSlide !== 0}>
+            <div className="flex shrink-0 flex-col gap-3">
+              <p className="hidden text-[11px] font-semibold uppercase tracking-[0.22em] text-[#0D1282]/70 lg:block">
+                Secure international logistics
+              </p>
 
-        <h1 className="text-[clamp(1.65rem,8vw,2.25rem)] font-bold leading-[1.06] tracking-tight text-[#0D1282] sm:text-[clamp(1.85rem,5vw,2.55rem)] lg:mt-2.5 lg:text-[clamp(2.3rem,4vw,3rem)]">
-          Every Parcel.
-          <br />
-          A Promise.
-          <br />
-          <span className="text-[#D81F26]">Swiftly Delivered.</span>
-        </h1>
+              <h1 className="max-w-xl text-[clamp(1.65rem,8vw,2.25rem)] font-bold leading-[1.06] tracking-tight text-[#0D1282] sm:text-[clamp(1.85rem,5vw,2.55rem)] lg:text-[clamp(2rem,3.2vw,2.5rem)]">
+                Every Parcel.
+                <br />
+                A Promise.
+                <br />
+                <span className="text-[#D81F26]">Swiftly Delivered.</span>
+              </h1>
 
-        <div className="mt-3.5 flex items-center gap-1.5" aria-hidden="true">
-          <span className="h-1 w-9 rounded-full bg-[#0D1282]" />
-          <span className="h-1 w-4 rounded-full bg-[#D81F26]" />
+              <div className="flex items-center gap-1.5" aria-hidden="true">
+                <span className="h-1 w-9 rounded-full bg-[#0D1282]" />
+                <span className="h-1 w-4 rounded-full bg-[#D81F26]" />
+              </div>
+
+              <p className="max-w-xl text-[13px] leading-5.5 text-slate-600 sm:text-[14px]">
+                Your trusted logistics partner for secure, reliable and compliant international
+                courier and cargo solutions.
+              </p>
+
+              <p className="text-[13px] font-semibold text-[#0D1282] sm:text-[14px]">
+                One Platform. <span className="text-[#D81F26]">Complete Control.</span>
+              </p>
+
+              <div className="flex shrink-0 flex-wrap gap-3">
+                <Link
+                  href="/track"
+                  className="inline-flex min-h-11 items-center justify-center rounded-lg border border-[#0D1282]/25 bg-white px-4 text-[13px] font-semibold text-[#0D1282] transition-colors hover:border-[#0D1282] hover:bg-[#0D1282]/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282] focus-visible:ring-offset-2 sm:px-5"
+                >
+                  Track Shipment
+                </Link>
+                <Link
+                  href="/book-shipment-online"
+                  className="inline-flex min-h-11 items-center justify-center rounded-lg bg-[#0D1282] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-[#0a0f6b] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282] focus-visible:ring-offset-2 sm:px-5"
+                >
+                  Ship Now
+                </Link>
+              </div>
+            </div>
+
+            <ul className="mt-auto grid grid-cols-2 gap-2.5 pt-5 sm:grid-cols-3 lg:grid-cols-5 lg:gap-3">
+              {capabilities.map(({ icon: Icon, label, sublabel, color }) => (
+                <li
+                  key={label}
+                  className="rounded-xl border border-white/80 bg-white/75 px-2.5 py-3 text-center shadow-[0_8px_24px_-20px_rgba(15,23,42,0.45)] backdrop-blur-sm transition last:col-span-2 hover:-translate-y-0.5 hover:border-[#0D1282]/20 hover:bg-white/90 sm:last:col-span-1"
+                >
+                  <span
+                    className="mx-auto flex h-7 w-7 items-center justify-center rounded-lg sm:h-8 sm:w-8"
+                    style={{ color }}
+                  >
+                    <Icon size={18} strokeWidth={1.9} aria-hidden="true" />
+                  </span>
+
+                  <span className="mt-1.5 block text-[10px] font-semibold leading-snug sm:text-[10.5px]">
+                    {label}
+                    <br />
+                    {sublabel}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className={slideClassName(1)} aria-hidden={activeSlide !== 1}>
+            <h2 className="shrink-0 text-[clamp(1.45rem,7vw,2rem)] font-bold leading-[1.08] tracking-tight text-[#0D1282] lg:text-[2rem]">
+              Create a shipment.
+              <br />
+              <span className="text-[#D81F26]">Track every step.</span>
+            </h2>
+
+            <p className="mt-2.5 max-w-2xl shrink-0 text-[13px] leading-5 text-slate-600 sm:text-[14px]">
+              Book your international shipments and follow their progress in one place.
+              Access your Swiftline AWB, track key milestones and view proof of delivery.
+            </p>
+            <div className="-mx-1 mt-4 sm:-mx-2 lg:-mx-3">
+              <Image
+                src="/login/sliderr.png"
+                alt="Swiftline shipment import and manual creation alongside the shipment tracking journey"
+                width={1916}
+                height={821}
+                sizes="(min-width: 1440px) 850px, (min-width: 1024px) 58vw, 100vw"
+                className="h-auto w-full object-contain"
+              />
+            </div>
+          </div>
+
+          <div className={slideClassName(2)} aria-hidden={activeSlide !== 2}>
+            <h2 className="shrink-0 text-[clamp(1.45rem,7vw,2rem)] font-bold leading-[1.08] tracking-tight text-[#0D1282] lg:text-[2rem]">
+              Your business accounts.
+              <br />
+              <span className="text-[#D81F26]">Your credit, in view.</span>
+            </h2>
+
+            <p className="mt-2.5 max-w-2xl shrink-0 text-[13px] leading-5 text-slate-600 sm:text-[14px]">
+              View your account&apos;s shipping rates and stay informed about your credit.
+              Check approved limits, available balances and payment details in one place.
+            </p>
+            <div className="-mx-1 mt-4 sm:-mx-2 lg:-mx-3">
+              <Image
+                src="/login/sliderrr.png"
+                alt="Swiftline account rate card and credit account showing approved limits, balances and statements"
+                width={1916}
+                height={821}
+                sizes="(min-width: 1440px) 850px, (min-width: 1024px) 58vw, 100vw"
+                className="h-auto w-full object-contain"
+              />
+            </div>
+          </div>
         </div>
 
-        <p className="mt-6.5 max-w-lg text-[13px] leading-5 text-slate-600 sm:text-[14px]">
-          Your trusted logistics partner for secure, reliable and compliant international
-          courier and cargo solutions.
-        </p>
-
-        <p className="mt-5 text-[13px] font-semibold text-[#0D1282] sm:text-[14px]">
-          One Platform. <span className="text-[#D81F26]">Complete Control.</span>
-        </p>
-
-        <ul className="mt-auto grid grid-cols-2 gap-2 pt-4 sm:grid-cols-3 sm:gap-2.5 lg:grid-cols-5 lg:pt-5">
-          {capabilities.map(({ icon: Icon, label, sublabel, color }) => (
-            <li
-              key={label}
-              className="rounded-xl border border-slate-200/80 bg-white/80 px-2 py-2.5 text-center backdrop-blur-[2px] transition last:col-span-2 hover:border-[#0D1282]/25 hover:shadow-sm sm:px-2.5 sm:last:col-span-1"
-            >
-              <span
-                className="mx-auto flex h-7 w-7 items-center justify-center rounded-lg sm:h-8 sm:w-8"
-                style={{ color }}
-              >
-                <Icon size={18} strokeWidth={1.9} aria-hidden="true" />
-              </span>
-
-              <span className="mt-1.5 block text-[10px] font-semibold leading-snug sm:text-[10.5px]">
-                {label}
-                <br />
-                {sublabel}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <div className="relative z-20 mt-3 flex shrink-0 items-center justify-start px-1 pt-1">
+          <div className="flex items-center gap-2" aria-label="Choose a slide">
+            {Array.from({ length: SLIDE_COUNT }, (_, index) => (
+              <button
+                key={index}
+                type="button"
+                onClick={() => setActiveSlide(index)}
+                aria-label={`Show slide ${index + 1} of ${SLIDE_COUNT}`}
+                aria-current={activeSlide === index ? "true" : undefined}
+                className={`h-2 rounded-full transition-[width,background-color] duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282] focus-visible:ring-offset-2 motion-reduce:transition-none ${
+                  activeSlide === index
+                    ? "w-7 bg-[#0D1282]"
+                    : "w-2 bg-slate-300 hover:bg-slate-400"
+                }`}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     </section>
   );

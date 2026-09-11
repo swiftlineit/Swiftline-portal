@@ -494,6 +494,10 @@ businessAccountSchema.pre("validate", function normalizeLegacyWorkflowStatus() {
 
   if (account.accountKind === "INDIVIDUAL_SENTINEL") {
     account.rateCardBand = "BAND_D";
+    // This is a system bookkeeping record for individual shipments, not an
+    // onboarded company. Keeping the flag as an invariant lets it bypass only
+    // company-specific fields without weakening validation for real accounts.
+    account.company.noCompany = true;
     account.gstBilling = {
       requestedTreatment: "GST_APPLICABLE",
       status: "NOT_REQUIRED",

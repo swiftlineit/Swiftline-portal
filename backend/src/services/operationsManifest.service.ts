@@ -1733,6 +1733,25 @@ function spacedPdfAddress(value: unknown) {
 export async function buildOperationsManifestExcel(manifest: IOperationsManifest) {
   const snapshot = readSealedSnapshot(manifest);
   const model = buildManifestDocumentModel(snapshot);
+  const bagSequenceByNumber = new Map(snapshot.bags.map((bag, index) => {
+    const storedSequence = Number(bag.sequence);
+    const sequence = Number.isInteger(storedSequence) && storedSequence > 0
+      ? storedSequence
+      : index + 1;
+    return [String(bag.bagNumber ?? "").trim().toUpperCase(), sequence] as const;
+  }));
+  // The sealed snapshot remains in packing/consignment order. Sort only a copy
+  // used by the standard Excel renderer so every parcel row stays intact while
+  // the Bag No column reads 01, 01, 02... EDI, PDF and UK exports keep their
+  // existing contracts and ordering.
+  const excelParcelRows = model.parcelRows
+    .map((row, sourceIndex) => ({
+      row,
+      sourceIndex,
+      bagSequence: bagSequenceByNumber.get(row.bagNumber.trim().toUpperCase()) ?? Number.MAX_SAFE_INTEGER
+    }))
+    .sort((left, right) => left.bagSequence - right.bagSequence || left.sourceIndex - right.sourceIndex)
+    .map(({ row }) => row);
   const virtualManifest = {
     manifestNumber: model.manifestNumber,
     businessAccountId: new mongoose.Types.ObjectId(),
@@ -1751,7 +1770,7 @@ export async function buildOperationsManifestExcel(manifest: IOperationsManifest
     },
     // One line per parcel, straight from the shared document model. The goods value
     // already lives only on each consignment's first parcel row.
-    lineSnapshots: model.parcelRows.map((row) => ({
+    lineSnapshots: excelParcelRows.map((row) => ({
       shipmentDraftId: new mongoose.Types.ObjectId(row.shipmentDraftId),
       dpdShipmentId: new mongoose.Types.ObjectId(row.dpdShipmentId),
       consignmentNumber: row.consignmentNumber,

@@ -16,6 +16,7 @@ import {
   matchStateName,
   type GeographyState,
 } from "@/lib/geography";
+import { formatAadhaarNumber, normalizeAadhaarNumber } from "@/lib/aadhaar";
 import type { PublicAddress, PublicSender } from "@/lib/publicShipmentBooking";
 import { BookingField } from "./BookingField";
 
@@ -293,6 +294,43 @@ function AddressPanel<T extends PublicAddress>({
             autoComplete="address-line2"
           />
         </div>
+        {states.length ? (
+          <PublicSearchableSelect
+            label="State / County"
+            required
+            value={value.county}
+            options={states.map((state) => ({
+              value: state.name,
+              label: state.name,
+            }))}
+            error={errors[`${prefix}.county`]}
+            revealError={revealErrors}
+            placeholder="Search state"
+            onChange={(next) =>
+              onChange({
+                ...value,
+                county: next,
+                // Preserve a city entered before the first state selection or
+                // filled by address lookup. Clear it only when the user changes
+                // from one established state to another.
+                townOrCity:
+                  value.county && value.county !== next
+                    ? ""
+                    : value.townOrCity,
+              } as T)
+            }
+          />
+        ) : (
+          <BookingField
+            label="State / County"
+            required
+            value={value.county}
+            onChange={(event) => update("county", event.target.value)}
+            revealError={revealErrors}
+            error={errors[`${prefix}.county`]}
+            autoComplete="address-level1"
+          />
+        )}
         {stateCode && cities.length ? (
           <PublicSearchableSelect
             label="Town / City"
@@ -315,45 +353,23 @@ function AddressPanel<T extends PublicAddress>({
             autoComplete="address-level2"
           />
         )}
-        {states.length ? (
-          <PublicSearchableSelect
-            label="State / County"
-            value={value.county}
-            options={states.map((state) => ({
-              value: state.name,
-              label: state.name,
-            }))}
-            error={errors[`${prefix}.county`]}
-            revealError={revealErrors}
-            placeholder="Search state"
-            onChange={(next) =>
-              onChange({ ...value, county: next, townOrCity: "" } as T)
-            }
-          />
-        ) : (
-          <BookingField
-            label="State / County"
-            value={value.county}
-            onChange={(event) => update("county", event.target.value)}
-            autoComplete="address-level1"
-          />
-        )}
         {sender ? (
           <div className="sm:col-span-2">
             <BookingField
               label="Aadhaar Number"
               required
               inputMode="numeric"
-              value={
+              maxLength={14}
+              value={formatAadhaarNumber(
                 "aadhaarNumber" in value &&
-                typeof value.aadhaarNumber === "string"
+                  typeof value.aadhaarNumber === "string"
                   ? value.aadhaarNumber
-                  : ""
-              }
+                  : "",
+              )}
               onChange={(event) =>
                 update(
                   "aadhaarNumber",
-                  event.target.value.replace(/\D/g, "").slice(0, 12),
+                  normalizeAadhaarNumber(event.target.value),
                 )
               }
               revealError={revealErrors}

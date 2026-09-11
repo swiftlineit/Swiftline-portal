@@ -174,8 +174,12 @@ async function completeAddressStep(page: Page) {
   await sender.getByLabel("Mobile number").fill("9876543210");
   await sender.getByLabel("PIN code").fill("110001");
   await sender.getByLabel("Address line 1").fill("10 Market Road");
+  await sender.getByLabel("State / county").fill("Delhi");
   await sender.getByLabel("Town / city").fill("Delhi");
   await sender.getByLabel("Aadhaar number").fill("234567890124");
+  await expect(sender.getByLabel("Aadhaar number")).toHaveValue(
+    "2345 6789 0124",
+  );
   const receiver = page.getByRole("region", { name: "Receiver details" });
   await receiver.getByLabel("Contact name").fill("Alex Smith");
   await receiver.getByLabel("Email").fill("alex@example.com");
@@ -189,6 +193,9 @@ async function completeAddressStep(page: Page) {
   await receiver.getByLabel("Address line 1").fill("10 Down");
   await page.getByRole("button", { name: /10 Downing Street/ }).click();
   await expect(receiver.getByLabel("Postal code")).toHaveValue("SW1A 1AA");
+  await expect(receiver.getByLabel("State / county")).toHaveValue(
+    "Greater London",
+  );
   await expect(receiver.getByLabel("Town / city")).toHaveValue("London");
   await page.getByRole("button", { name: "Continue" }).click();
 }
@@ -341,6 +348,42 @@ test("shows country flags, address suggestions and HS-code search", async ({
   await expect(page.getByRole("button", { name: /62052000/ })).toBeVisible();
   await page.getByRole("button", { name: /62052000/ }).click();
   await expect(page.getByLabel("HS code")).toHaveValue("62052000");
+});
+
+test("receiver state and city use reference search without clearing an entered city", async ({
+  page,
+}) => {
+  await page.route("**/reference/countries/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/states")) {
+      return route.fulfill({
+        json: {
+          success: true,
+          states: [{ name: "London", code: "LND" }],
+        },
+      });
+    }
+    return route.fulfill({
+      json: { success: true, cities: ["London", "Westminster"] },
+    });
+  });
+
+  await page.goto("/book-shipment-online");
+  const receiver = page.getByRole("region", { name: "Receiver details" });
+  await receiver.locator('button[aria-label="Country"]').click();
+  await page.keyboard.type("United Kingdom");
+  await page.keyboard.press("Enter");
+
+  await receiver.getByLabel("Town / city").fill("London");
+  const state = receiver.locator('button[aria-label="State / County"]');
+  await expect(state).toBeVisible();
+  await state.click();
+  await receiver.getByRole("button", { name: "London", exact: true }).click();
+
+  await expect(state).toContainText("London");
+  await expect(
+    receiver.locator('button[aria-label="Town / City"]'),
+  ).toContainText("London");
 });
 
 test("mobile layout has no horizontal overflow", async ({ page }, testInfo) => {
