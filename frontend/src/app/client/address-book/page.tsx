@@ -8,6 +8,8 @@ import {
   FiCopy,
   FiDownload,
   FiEdit3,
+  FiEye,
+  FiEyeOff,
   FiFileText,
   FiMapPin,
   FiPlus,
@@ -35,6 +37,7 @@ import {
   importAddressBookEntries,
   listAddressBookEntries,
   previewAddressBookImport,
+  revealAddressBookAadhaar,
   runAddressBookAction,
   setAddressBookFavourite,
   updateAddressBookEntry,
@@ -44,6 +47,7 @@ import {
   type AddressBookInput,
   type AddressBookValidationStatus,
 } from "@/lib/addressBook";
+import { formatAadhaarNumber, isValidAadhaarNumber, normalizeAadhaarNumber } from "@/lib/aadhaar";
 import {
   createClientManualShipmentDraft,
   getClientDashboard,
@@ -99,6 +103,8 @@ export default function ClientAddressBookPage() {
   const [editing, setEditing] = useState<AddressBookEntry | null | "new">(null);
   const [importOpen, setImportOpen] = useState(false);
   const [busyId, setBusyId] = useState("");
+  const [aadhaarBusyId, setAadhaarBusyId] = useState("");
+  const [revealedAadhaar, setRevealedAadhaar] = useState<Record<string, string>>({});
 
   const accountId = account?.account.id ?? "";
   const branchId = account ? (accountBranches(account)[0]?._id ?? "") : "";
@@ -174,7 +180,29 @@ export default function ClientAddressBookPage() {
   }, [accountId, deferredSearch, favouritesOnly, page, refreshKey, type]);
 
   function refresh() {
+    setRevealedAadhaar({});
     setRefreshKey((value) => value + 1);
+  }
+
+  async function toggleAadhaar(entry: AddressBookEntry) {
+    if (revealedAadhaar[entry.id]) {
+      setRevealedAadhaar((current) => {
+        const next = { ...current };
+        delete next[entry.id];
+        return next;
+      });
+      return;
+    }
+    if (aadhaarBusyId) return;
+    setAadhaarBusyId(entry.id);
+    try {
+      const result = await revealAddressBookAadhaar(entry.id);
+      setRevealedAadhaar((current) => ({ ...current, [entry.id]: result.aadhaarNumber }));
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : "The Aadhaar number could not be shown.");
+    } finally {
+      setAadhaarBusyId("");
+    }
   }
 
   async function run(
@@ -424,6 +452,28 @@ export default function ClientAddressBookPage() {
                         <p>{entry.mobileCountryCode} {entry.mobileNumber}</p>
                       </div>
 
+                      {entry.type === "SENDER" && entry.hasAadhaarNumber ? (
+                        <div className="mt-2 flex min-h-8 items-center justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600">
+                          <span className="min-w-0">
+                            <span className="font-semibold text-slate-700">Aadhaar</span>{" "}
+                            <span className="tabular-nums" aria-live="polite">
+                              {revealedAadhaar[entry.id]
+                                ? formatAadhaarNumber(revealedAadhaar[entry.id])
+                                : entry.aadhaarNumberMasked}
+                            </span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void toggleAadhaar(entry)}
+                            disabled={aadhaarBusyId === entry.id}
+                            aria-label={revealedAadhaar[entry.id] ? "Hide Aadhaar number" : "Show Aadhaar number"}
+                            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-white hover:text-[#0D1282] focus:outline-none focus:ring-2 focus:ring-[#0D1282]/20 disabled:opacity-50"
+                          >
+                            {revealedAadhaar[entry.id] ? <FiEyeOff aria-hidden="true" /> : <FiEye aria-hidden="true" />}
+                          </button>
+                        </div>
+                      ) : null}
+
                       {entry.validationMessage ? (
                         <p className="mt-2 line-clamp-1 text-xs text-slate-500" title={entry.validationMessage}>
                           {entry.validationMessage}
@@ -542,6 +592,7 @@ export default function ClientAddressBookPage() {
               : addressBookInputFromEntry(editing)
           }
           title={editing === "new" ? "Add Address" : "Edit Address"}
+          existingAadhaarMasked={editing === "new" ? "" : editing.aadhaarNumberMasked}
           onClose={() => setEditing(null)}
           onSave={async (input) => {
             if (!accountId) return;
@@ -615,17 +666,20 @@ function SmallAction({
 function AddressFormDialog({
   initial,
   title,
+  existingAadhaarMasked,
   onClose,
   onSave,
 }: {
   initial: AddressBookInput;
   title: string;
+  existingAadhaarMasked: string;
   onClose: () => void;
   onSave: (input: AddressBookInput) => Promise<void>;
 }) {
   const [form, setForm] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showAadhaar, setShowAadhaar] = useState(false);
   const set = <K extends keyof AddressBookInput>(
     field: K,
     value: AddressBookInput[K],
@@ -642,11 +696,16 @@ function AddressFormDialog({
             mobileCountryCode: current.mobileCountryCode || "+91",
           }
         : {}),
+      ...(nextType === "RECIPIENT" ? { aadhaarNumber: "" } : {}),
     }));
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (form.aadhaarNumber && !isValidAadhaarNumber(form.aadhaarNumber)) {
+      setError("Enter a valid 12-digit Aadhaar number.");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -677,8 +736,7 @@ function AddressFormDialog({
           <div>
             <h2 className="text-xl font-semibold text-[#0D1282]">{title}</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Save contact and postal details only. KYC information is never
-              stored here.
+              Save contact and postal details. Sender Aadhaar is optional and stored securely.
             </p>
           </div>
           <button
@@ -758,6 +816,39 @@ function AddressFormDialog({
                 maxLength={30}
               />
             </div>
+            {form.type === "SENDER" ? (
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  Aadhaar Number <span className="normal-case tracking-normal text-slate-400">(optional)</span>
+                </span>
+                <span className="relative block">
+                  <input
+                    type={showAadhaar ? "text" : "password"}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={formatAadhaarNumber(form.aadhaarNumber ?? "")}
+                    onChange={(event) => set("aadhaarNumber", normalizeAadhaarNumber(event.target.value))}
+                    maxLength={14}
+                    placeholder={existingAadhaarMasked || "XXXX XXXX XXXX"}
+                    aria-describedby="address-book-aadhaar-help"
+                    className="h-14 w-full rounded-xl border border-[#EEEDED] bg-white px-4 pr-12 text-sm tabular-nums outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#F0DE36]/35"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAadhaar((value) => !value)}
+                    aria-label={showAadhaar ? "Hide Aadhaar number" : "Show Aadhaar number"}
+                    className="absolute right-2 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-[#0D1282] focus:outline-none focus:ring-2 focus:ring-[#0D1282]/20"
+                  >
+                    {showAadhaar ? <FiEyeOff aria-hidden="true" /> : <FiEye aria-hidden="true" />}
+                  </button>
+                </span>
+                <span id="address-book-aadhaar-help" className="mt-1.5 block text-xs leading-5 text-slate-500">
+                  {existingAadhaarMasked
+                    ? `Saved as ${existingAadhaarMasked}. Leave blank to keep it, or enter a new number to replace it.`
+                    : "Saved only with sender addresses and filled into new shipment drafts."}
+                </span>
+              </label>
+            ) : null}
             <label className="block">
               <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
                 Country *

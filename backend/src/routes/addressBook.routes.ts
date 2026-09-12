@@ -10,6 +10,7 @@ import {
   importAddressBookEntries,
   listAddressBookEntries,
   previewAddressBookImport,
+  revealAddressBookAadhaar,
   setAddressBookFavourite,
   updateAddressBookEntry,
   validateAddressBookEntry
@@ -28,6 +29,7 @@ addressBookRouter.patch("/:entryId", updateAddressBookEntry);
 addressBookRouter.delete("/:entryId", deleteAddressBookEntry);
 addressBookRouter.patch("/:entryId/favourite", setAddressBookFavourite);
 addressBookRouter.post("/:entryId/duplicate", duplicateAddressBookEntry);
+addressBookRouter.post("/:entryId/aadhaar/reveal", revealAddressBookAadhaar);
 addressBookRouter.post("/:entryId/validate", validateAddressBookEntry);
 addressBookRouter.post("/:entryId/accept-suggestion", acceptAddressBookSuggestion);
 addressBookRouter.post("/:entryId/confirm", confirmAddressBookEntry);

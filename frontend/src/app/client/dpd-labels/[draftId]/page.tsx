@@ -92,7 +92,7 @@ import {
 } from "@/lib/shipmentCostEstimate";
 import { useShipmentCostEstimate } from "@/lib/useShipmentCostEstimate";
 import AddressBookPicker from "@/components/address-book/AddressBookPicker";
-import { getAddressBookEntry, type AddressBookEntry, type AddressBookEntryType } from "@/lib/addressBook";
+import { getAddressBookEntry, prepareAddressBookEntryForShipment, type AddressBookEntryType, type AddressBookSelection } from "@/lib/addressBook";
 import BookingPausedNotice from "@/components/booking/BookingPausedNotice";
 import { isCountryPaused, listClientBookingPauses, type BookingPause } from "@/lib/bookingPause";
 
@@ -419,7 +419,7 @@ export default function ClientDpdDraftReviewPage() {
   const [manualAddressConfirmationRequired, setManualAddressConfirmationRequired] = useState(false);
   const [addressBookPicker, setAddressBookPicker] = useState<AddressBookEntryType | null>(null);
 
-  const applySavedAddress = useCallback((entry: AddressBookEntry, confirmReplacement: boolean) => {
+  const applySavedAddress = useCallback((entry: AddressBookSelection, confirmReplacement: boolean) => {
     const targetHasValues = entry.type === "SENDER"
       ? Boolean(consignorForm.contactName || consignorForm.addressLine1 || consignorForm.postcode)
       : Boolean(contactForm.contactName || addressForm.addressLine1 || addressForm.postcode);
@@ -434,6 +434,7 @@ export default function ClientDpdDraftReviewPage() {
         contactName: entry.contactName,
         email: entry.email,
         mobileNumber: entry.mobileNumber,
+        aadhaarNumber: entry.aadhaarNumber,
         addressLine1: entry.addressLine1,
         addressLine2: entry.addressLine2,
         townOrCity: entry.townOrCity,
@@ -703,7 +704,8 @@ export default function ClientDpdDraftReviewPage() {
     if (!draft || !addressBookEntryId || appliedAddressBookEntryRef.current === addressBookEntryId) return;
     appliedAddressBookEntryRef.current = addressBookEntryId;
     void getAddressBookEntry(addressBookEntryId)
-      .then(({ entry }) => applySavedAddress(entry, false))
+      .then(({ entry }) => prepareAddressBookEntryForShipment(entry))
+      .then((entry) => applySavedAddress(entry, false))
       .catch((caught) => toast.error(caught instanceof Error ? caught.message : "The saved address could not be applied."));
   }, [addressBookEntryId, applySavedAddress, draft]);
 

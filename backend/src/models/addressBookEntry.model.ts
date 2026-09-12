@@ -33,6 +33,8 @@ export interface IAddressBookEntry extends mongoose.Document, AddressBookPostalA
   email: string;
   mobileCountryCode: string;
   mobileNumber: string;
+  aadhaarNumberEncrypted: string;
+  aadhaarNumberMasked: string;
   instructions?: string;
   providerPlaceId?: string;
   validationStatus: AddressBookValidationStatus;
@@ -72,6 +74,8 @@ const addressBookEntrySchema = new mongoose.Schema<IAddressBookEntry>(
     email: { type: String, lowercase: true, trim: true, maxlength: 160, required: true },
     mobileCountryCode: { type: String, trim: true, maxlength: 8, required: true },
     mobileNumber: { type: String, trim: true, maxlength: 30, required: true },
+    aadhaarNumberEncrypted: { type: String, default: "", select: false },
+    aadhaarNumberMasked: { type: String, trim: true, maxlength: 14, default: "" },
     countryCode: postalAddressSchema.path("countryCode"),
     countryName: postalAddressSchema.path("countryName"),
     addressLine1: postalAddressSchema.path("addressLine1"),

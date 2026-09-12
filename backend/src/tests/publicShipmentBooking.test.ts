@@ -5,6 +5,111 @@ import { getPublicShipmentPolicySummary, publicShipmentPolicyVersions } from "..
 import { PublicShipmentBooking } from "../models/publicShipmentBooking.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { validateShipmentDraftFields } from "../services/shipmentValidation.service.js";
+import { ensurePublicShipmentBookingIndexes } from "../services/publicShipmentBookingIndexes.service.js";
+
+describe("public shipment booking index migration", () => {
+  it("creates declared indexes when the collections do not exist yet", async () => {
+    let bookingIndexesCreated = 0;
+    let paymentIndexesCreated = 0;
+    const result = await ensurePublicShipmentBookingIndexes({
+      bookingCollection: {
+        listIndexes: () => ({
+          toArray: async () => {
+            throw Object.assign(new Error("namespace does not exist"), {
+              code: 26,
+              codeName: "NamespaceNotFound",
+            });
+          },
+        }),
+        dropIndex: async () => {
+          throw new Error("No index should be dropped for a missing collection.");
+        },
+      },
+      createBookingIndexes: async () => {
+        bookingIndexesCreated += 1;
+      },
+      createPaymentIndexes: async () => {
+        paymentIndexesCreated += 1;
+      },
+    });
+
+    assert.deepEqual(result, {
+      bookingCollectionMissing: true,
+      bookingIndexesRebuilt: true,
+    });
+    assert.equal(bookingIndexesCreated, 1);
+    assert.equal(paymentIndexesCreated, 1);
+  });
+
+  it("keeps the correct partial index and still ensures payment indexes", async () => {
+    let bookingIndexesCreated = 0;
+    let paymentIndexesCreated = 0;
+    const result = await ensurePublicShipmentBookingIndexes({
+      bookingCollection: {
+        listIndexes: () => ({
+          toArray: async () => [
+            {
+              name: "shipmentDraftId_1",
+              key: { shipmentDraftId: 1 },
+              unique: true,
+              partialFilterExpression: {
+                shipmentDraftId: { $type: "objectId" },
+              },
+            },
+          ],
+        }),
+        dropIndex: async () => {
+          throw new Error("The correct index must not be dropped.");
+        },
+      },
+      createBookingIndexes: async () => {
+        bookingIndexesCreated += 1;
+      },
+      createPaymentIndexes: async () => {
+        paymentIndexesCreated += 1;
+      },
+    });
+
+    assert.deepEqual(result, {
+      bookingCollectionMissing: false,
+      bookingIndexesRebuilt: false,
+    });
+    assert.equal(bookingIndexesCreated, 0);
+    assert.equal(paymentIndexesCreated, 1);
+  });
+
+  it("replaces the legacy sparse shipment-draft index", async () => {
+    const droppedIndexes: string[] = [];
+    let bookingIndexesCreated = 0;
+    const result = await ensurePublicShipmentBookingIndexes({
+      bookingCollection: {
+        listIndexes: () => ({
+          toArray: async () => [
+            {
+              name: "shipmentDraftId_1",
+              key: { shipmentDraftId: 1 },
+              unique: true,
+            },
+          ],
+        }),
+        dropIndex: async (name) => {
+          droppedIndexes.push(name);
+        },
+      },
+      createBookingIndexes: async () => {
+        bookingIndexesCreated += 1;
+      },
+      createPaymentIndexes: async () => undefined,
+    });
+
+    assert.deepEqual(result, {
+      bookingCollectionMissing: false,
+      bookingIndexesRebuilt: true,
+    });
+    assert.deepEqual(droppedIndexes, ["shipmentDraftId_1"]);
+    assert.equal(bookingIndexesCreated, 1);
+  });
+});
 
 function validPayload() {
   return {

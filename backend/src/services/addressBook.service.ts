@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { z } from "zod";
 import type { AddressBookPostalAddress, IAddressBookEntry } from "../models/addressBookEntry.model.js";
+import { isValidAadhaarNumber, normalizeAadhaarNumber } from "./aadhaarValidation.service.js";
 import { mapGoogleComponentsToGenericAddress } from "./addressMapping.service.js";
 import { autocompletePlaces, getPlaceDetails } from "./googlePlaces.service.js";
 import { validateUkAddressWithPaf } from "./idealPostcodes.service.js";
@@ -22,6 +23,9 @@ export const addressBookInputSchema = z.object({
   mobileCountryCode: z.string().trim().min(1, "Mobile country code is required").max(8)
     .transform((value) => value.startsWith("+") ? value : `+${value.replace(/\D/g, "")}`),
   mobileNumber: z.string().trim().min(1, "Mobile number is required").max(30),
+  aadhaarNumber: z.string().trim().max(20).transform(normalizeAadhaarNumber)
+    .refine((value) => !value || isValidAadhaarNumber(value), "Enter a valid 12-digit Aadhaar number")
+    .optional(),
   countryCode: z.string().trim().toUpperCase().length(2, "Select a valid country"),
   countryName: z.string().trim().min(1, "Country is required").max(80),
   addressLine1: z.string().trim().toUpperCase().min(1, "Address line 1 is required").max(120),
@@ -37,6 +41,9 @@ export const addressBookInputSchema = z.object({
   }
   if (value.type === "SENDER" && value.countryCode !== "IN") {
     context.addIssue({ code: "custom", path: ["countryCode"], message: "Shipment sender addresses must be in India" });
+  }
+  if (value.type !== "SENDER" && value.aadhaarNumber) {
+    context.addIssue({ code: "custom", path: ["aadhaarNumber"], message: "Aadhaar can only be saved for sender addresses" });
   }
   if (value.countryCode === "GB" && !ukPostcodePattern.test(value.postcode)) {
     context.addIssue({ code: "custom", path: ["postcode"], message: "Enter a valid UK postcode" });
@@ -145,6 +152,8 @@ export function serializeAddressBookEntry(entry: IAddressBookEntry | Record<stri
     email: value.email ?? "",
     mobileCountryCode: value.mobileCountryCode ?? "",
     mobileNumber: value.mobileNumber ?? "",
+    hasAadhaarNumber: Boolean(value.aadhaarNumberMasked),
+    aadhaarNumberMasked: value.aadhaarNumberMasked ?? "",
     countryCode: value.countryCode ?? "",
     countryName: value.countryName ?? "",
     addressLine1: value.addressLine1 ?? "",

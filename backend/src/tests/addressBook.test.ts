@@ -6,7 +6,9 @@ import { env } from "../config/env.js";
 import {
   createAddressBookEntry,
   deleteAddressBookEntry,
+  duplicateAddressBookEntry,
   getAddressBookEntry,
+  revealAddressBookAadhaar,
   updateAddressBookEntry
 } from "../controllers/addressBook.controller.js";
 import { AddressBookEntry } from "../models/addressBookEntry.model.js";
@@ -51,11 +53,13 @@ function request(userId: mongoose.Types.ObjectId, body: Record<string, unknown> 
 function responseRecorder() {
   let statusCode = 200;
   let body: any;
+  const headers: Record<string, string> = {};
   const response = {
     status(code: number) { statusCode = code; return this; },
-    json(value: unknown) { body = value; return this; }
+    json(value: unknown) { body = value; return this; },
+    setHeader(name: string, value: string) { headers[name.toLowerCase()] = value; return this; }
   } as unknown as Response;
-  return { response, read: () => ({ statusCode, body }) };
+  return { response, read: () => ({ statusCode, body, headers }) };
 }
 
 before(async () => {
@@ -99,6 +103,70 @@ describe("address book account isolation and lifecycle", () => {
     const recorder = responseRecorder();
     await getAddressBookEntry(request(outsiderId, {}, { entryId: String(entry._id) }), recorder.response);
     assert.equal(recorder.read().statusCode, 404);
+  });
+
+  test("encrypts sender Aadhaar, masks normal responses, and audits authorized reveal", async () => {
+    const aadhaarNumber = "234567890124";
+    const senderInput = input({
+      type: "SENDER",
+      label: "Delhi Sender",
+      mobileCountryCode: "+91",
+      mobileNumber: "9876543210",
+      countryCode: "IN",
+      countryName: "India",
+      addressLine1: "10 Market Road",
+      townOrCity: "Delhi",
+      county: "Delhi",
+      postcode: "110001",
+      aadhaarNumber
+    });
+    const createRecorder = responseRecorder();
+    await createAddressBookEntry(request(ownerId, senderInput), createRecorder.response);
+    const created = createRecorder.read();
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.body.entry.hasAadhaarNumber, true);
+    assert.equal(created.body.entry.aadhaarNumberMasked, "XXXX XXXX 0124");
+    assert.equal(JSON.stringify(created.body).includes(aadhaarNumber), false);
+
+    const entryId = created.body.entry.id as string;
+    const defaultRead = await AddressBookEntry.findById(entryId).lean().exec();
+    assert.ok(defaultRead);
+    assert.equal("aadhaarNumberEncrypted" in defaultRead, false);
+    const protectedRead = await AddressBookEntry.findById(entryId).select("+aadhaarNumberEncrypted").lean().exec();
+    assert.ok(protectedRead?.aadhaarNumberEncrypted);
+    assert.notEqual(protectedRead.aadhaarNumberEncrypted, aadhaarNumber);
+
+    const revealRecorder = responseRecorder();
+    await revealAddressBookAadhaar(request(ownerId, {}, { entryId }), revealRecorder.response);
+    const revealed = revealRecorder.read();
+    assert.equal(revealed.statusCode, 200);
+    assert.equal(revealed.body.aadhaarNumber, aadhaarNumber);
+    assert.equal(revealed.headers["cache-control"], "no-store");
+    assert.equal(await AuditLog.countDocuments({ action: "ADDRESS_BOOK_ENTRY_AADHAAR_REVEALED", entityId: entryId }), 1);
+
+    const outsiderRecorder = responseRecorder();
+    await revealAddressBookAadhaar(request(outsiderId, {}, { entryId }), outsiderRecorder.response);
+    assert.equal(outsiderRecorder.read().statusCode, 404);
+
+    const updateRecorder = responseRecorder();
+    await updateAddressBookEntry(request(ownerId, { ...senderInput, aadhaarNumber: undefined }, { entryId }), updateRecorder.response);
+    assert.equal(updateRecorder.read().statusCode, 200);
+    const afterUpdate = await AddressBookEntry.findById(entryId).select("+aadhaarNumberEncrypted").lean().exec();
+    assert.equal(afterUpdate?.aadhaarNumberEncrypted, protectedRead.aadhaarNumberEncrypted);
+
+    const duplicateRecorder = responseRecorder();
+    await duplicateAddressBookEntry(request(ownerId, {}, { entryId }), duplicateRecorder.response);
+    assert.equal(duplicateRecorder.read().statusCode, 201);
+    const duplicate = await AddressBookEntry.findById(duplicateRecorder.read().body.entry.id).select("+aadhaarNumberEncrypted").lean().exec();
+    assert.equal(duplicate?.aadhaarNumberEncrypted, protectedRead.aadhaarNumberEncrypted);
+    assert.equal(duplicate?.aadhaarNumberMasked, "XXXX XXXX 0124");
+  });
+
+  test("rejects Aadhaar on recipient addresses", async () => {
+    const recorder = responseRecorder();
+    await createAddressBookEntry(request(ownerId, input({ aadhaarNumber: "234567890124" })), recorder.response);
+    assert.equal(recorder.read().statusCode, 400);
+    assert.equal(recorder.read().body.errors[0].field, "aadhaarNumber");
   });
 
   test("resets validation when the postal address changes and soft-deletes the entry", async () => {

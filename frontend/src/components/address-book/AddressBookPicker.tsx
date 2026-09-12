@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { FiMapPin, FiSearch, FiStar, FiX } from "react-icons/fi";
 import {
   listAddressBookEntries,
+  prepareAddressBookEntryForShipment,
   type AddressBookEntry,
+  type AddressBookSelection,
   type AddressBookEntryType
 } from "@/lib/addressBook";
 
@@ -19,12 +21,28 @@ export default function AddressBookPicker({
   businessAccountId: string;
   type: AddressBookEntryType;
   onClose: () => void;
-  onSelect: (entry: AddressBookEntry) => void;
+  onSelect: (entry: AddressBookSelection) => void;
 }) {
   const [search, setSearch] = useState("");
   const [entries, setEntries] = useState<AddressBookEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [selectingId, setSelectingId] = useState("");
+
+  async function selectEntry(entry: AddressBookEntry) {
+    if (selectingId) return;
+    setSelectingId(entry.id);
+    setError("");
+    try {
+      const selection = await prepareAddressBookEntryForShipment(entry);
+      setSearch("");
+      onSelect(selection);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The saved address could not be applied.");
+    } finally {
+      setSelectingId("");
+    }
+  }
 
   useEffect(() => {
     if (!open || !businessAccountId) return;
@@ -48,7 +66,9 @@ export default function AddressBookPicker({
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
           <div>
             <h2 className="text-lg font-semibold text-[#0D1282]">Choose Saved {type === "SENDER" ? "Sender" : "Recipient"}</h2>
-            <p className="mt-1 text-sm text-slate-500">Only the contact and address fields will be filled.</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {type === "SENDER" ? "Contact, address and saved Aadhaar details will be filled." : "Contact and address details will be filled."}
+            </p>
           </div>
           <button type="button" onClick={() => { setSearch(""); onClose(); }} aria-label="Close address book" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-600 hover:border-[#0D1282] hover:text-[#0D1282]">
             <FiX className="h-4 w-4" />
@@ -75,8 +95,9 @@ export default function AddressBookPicker({
               <button
                 key={entry.id}
                 type="button"
-                onClick={() => { setSearch(""); onSelect(entry); }}
-                className="group rounded-2xl border border-slate-200 p-4 text-left transition hover:border-[#0D1282] hover:bg-[#0D1282]/[0.03] focus:outline-none focus:ring-2 focus:ring-[#0D1282]/20"
+                onClick={() => void selectEntry(entry)}
+                disabled={Boolean(selectingId)}
+                className="group rounded-2xl border border-slate-200 p-4 text-left transition hover:border-[#0D1282] hover:bg-[#0D1282]/[0.03] focus:outline-none focus:ring-2 focus:ring-[#0D1282]/20 disabled:cursor-wait disabled:opacity-60"
               >
                 <span className="flex items-start justify-between gap-3">
                   <span className="min-w-0">
@@ -88,7 +109,9 @@ export default function AddressBookPicker({
                 <span className="mt-3 block text-sm leading-5 text-slate-600">
                   {[entry.addressLine1, entry.addressLine2, entry.townOrCity, entry.postcode].filter(Boolean).join(", ")}
                 </span>
-                <span className="mt-3 block text-xs font-semibold text-[#0D1282] group-hover:underline">Use this address</span>
+                <span className="mt-3 block text-xs font-semibold text-[#0D1282] group-hover:underline">
+                  {selectingId === entry.id ? "Applying..." : "Use this address"}
+                </span>
               </button>
             ))}
           </div>

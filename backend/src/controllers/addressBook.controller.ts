@@ -19,6 +19,8 @@ import {
   buildAddressBookTemplateWorkbook,
   parseAddressBookImport
 } from "../services/addressBookImport.service.js";
+import { maskAadhaarNumber } from "../services/aadhaarValidation.service.js";
+import { decryptSecret, encryptSecret } from "../services/credentialEncryption.service.js";
 
 const addressBookRoles = new Set<string>(shipmentBookingRoles);
 const objectIdSchema = z.string().trim().refine((value) => mongoose.Types.ObjectId.isValid(value), "Invalid id");
@@ -55,13 +57,15 @@ async function getScope(request: Request, response: Response, businessAccountId:
   return { userId, businessAccountId: membership.businessAccount as mongoose.Types.ObjectId };
 }
 
-async function getScopedEntry(request: Request, response: Response) {
+async function getScopedEntry(request: Request, response: Response, includeAadhaar = false) {
   const entryId = String(request.params.entryId ?? "");
   if (!mongoose.Types.ObjectId.isValid(entryId)) {
     response.status(404).json({ success: false, message: "Address not found." });
     return null;
   }
-  const entry = await AddressBookEntry.findOne({ _id: entryId, deletedAt: null }).exec();
+  const query = AddressBookEntry.findOne({ _id: entryId, deletedAt: null });
+  if (includeAadhaar) query.select("+aadhaarNumberEncrypted");
+  const entry = await query.exec();
   if (!entry) {
     response.status(404).json({ success: false, message: "Address not found." });
     return null;
@@ -141,8 +145,11 @@ export async function createAddressBookEntry(request: Request, response: Respons
   const parsed = addressBookInputSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ success: false, message: "Correct the highlighted address details.", errors: validationErrors(parsed.error) });
 
+  const { aadhaarNumber, ...details } = parsed.data;
   const entry = await AddressBookEntry.create({
-    ...parsed.data,
+    ...details,
+    aadhaarNumberEncrypted: aadhaarNumber ? encryptSecret(aadhaarNumber, "taxId") : "",
+    aadhaarNumberMasked: aadhaarNumber ? maskAadhaarNumber(aadhaarNumber) : "",
     businessAccountId: scope.businessAccountId,
     validationStatus: "NOT_VALIDATED",
     createdBy: scope.userId,
@@ -158,8 +165,16 @@ export async function updateAddressBookEntry(request: Request, response: Respons
   const parsed = addressBookInputSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ success: false, message: "Correct the highlighted address details.", errors: validationErrors(parsed.error) });
 
-  const postalChanged = postalAddressFields.some((field) => String(scoped.entry[field] ?? "") !== String(parsed.data[field] ?? ""));
-  scoped.entry.set(parsed.data);
+  const { aadhaarNumber, ...details } = parsed.data;
+  const postalChanged = postalAddressFields.some((field) => String(scoped.entry[field] ?? "") !== String(details[field] ?? ""));
+  scoped.entry.set(details);
+  if (details.type !== "SENDER" || aadhaarNumber === "") {
+    scoped.entry.aadhaarNumberEncrypted = "";
+    scoped.entry.aadhaarNumberMasked = "";
+  } else if (aadhaarNumber) {
+    scoped.entry.aadhaarNumberEncrypted = encryptSecret(aadhaarNumber, "taxId");
+    scoped.entry.aadhaarNumberMasked = maskAadhaarNumber(aadhaarNumber);
+  }
   scoped.entry.updatedBy = scoped.userId;
   if (postalChanged) {
     scoped.entry.validationStatus = "NOT_VALIDATED";
@@ -197,7 +212,7 @@ export async function setAddressBookFavourite(request: Request, response: Respon
 }
 
 export async function duplicateAddressBookEntry(request: Request, response: Response) {
-  const scoped = await getScopedEntry(request, response);
+  const scoped = await getScopedEntry(request, response, true);
   if (!scoped) return response;
   const source = scoped.entry.toObject();
   const entry = await AddressBookEntry.create({
@@ -214,6 +229,19 @@ export async function duplicateAddressBookEntry(request: Request, response: Resp
   });
   await audit("ADDRESS_BOOK_ENTRY_DUPLICATED", entry, scoped.userId, { sourceEntryId: scoped.entry._id });
   return response.status(201).json({ success: true, entry: serializeAddressBookEntry(entry) });
+}
+
+export async function revealAddressBookAadhaar(request: Request, response: Response) {
+  const scoped = await getScopedEntry(request, response, true);
+  if (!scoped) return response;
+  if (scoped.entry.type !== "SENDER" || !scoped.entry.aadhaarNumberEncrypted) {
+    return response.status(404).json({ success: false, message: "No Aadhaar number is saved for this address." });
+  }
+
+  const aadhaarNumber = decryptSecret<string>(scoped.entry.aadhaarNumberEncrypted, "taxId");
+  await audit("ADDRESS_BOOK_ENTRY_AADHAAR_REVEALED", scoped.entry, scoped.userId);
+  response.setHeader("Cache-Control", "no-store");
+  return response.status(200).json({ success: true, aadhaarNumber });
 }
 
 export async function validateAddressBookEntry(request: Request, response: Response) {
@@ -309,13 +337,18 @@ export async function importAddressBookEntries(request: Request, response: Respo
   if (!parsed.success) return response.status(400).json({ success: false, message: "The address import contains invalid rows.", errors: validationErrors(parsed.error) });
   const scope = await getScope(request, response, parsed.data.businessAccountId);
   if (!scope) return response;
-  const entries = await AddressBookEntry.insertMany(parsed.data.entries.map((entry) => ({
-    ...entry,
-    businessAccountId: scope.businessAccountId,
-    validationStatus: "NOT_VALIDATED",
-    createdBy: scope.userId,
-    updatedBy: scope.userId
-  })), { ordered: true });
+  const entries = await AddressBookEntry.insertMany(parsed.data.entries.map((entry) => {
+    const { aadhaarNumber, ...details } = entry;
+    return {
+      ...details,
+      aadhaarNumberEncrypted: aadhaarNumber ? encryptSecret(aadhaarNumber, "taxId") : "",
+      aadhaarNumberMasked: aadhaarNumber ? maskAadhaarNumber(aadhaarNumber) : "",
+      businessAccountId: scope.businessAccountId,
+      validationStatus: "NOT_VALIDATED",
+      createdBy: scope.userId,
+      updatedBy: scope.userId
+    };
+  }), { ordered: true });
   await AuditLog.create({
     action: "ADDRESS_BOOK_ENTRIES_IMPORTED",
     entityType: "BUSINESS_ACCOUNT",

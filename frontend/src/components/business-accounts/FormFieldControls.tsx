@@ -1,6 +1,6 @@
 "use client";
 
-import { KeyboardEvent, ReactNode, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import { KeyboardEvent, ReactNode, useEffect, useId, useMemo, useRef, useState, type DragEvent, type RefObject } from "react";
 import { CountrySelector, FlagImage, defaultCountries, parseCountry, type CountryIso2 } from "react-international-phone";
 import { FiAlertCircle, FiAlertTriangle, FiCheckCircle, FiChevronDown, FiLoader } from "react-icons/fi";
 import InfoTooltip from "@/components/ui/InfoTooltip";
@@ -1220,6 +1220,33 @@ export function DocumentInput({
   // the picker must be done programmatically instead of via the label's default
   // activation - `.click()` opens the dialog without focusing the input.
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+
+  function handleDragEnter(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDraggingFile(true);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function handleDragLeave() {
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDraggingFile(false);
+  }
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDraggingFile(false);
+
+    const droppedFile = event.dataTransfer.files.item(0);
+    if (droppedFile) onChange(droppedFile);
+  }
 
   return (
     <div className="rounded-2xl bg-[#EEEDED]/35 p-5 ring-1 ring-[#EEEDED]">
@@ -1240,8 +1267,16 @@ export function DocumentInput({
               event.preventDefault();
               fileInputRef.current?.click();
             }}
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
             className={`mt-4 flex min-h-28 cursor-pointer flex-col justify-center rounded-xl border-2 border-dashed px-5 py-5 transition hover:border-[#0D1282]/50 hover:bg-[#F0DE36]/10 ${
-              error ? "border-[#D71313] bg-[#D71313]/5" : "border-[#0D1282]/20 bg-white/70"
+              isDraggingFile
+                ? "border-[#0D1282] bg-[#F0DE36]/15 ring-2 ring-[#F0DE36]/40"
+                : error
+                  ? "border-[#D71313] bg-[#D71313]/5"
+                  : "border-[#0D1282]/20 bg-white/70"
             }`}
           >
             <span className="rounded-lg px-2 py-1 text-sm font-semibold text-[#0D1282] transition hover:bg-[#F0DE36]/15">

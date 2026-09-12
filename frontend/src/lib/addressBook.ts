@@ -32,6 +32,8 @@ export type AddressBookEntry = AddressBookPostalAddress & {
   email: string;
   mobileCountryCode: string;
   mobileNumber: string;
+  hasAadhaarNumber: boolean;
+  aadhaarNumberMasked: string;
   instructions: string;
   providerPlaceId: string;
   validationStatus: AddressBookValidationStatus;
@@ -44,8 +46,10 @@ export type AddressBookEntry = AddressBookPostalAddress & {
 };
 
 export type AddressBookInput = Omit<AddressBookEntry,
-  "id" | "validationStatus" | "validationProvider" | "validationMessage" | "suggestedAddress" | "validatedAt" | "createdAt" | "updatedAt"
->;
+  "id" | "hasAadhaarNumber" | "aadhaarNumberMasked" | "validationStatus" | "validationProvider" | "validationMessage" | "suggestedAddress" | "validatedAt" | "createdAt" | "updatedAt"
+> & { aadhaarNumber?: string };
+
+export type AddressBookSelection = AddressBookEntry & { aadhaarNumber: string };
 
 export const emptyAddressBookInput = (type: AddressBookEntryType = "RECIPIENT"): AddressBookInput => ({
   type,
@@ -56,6 +60,7 @@ export const emptyAddressBookInput = (type: AddressBookEntryType = "RECIPIENT"):
   email: "",
   mobileCountryCode: type === "SENDER" ? "+91" : "",
   mobileNumber: "",
+  aadhaarNumber: "",
   countryCode: type === "SENDER" ? "IN" : "GB",
   countryName: type === "SENDER" ? "India" : "United Kingdom",
   addressLine1: "",
@@ -126,6 +131,19 @@ export async function createAddressBookEntry(businessAccountId: string, input: A
 
 export async function getAddressBookEntry(entryId: string) {
   return json<{ success: true; entry: AddressBookEntry }>(`/api/v1/client/address-book/${entryId}`);
+}
+
+export async function revealAddressBookAadhaar(entryId: string) {
+  return json<{ success: true; aadhaarNumber: string }>(`/api/v1/client/address-book/${entryId}/aadhaar/reveal`, {
+    method: "POST"
+  });
+}
+
+export async function prepareAddressBookEntryForShipment(entry: AddressBookEntry): Promise<AddressBookSelection> {
+  const aadhaarNumber = entry.type === "SENDER" && entry.hasAadhaarNumber
+    ? (await revealAddressBookAadhaar(entry.id)).aadhaarNumber
+    : "";
+  return { ...entry, aadhaarNumber };
 }
 
 export async function updateAddressBookEntry(entryId: string, input: AddressBookInput) {
