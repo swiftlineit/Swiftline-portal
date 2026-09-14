@@ -246,7 +246,19 @@ export async function listPublicShipmentLabels(request: Request, response: Respo
     if (booking.state !== "BOOKED" || !booking.dpdShipmentId) throw new PublicShipmentBookingError("Labels are not available yet.", 409);
     const token = typeof request.query.token === "string" ? request.query.token : "";
     const labels = await LabelDocument.find({ dpdShipmentId: booking.dpdShipmentId, labelType: "SWIFTLINE", voidedAt: null }).sort({ parcelNumber: 1 }).lean().exec();
-    return response.status(200).json({ success: true, labels: labels.map((label) => ({ id: String(label._id), parcelNumber: label.parcelNumber, format: label.format, downloadUrl: `/api/v1/public/shipment-bookings/status/labels/${label._id}${token ? `?token=${encodeURIComponent(token)}` : ""}` })) });
+    const printableLabels = labels.filter((label, index) => (
+      labels.findIndex((candidate) => candidate.storageKey === label.storageKey) === index
+    ));
+    return response.status(200).json({
+      success: true,
+      labels: printableLabels.map((label) => ({
+        id: String(label._id),
+        parcelNumber: label.parcelNumber,
+        parcelCount: labels.filter((candidate) => candidate.storageKey === label.storageKey).length,
+        format: label.format,
+        downloadUrl: `/api/v1/public/shipment-bookings/status/labels/${label._id}${token ? `?token=${encodeURIComponent(token)}` : ""}`
+      }))
+    });
   } catch (error) {
     return sendError(response, error);
   }
@@ -262,7 +274,13 @@ export async function downloadPublicShipmentLabel(request: Request, response: Re
     if (!label) throw new PublicShipmentBookingError("Label not found.", 404);
     await AuditLog.create({ action: "LABEL_DOWNLOADED", entityType: "LABEL_DOCUMENT", entityId: label._id, performedBy: new mongoose.Types.ObjectId("000000000000000000000000"), performedAt: new Date(), metadata: { publicBookingReference: booking.publicReference } }).catch(() => undefined);
     await LabelDocument.updateOne({ _id: label._id }, { $inc: { downloadCount: 1 }, $set: { lastDownloadedAt: new Date() } }).exec();
-    return streamObjectToResponse({ response, key: label.storageKey, contentType: "application/pdf", filename: `Swiftline-Label-${label.parcelNumber}.pdf`, disposition: "attachment" });
+    return streamObjectToResponse({
+      response,
+      key: label.storageKey,
+      contentType: "application/pdf",
+      filename: `Swiftline-Labels-${booking.swiftlineTrackingNumber}.pdf`,
+      disposition: "attachment"
+    });
   } catch (error) {
     return sendError(response, error);
   }

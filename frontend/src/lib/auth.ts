@@ -37,6 +37,14 @@ export class AuthRequestError extends Error {
   }
 }
 
+/** A server-side session termination, distinct from an ordinary expired token. */
+export class SessionEndedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionEndedError";
+  }
+}
+
 export function getAccessToken() {
   return accessToken;
 }
@@ -65,6 +73,7 @@ async function requestRefreshedAccessToken() {
     const data = await readJsonSafely(response);
     if (response.ok && data.success && typeof data.accessToken === "string") {
       setAccessToken(data.accessToken);
+      setSessionEndedReason(null);
       return data.accessToken;
     }
 
@@ -74,14 +83,17 @@ async function requestRefreshedAccessToken() {
     if (data.sessionEnded && typeof data.message === "string") {
       setAccessToken(null);
       setSessionEndedReason(data.message);
-      return null;
+      throw new SessionEndedError(data.message);
     }
 
     // Only a rejected refresh cookie means the session is gone. Throttling,
     // server faults, and offline devices must keep the current token usable.
     if (response.status === 401 || response.status === 403) setAccessToken(null);
     return null;
-  } catch {
+  } catch (error) {
+    // Callers must see the server's reason. Returning null here made request
+    // helpers fall back to the original generic 401 response instead.
+    if (error instanceof SessionEndedError) throw error;
     return null;
   }
 }

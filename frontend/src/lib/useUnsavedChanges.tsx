@@ -61,6 +61,22 @@ export function getDirtyForm(): DirtyForm | null {
 }
 
 /**
+ * Best-effort persistence used immediately before an automatic security logout.
+ * Failure never cancels that logout; the caller decides how to proceed.
+ */
+export async function saveUnsavedWork() {
+  const form = getDirtyForm();
+  if (!form?.saveDraft) return true;
+
+  try {
+    await form.saveDraft();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Declares that a form currently holds unsaved edits.
  *
  * Covers the browser's own unload (tab close, reload, external navigation) and

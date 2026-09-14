@@ -61,6 +61,7 @@ import {
   AddressPrediction,
   ShipmentContentType,
   ShipmentDraft,
+  type ShipmentDraftPatch,
   ShipmentKycDocuments,
   ShipmentServiceType,
   shipmentContentTypeOptions,
@@ -82,6 +83,7 @@ import {
   type ShipmentFormIssues
 } from "@/lib/shipmentConsignor";
 import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
+import { useShipmentDraftAutosave } from "@/lib/useShipmentDraftAutosave";
 import ShipmentCostEstimatePanel from "@/components/shipments/ShipmentCostEstimatePanel";
 import ShipmentPriceChangeDialog from "@/components/shipments/ShipmentPriceChangeDialog";
 import {
@@ -562,11 +564,66 @@ export default function ClientDpdDraftReviewPage() {
     enabled: Boolean(draft)
   });
 
+  const draftPatch = useMemo<ShipmentDraftPatch>(() => ({
+    consignorAddress: consignorFormToPatch(consignorForm),
+    kycUseForAllParcels: kycUseForAll,
+    consigneeEnteredAddress: {
+      companyName: contactForm.companyName,
+      contactName: contactForm.contactName,
+      email: contactForm.email,
+      mobileCountryCode: contactForm.mobileCountryCode,
+      mobileNumber: contactForm.mobileNumber,
+      countryCode: addressForm.countryCode,
+      countryName: addressForm.countryName,
+      addressLine1: addressForm.addressLine1,
+      addressLine2: addressForm.addressLine2,
+      townOrCity: addressForm.townOrCity,
+      county: addressForm.county,
+      postcode: addressForm.postcode,
+      deliveryInstructions: contactForm.deliveryInstructions
+    },
+    parcelList: parcelForms.map((parcel, index) => ({
+      sequence: index + 1,
+      weightKg: Number(parcel.weightKg),
+      lengthCm: parcel.lengthCm ? Number(parcel.lengthCm) : undefined,
+      widthCm: parcel.widthCm ? Number(parcel.widthCm) : undefined,
+      heightCm: parcel.heightCm ? Number(parcel.heightCm) : undefined,
+      shipmentContentType: parcel.shipmentContentType,
+      // Blank rows are dropped; quantity and rate go over the wire as numbers.
+      items: parcel.items
+        .filter((item) => item.description.trim() || item.hsnCode.trim())
+        .map((item) => ({
+          description: item.description,
+          hsnCode: item.hsnCode,
+          unitType: item.unitType,
+          quantity: Number(item.quantity) || 0,
+          unitRate: Number(item.unitRate) || 0
+        })),
+      contentsDescription: composeContentsDescription(parcel.items),
+      shipmentReference1: parcel.shipmentReference1,
+      shipmentReference2: parcel.shipmentReference2,
+      aadhaarNumber: parcel.aadhaarNumber
+    })),
+    csbType,
+    insuranceOptIn,
+    forceGst,
+    declarationNote,
+    serviceType: contactForm.serviceType,
+    serviceCode: contactForm.serviceCode
+  }), [addressForm, consignorForm, contactForm, csbType, declarationNote, forceGst, insuranceOptIn, kycUseForAll, parcelForms]);
+
+  const draftPatchKey = useMemo(
+    () => `${draft?._id ?? "unloaded"}:${JSON.stringify(draftPatch)}`,
+    [draft?._id, draftPatch]
+  );
+
   const draftChanged = useMemo(() => {
     if (!draft) return false;
     return consignorChanged
       || insuranceOptIn !== (draft.insuranceOptIn ?? false)
       || forceGst !== (draft.forceGst ?? false)
+      || csbType !== normalizeCsbType(draft.csbType)
+      || declarationNote !== (draft.declarationNote ?? defaultDeclarationNote)
       || JSON.stringify(parcelForms) !== JSON.stringify(normalizeParcels(draft))
       || contactForm.companyName !== (draft.consigneeEnteredAddress.companyName ?? "")
       || contactForm.contactName !== (draft.consigneeEnteredAddress.contactName ?? "")
@@ -582,17 +639,38 @@ export default function ClientDpdDraftReviewPage() {
       || addressForm.townOrCity !== (draft.consigneeEnteredAddress.townOrCity ?? "")
       || addressForm.county !== (draft.consigneeEnteredAddress.county ?? "")
       || addressForm.postcode !== (draft.consigneeEnteredAddress.postcode ?? "");
-  }, [addressForm, consignorChanged, contactForm, draft, forceGst, insuranceOptIn, parcelForms]);
+  }, [addressForm, consignorChanged, contactForm, csbType, declarationNote, draft, forceGst, insuranceOptIn, parcelForms]);
+
+  const {
+    status: draftAutosaveStatus,
+    flush: flushDraftChanges
+  } = useShipmentDraftAutosave({
+    enabled: Boolean(draft && draftChanged && !busy && !addressBusy),
+    changeKey: draftPatchKey,
+    patch: draftPatch,
+    save: async (patch) => {
+      if (!draft) throw new Error("Shipment draft is not loaded.");
+      const data = await updateClientShipmentDraft(draft._id, patch);
+      return data.shipmentDraft;
+    },
+    onSaved: (nextDraft, isLatest) => {
+      // A response for an older edit advances the server baseline without
+      // replacing newer text that is still on screen.
+      if (isLatest) syncDraft(nextDraft);
+      else setDraft(nextDraft);
+    },
+    onError: (caughtError) => {
+      setError(caughtError instanceof Error ? caughtError.message : "Shipment changes could not be saved.");
+    }
+  });
 
   // This form used to lose everything on navigation: nothing was stored until the
   // whole form validated, and there was no guard on the way out.
   useUnsavedChanges(draftChanged, {
     label: "this shipment",
     saveDraft: async () => {
-      const saved = await handleSaveDraft({ silentWhenUnchanged: true });
-      // Rejecting holds the user here; handleSaveDraft has already named the
-      // field that has to be corrected first.
-      if (!saved) throw new Error("Shipment draft was not saved.");
+      if (!draftChanged) return;
+      await flushDraftChanges();
     }
   });
 
@@ -885,60 +963,7 @@ export default function ClientDpdDraftReviewPage() {
 
   async function saveDraftChanges() {
     if (!draft) return null;
-
-    // PCS is derived from the parcel array length on the backend.
-    const data = await updateClientShipmentDraft(draft._id, {
-      consignorAddress: consignorFormToPatch(consignorForm),
-      kycUseForAllParcels: kycUseForAll,
-      consigneeEnteredAddress: {
-        companyName: contactForm.companyName,
-        contactName: contactForm.contactName,
-        email: contactForm.email,
-        mobileCountryCode: contactForm.mobileCountryCode,
-        mobileNumber: contactForm.mobileNumber,
-        countryCode: addressForm.countryCode,
-        countryName: addressForm.countryName,
-        addressLine1: addressForm.addressLine1,
-        addressLine2: addressForm.addressLine2,
-        townOrCity: addressForm.townOrCity,
-        county: addressForm.county,
-        postcode: addressForm.postcode,
-        deliveryInstructions: contactForm.deliveryInstructions
-      },
-      parcelList: parcelForms.map((parcel, index) => ({
-        sequence: index + 1,
-        weightKg: Number(parcel.weightKg),
-        lengthCm: parcel.lengthCm ? Number(parcel.lengthCm) : undefined,
-        widthCm: parcel.widthCm ? Number(parcel.widthCm) : undefined,
-        heightCm: parcel.heightCm ? Number(parcel.heightCm) : undefined,
-        shipmentContentType: parcel.shipmentContentType,
-        // Blank rows are dropped so an untouched extra row never blocks a save.
-        // Blank rows are dropped; quantity and rate go over the wire as numbers.
-        items: parcel.items
-          .filter((item) => item.description.trim() || item.hsnCode.trim())
-          .map((item) => ({
-            description: item.description,
-            hsnCode: item.hsnCode,
-            unitType: item.unitType,
-            quantity: Number(item.quantity) || 0,
-            unitRate: Number(item.unitRate) || 0
-          })),
-        // Recomputed from the items so the value the EDI export, manifest, carrier
-        // payload and labels read always matches what was entered.
-        contentsDescription: composeContentsDescription(parcel.items),
-        shipmentReference1: parcel.shipmentReference1,
-        shipmentReference2: parcel.shipmentReference2,
-        aadhaarNumber: parcel.aadhaarNumber
-      })),
-      csbType,
-      insuranceOptIn,
-      forceGst,
-      declarationNote,
-      serviceType: contactForm.serviceType,
-      serviceCode: contactForm.serviceCode
-    });
-    syncDraft(data.shipmentDraft);
-    return data.shipmentDraft;
+    return flushDraftChanges();
   }
 
   /**
@@ -1504,14 +1529,20 @@ export default function ClientDpdDraftReviewPage() {
                 <button
                   type="button"
                   onClick={() => void handleSaveDraft()}
-                  disabled={busy || !draftChanged}
+                  disabled={busy || !draftChanged || draftAutosaveStatus === "saving"}
                   className="mt-2 inline-flex rounded-xl h-10 w-full items-center justify-center gap-2 border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
                 >
                   <FiSave aria-hidden="true" className="h-4 w-4" />
                   {pendingAction === "DRAFT" ? "Saving..." : "Save as Draft"}
                 </button>
-                {draftChanged ? (
+                {draftAutosaveStatus === "saving" ? (
+                  <p className="mt-2 text-center text-xs font-semibold text-blue-700">Saving draft...</p>
+                ) : draftAutosaveStatus === "failed" ? (
+                  <p className="mt-2 text-center text-xs font-semibold text-red-700">Autosave failed. Use Save as Draft to retry.</p>
+                ) : draftChanged ? (
                   <p className="mt-2 text-center text-xs font-semibold text-amber-700">Unsaved changes</p>
+                ) : draftAutosaveStatus === "saved" ? (
+                  <p className="mt-2 text-center text-xs font-semibold text-emerald-700">Draft saved automatically.</p>
                 ) : null}
                 <ShipmentCostEstimatePanel
                   estimate={costEstimate}

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { createAccessToken, createRefreshToken, verifyAccessToken } from "../services/auth.service.js";
+import { shouldSupersedeExistingSessions } from "../services/userSession.service.js";
 
 const user = { id: "68f0000000000000000000aa", role: "admin", email: "ops@swiftline.test" };
 
@@ -35,14 +36,28 @@ describe("session-bound tokens", () => {
 });
 
 describe("single-session configuration", () => {
-  it("is off by default so a deploy cannot lock anyone out", () => {
-    // The flag is what makes this safe to ship: sessions are recorded and
-    // audited either way, but nothing is refused until it is switched on.
+  it("does not enable newest-login-wins by default", () => {
+    // Sessions, revocation and idle expiry still work with this off; only
+    // displacement by a newer internal login follows the flag.
     assert.equal(typeof env.SINGLE_SESSION_ENFORCED, "boolean");
     assert.equal(env.SINGLE_SESSION_ENFORCED, false);
   });
 
   it("has a positive idle timeout", () => {
     assert.ok(env.SESSION_IDLE_TIMEOUT_MINUTES > 0);
+  });
+
+  it("never supersedes an existing client session", () => {
+    const original = env.SINGLE_SESSION_ENFORCED;
+    env.SINGLE_SESSION_ENFORCED = true;
+
+    try {
+      assert.equal(shouldSupersedeExistingSessions("client"), false);
+      assert.equal(shouldSupersedeExistingSessions("admin"), true);
+      assert.equal(shouldSupersedeExistingSessions("operations"), true);
+      assert.equal(shouldSupersedeExistingSessions("driver"), true);
+    } finally {
+      env.SINGLE_SESSION_ENFORCED = original;
+    }
   });
 });

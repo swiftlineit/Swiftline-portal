@@ -75,6 +75,16 @@ async function createStaffUser(email: string) {
   });
 }
 
+async function createClientUser(email: string) {
+  return User.create({
+    email,
+    passwordHash: "not-used-by-these-tests",
+    role: "client",
+    userStatus: "active",
+    isVerified: true
+  });
+}
+
 before(async () => {
   await mongoose.connect(env.MONGODB_URI, { dbName: databaseName, family: 4, retryWrites: false });
   assert.equal(
@@ -113,7 +123,7 @@ describe("session revocation with single-session enforcement off", () => {
 
   test("an ended session stops being usable", async () => {
     const user = await createStaffUser("ended-session@swiftline.test");
-    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000);
+    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "operations");
 
     assert.deepEqual(await verifySession(sessionId), { ok: true });
 
@@ -128,12 +138,61 @@ describe("session revocation with single-session enforcement off", () => {
     // sign everyone out on deploy.
     assert.deepEqual(await verifySession(undefined), { ok: true });
   });
+
+  test("the server idle timeout remains enforced", async () => {
+    const user = await createStaffUser("idle-session@swiftline.test");
+    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "operations");
+    await UserSession.updateOne(
+      { sessionId },
+      { $set: { lastSeenAt: new Date(Date.now() - (env.SESSION_IDLE_TIMEOUT_MINUTES + 1) * 60 * 1000) } }
+    ).exec();
+
+    assert.equal((await verifySession(sessionId)).ok, false);
+    const session = await UserSession.findOne({ sessionId }).lean().exec();
+    assert.equal(session?.endReason, "idle_timeout");
+  });
+});
+
+describe("role-based concurrent sessions", () => {
+  test("a client login does not end the client's other active device", async () => {
+    const original = env.SINGLE_SESSION_ENFORCED;
+    env.SINGLE_SESSION_ENFORCED = true;
+
+    try {
+      const user = await createClientUser("multi-device-client@swiftline.test");
+      const first = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "client");
+      const second = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "client");
+
+      assert.deepEqual(await verifySession(first), { ok: true });
+      assert.deepEqual(await verifySession(second), { ok: true });
+      assert.equal(await UserSession.countDocuments({ userId: user._id, status: "active" }), 2);
+    } finally {
+      env.SINGLE_SESSION_ENFORCED = original;
+    }
+  });
+
+  test("an internal login still ends its previous active device", async () => {
+    const original = env.SINGLE_SESSION_ENFORCED;
+    env.SINGLE_SESSION_ENFORCED = true;
+
+    try {
+      const user = await createStaffUser("single-device-staff@swiftline.test");
+      const first = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "operations");
+      const second = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "operations");
+
+      assert.equal((await verifySession(first)).ok, false);
+      assert.deepEqual(await verifySession(second), { ok: true });
+      assert.equal(await UserSession.countDocuments({ userId: user._id, status: "active" }), 1);
+    } finally {
+      env.SINGLE_SESSION_ENFORCED = original;
+    }
+  });
 });
 
 describe("account status is enforced on every request", () => {
   test("an active staff login is attached normally", async () => {
     const user = await createStaffUser("active-staff@swiftline.test");
-    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000);
+    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "operations");
     const token = createAccessToken(
       { id: String(user._id), role: "operations", email: user.email },
       sessionId
@@ -153,7 +212,7 @@ describe("account status is enforced on every request", () => {
 
   test("suspending a staff login refuses the token it already holds", async () => {
     const user = await createStaffUser("suspended-staff@swiftline.test");
-    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000);
+    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "operations");
     const token = createAccessToken(
       { id: String(user._id), role: "operations", email: user.email },
       sessionId
@@ -180,7 +239,7 @@ describe("account status is enforced on every request", () => {
 
   test("disabling a login refuses it too", async () => {
     const user = await createStaffUser("disabled-staff@swiftline.test");
-    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000);
+    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "operations");
     const token = createAccessToken(
       { id: String(user._id), role: "operations", email: user.email },
       sessionId
@@ -207,7 +266,7 @@ describe("changing a user's status ends their open sessions", () => {
       isVerified: true
     });
     const user = await createStaffUser("to-be-suspended@swiftline.test");
-    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000);
+    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "operations");
 
     const request = createRequest({
       params: { id: String(user._id) },
@@ -235,7 +294,7 @@ describe("changing a user's status ends their open sessions", () => {
       isVerified: true
     });
     const user = await createStaffUser("to-be-reactivated@swiftline.test");
-    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000);
+    const sessionId = await startSession(user._id as mongoose.Types.ObjectId, createRequest(), 60_000, "operations");
 
     for (const status of ["suspended", "active"]) {
       const request = createRequest({

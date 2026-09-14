@@ -351,6 +351,7 @@ describe("Swiftline tracking sequence", () => {
     // requested, generated or stored.
     assert.equal(result.labels.length, 1);
     assert.ok(result.labels.every((label) => label.labelType === "SWIFTLINE"));
+    assert.ok(result.labels.every((label) => label.labelSize === "SQUARE"));
     assert.ok(result.dpdShipment._id);
     assert.ok(result.labels.some((label) => label.parcelNumber.startsWith("SLC")));
   });
@@ -472,6 +473,12 @@ describe("Swiftline tracking sequence", () => {
     assert.equal(first.reused, false);
     assert.equal(first.labels.length, 2);
     assert.ok(first.labels.every((label) => label.labelType === "SWIFTLINE"));
+    assert.ok(first.labels.every((label) => label.labelSize === "A4"));
+    assert.equal(
+      new Set(first.labels.map((label) => label.storageKey)).size,
+      1,
+      "all parcel records should open the same combined printable PDF"
+    );
     assert.equal(first.shipmentInvoice.taxableValueMinor, 305085);
     assert.equal(first.shipmentInvoice.totalTaxAmountMinor, 54915);
     assert.equal(first.shipmentInvoice.totalAmountMinor, 360000);
@@ -605,6 +612,7 @@ describe("Swiftline tracking sequence", () => {
     revisedLabels.forEach((label) => generatedKeys.add(label.storageKey));
     assert.equal(revisedLabels.length, 2);
     assert.ok(revisedLabels.every((label) => label.labelVersion === 2));
+    assert.equal(new Set(revisedLabels.map((label) => label.storageKey)).size, 1);
     assert.equal(await LabelDocument.countDocuments({ dpdShipmentId: amendedShipment._id }), 2);
     assert.deepEqual(
       (readShipmentBookingSnapshot(amendedShipment.bookingSnapshot)?.parcels ?? [])

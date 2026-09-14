@@ -33,6 +33,11 @@ type ShipmentRow = {
   lastScan: { statusLabel: string; location: string; at: string | Date } | null;
   shipmentInvoice: { invoiceNumber: string; currency: string; chargeableAmountMinor: number } | null;
   createdAt: string | Date | null;
+  parcelManifests?: Array<{
+    parcelNumber: string;
+    scanState: "SCANNED" | "AWAITING_SCAN";
+    manifestNumber: string | null;
+  }>;
 };
 
 /** Minor units are stored as integers; a spreadsheet wants the real amount. */
@@ -47,6 +52,16 @@ function asDate(value: string | Date | null | undefined) {
 export const shipmentExportColumns: Array<ExportColumn<ShipmentRow>> = [
   { header: "AWB", value: (row) => row.swiftlineTrackingNumber || "", width: 20 },
   { header: "Parcel numbers", value: (row) => row.awbNumbers.join(", "), width: 26 },
+  // Mirrors the staff Parcels column: per-parcel manifest run or awaiting state.
+  {
+    header: "Parcel manifest status",
+    value: (row) => (row.parcelManifests ?? [])
+      .map((parcel) => parcel.scanState === "SCANNED" && parcel.manifestNumber
+        ? `${parcel.parcelNumber} (${parcel.manifestNumber})`
+        : `${parcel.parcelNumber} (Awaiting manifest scan)`)
+      .join("; "),
+    width: 34
+  },
   { header: "Carrier numbers", value: (row) => row.forwardingNumbers.join(", "), width: 26 },
   { header: "Customer reference", value: (row) => row.shipmentReference, width: 20 },
   { header: "Account", value: (row) => row.businessAccountName, width: 26 },

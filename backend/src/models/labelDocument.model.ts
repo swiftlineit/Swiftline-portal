@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 export const labelFormatValues = ["PDF", "ZPL", "HTML"] as const;
-export const labelSizeValues = ["A4", "A6"] as const;
+export const labelSizeValues = ["A4", "A6", "SQUARE"] as const;
 
 export type LabelFormat = (typeof labelFormatValues)[number];
 export type LabelSize = (typeof labelSizeValues)[number];

@@ -4,7 +4,12 @@ import { AuditLog } from "../models/auditLog.model.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { DpdShipment, IDpdShipment } from "../models/dpdShipment.model.js";
-import { LabelDocument, type LabelFormat, type LabelType } from "../models/labelDocument.model.js";
+import {
+  LabelDocument,
+  type LabelFormat,
+  type LabelSize,
+  type LabelType
+} from "../models/labelDocument.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import type { PaymentSource } from "../models/financialTypes.js";
 import { validateShipmentDraftFields } from "./shipmentValidation.service.js";
@@ -21,7 +26,10 @@ import {
   publicBookingRateCardBand,
 } from "./shipmentPricing.service.js";
 import { assertPriceLockUnchanged } from "./shipmentCostEstimate.service.js";
-import { renderSwiftlineLabelPdf } from "./shipmentLabelPdf.service.js";
+import {
+  renderSwiftlineLabelSetPdf,
+  type ShipmentLabelData
+} from "./shipmentLabelPdf.service.js";
 import {
   AlsRequestError,
   AlsUncertainError,
@@ -305,9 +313,11 @@ export async function storeGeneratedLabel(input: {
   labelType?: LabelType;
   buffer: Buffer;
   format?: LabelFormat;
-  labelSize?: "A4" | "A6";
+  labelSize?: LabelSize;
   /** Exact snapshot revision; avoids a label-version lookup on known writes. */
   labelVersion?: number;
+  /** Reuses one stored PDF for every parcel record in a multi-label sheet. */
+  storedLabel?: { storageKey: string; fileChecksum: string };
 }) {
   const labelType = input.labelType ?? "SWIFTLINE";
   const format = input.format ?? "PDF";
@@ -332,7 +342,7 @@ export async function storeGeneratedLabel(input: {
     throw new DpdShipmentServiceError("The booking this label belongs to no longer exists.", 404);
   }
 
-  const stored = await saveLabelBuffer({
+  const stored = input.storedLabel ?? await saveLabelBuffer({
     shipmentDraftId: shipmentDraftId.toString(),
     parcelNumber: input.parcelNumber,
     buffer: input.buffer,
@@ -362,7 +372,7 @@ export async function storeGeneratedLabel(input: {
   ).exec();
 }
 
-type GeneratedLabelJob = Omit<Parameters<typeof storeGeneratedLabel>[0], "buffer"> & {
+type GeneratedLabelJob = Omit<Parameters<typeof storeGeneratedLabel>[0], "buffer" | "storedLabel"> & {
   buffer: Buffer | (() => Promise<Buffer>);
 };
 
@@ -374,6 +384,49 @@ async function storeGeneratedLabels(jobs: readonly GeneratedLabelJob[]) {
       : bufferSource;
     return storeGeneratedLabel({ ...input, buffer });
   });
+}
+
+type SwiftlineLabelJob = Omit<GeneratedLabelJob, "buffer" | "format" | "labelSize" | "labelType">;
+
+/**
+ * Stores one printable PDF for the shipment while retaining a parcel record for
+ * every barcode. Manifest completeness, scans and audit history remain parcel
+ * based; downloads and email attachments can treat the shared object as one set.
+ */
+async function storeGeneratedSwiftlineLabels(
+  jobs: readonly SwiftlineLabelJob[],
+  labelData: readonly ShipmentLabelData[]
+) {
+  if (!jobs.length) return [];
+  if (jobs.length !== labelData.length) {
+    throw new DpdShipmentServiceError("The parcel label set is incomplete.", 409);
+  }
+
+  const firstJob = jobs[0];
+  const firstLabel = labelData[0];
+  if (!firstJob?.shipmentDraftId || !firstLabel) {
+    throw new DpdShipmentServiceError("The parcel label set could not be stored.", 409);
+  }
+
+  const buffer = await renderSwiftlineLabelSetPdf(labelData);
+  const labelSize = labelData.length > 1 ? "A4" : "SQUARE";
+  const storedLabel = await saveLabelBuffer({
+    shipmentDraftId: firstJob.shipmentDraftId.toString(),
+    parcelNumber: firstLabel.parcelNumber,
+    buffer,
+    format: "PDF",
+    labelSize,
+    labelType: "SWIFTLINE"
+  });
+
+  return runWithConcurrency(jobs, LABEL_STORAGE_CONCURRENCY, (job) => storeGeneratedLabel({
+    ...job,
+    buffer,
+    format: "PDF",
+    labelSize,
+    labelType: "SWIFTLINE",
+    storedLabel
+  }));
 }
 
 export async function createLabelForShipmentDraft(
@@ -859,20 +912,19 @@ async function createLabelForShipmentDraftInternal(
     booking.snapshotRevision = 1;
     await measureShipmentBookingStage(timings, "bookingWriteMs", () => booking.save());
 
-    const swiftlineLabelJobs: GeneratedLabelJob[] = payload.parcels.map((_, index) => {
-      const labelData = bookingSnapshotToLabelData(bookingSnapshot, index);
-      return {
+    const swiftlineLabelData = payload.parcels.map((_, index) => (
+      bookingSnapshotToLabelData(bookingSnapshot, index)
+    ));
+    const swiftlineLabelJobs: SwiftlineLabelJob[] = swiftlineLabelData.map((labelData) => ({
         dpdShipmentId: booking._id as mongoose.Types.ObjectId,
         shipmentDraftId: lockedDraft._id as mongoose.Types.ObjectId,
         parcelNumber: labelData.parcelNumber,
-        labelVersion: booking.snapshotRevision,
-        buffer: () => renderSwiftlineLabelPdf(labelData)
-      };
-    });
+        labelVersion: booking.snapshotRevision
+      }));
 
     // DPD supplies one printable document for the whole booking. It is safe to
-    // store alongside the independently rendered Swiftline parcel labels after
-    // the carrier identifiers and locked snapshot are durable.
+    // store beside the combined Swiftline parcel-label document after the
+    // carrier identifiers and locked snapshot are durable.
     const dpdLabelJobs: GeneratedLabelJob[] = (dpdDocket?.labels ?? []).map((dpdLabel, index) => ({
       dpdShipmentId: booking._id as mongoose.Types.ObjectId,
       shipmentDraftId: lockedDraft._id as mongoose.Types.ObjectId,
@@ -888,7 +940,13 @@ async function createLabelForShipmentDraftInternal(
     const storedLabels = await measureShipmentBookingStage(
       timings,
       "labelMs",
-      () => storeGeneratedLabels([...swiftlineLabelJobs, ...dpdLabelJobs])
+      async () => {
+        const [swiftlineLabels, dpdLabels] = await Promise.all([
+          storeGeneratedSwiftlineLabels(swiftlineLabelJobs, swiftlineLabelData),
+          storeGeneratedLabels(dpdLabelJobs)
+        ]);
+        return [...swiftlineLabels, ...dpdLabels];
+      }
     );
     const labels = storedLabels.filter((label): label is NonNullable<typeof label> => Boolean(label));
     if (!hasCompleteSwiftlineLabelSet({ parcelCount: payload.parcels.length, labels })) {
@@ -1134,26 +1192,25 @@ export async function reconcileShipmentDocuments(
   }).exec();
   const expectedLabelVersion = dpdShipment.snapshotRevision || 1;
 
-  const missingLabelJobs: GeneratedLabelJob[] = [];
+  const needsLabelRepair = snapshot.parcels.some((parcel) => !existingLabels.some((label) => (
+    label.parcelNumber === parcel.swiftlineParcelNumber
+    && label.labelVersion === expectedLabelVersion
+  )));
+  const repairedLabelData: ShipmentLabelData[] = [];
+  const repairedLabelJobs: SwiftlineLabelJob[] = [];
   for (let index = 0; index < snapshot.parcels.length; index += 1) {
-    const swiftlineParcelNumber = snapshot.parcels[index]?.swiftlineParcelNumber ?? "";
-    const hasLabel = existingLabels.some((label) => (
-      label.parcelNumber === swiftlineParcelNumber
-      && label.labelVersion === expectedLabelVersion
-    ));
-
-    if (!hasLabel) {
+    if (needsLabelRepair) {
       const labelData = bookingSnapshotToLabelData(snapshot, index);
-      missingLabelJobs.push({
+      repairedLabelData.push(labelData);
+      repairedLabelJobs.push({
         dpdShipmentId: dpdShipment._id as mongoose.Types.ObjectId,
         shipmentDraftId: dpdShipment.shipmentDraftId,
         parcelNumber: labelData.parcelNumber,
-        labelVersion: expectedLabelVersion,
-        buffer: () => renderSwiftlineLabelPdf(labelData)
+        labelVersion: expectedLabelVersion
       });
     }
   }
-  await storeGeneratedLabels(missingLabelJobs);
+  await storeGeneratedSwiftlineLabels(repairedLabelJobs, repairedLabelData);
 
   const labels = await LabelDocument.find({
     dpdShipmentId: dpdShipment._id,
@@ -1412,18 +1469,19 @@ export async function regenerateShipmentLabels(
     ?? readShipmentBookingSnapshot(dpdShipment.bookingSnapshot);
   if (!snapshot) throw new DpdShipmentServiceError("The current shipment snapshot is unavailable.", 409);
 
-  const labelJobs: GeneratedLabelJob[] = [];
+  const labelDataSet: ShipmentLabelData[] = [];
+  const labelJobs: SwiftlineLabelJob[] = [];
   for (let index = 0; index < snapshot.parcels.length; index += 1) {
     const labelData = bookingSnapshotToLabelData(snapshot, index);
+    labelDataSet.push(labelData);
     labelJobs.push({
       dpdShipmentId,
       shipmentDraftId: dpdShipment.shipmentDraftId,
       parcelNumber: labelData.parcelNumber,
-      labelVersion: dpdShipment.snapshotRevision || 1,
-      buffer: () => renderSwiftlineLabelPdf(labelData)
+      labelVersion: dpdShipment.snapshotRevision || 1
     });
   }
-  await storeGeneratedLabels(labelJobs);
+  await storeGeneratedSwiftlineLabels(labelJobs, labelDataSet);
 
   const labels = await LabelDocument.find({
     dpdShipmentId,

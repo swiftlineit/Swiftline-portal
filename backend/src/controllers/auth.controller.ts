@@ -17,7 +17,7 @@ import { BusinessAccountMember } from "../models/businessAccountMember.model.js"
 import { sendLoginOtpEmail, sendPasswordResetEmail } from "../services/mail.service.js";
 import { normalizePortalRole } from "../utils/portalRole.js";
 import mongoose from "mongoose";
-import { accountNotActiveMessage, endSessions, startSession, verifySession } from "../services/userSession.service.js";
+import { accountNotActiveMessage, endSessions, startSession, touchSession, verifySession } from "../services/userSession.service.js";
 import {
   passwordLockDetails,
   recordFailedPasswordAttempt,
@@ -226,9 +226,14 @@ async function issueSignedInResponse(req: Request, res: Response, user: IUser): 
     await User.updateOne({ _id: user._id }, { $set: { role } }).exec();
   }
 
-  // Opening a session ends whatever else this user had open: the newest login
-  // wins, so a laptop closed without signing out cannot lock them out.
-  const sessionId = await startSession(user._id as mongoose.Types.ObjectId, req, refreshTokenTtlMs());
+  // Internal accounts remain newest-login-wins. Client accounts may use more
+  // than one device, while every session is still independently revocable.
+  const sessionId = await startSession(
+    user._id as mongoose.Types.ObjectId,
+    req,
+    refreshTokenTtlMs(),
+    role
+  );
   const accessToken = createAccessToken({ id: String(user._id), role, email: user.email }, sessionId);
   const refreshToken = createRefreshToken({ id: String(user._id), role, email: user.email }, sessionId);
 
@@ -634,6 +639,7 @@ export async function refresh(req: Request, res: Response): Promise<Response> {
     // supersede the device doing the refreshing.
     const sessionCheck = await verifySession(payload.sid);
     if (!sessionCheck.ok) return res.status(401).json({ success: false, message: sessionCheck.message, sessionEnded: true });
+    await touchSession(payload.sid);
 
     const accessToken = createAccessToken({ id: String(user._id), role, email: user.email }, payload.sid);
     const refreshToken = createRefreshToken({ id: String(user._id), role, email: user.email }, payload.sid);

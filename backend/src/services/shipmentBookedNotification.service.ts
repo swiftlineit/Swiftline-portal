@@ -77,7 +77,7 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
         voidedAt: null,
         ...(draft.creationSource === "PUBLIC_ONLINE" ? { labelType: "SWIFTLINE" } : {}),
       })
-        .select("_id labelType parcelNumber format")
+        .select("_id labelType parcelNumber format storageKey")
         // labelType descending puts SWIFTLINE after DPD, which is the order the
         // attachments are wanted in - see the size-budget note below.
         .sort({ labelType: -1, parcelNumber: 1 })
@@ -108,14 +108,19 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
       kind: "LABEL_DOCUMENT",
       refId: label._id,
       revision: null,
-      filename: `${label.labelType === "DPD" ? "DPD" : "Swiftline"}-Label-${label.parcelNumber}.${label.format.toLowerCase()}`
+      filename: label.labelType === "DPD"
+        ? `DPD-Label-${label.parcelNumber}.${label.format.toLowerCase()}`
+        : `Swiftline-Labels-${dpdShipment.swiftlineTrackingNumber}.${label.format.toLowerCase()}`
     });
 
     // Client and staff receive the same documents: the label is what the parcel
     // travels on, so withholding it from the client leaves them unable to hand
     // over. The invoice leads the list so that if the size budget runs out it is
     // labels that get dropped, never the document needed for accounts.
-    const attachments = [invoiceAttachment, ...labels.map(labelAttachment)];
+    const printableLabels = labels.filter((label, index) => (
+      labels.findIndex((candidate) => candidate.storageKey === label.storageKey) === index
+    ));
+    const attachments = [invoiceAttachment, ...printableLabels.map(labelAttachment)];
     // Drives the wording in the booked email: a UK shipment travels on the DPD
     // label, so the message must not tell the customer to affix only ours.
     const hasDpdLabel = labels.some((label) => label.labelType === "DPD");

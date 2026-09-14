@@ -8,6 +8,7 @@ import {
 } from "../services/swiftlineTracking.service.js";
 import {
   renderSwiftlineLabelPdf,
+  renderSwiftlineLabelSetPdf,
   type ShipmentLabelData
 } from "../services/shipmentLabelPdf.service.js";
 import {
@@ -73,6 +74,10 @@ function readPageSize(pdf: Buffer): number[] {
   return mediaBox[1].trim().split(/\s+/).map(Number);
 }
 
+function readPageCount(pdf: Buffer) {
+  return pdf.toString("latin1").match(/\/Type\s*\/Page\b/g)?.length ?? 0;
+}
+
 /**
  * Every string pdfkit actually drew, one entry per text run.
  *
@@ -119,14 +124,15 @@ function drawnText(pdf: Buffer): string[] {
 }
 
 describe("shipment label PDFs", () => {
-  test("renders the Swiftline label on A6 courier label stock", async () => {
+  test("renders one Swiftline label on square printer-safe stock", async () => {
     const pdf = await renderSwiftlineLabelPdf(labelData("SLCDEL200726001-01"));
     assert.equal(pdf.subarray(0, 4).toString(), "%PDF");
     assert.ok(pdf.length > 2_000);
 
     const [, , pageWidth, pageHeight] = readPageSize(pdf);
     assert.equal(Math.round(pageWidth ?? 0), 283);
-    assert.equal(Math.round(pageHeight ?? 0), 425);
+    assert.equal(Math.round(pageHeight ?? 0), 283);
+    assert.equal(readPageCount(pdf), 1);
   });
 
   test("keeps the footprint fixed however long the parcel number is", async () => {
@@ -136,8 +142,36 @@ describe("shipment label PDFs", () => {
     for (const pdf of [long, short]) {
       const [, , pageWidth, pageHeight] = readPageSize(pdf);
       assert.equal(Math.round(pageWidth ?? 0), 283);
-      assert.equal(Math.round(pageHeight ?? 0), 425);
+      assert.equal(Math.round(pageHeight ?? 0), 283);
     }
+  });
+
+  test("lays out two complete centred parcel labels per A4 page", async () => {
+    const labels = Array.from({ length: 5 }, (_, index) => ({
+      ...labelData(`SLCDEL200726001-${String(index + 1).padStart(2, "0")}`),
+      parcelIndex: index,
+      parcelCount: 5,
+      weightKg: index + 1
+    }));
+    const firstSheet = await renderSwiftlineLabelSetPdf(labels.slice(0, 2));
+    const secondSheet = await renderSwiftlineLabelSetPdf(labels);
+
+    for (const pdf of [firstSheet, secondSheet]) {
+      const [, , pageWidth, pageHeight] = readPageSize(pdf);
+      assert.equal(Math.round(pageWidth ?? 0), 595);
+      assert.equal(Math.round(pageHeight ?? 0), 842);
+    }
+    assert.equal(readPageCount(firstSheet), 1);
+    assert.equal(readPageCount(secondSheet), 3);
+
+    const drawn = drawnText(secondSheet);
+    for (const label of labels) {
+      assert.ok(drawn.includes(label.parcelNumber), `${label.parcelNumber} should be printed in the combined PDF`);
+    }
+    assert.deepEqual(
+      labels.map((label) => `${label.parcelIndex + 1} OF ${label.parcelCount}`).filter((piece) => !drawn.includes(piece)),
+      []
+    );
   });
 
   test("prints the routing grid, the hardcoded service and the consignee block", async () => {
@@ -174,7 +208,7 @@ describe("shipment label PDFs", () => {
     // The postcode is what the delivery depot sorts on, so it shares the bold
     // face used by the consignee name rather than the address's regular one.
     const postcode = find("SW1A 2AA  GB");
-    const name = find("Prime Minister & First Lord Of The Treasury");
+    const name = runs.find((run) => run.text.startsWith("Prime Minister & First Lord"));
     const street = find("10 Downing Street");
     assert.ok(postcode && name && street);
     assert.equal(postcode.font, name.font, "postcode should use the bold face");

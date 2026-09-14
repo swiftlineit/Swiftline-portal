@@ -25,9 +25,10 @@ const environmentSchema = z.object({
   JWT_SECRET: z.string().min(1, "JWT_SECRET is required for signing tokens"),
   ACCESS_TOKEN_EXPIRES_IN: z.string().default("15m"),
   REFRESH_TOKEN_EXPIRES_IN: z.string().default("7d"),
-  // Off by default: sessions are tracked and audited either way, but nothing is
-  // refused until this is switched on. Turning it back off is a config change.
+  // Off by default: sessions are tracked and audited either way. When enabled,
+  // internal accounts are newest-login-wins; client accounts remain multi-device.
   SINGLE_SESSION_ENFORCED: booleanFromEnv.default(false),
+  // Always enforced server-side as a backstop to the browser's visible timeout.
   SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_PASSWORD: z.string().optional(),

@@ -8,6 +8,7 @@ import { BsArrowCounterclockwise } from "react-icons/bs";
 import { toast } from "react-toastify";
 import CreateManifestDialog, { type ManifestDialogValues } from "@/components/shipments/CreateManifestDialog";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
+import ParcelManifestCell from "@/components/shipments/ParcelManifestCell";
 import DateRangeFilter from "@/components/ui/DateRangeFilter";
 import { SortableHeader, TableToolbar, defaultPageSizeOptions, type TableColumnOption } from "@/components/ui/TableToolbar";
 import { ScheduleChip } from "@/components/shipments/ShipmentJourney";
@@ -283,7 +284,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const [limit, setLimit] = useState(limitFromQuery);
   // Newest booking first, the order this table has always opened in.
   const [sort, setSort] = useState(sortFromQuery);
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(
+    // Staff open on the Parcels scan state; the lane stays available as an
+    // opt-in column rather than taking table width by default.
+    () => new Set(audience === "admin" ? ["route"] : [])
+  );
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -335,6 +340,9 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const columnOptions: TableColumnOption[] = [
     { key: "awb", label: "AWB / Shipment No.", locked: true },
     { key: "consignee", label: "Consignee" },
+    // Staff-only scan state. Separate key from "route" so each column is
+    // toggled independently; clients never see this entry.
+    ...(audience === "admin" ? [{ key: "parcels", label: "Parcels" }] : []),
     { key: "route", label: "Route" },
     { key: "amount", label: "Chargeable Amount" },
     { key: "status", label: "Status" },
@@ -1403,8 +1411,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-slate-200 bg-slate-100 text-xs uppercase text-slate-500">
+          <table className="min-w-full text-left text-xs">
+            <thead className="border-b border-slate-200 bg-slate-100 text-[11px] uppercase text-slate-500">
               <tr>
                 <th className="w-10 px-4 py-3">
                   <input
@@ -1418,11 +1426,12 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                 </th>
                 <th className="px-4 py-3">AWB / Shipment No.</th>
                 {shows("consignee") ? <th className="px-4 py-3">Consignee</th> : null}
+                {audience === "admin" && shows("parcels") ? <th className="px-4 py-3">Parcels</th> : null}
                 {shows("route") ? <th className="px-4 py-3">Route</th> : null}
                 {shows("amount") ? <th className="px-4 py-3">Chargeable Amount</th> : null}
                 {shows("status") ? <th className="px-4 py-3">Status</th> : null}
-                {/* The only sortable column on show. Consignee, Route, Amount
-                    and Status cannot be ordered by the server- see
+                {/* The only sortable column on show. Consignee, Parcels, Route,
+                    Amount and Status cannot be ordered by the server- see
                     shipmentSortableColumns for why- so they stay plain
                     headings rather than arrows that reorder one page. */}
                 {shows("eta") ? <th className="px-4 py-3">Estimated Delivery</th> : null}
@@ -1458,7 +1467,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                       </p>
                       <div
                         className="mt-1 flex min-w-0 items-center gap-1.5 text-xs"
-                        aria-label={`Account ${visibleAccountName(shipment) || "not available"}; ${shipment.pieces} pieces`}
+                        aria-label={`Account ${visibleAccountName(shipment) || "not available"}`}
                       >
                         <span className="shrink-0 text-slate-400">Account</span>
                         <span
@@ -1466,10 +1475,6 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                           title={visibleAccountName(shipment) || "Account not available"}
                         >
                           {truncateBusinessAccountName(visibleAccountName(shipment))}
-                        </span>
-                        <span aria-hidden="true" className="text-slate-300">·</span>
-                        <span className="shrink-0 whitespace-nowrap text-slate-600">
-                          <span className="text-slate-400">Pcs</span> {shipment.pieces}
                         </span>
                       </div>
                       <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -1489,6 +1494,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     <td className="px-4 py-3">
                       <p className="font-medium text-slate-800">{shipment.consignee || "Not set"}</p>
                       <p className="mt-1 text-xs text-slate-500">{shipment.destination || "Not set"}</p>
+                    </td>
+                  ) : null}
+                  {audience === "admin" && shows("parcels") ? (
+                    <td className="px-4 py-3">
+                      <ParcelManifestCell shipment={shipment} />
                     </td>
                   ) : null}
                   {shows("route") ? (
@@ -1513,11 +1523,6 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     {shipment.bookingStatus !== "LABEL_RECEIVED" ? (
                       <p className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
                         {shipment.bookingStatusLabel}
-                      </p>
-                    ) : null}
-                    {shipment.manifest ? (
-                      <p className="mt-1 text-xs font-semibold text-[#0D1282]">
-                        Manifest {shipment.manifest.manifestNumber}
                       </p>
                     ) : null}
                   </td>

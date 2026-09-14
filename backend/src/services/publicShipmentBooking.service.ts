@@ -344,9 +344,17 @@ async function sendPublicBookingEmail(input: {
       : [],
   ]);
   if (!invoice) return;
+  const printableLabels = labels.filter((label, index) => (
+    labels.findIndex((candidate) => candidate.storageKey === label.storageKey) === index
+  ));
   const attachments = [
     { kind: "SHIPMENT_INVOICE_PDF" as const, refId: invoice._id, revision: invoice.revision, filename: `${invoice.invoiceNumber.replaceAll("/", "-")}-Invoice.pdf` },
-    ...labels.map((label) => ({ kind: "LABEL_DOCUMENT" as const, refId: label._id, revision: null, filename: `Swiftline-Label-${label.parcelNumber}.${label.format.toLowerCase()}` })),
+    ...printableLabels.map((label) => ({
+      kind: "LABEL_DOCUMENT" as const,
+      refId: label._id,
+      revision: null,
+      filename: `Swiftline-Labels-${input.booking.swiftlineTrackingNumber}.${label.format.toLowerCase()}`
+    })),
   ];
   await enqueueEmails({
     notificationType: "SHIPMENT_BOOKED",

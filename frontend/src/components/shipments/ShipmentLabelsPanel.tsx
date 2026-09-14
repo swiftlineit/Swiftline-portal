@@ -9,6 +9,11 @@ export type ShipmentLabelItem = {
   labelType: "SWIFTLINE" | "DPD";
   format: string;
   labelSize: string;
+  fileChecksum?: string;
+};
+
+export type ShipmentLabelDocument = ShipmentLabelItem & {
+  parcelNumbers: string[];
 };
 
 type LabelAction = "view" | "download" | "print";
@@ -20,8 +25,28 @@ type LabelAction = "view" | "download" | "print";
  * whole shipment; the Swiftline label is one per box. Naming them apart is what
  * stops someone affixing the wrong one.
  */
-function labelTitle(label: ShipmentLabelItem) {
-  return label.labelType === "DPD" ? "DPD Carrier Label" : "Swiftline Label";
+function labelTitle(label: ShipmentLabelDocument) {
+  if (label.labelType === "DPD") return "DPD Carrier Label";
+  return label.parcelNumbers.length > 1 ? "Swiftline Labels" : "Swiftline Label";
+}
+
+/** Groups only parcel records that point to the same stored Swiftline PDF. */
+export function groupShipmentLabelDocuments(labels: ShipmentLabelItem[]) {
+  const documents = new Map<string, ShipmentLabelDocument>();
+
+  for (const label of labels) {
+    const key = label.labelType === "SWIFTLINE" && label.fileChecksum
+      ? `SWIFTLINE:${label.fileChecksum}`
+      : `${label.labelType}:${label.id}`;
+    const existing = documents.get(key);
+    if (existing) {
+      existing.parcelNumbers.push(label.parcelNumber);
+    } else {
+      documents.set(key, { ...label, parcelNumbers: [label.parcelNumber] });
+    }
+  }
+
+  return [...documents.values()];
 }
 
 export function ShipmentLabelsPanel({
@@ -37,9 +62,9 @@ export function ShipmentLabelsPanel({
 }) {
   const [activeAction, setActiveAction] = useState("");
   const [error, setError] = useState("");
-  void swiftlineTrackingNumber;
+  const labelDocuments = groupShipmentLabelDocuments(labels);
 
-  async function runAction(label: ShipmentLabelItem, action: LabelAction) {
+  async function runAction(label: ShipmentLabelDocument, action: LabelAction) {
     const actionKey = `${label.id}:${action}`;
     const openedWindow = action === "download" ? null : window.open("about:blank", "_blank");
     setActiveAction(actionKey);
@@ -51,7 +76,10 @@ export function ShipmentLabelsPanel({
       if (action === "download") {
         const anchor = document.createElement("a");
         anchor.href = access.url;
-        anchor.download = `${label.labelType.toLowerCase()}-label-${label.parcelNumber}.${label.format.toLowerCase()}`;
+        const basename = label.labelType === "SWIFTLINE" && label.parcelNumbers.length > 1
+          ? `swiftline-labels-${swiftlineTrackingNumber || label.parcelNumber.replace(/-\d+$/, "")}`
+          : `${label.labelType.toLowerCase()}-label-${label.parcelNumber}`;
+        anchor.download = `${basename}.${label.format.toLowerCase()}`;
         document.body.appendChild(anchor);
         anchor.click();
         anchor.remove();
@@ -94,14 +122,16 @@ export function ShipmentLabelsPanel({
 
       {compact ? (
         <div className="divide-y divide-slate-200">
-          {labels.map((label) => (
+          {labelDocuments.map((label) => (
             <div key={label.id} className="p-4">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-semibold text-slate-950">{labelTitle(label)}</h3>
                   <span className="text-xs font-medium text-slate-500">{label.format} </span>
                 </div>
-                <p className="mt-1 break-all text-sm font-medium text-slate-700">{label.parcelNumber}</p>
+                <p className="mt-1 break-all text-sm font-medium text-slate-700">
+                  {label.parcelNumbers.length > 1 ? `${label.parcelNumbers.length} parcel labels` : label.parcelNumber}
+                </p>
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2">
                 <LabelButton icon={<FiEye />} label="View" busy={activeAction === `${label.id}:view`} onClick={() => runAction(label, "view")} compact />
@@ -123,12 +153,14 @@ export function ShipmentLabelsPanel({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {labels.map((label) => (
+              {labelDocuments.map((label) => (
                 <tr key={label.id}>
                   <td className="px-4 py-3">
                     <p className="font-semibold text-slate-950">{labelTitle(label)}</p>
                   </td>
-                  <td className="px-4 py-3 font-medium text-slate-800">{label.parcelNumber}</td>
+                  <td className="px-4 py-3 font-medium text-slate-800">
+                    {label.parcelNumbers.length > 1 ? `${label.parcelNumbers.length} parcel labels` : label.parcelNumber}
+                  </td>
                   <td className="px-4 py-3 text-slate-600">{label.format} {label.labelSize}</td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-2">

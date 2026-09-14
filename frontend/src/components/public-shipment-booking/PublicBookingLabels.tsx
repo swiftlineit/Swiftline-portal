@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiUrl } from "@/lib/api";
 
-type Label = { id: string; parcelNumber: string; format: string; downloadUrl: string };
+type Label = { id: string; parcelNumber: string; parcelCount: number; format: string; downloadUrl: string };
 export default function PublicBookingLabels() {
   const params = useSearchParams();
   const token = params.get("token") || "";
@@ -23,13 +23,13 @@ export default function PublicBookingLabels() {
   return (
     <section className="mx-auto max-w-2xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
       <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#0D1282]">Swiftline parcel labels</p>
-      <h1 className="mt-2 text-2xl font-bold text-slate-950">Download one label per parcel</h1>
-      <p className="mt-2 text-sm leading-6 text-slate-600">Print each label at its original size and attach it securely to the matching parcel.</p>
+      <h1 className="mt-2 text-2xl font-bold text-slate-950">Download shipment labels</h1>
+      <p className="mt-2 text-sm leading-6 text-slate-600">Print the PDF at actual size and attach each label to the matching parcel.</p>
       {error ? <p role="alert" className="mt-5 rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
       <div className="mt-6 space-y-3">
-        {labels.map((label, index) => (
+        {labels.map((label) => (
           <a key={label.id} href={apiUrl(label.downloadUrl)} className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm font-bold text-slate-800 hover:border-[#0D1282] hover:text-[#0D1282]">
-            <span>Parcel {index + 1} · {label.parcelNumber}</span>
+            <span>{label.parcelCount > 1 ? `${label.parcelCount} parcel labels` : label.parcelNumber}</span>
             <span>Download {label.format}</span>
           </a>
         ))}

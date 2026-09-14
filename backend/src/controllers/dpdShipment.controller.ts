@@ -526,7 +526,9 @@ async function sendStoredLabel(params: {
     response,
     key: label.storageKey,
     contentType: labelContentType(label.format),
-    filename: `${label.labelType.toLowerCase()}-label-${label.parcelNumber}.${extension}`,
+    filename: label.labelType === "SWIFTLINE" && label.labelSize === "A4"
+      ? `swiftline-labels-${label.parcelNumber.replace(/-\d+$/, "")}.${extension}`
+      : `${label.labelType.toLowerCase()}-label-${label.parcelNumber}.${extension}`,
     disposition: params.disposition ?? "inline"
   });
 }

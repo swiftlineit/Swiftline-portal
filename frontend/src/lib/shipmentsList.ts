@@ -65,6 +65,22 @@ export type ShipmentListItem = {
   bookingStatusLabel: string;
   manifest: { id: string; manifestNumber: string } | null;
   manifestEligible: boolean;
+  /**
+   * Per-parcel operational manifest scan state, staff list only. `SCANNED`
+   * carries the owning manifest run; `AWAITING_SCAN` means no live scan owns
+   * the parcel (never scanned, or removed via parcel/bag/manifest
+   * cancellation). Absent on client responses and on shipments with no
+   * issued labels. Optional so cached responses still type-check.
+   */
+  parcelManifests?: Array<{
+    parcelNumber: string;
+    scanState: "SCANNED" | "AWAITING_SCAN";
+    manifestId: string | null;
+    manifestNumber: string | null;
+    manifestStatus: "DRAFT" | "PACKING" | "READY_TO_SEAL" | "SEALED" | "DISPATCHED" | "CANCELLED" | null;
+    bagNumber: string | null;
+    scannedAt: string | null;
+  }>;
   /** Internal staff-only carrier-label state; omitted from client responses. */
   dpdLabelStatus?: DpdLabelStatus;
   createdAt: string | null;

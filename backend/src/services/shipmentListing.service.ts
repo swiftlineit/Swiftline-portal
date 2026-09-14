@@ -8,6 +8,9 @@ import { ShipmentEvent, shipmentOperationalStatusValues } from "../models/shipme
 import { buildDeliveryEstimates } from "./shipmentTracking.service.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
+import { OperationsManifest, type OperationsManifestStatus } from "../models/operationsManifest.model.js";
+import { OperationsManifestBag } from "../models/operationsManifestBag.model.js";
+import { OperationsManifestScan } from "../models/operationsManifestScan.model.js";
 import { isDpdLabelDestination } from "./als/alsPayload.service.js";
 import { dateRangeCondition } from "../utils/dateRangeFilter.js";
 import { normalizeCsbType } from "./csbType.service.js";
@@ -114,6 +117,27 @@ export const allShipmentStatuses: DpdShipmentStatus[] = [
   "DPD_CREATING",
   "DPD_REJECTED"
 ];
+
+/**
+ * Per-parcel operational manifest scan state for the staff shipments table.
+ *
+ * `SCANNED` means a live `ACCEPTED` operations-manifest scan owns the parcel;
+ * the manifest number shown is that scan's manifest. `AWAITING_SCAN` means no
+ * live scan owns it- it was never scanned, or its scan was removed (single
+ * parcel removal, bag cancellation, or manifest cancellation flips `ACCEPTED`
+ * to `REMOVED`), or its manifest was deleted. A re-scan simply creates a new
+ * `ACCEPTED` row, so the next list load shows the new run with no extra logic.
+ */
+export type ShipmentParcelManifestInfo = {
+  parcelNumber: string;
+  scanState: "SCANNED" | "AWAITING_SCAN";
+  manifestId: string | null;
+  manifestNumber: string | null;
+  manifestStatus: OperationsManifestStatus | null;
+  /** Packing bag for the tooltip only; the chip always shows the manifest run. */
+  bagNumber: string | null;
+  scannedAt: string | null;
+};
 
 // The dashboard's In transit KPI includes every operational milestone from
 // collection through out-for-delivery. Legacy flight/customs names are kept in
@@ -543,6 +567,58 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     : [];
   const dpdLabelShipmentIdSet = new Set(dpdShipmentIdsWithLabel.map((id) => String(id)));
 
+  // Parcel-level operational manifest ownership, staff list only. The live
+  // `ACCEPTED` scan is the sole source of truth: removals (single parcel,
+  // bag cancellation, manifest cancellation) flip `ACCEPTED` to `REMOVED`,
+  // and the partial unique index on `{ parcelNumber where ACCEPTED }` frees
+  // the barcode for re-scanning. Consignment rows linger after removal, so
+  // they are deliberately not consulted here.
+  const scanByParcel = new Map<string, {
+    manifestId: string;
+    bagId: string | null;
+    scannedAt: Date;
+  }>();
+  const manifestHeaderById = new Map<string, { manifestNumber: string; status: OperationsManifestStatus }>();
+  const bagNumberById = new Map<string, string>();
+  if (filter.actorRole === "admin" && bookings.length) {
+    const pageParcelNumbers = new Set<string>();
+    for (const booking of bookings) {
+      const snapshot = readShipmentBookingSnapshot(booking.currentShipmentSnapshot)
+        ?? readShipmentBookingSnapshot(booking.bookingSnapshot);
+      for (const parcel of snapshot?.parcels ?? []) {
+        const normalized = parcel.swiftlineParcelNumber?.trim().toUpperCase();
+        if (normalized) pageParcelNumbers.add(normalized);
+      }
+    }
+    if (pageParcelNumbers.size) {
+      const parcelNumbers = [...pageParcelNumbers];
+      const liveScans = await OperationsManifestScan.find({ parcelNumber: { $in: parcelNumbers }, status: "ACCEPTED" })
+        .select("parcelNumber manifestId bagId scannedAt")
+        .lean()
+        .exec();
+      for (const scan of liveScans) scanByParcel.set(String(scan.parcelNumber).toUpperCase(), {
+        manifestId: String(scan.manifestId),
+        bagId: scan.bagId ? String(scan.bagId) : null,
+        scannedAt: scan.scannedAt
+      });
+      if (scanByParcel.size) {
+        const manifestIds = [...new Set([...scanByParcel.values()].map((scan) => scan.manifestId))];
+        const bagIds = [...new Set([...scanByParcel.values()].map((scan) => scan.bagId).filter((id): id is string => Boolean(id)))];
+        const [manifests, bags] = await Promise.all([
+          OperationsManifest.find({ _id: { $in: manifestIds } }).select("manifestNumber status").lean().exec(),
+          bagIds.length
+            ? OperationsManifestBag.find({ _id: { $in: bagIds } }).select("bagNumber").lean().exec()
+            : Promise.resolve([])
+        ]);
+        for (const manifest of manifests) manifestHeaderById.set(String(manifest._id), {
+          manifestNumber: manifest.manifestNumber,
+          status: manifest.status
+        });
+        for (const bag of bags) bagNumberById.set(String(bag._id), bag.bagNumber);
+      }
+    }
+  }
+
   const shipments = drafts.map((draft) => {
     const draftId = String(draft._id);
     const booking = bookingByDraft.get(draftId);
@@ -636,7 +712,33 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
             ? booking && dpdLabelShipmentIdSet.has(String(booking._id))
               ? "AVAILABLE" as const
               : "NOT_AVAILABLE" as const
-            : "NOT_APPLICABLE" as const
+            : "NOT_APPLICABLE" as const,
+          // Parcel-level operational manifest ownership for the staff Parcels
+          // column. Empty when labels are not yet issued (nothing scannable).
+          parcelManifests: parcels.map((parcel): ShipmentParcelManifestInfo => {
+            const live = scanByParcel.get(parcel.swiftlineParcelNumber.trim().toUpperCase());
+            const header = live ? manifestHeaderById.get(live.manifestId) : undefined;
+            if (!live || !header) {
+              return {
+                parcelNumber: parcel.swiftlineParcelNumber,
+                scanState: "AWAITING_SCAN",
+                manifestId: null,
+                manifestNumber: null,
+                manifestStatus: null,
+                bagNumber: null,
+                scannedAt: null
+              };
+            }
+            return {
+              parcelNumber: parcel.swiftlineParcelNumber,
+              scanState: "SCANNED",
+              manifestId: live.manifestId,
+              manifestNumber: header.manifestNumber,
+              manifestStatus: header.status,
+              bagNumber: (live.bagId && bagNumberById.get(live.bagId)) ?? null,
+              scannedAt: live.scannedAt ? new Date(live.scannedAt).toISOString() : null
+            };
+          })
         }
         : {}),
       createdAt: draft.createdAt ?? null,

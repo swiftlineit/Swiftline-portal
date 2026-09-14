@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiTag } from "react-icons/fi";
+import { BsChatRightQuote } from "react-icons/bs";
 import RateCardShareModal from "@/components/rate-cards/RateCardShareModal";
 import {
   daysUntil,
@@ -146,12 +146,12 @@ export default function RateCardTray() {
         <button
           type="button"
           onClick={() => setOpen((current) => !current)}
-          aria-label={hasUnread ? `Rate cards, ${unreadCount} unread` : "Rate cards"}
+          aria-label={hasUnread ? `Your Rate Card, ${unreadCount} unread` : "Your Rate Card"}
           aria-expanded={open}
-          className={`relative flex h-10 w-10 items-center justify-center rounded-4xl border bg-white transition ${
+          className={`relative inline-flex h-10 items-center gap-2.5 rounded-4xl border-2 bg-white px-3.5 text-sm font-semibold transition ${
             hasUnread
-              ? "border-[#0D1282] text-[#0D1282] shadow-[0_0_0_4px_rgba(13,18,130,0.12)]"
-              : "border-slate-300 text-slate-700 hover:border-blue-800 hover:text-blue-900"
+              ? "border-[#0D1282]/35 bg-[#0D1282]/4 text-[#0D1282] shadow-[0_0_0_3px_rgba(13,18,130,0.10)]"
+              : "border-slate-300 text-slate-700 shadow-sm hover:border-[#ffffff] hover:bg-[#0D1282]/4 hover:text-[#ffffff]"
           }`}
         >
           {/* A slow halo rather than a bouncing badge: enough to draw the eye on
@@ -159,25 +159,21 @@ export default function RateCardTray() {
           {hasUnread ? (
             <span
               aria-hidden="true"
-              className="absolute inset-0 animate-ping rounded-4xl bg-[#0D1282]/20 [animation-duration:2.4s]"
+              className="absolute inset-0 animate-ping rounded-xl bg-[#0D1282]/15 [animation-duration:2.4s]"
             />
           ) : null}
 
-          <FiTag className="relative h-4 w-4" />
+            <BsChatRightQuote  className="h-4 w-4 text-red-500 " />
+         
+
+          <span className="relative whitespace-nowrap">Your Rate Card</span>
 
           {hasUnread ? (
-            <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#0D1282] px-1 text-[10px] font-bold text-white">
+            <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#0D1282] px-1 text-[10px] font-bold text-white shadow-sm">
               {unreadCount > 9 ? "9+" : unreadCount}
             </span>
           ) : null}
         </button>
-
-        {!open && (
-          <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white opacity-0 shadow-xl transition-all duration-200 group-hover:translate-y-1 group-hover:opacity-100">
-            Rate cards
-            <div className="absolute -top-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-slate-900" />
-          </div>
-        )}
 
         {open ? (
           <div className="absolute right-0 top-12 z-50 w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">

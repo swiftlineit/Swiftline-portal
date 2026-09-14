@@ -1,17 +1,17 @@
 /**
  * Server-side sessions.
  *
- * Three separate rules live here, and only two of them are optional:
+ * Three separate rules live here:
  *
  * - Revocation is always enforced. A session that has been ended- by logout, by
  *   an admin, or by the owning account being suspended- stops working
  *   immediately. This cannot be behind a flag: it is what makes signing someone
  *   out mean anything, and a stateless JWT has no other way to express it.
  * - Single-active-session ("newest login wins") stays behind
- *   `SINGLE_SESSION_ENFORCED`, because whether one person may use two devices is
- *   a policy question rather than a security one.
- * - The idle timeout is behind the same flag, so switching it on is a deliberate
- *   decision about how long a shift can sit untouched rather than a surprise.
+ *   `SINGLE_SESSION_ENFORCED` and applies only to internal users. Clients may
+ *   use their own account on more than one device without displacing themselves.
+ * - The server idle timeout is always enforced. It is deliberately longer than
+ *   the visible browser warning and remains a backstop if a tab is suspended.
  */
 import crypto from "node:crypto";
 import type { Request } from "express";
@@ -28,6 +28,11 @@ export const accountNotActiveMessage = "This login is no longer active. Contact 
 
 export function isSingleSessionEnforced() {
   return env.SINGLE_SESSION_ENFORCED;
+}
+
+/** Clients may use multiple devices; internal portal accounts remain newest-login-wins. */
+export function shouldSupersedeExistingSessions(portalRole: string) {
+  return isSingleSessionEnforced() && portalRole !== "client";
 }
 
 function getIdleCutoff() {
@@ -113,20 +118,18 @@ export async function endSessions(
 }
 
 /**
- * Opens a session for a login, ending whatever else that user had open.
- *
- * The newest login wins: a laptop closed without signing out must never lock
- * someone out of their own account, which is what refusing the new login would
- * do. The displaced device learns why on its next request.
+ * Opens a session for a login. Internal users displace their older sessions;
+ * clients keep each device active and can revoke either session independently.
  */
 export async function startSession(
   userId: mongoose.Types.ObjectId,
   request: Request,
-  refreshTokenTtlMs: number
+  refreshTokenTtlMs: number,
+  portalRole: string
 ) {
   const { ipAddress, userAgent, device } = readRequestContext(request);
 
-  if (isSingleSessionEnforced()) {
+  if (shouldSupersedeExistingSessions(portalRole)) {
     await endSessions({ userId }, "superseded_by_new_login");
   }
 
@@ -179,8 +182,7 @@ export async function verifySession(sessionId: string | undefined): Promise<Sess
     };
   }
 
-  // Policy rather than revocation, so it follows the flag. See the note above.
-  if (isSingleSessionEnforced() && session.lastSeenAt < getIdleCutoff()) {
+  if (session.lastSeenAt < getIdleCutoff()) {
     await endSessions({ _id: session._id }, "idle_timeout");
     return { ok: false, message: sessionEndedMessage };
   }

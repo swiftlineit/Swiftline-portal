@@ -2,15 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { logout, setSessionEndedReason } from "@/lib/auth";
+import { getAccessToken, logout, refreshAccessToken, setSessionEndedReason } from "@/lib/auth";
 import { useDialog } from "@/lib/useDialog";
+import {
+  IDLE_SIGN_OUT_MESSAGE,
+  SESSION_IDLE_COUNTDOWN_MS,
+  SESSION_IDLE_WARNING_AFTER_MS
+} from "@/lib/sessionTimeout";
+import { saveUnsavedWork } from "@/lib/useUnsavedChanges";
 
 /**
  * Signs out a portal that has been left unattended.
  *
- * After five minutes without activity the user is asked whether they are still
+ * After fifteen minutes without activity the user is asked whether they are still
  * there, and has one minute to answer before being signed out and returned to
- * the login page. Answering restarts the five minutes.
+ * the login page. Answering restarts the fifteen minutes.
  *
  * This is the visible half of a rule the server already enforces
  * (`SESSION_IDLE_TIMEOUT_MINUTES` in userSession.service.ts). The server decides
@@ -19,9 +25,6 @@ import { useDialog } from "@/lib/useDialog";
  * only clearing the screen- `logout()` revokes it server-side, so walking away
  * from an unlocked machine does not leave a usable session behind.
  */
-
-const IDLE_LIMIT_MS = 5 * 60 * 1000;
-const COUNTDOWN_MS = 60 * 1000;
 
 /**
  * Shared across tabs.
@@ -37,9 +40,6 @@ const SIGNED_OUT_KEY = "swiftline:idle-signed-out";
 const ACTIVITY_WRITE_INTERVAL_MS = 5_000;
 
 const ACTIVITY_EVENTS = ["mousedown", "mousemove", "wheel", "keydown", "scroll", "touchstart"] as const;
-
-const IDLE_SIGN_OUT_MESSAGE =
-  "You were signed out after 5 minutes of inactivity. Please sign in again.";
 
 function readSharedActivity() {
   try {
@@ -62,7 +62,7 @@ function writeShared(key: string, value: number) {
 export default function SessionTimeoutGuard() {
   const router = useRouter();
   const [warning, setWarning] = useState(false);
-  const [secondsLeft, setSecondsLeft] = useState(Math.round(COUNTDOWN_MS / 1000));
+  const [secondsLeft, setSecondsLeft] = useState(Math.round(SESSION_IDLE_COUNTDOWN_MS / 1000));
 
   // Seeded on mount rather than at render: reading the clock while rendering is
   // impure, and a ref initialiser runs on every render even though only the
@@ -88,8 +88,12 @@ export default function SessionTimeoutGuard() {
     // Set before awaiting so the login page can explain the bounce even if the
     // logout request is slow or fails.
     setSessionEndedReason(IDLE_SIGN_OUT_MESSAGE);
-    writeShared(SIGNED_OUT_KEY, Date.now());
 
+    // The draft registry already owns the current form's canonical save action.
+    // Give it a chance to flush before revoking the session, without allowing a
+    // failed network request to defeat the security timeout.
+    await saveUnsavedWork();
+    writeShared(SIGNED_OUT_KEY, Date.now());
     await logout();
     router.replace("/");
   }, [router]);
@@ -104,7 +108,22 @@ export default function SessionTimeoutGuard() {
     warningRef.current = false;
     warningStartedAtRef.current = 0;
     setWarning(false);
-  }, []);
+
+    // Refreshing also touches the server-side idle clock. Without this, a user
+    // could answer the visible warning but still hit the server's hard timeout.
+    void refreshAccessToken()
+      .then((token) => {
+        // A transient network/server failure leaves the current token in place.
+        // A rejected refresh clears it and requires a fresh sign-in.
+        if (token || getAccessToken()) return;
+        setSessionEndedReason("Your session has ended. Please sign in again.");
+        router.replace("/");
+      })
+      .catch(() => {
+        // Structured session-ended errors already stored their exact reason.
+        router.replace("/");
+      });
+  }, [router]);
 
   // Activity tracking. Registered once, driven entirely through refs, so moving
   // the mouse never causes a render.
@@ -165,17 +184,17 @@ export default function SessionTimeoutGuard() {
       if (signingOutRef.current) return;
 
       const lastActivity = effectiveActivity();
-      // Belt and braces: never treat an unseeded timestamp as five minutes idle.
+      // Belt and braces: never treat an unseeded timestamp as idle.
       if (!lastActivity) return;
 
       const now = Date.now();
 
       if (!warningRef.current) {
-        if (now - lastActivity >= IDLE_LIMIT_MS) {
+        if (now - lastActivity >= SESSION_IDLE_WARNING_AFTER_MS) {
           warningRef.current = true;
           warningStartedAtRef.current = now;
-          deadlineRef.current = now + COUNTDOWN_MS;
-          setSecondsLeft(Math.round(COUNTDOWN_MS / 1000));
+          deadlineRef.current = now + SESSION_IDLE_COUNTDOWN_MS;
+          setSecondsLeft(Math.round(SESSION_IDLE_COUNTDOWN_MS / 1000));
           setWarning(true);
         }
         return;
@@ -218,7 +237,7 @@ function IdleWarningDialog({
   // Escape keeps the session: pressing a key is proof someone is there, and the
   // destructive reading of "dismiss" would be a strange thing to do by default.
   const dialogRef = useDialog<HTMLDivElement>(true, onStay);
-  const remainingFraction = Math.max(0, Math.min(1, secondsLeft / (COUNTDOWN_MS / 1000)));
+  const remainingFraction = Math.max(0, Math.min(1, secondsLeft / (SESSION_IDLE_COUNTDOWN_MS / 1000)));
 
   return (
     <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#0D1282]/30 px-4 backdrop-blur-sm">
@@ -237,7 +256,7 @@ function IdleWarningDialog({
 
         <div className="px-5 py-4">
           <p id="idle-warning-description" className="text-sm leading-6 text-slate-600">
-            You have been inactive for 5 minutes. For your security you will be signed out in one
+            You have been inactive for 15 minutes. For your security you will be signed out in one
             minute unless you continue.
           </p>
 
