@@ -74,20 +74,20 @@ export default function PortalBackButton({
   // The button is rendered even on top-level pages per plan (“mount shell-wide”)
   // but callers may pass `hidden` to suppress it on exact roots if desired.
   return (
-   <button
-  type="button"
-  onClick={() => void handleClick()}
-  disabled={busy}
-  aria-label={ariaLabel}
-  title={ariaLabel}
-  className={
-    className ??
-    "inline-flex h-9 min-w-[96px] shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-[#0D1282] shadow-sm transition hover:border-[#0D1282]/30 hover:bg-[#0D1282]/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
-  }
->
-  <FiArrowLeft aria-hidden="true" className="h-4 w-4" />
-  <span>Back</span>
-</button>
+    <button
+      type="button"
+      onClick={() => void handleClick()}
+      disabled={busy}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      className={
+        className ??
+        "inline-flex h-9 min-w-[96px] shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white pr-2 text-sm font-semibold text-[#0D1282] shadow-sm transition hover:border-[#0D1282]/30 hover:bg-[#0D1282]/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+      }
+    >
+      <FiArrowLeft aria-hidden="true" className="h-4 w-4" />
+      <span>Back</span>
+    </button>
   );
 }
 
@@ -97,11 +97,14 @@ export default function PortalBackButton({
  * resolver simply keeps the user on that root; after in-portal navigation it
  * follows the real browser history.
  */
-export function ShellPortalBackButton(props: Omit<PortalBackButtonProps, "hidden">) {
+export function ShellPortalBackButton(
+  props: Omit<PortalBackButtonProps, "hidden">,
+) {
   const pathname = usePathname() ?? "";
   // The main staff and client dashboards are entry points, not detail pages.
   // Keep the control on every other authenticated route, including collection
   // roots and create/manage pages.
-  if (pathname === "/dashboard" || pathname === "/client/dashboard") return null;
+  if (pathname === "/dashboard" || pathname === "/client/dashboard")
+    return null;
   return <PortalBackButton {...props} hidden={false} />;
 }

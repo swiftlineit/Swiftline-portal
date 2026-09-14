@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { FiAlertTriangle, FiChevronRight, FiGlobe, FiLayers, FiTrendingDown } from "react-icons/fi";
+import { FiAlertTriangle, FiChevronRight } from "react-icons/fi";
 import { ClientDashboardLoading } from "@/components/client/ClientDashboardShell";
 import RateCardSearch from "@/components/client/rate-card/RateCardSearch";
 import RateCardRegionTiles from "@/components/client/rate-card/RateCardRegionTiles";
@@ -13,7 +13,6 @@ import {
   buildRegions,
   formatRate
 } from "@/components/client/rate-card/rateCardView";
-import { panelSurface } from "@/components/dashboard/DashboardWidgets";
 import { countryName } from "@/lib/countries";
 import { rateCardRegionLabel } from "@/lib/rateCardRegions";
 import {
@@ -128,16 +127,38 @@ export default function ClientRateCardPage() {
 
   if (userLoading || !user) return <ClientDashboardLoading />;
 
+  // Same visibility rule the body uses below, so the search lives in the
+  // header without appearing in loading, unassigned or empty states.
+  const showSearch = !loading && assigned && rates.length > 0;
+
   return (
-    <div className="mx-auto flex max-w-8xl flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-950">
-          Your Swiftline Rate Card
-        </h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Your current destinations, weight slabs and applicable route charges.
-        </p>
-      </div>
+    <div className="mx-auto flex max-w-8xl flex-col gap-5">
+      <header className="rounded-xl border border-slate-200 bg-white">
+        <div className="flex flex-col gap-4 px-5 py-5 sm:px-6 lg:flex-row lg:items-end lg:gap-8">
+          <div className="order-1 min-w-0">
+            {/* <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#0D1282]">
+              Rate card
+            </p> */}
+            <h1 className="mt-1 text-xl font-semibold tracking-[-0.02em] text-slate-900 sm:text-2xl">
+              Your Swiftline Rate Card
+            </h1>
+            <p className="mt-1.5 text-sm leading-6 text-slate-500">
+              Your current destinations, weight slabs and applicable route charges.
+            </p>
+          </div>
+
+          {showSearch ? (
+            <div className="order-2 min-w-0 flex-1 lg:ml-auto lg:max-w-md xl:max-w-lg">
+              <RateCardSearch
+                value={query}
+                onChange={setQuery}
+                onSelect={(countryCode) => setView({ kind: "country", iso2: countryCode })}
+                coveredCodes={coveredCodes}
+              />
+            </div>
+          ) : null}
+        </div>
+      </header>
 
       {error ? (
         <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
@@ -175,44 +196,34 @@ export default function ClientRateCardPage() {
 
       {!loading && assigned && rates.length ? (
         <>
-          <RateCardSearch
-            value={query}
-            onChange={setQuery}
-            onSelect={(countryCode) => setView({ kind: "country", iso2: countryCode })}
-            coveredCodes={coveredCodes}
-          />
+          <Breadcrumb view={view} onNavigate={setView} />
 
-          {totals ? (
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Metric icon={<FiGlobe />} label="Destinations" value={String(totals.destinations)} />
-              <Metric icon={<FiLayers />} label="Weight slabs" value={String(totals.slabs)} />
-              <Metric
-                icon={<FiTrendingDown />}
-                label="Starting from"
-                value={`${formatRate(totals.lowestRate)} / kg`}
+          {view.kind === "regions" ? (
+            <div className="grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {totals ? <StatsList rows={totalRows(totals)} /> : null}
+              <RateCardRegionTiles
+                regions={regions}
+                onSelect={(code) => setView({ kind: "region", code })}
               />
             </div>
           ) : null}
 
-          <Breadcrumb view={view} onNavigate={setView} />
-
-          {view.kind === "regions" ? (
-            <RateCardRegionTiles
-              regions={regions}
-              onSelect={(code) => setView({ kind: "region", code })}
-            />
-          ) : null}
-
           {view.kind === "region" ? (
             activeRegion ? (
-              <RateCardCountryGrid
-                destinations={activeRegion.destinations}
-                onSelect={(countryCode) => setView({ kind: "country", iso2: countryCode })}
-              />
+              <div className="grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {totals ? <StatsList rows={totalRows(totals)} /> : null}
+                <RateCardCountryGrid
+                  destinations={activeRegion.destinations}
+                  onSelect={(countryCode) => setView({ kind: "country", iso2: countryCode })}
+                />
+              </div>
             ) : (
-              <p className="rounded-xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
-                This region is no longer on your card.
-              </p>
+              <>
+                {totals ? <StatsList rows={totalRows(totals)} /> : null}
+                <p className="rounded-xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
+                  This region is no longer on your card.
+                </p>
+              </>
             )
           ) : null}
 
@@ -235,6 +246,29 @@ export default function ClientRateCardPage() {
         </>
       ) : null}
     </div>
+  );
+}
+
+function totalRows(totals: { destinations: number; slabs: number; lowestRate: number }) {
+  return [
+    { label: "Destinations", value: String(totals.destinations) },
+    { label: "Weight slabs", value: String(totals.slabs) },
+    { label: "Starting from", value: `${formatRate(totals.lowestRate)} / kg` },
+  ];
+}
+
+function StatsList({ rows }: { rows: Array<{ label: string; value: string }> }) {
+  return (
+    <dl aria-label="Rate card summary" className="flex flex-col self-stretch rounded-xl border border-slate-200 bg-white px-5 py-2">
+      <div className="flex flex-1 flex-col divide-y divide-slate-100">
+        {rows.map((row) => (
+          <div key={row.label} className="flex flex-1 items-center justify-between gap-3 py-2.5">
+            <dt className="text-xs font-medium text-slate-500">{row.label}</dt>
+            <dd className="truncate text-sm font-semibold tabular-nums text-slate-900">{row.value}</dd>
+          </div>
+        ))}
+      </div>
+    </dl>
   );
 }
 
@@ -267,19 +301,5 @@ function Breadcrumb({ view, onNavigate }: { view: View; onNavigate: (view: View)
         </>
       ) : null}
     </nav>
-  );
-}
-
-function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className={`flex items-center gap-3 px-4 py-3 ${panelSurface}`}>
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#0D1282]/8 text-[#0D1282]">
-        {icon}
-      </span>
-      <div className="min-w-0">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="truncate text-sm font-semibold text-slate-900">{value}</p>
-      </div>
-    </div>
   );
 }

@@ -13,8 +13,10 @@ export default function RateCardCountryGrid({
   destinations: Destination[];
   onSelect: (countryCode: string) => void;
 }) {
+  // No grid of its own: the page lays these cards out next to the summary
+  // list, so the wrapper dissolves and the cards become the grid's items.
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <div className="contents">
       {destinations.map((destination) => (
         <button
           key={destination.countryCode}

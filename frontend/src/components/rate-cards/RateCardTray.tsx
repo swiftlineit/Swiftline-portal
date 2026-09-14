@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BsChatRightQuote } from "react-icons/bs";
+import Link from "next/link";
 import RateCardShareModal from "@/components/rate-cards/RateCardShareModal";
 import {
   daysUntil,
@@ -11,6 +11,7 @@ import {
   markClientRateCardShareRead,
   type RateCardShare,
 } from "@/lib/rateCardShares";
+import { FaTags } from "react-icons/fa6";
 
 // Remembers which shares have already auto-opened, so a share cannot pop a
 // second time if the read call failed or the client has two tabs open. Cleared
@@ -42,6 +43,11 @@ function writeAutoOpened(ids: string[]) {
  * unread, and auto-opens a rate card the very first time it arrives. Built as a
  * tray rather than a page so this shelf can carry other shared documents later
  * without adding another route each time.
+ *
+ * The button is dual-purpose: while the client holds at least one live share
+ * it opens the tray; with nothing shared it is a plain link to the client's
+ * own assigned rate card. Both destinations are server-scoped to the client's
+ * accounts, so a client can only ever see what was shared with them.
  */
 export default function RateCardTray() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -140,43 +146,61 @@ export default function RateCardTray() {
 
   const hasUnread = unreadCount > 0;
 
+  // Only live shares earn the tray. Expired-only (or no) inboxes link straight
+  // to the client's own assigned rate card instead of an empty dropdown.
+  const hasLiveShares = shares.some((share) => !share.expired);
+
+  const buttonClassName = `relative inline-flex h-10 items-center gap-2 rounded-4xl border-2 bg-white px-2.5 text-sm font-semibold transition sm:gap-2.5 sm:px-3.5 ${
+    hasUnread
+      ? "border-[#0D1282]/35 bg-[#0D1282]/4 text-[#0D1282] shadow-[0_0_0_3px_rgba(13,18,130,0.10)]"
+      : "border-slate-300 text-slate-700 shadow-sm hover:border-[#ffffff] hover:bg-[#0D1282]/4 hover:text-[#ffffff]"
+  }`;
+
   return (
     <>
       <div ref={containerRef} className="group relative">
-        <button
-          type="button"
-          onClick={() => setOpen((current) => !current)}
-          aria-label={hasUnread ? `Your Rate Card, ${unreadCount} unread` : "Your Rate Card"}
-          aria-expanded={open}
-          className={`relative inline-flex h-10 items-center gap-2.5 rounded-4xl border-2 bg-white px-3.5 text-sm font-semibold transition ${
-            hasUnread
-              ? "border-[#0D1282]/35 bg-[#0D1282]/4 text-[#0D1282] shadow-[0_0_0_3px_rgba(13,18,130,0.10)]"
-              : "border-slate-300 text-slate-700 shadow-sm hover:border-[#ffffff] hover:bg-[#0D1282]/4 hover:text-[#ffffff]"
-          }`}
-        >
-          {/* A slow halo rather than a bouncing badge: enough to draw the eye on
-              a page the client visits every day, not enough to nag. */}
-          {hasUnread ? (
-            <span
-              aria-hidden="true"
-              className="absolute inset-0 animate-ping rounded-xl bg-[#0D1282]/15 [animation-duration:2.4s]"
-            />
-          ) : null}
+        {hasLiveShares ? (
+          <button
+            type="button"
+            onClick={() => setOpen((current) => !current)}
+            aria-label={hasUnread ? `Your Rate Card, ${unreadCount} unread` : "Your Rate Card"}
+            aria-expanded={open}
+            className={buttonClassName}
+          >
+            {/* A slow halo rather than a bouncing badge: enough to draw the eye on
+                a page the client visits every day, not enough to nag. */}
+            {hasUnread ? (
+              <span
+                aria-hidden="true"
+                className="absolute inset-0 animate-ping rounded-xl bg-[#0D1282]/15 [animation-duration:2.4s]"
+              />
+            ) : null}
 
-            <BsChatRightQuote  className="h-4 w-4 text-red-500 " />
-         
+              <FaTags   className="h-4 w-4 text-red-500 " />
+          
 
-          <span className="relative whitespace-nowrap">Your Rate Card</span>
+            <span className="relative hidden whitespace-nowrap sm:inline">Your Rate Card</span>
 
-          {hasUnread ? (
-            <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#0D1282] px-1 text-[10px] font-bold text-white shadow-sm">
-              {unreadCount > 9 ? "9+" : unreadCount}
-            </span>
-          ) : null}
-        </button>
+            {hasUnread ? (
+              <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#0D1282] px-1 text-[10px] font-bold text-white shadow-sm">
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+            ) : null}
+          </button>
+        ) : (
+          <Link
+            href="/client/rate-card"
+            aria-label="Your Rate Card"
+            className={buttonClassName}
+          >
+              <FaTags   className="h-4 w-4 text-red-500 " />
+
+            <span className="relative hidden whitespace-nowrap sm:inline">Your Rate Card</span>
+          </Link>
+        )}
 
         {open ? (
-          <div className="absolute right-0 top-12 z-50 w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+          <div className="fixed inset-x-4 top-[76px] z-50 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-96 sm:max-w-[calc(100vw-2rem)]">
             <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-slate-50 px-4">
               <p className="text-sm font-semibold text-slate-950">Shared with you</p>
               {hasUnread ? (

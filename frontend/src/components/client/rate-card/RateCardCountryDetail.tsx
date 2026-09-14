@@ -60,10 +60,20 @@ export default function RateCardCountryDetail({
             </p>
           </div>
         </div>
-        <div className="text-right">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Starting from</p>
-          <p className="text-lg font-semibold text-[#0D1282]">{formatRate(lowestRate)} <span className="text-sm font-medium text-slate-500">/ kg</span></p>
-        </div>
+        <dl className="flex items-center divide-x divide-slate-200">
+          <div className="px-4 text-center first:pl-0">
+            <dd className="text-base font-semibold tabular-nums text-slate-900">{byService.length}</dd>
+            <dt className="mt-0.5 text-[11px] font-medium text-slate-500">Services</dt>
+          </div>
+          <div className="px-4 text-center">
+            <dd className="text-base font-semibold tabular-nums text-slate-900">{rates.length}</dd>
+            <dt className="mt-0.5 text-[11px] font-medium text-slate-500">Weight slabs</dt>
+          </div>
+          <div className="pl-4 text-right">
+            <dd className="text-lg font-semibold text-[#0D1282]">{formatRate(lowestRate)} <span className="text-sm font-medium text-slate-500">/ kg</span></dd>
+            <dt className="mt-0.5 text-[11px] font-medium text-slate-500">Starting from</dt>
+          </div>
+        </dl>
       </div>
 
       {byService.map((entry) => (

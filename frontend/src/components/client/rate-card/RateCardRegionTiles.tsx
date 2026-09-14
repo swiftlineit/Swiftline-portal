@@ -19,8 +19,10 @@ export default function RateCardRegionTiles({
   regions: Region[];
   onSelect: (regionCode: string) => void;
 }) {
+  // No grid of its own: the page lays these tiles out next to the summary
+  // list, so the wrapper dissolves and the tiles become the grid's items.
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="contents">
       {regions.map(({ region, destinations, lowestRate }) => {
         const shownFlags = destinations.slice(0, 6);
         const remaining = destinations.length - shownFlags.length;

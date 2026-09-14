@@ -7,7 +7,9 @@ import CalendarEntriesManager from "@/components/operations-advisory/CalendarEnt
 import RegulatoryUpdatesManager from "@/components/operations-advisory/RegulatoryUpdatesManager";
 import ServiceDisruptionsManager from "@/components/operations-advisory/ServiceDisruptionsManager";
 import BookingPausesManager from "@/components/operations-advisory/BookingPausesManager";
-import OperationsCalendarView from "@/components/operations-advisory/OperationsCalendarView";
+import OperationsCalendarView, {
+  OperationsCalendarSkeleton,
+} from "@/components/operations-advisory/OperationsCalendarView";
 import DashboardBannerManager from "@/components/operations-advisory/DashboardBannerManager";
 import { OPERATIONS_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
@@ -124,6 +126,7 @@ function PreviewStrip() {
   const [entries, setEntries] = useState<CalendarEntry[]>([]);
   const [disruptions, setDisruptions] = useState<ServiceDisruption[]>([]);
   const [regulatoryUpdates, setRegulatoryUpdates] = useState<RegulatoryUpdate[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -145,6 +148,8 @@ function PreviewStrip() {
       } catch (caughtError) {
         if (!active) return;
         setError(caughtError instanceof Error ? caughtError.message : "Preview could not be loaded.");
+      } finally {
+        if (active) setLoading(false);
       }
     }
 
@@ -160,6 +165,10 @@ function PreviewStrip() {
       </div>
       {error ? (
         <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div>
+      ) : loading ? (
+        <div aria-busy="true">
+          <OperationsCalendarSkeleton />
+        </div>
       ) : (
         <OperationsCalendarView entries={entries} disruptions={disruptions} regulatoryUpdates={regulatoryUpdates} />
       )}

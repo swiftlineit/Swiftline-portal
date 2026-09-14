@@ -114,7 +114,7 @@ export default function RateCardSearch({
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={handleKeyDown}
-          className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-11 pr-11 text-sm font-medium text-slate-900 shadow-sm outline-none transition focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15"
+          className="h-12 w-full rounded-lg border border-slate-200 bg-white pl-11 pr-11 text-sm font-medium text-slate-900 shadow-sm outline-none transition focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15"
         />
         {value ? (
           <button
@@ -135,7 +135,7 @@ export default function RateCardSearch({
         <ul
           id={listboxId}
           role="listbox"
-          className="absolute z-30 mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white py-1 shadow-lg"
+          className="absolute z-30 mt-2 max-h-72 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
           {suggestions.map((country, index) => {
             const covered = coveredCodes.has(country.iso2.toUpperCase());

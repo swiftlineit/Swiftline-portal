@@ -151,7 +151,7 @@ export default function ClientDashboardHeader({
               {canCreate ? (
                 <Link
                   href="/client/dpd-labels"
-                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-[#F0DE36] px-4 py-2.5 text-sm font-semibold text-[#0D1282] shadow-sm transition-colors duration-200 hover:bg-[#e5d331] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
+                  className="inline-flex min-h-10 border border-gray-300 items-center justify-center gap-2 rounded-xl bg-[#F0DE36] px-4 py-2.5 text-sm font-semibold text-[#0D1282] shadow-sm transition-colors duration-200 hover:bg-[#e5d331] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
                 >
                   <FiPlus
                     aria-hidden="true"

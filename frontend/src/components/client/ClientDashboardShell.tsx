@@ -692,9 +692,10 @@ export function ClientDashboardShell({
 
               <OperationsCalendarIcon />
 
-              <RateCardTray />
 
               <NotificationBell />
+              <RateCardTray />
+
 
               <div className="group relative inline-flex">
                 <button

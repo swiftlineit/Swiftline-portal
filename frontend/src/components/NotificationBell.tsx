@@ -166,7 +166,7 @@ export default function NotificationBell() {
       )}
 
       {open ? (
-        <div className="absolute right-0 top-12 z-50 w-90 max-w-[calc(100vw-2rem)] border border-slate-200 bg-white shadow-xl">
+        <div className="fixed inset-x-4 top-[76px] z-50 border border-slate-200 bg-white shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-90 sm:max-w-[calc(100vw-2rem)]">
           <div className="flex h-12 items-center justify-between border-b border-slate-200 px-4">
             <p className="text-sm font-semibold text-slate-950">
               Notifications

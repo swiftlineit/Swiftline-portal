@@ -1,21 +1,6 @@
 "use client";
 
-import {
-  FiAlertOctagon,
-  FiAlertTriangle,
-  FiCalendar,
-  FiClock,
-  FiGlobe,
-  FiInfo,
-  FiMapPin,
-  FiFileText,
-  FiPackage,
-  FiSend,
-  FiShield,
-  FiTruck,
-  FiTrendingUp
-} from "react-icons/fi";
-import type { IconType } from "react-icons";
+import type { CSSProperties } from "react";
 import {
   calendarCategories,
   calendarCategoryLabels,
@@ -26,26 +11,28 @@ import {
   type CalendarCategory,
   type CalendarEntry,
   type RegulatoryUpdate,
-  type ServiceDisruption
+  type ServiceDisruption,
 } from "@/lib/operationsAdvisory";
 import { regulatoryRegionLabel } from "@/lib/regulatoryRegions";
 
 /**
  * The read-only Holiday & Cut-Off Calendar. Shared by the client page and (via
- * the management tab) the staff view, so the two can never drift apart. Each
- * category renders as its own panel; service disruptions sit on top as
- * severity-tinted banners.
+ * the management tab) the staff preview, so the two can never drift apart.
+ *
+ * Layout: service disruptions and regulatory updates sit side by side in two
+ * equal columns, each rendering its items as cards. Calendar events follow
+ * underneath in a full-width grid.
  */
 
-const categoryMeta: Record<CalendarCategory, { icon: IconType; subtitle: string }> = {
-  BRANCH_HOLIDAY: { icon: FiMapPin, subtitle: "Days our branches are closed" },
-  DESTINATION_HOLIDAY: { icon: FiGlobe, subtitle: "Public holidays at destination countries" },
-  CUSTOMS_HOLIDAY: { icon: FiShield, subtitle: "Customs offices closed" },
-  PICKUP_CUTOFF: { icon: FiTruck, subtitle: "Latest time to request a pickup" },
-  SAME_DAY_BOOKING_CUTOFF: { icon: FiClock, subtitle: "Latest time to book for same-day dispatch" },
-  FLIGHT_CLOSING_TIME: { icon: FiSend, subtitle: "When the next flight closes for a route" },
-  WEEKEND_DELIVERY: { icon: FiPackage, subtitle: "Whether weekend deliveries run" },
-  PEAK_SEASON_RESTRICTION: { icon: FiTrendingUp, subtitle: "Restrictions and surcharges during peak periods" }
+const categoryDescriptions: Record<CalendarCategory, string> = {
+  BRANCH_HOLIDAY: "Days our branches are closed",
+  DESTINATION_HOLIDAY: "Public holidays at destination countries",
+  CUSTOMS_HOLIDAY: "Customs offices closed",
+  PICKUP_CUTOFF: "Latest time to request a pickup",
+  SAME_DAY_BOOKING_CUTOFF: "Latest time to book for same-day dispatch",
+  FLIGHT_CLOSING_TIME: "When the next flight closes for a route",
+  WEEKEND_DELIVERY: "Whether weekend deliveries run",
+  PEAK_SEASON_RESTRICTION: "Restrictions and surcharges during peak periods",
 };
 
 const monthNames = [
@@ -110,8 +97,104 @@ function entryDetail(entry: CalendarEntry): string {
   }
 }
 
-function severityIcon(severity: ServiceDisruption["severity"]) {
-  return severity === "CRITICAL" ? FiAlertOctagon : severity === "WARNING" ? FiAlertTriangle : FiInfo;
+const severityTone: Record<ServiceDisruption["severity"], string> = {
+  CRITICAL: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20",
+  WARNING: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20",
+  INFO: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20",
+};
+
+const severityLabel: Record<ServiceDisruption["severity"], string> = {
+  CRITICAL: "Critical",
+  WARNING: "Warning",
+  INFO: "Info",
+};
+
+/** Mirrors effectiveLabel below so both card footers read the same way. */
+function disruptionDateLabel(disruption: ServiceDisruption) {
+  const from = formatLocalDate(disruption.startAt);
+  const until = disruption.endAt ? formatLocalDate(disruption.endAt) : null;
+
+  if (!from) return "Start date to be confirmed";
+  return until ? `Active ${from} – ${until}` : `Active from ${from}`;
+}
+
+/** Staggered entrance: each card rises slightly after the previous one. */
+function riseStyle(index: number, stepMs = 70, maxMs = 420): CSSProperties {
+  return { animationDelay: `${Math.min(index * stepMs, maxMs)}ms` };
+}
+
+function SkeletonBar({ className }: { className?: string }) {
+  return (
+    <div className={`relative overflow-hidden rounded bg-slate-200/70 ${className ?? ""}`}>
+      <div className="ops-shimmer-bar absolute inset-0" aria-hidden="true" />
+    </div>
+  );
+}
+
+/**
+ * Loading placeholder that mirrors the loaded layout (two half-width panels
+ * on top, calendar grid below) so content swaps in without layout shift.
+ * Shared with the admin preview for the same reason.
+ */
+export function OperationsCalendarSkeleton() {
+  return (
+    <div className="flex flex-col gap-5" role="status" aria-label="Loading operational calendar">
+      <span className="sr-only">Loading calendar…</span>
+
+      <div className="grid items-stretch gap-5 lg:grid-cols-2" aria-hidden="true">
+        {[0, 1].map((column) => (
+          <div
+            key={column}
+            className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
+          >
+            <div className="border-b border-slate-100 px-5 py-4">
+              <SkeletonBar className="h-3.5 w-36" />
+              <SkeletonBar className="mt-2 h-3 w-52" />
+            </div>
+            <div className="flex flex-1 flex-col gap-3 bg-white p-4">
+              {[0, 1].map((card) => (
+                <div
+                  key={card}
+                  className="rounded-lg bg-slate-100 px-4 py-3.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <SkeletonBar className="h-3 w-32" />
+                    <SkeletonBar className="h-3 w-16" />
+                  </div>
+                  <SkeletonBar className="mt-3 h-4 w-3/4" />
+                  <SkeletonBar className="mt-2 h-3 w-full" />
+                  <SkeletonBar className="mt-1.5 h-3 w-2/3" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div
+        className="overflow-hidden rounded-xl border border-slate-200 bg-white"
+        aria-hidden="true"
+      >
+        <div className="px-5 py-4">
+          <SkeletonBar className="h-3.5 w-32" />
+          <SkeletonBar className="mt-2 h-3 w-64" />
+        </div>
+        <div className="grid gap-px border-t border-slate-100 bg-slate-100 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 8 }, (_, cell) => (
+            <div key={cell} className="bg-white px-5 py-4">
+              <SkeletonBar className="h-3.5 w-2/3" />
+              <SkeletonBar className="mt-2 h-3 w-1/2" />
+              <div className="mt-3 border-t border-slate-100 pt-3">
+                <SkeletonBar className="h-3 w-5/6" />
+                <SkeletonBar className="mt-2 h-3 w-2/3" />
+                <SkeletonBar className="mt-2 h-3 w-4/6" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function OperationsCalendarView({
@@ -136,10 +219,9 @@ export default function OperationsCalendarView({
 
   if (!hasContent) {
     return (
-      <div className="flex flex-col items-center gap-3 rounded-xl border border-slate-200 bg-white px-6 py-16 text-center">
-        <FiCalendar aria-hidden="true" className="h-10 w-10 text-slate-300" />
+      <div className="rounded-xl border border-slate-200 bg-white px-6 py-16 text-center">
         <p className="text-sm font-semibold text-slate-900">No operational information yet</p>
-        <p className="max-w-sm text-sm text-slate-500">
+        <p className="mx-auto mt-1 max-w-sm text-sm leading-6 text-slate-500">
           Holidays, cut-off times, customs updates and service alerts will appear here as soon as our team publishes them.
         </p>
       </div>
@@ -147,93 +229,100 @@ export default function OperationsCalendarView({
   }
 
   return (
-    <div className="flex flex-col gap-8">
-      {disruptions.length ? (
-        <section aria-labelledby="service-disruptions-heading">
-          <div className="mb-3 flex items-center gap-2">
-            <FiAlertOctagon aria-hidden="true" className="h-4 w-4 text-[#D71313]" />
-            <h2 id="service-disruptions-heading" className="text-sm font-bold uppercase tracking-wide text-slate-900">
-              Service Disruptions
-            </h2>
-          </div>
+    <div className="flex flex-col gap-5">
+      {/* Top row: disruptions and regulatory updates side by side, equal height */}
+      <div className="grid items-stretch gap-5 lg:grid-cols-2">
+        <DisruptionsPanel disruptions={disruptions} />
+        <RegulatoryUpdatesPanel updates={regulatoryUpdates} />
+      </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            {disruptions.map((disruption) => {
-              const Icon = severityIcon(disruption.severity);
-              const tone = disruption.severity === "CRITICAL"
-                ? "border-[#D71313]/30 bg-[#D71313]/[0.06]"
-                : disruption.severity === "WARNING"
-                  ? "border-amber-400/50 bg-amber-50"
-                  : "border-blue-200 bg-blue-50/60";
-
-              return (
-                <article key={disruption.id} className={`rounded-xl border px-4 py-3 ${tone}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="flex items-center gap-2 text-sm font-bold text-slate-950">
-                      <Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
-                      {disruption.title}
-                    </p>
-                    <span className="shrink-0 rounded-full bg-white/70 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-                      {serviceDisruptionTypeLabels[disruption.type]}
-                    </span>
-                  </div>
-                  <p className="mt-1.5 text-sm leading-6 text-slate-700">{disruption.message}</p>
-                  <p className="mt-2 text-[11px] font-medium text-slate-500">
-                    {formatLocalDate(disruption.startAt)} onward
-                    {disruption.endAt ? ` · until ${formatLocalDate(disruption.endAt)}` : ""}
-                  </p>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      <RegulatoryUpdatesSection updates={regulatoryUpdates} />
-
-      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-3" aria-label="Holiday and cut-off calendar">
-        {calendarCategories.map((category) => {
-          const categoryEntries = byCategory.get(category) ?? [];
-          const meta = categoryMeta[category];
-          const Icon = meta.icon;
-
-          return (
-            <div key={category} className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <div className="flex items-start gap-3 border-b border-slate-100 px-4 py-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#0D1282]/[0.07] text-[#0D1282]">
-                  <Icon aria-hidden="true" className="h-4 w-4" />
-                </span>
-                <div className="min-w-0">
-                  <h3 className="text-sm font-bold text-slate-950">{calendarCategoryLabels[category]}</h3>
-                  <p className="mt-0.5 text-xs text-slate-500">{meta.subtitle}</p>
-                </div>
-              </div>
-
-              <div className="flex flex-1 flex-col divide-y divide-slate-100">
-                {!categoryEntries.length ? (
-                  <p className="px-4 py-5 text-sm text-slate-400">No entries published.</p>
-                ) : categoryEntries.map((entry) => (
-                  <div key={entry.id} className="px-4 py-3">
-                    <p className="text-sm font-semibold text-slate-900">{entry.title}</p>
-                    <p className="mt-0.5 text-xs text-slate-600">{entryDetail(entry)}</p>
-                    {entry.description ? (
-                      <p className="mt-1.5 text-xs leading-5 text-slate-500">{entry.description}</p>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </section>
+      {/* Bottom: calendar events, full width */}
+      <CalendarEventsPanel entries={entries} byCategory={byCategory} />
     </div>
   );
 }
 
+function PanelHeader({ title, count, description }: { title: string; count: number; description: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+      <div className="min-w-0">
+        <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+        <p className="mt-0.5 text-xs text-slate-500">{description}</p>
+      </div>
+      <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold tabular-nums text-slate-600">
+        {count}
+      </span>
+    </div>
+  );
+}
+
+function EmptyList({ message }: { message: string }) {
+  return (
+    <p className="rounded-lg border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-400">
+      {message}
+    </p>
+  );
+}
+
+function DisruptionsPanel({ disruptions }: { disruptions: ServiceDisruption[] }) {
+  return (
+    <section
+      aria-labelledby="service-disruptions-heading"
+      className="ops-rise flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
+    >
+      <div id="service-disruptions-heading">
+        <PanelHeader
+          title="Service disruptions"
+          count={disruptions.length}
+          description="Live network and service alerts"
+        />
+      </div>
+
+      <div className="flex flex-1 flex-col gap-3 bg-white p-4">
+        {!disruptions.length ? (
+          <EmptyList message="No active service disruptions." />
+        ) : (
+          disruptions.map((disruption, index) => (
+            <article
+              key={disruption.id}
+              style={riseStyle(index)}
+              className="ops-rise flex flex-1 flex-col rounded-lg bg-slate-100 px-4 py-3.5 transition-shadow duration-200 hover:shadow-[0_8px_20px_-12px_rgba(15,23,42,0.25)]"
+            >
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="rounded-md bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                  {serviceDisruptionTypeLabels[disruption.type]}
+                </span>
+                <span
+                  className={`ml-auto rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${severityTone[disruption.severity]}`}
+                >
+                  {severityLabel[disruption.severity]}
+                </span>
+              </div>
+
+              <div className="flex-1">
+                <h3 className="mt-2 text-sm font-semibold leading-6 text-slate-900">
+                  {disruption.title}
+                </h3>
+                <p className="mt-1 text-sm leading-6 text-slate-600">{disruption.message}</p>
+              </div>
+
+              <div className="mt-2.5 border-t border-slate-200 pt-2.5">
+                <p className="text-[11px] font-medium text-slate-500">
+                  {disruptionDateLabel(disruption)}
+                </p>
+              </div>
+            </article>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
 const regulatoryStatusTone: Record<RegulatoryUpdate["status"], string> = {
-  ACTIVE: "bg-emerald-100 text-emerald-800",
-  UPCOMING: "bg-amber-100 text-amber-800",
-  EXPIRED: "bg-slate-200 text-slate-600"
+  ACTIVE: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20",
+  UPCOMING: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20",
+  EXPIRED: "bg-slate-100 text-slate-500 ring-1 ring-inset ring-slate-500/10",
 };
 
 /** "All · All" reads like noise, so a blanket scope is simply not printed. */
@@ -257,75 +346,156 @@ function effectiveLabel(update: RegulatoryUpdate) {
   const from = formatLocalDate(update.effectiveFrom);
   const until = update.effectiveUntil ? formatLocalDate(update.effectiveUntil) : null;
 
-  return until ? `Effective ${from} - ${until}` : `Effective from ${from}`;
+  return until ? `Effective ${from} – ${until}` : `Effective from ${from}`;
 }
 
-/**
- * Customs and regulatory changes, kept out of the holiday grid on purpose: a
- * client reads these for what they have to *do*, not for which day an office
- * is shut. Rendered wide so the impact and action text stay readable.
- */
-function RegulatoryUpdatesSection({ updates }: { updates: RegulatoryUpdate[] }) {
-  if (!updates.length) return null;
-
+function RegulatoryUpdatesPanel({ updates }: { updates: RegulatoryUpdate[] }) {
   return (
-    <section aria-labelledby="regulatory-updates-heading">
-      <div className="mb-3 flex items-center gap-2">
-        <FiFileText aria-hidden="true" className="h-4 w-4 text-[#0D1282]" />
-        <h2 id="regulatory-updates-heading" className="text-sm font-bold uppercase tracking-wide text-slate-900">
-          Customs & Regulatory Updates
-        </h2>
+    <section
+      aria-labelledby="regulatory-updates-heading"
+      style={riseStyle(1, 80, 80)}
+      className="ops-rise flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
+    >
+      <div id="regulatory-updates-heading">
+        <PanelHeader
+          title="Customs & regulatory updates"
+          count={updates.length}
+          description="Rule changes and clearance requirements"
+        />
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-2">
-        {updates.map((update) => {
-          const scope = scopeLabel(update);
+      <div className="flex flex-1 flex-col gap-3 bg-white p-4">
+        {!updates.length ? (
+          <EmptyList message="No regulatory updates published." />
+        ) : (
+          updates.map((update, index) => {
+            const scope = scopeLabel(update);
+
+            return (
+              <article
+                key={update.id}
+                style={riseStyle(index)}
+                className="ops-rise flex flex-1 flex-col rounded-lg bg-slate-100 px-4 py-3.5 transition-shadow duration-200 hover:shadow-[0_8px_20px_-12px_rgba(15,23,42,0.25)]"
+              >
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="rounded-md bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                    {regulatoryUpdateCategoryLabels[update.category]}
+                  </span>
+                  {update.regions.map((code) => (
+                    <span
+                      key={code}
+                      className="rounded-md bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600"
+                    >
+                      {regulatoryRegionLabel(code)}
+                    </span>
+                  ))}
+                  <span
+                    className={`ml-auto rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${regulatoryStatusTone[update.status]}`}
+                  >
+                    {update.status}
+                  </span>
+                </div>
+
+                <div className="flex-1">
+                  <h3 className="mt-2 text-sm font-semibold leading-6 text-slate-900">
+                    {update.title}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">{update.customerImpact}</p>
+
+                  {update.actionRequired ? (
+                    <p className="mt-2.5 rounded-md bg-white px-3 py-2 text-xs leading-5 text-slate-600">
+                      <span className="font-semibold text-slate-700">Action required — </span>
+                      {update.actionRequired}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-2.5">
+                  <p className="text-[11px] font-medium text-slate-500">
+                    {effectiveLabel(update)}
+                    {scope ? ` · ${scope}` : ""}
+                  </p>
+                  {update.sourceUrl ? (
+                    <a
+                      href={update.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] font-semibold text-[#0D1282] hover:underline"
+                    >
+                      Official source
+                    </a>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CalendarEventsPanel({
+  entries,
+  byCategory,
+}: {
+  entries: CalendarEntry[];
+  byCategory: Map<CalendarCategory, CalendarEntry[]>;
+}) {
+  return (
+    <section
+      aria-label="Calendar events"
+      style={riseStyle(2, 80, 160)}
+      className="ops-rise overflow-hidden rounded-xl border border-slate-200 bg-white"
+    >
+      <div className="flex items-start justify-between gap-3 px-5 py-4">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-slate-900">Calendar events</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Holidays, cut-off times and operating hours by category
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold tabular-nums text-slate-600">
+          {entries.length}
+        </span>
+      </div>
+
+      <div className="grid gap-px border-t border-slate-100 bg-slate-100 sm:grid-cols-2 xl:grid-cols-4">
+        {calendarCategories.map((category, index) => {
+          const categoryEntries = byCategory.get(category) ?? [];
 
           return (
-            <article key={update.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <p className="text-sm font-bold text-slate-950">{update.title}</p>
-                <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide ${regulatoryStatusTone[update.status]}`}>
-                  {update.status}
+            <div
+              key={category}
+              style={riseStyle(index, 50, 350)}
+              className="ops-rise flex min-w-0 flex-col bg-white px-5 py-4"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <h3 className="truncate text-[13px] font-semibold text-slate-900">
+                  {calendarCategoryLabels[category]}
+                </h3>
+                <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-400">
+                  {categoryEntries.length}
                 </span>
               </div>
+              <p className="mt-0.5 text-xs text-slate-500">{categoryDescriptions[category]}</p>
 
-              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                {update.regions.map((code) => (
-                  <span key={code} className="rounded-full bg-[#0D1282]/[0.07] px-2 py-0.5 text-[10px] font-semibold text-[#0D1282]">
-                    {regulatoryRegionLabel(code)}
-                  </span>
-                ))}
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                  {regulatoryUpdateCategoryLabels[update.category]}
-                </span>
+              <div className="mt-3 flex flex-1 flex-col divide-y divide-slate-100 border-t border-slate-100">
+                {!categoryEntries.length ? (
+                  <p className="py-3 text-xs text-slate-400">No entries published.</p>
+                ) : (
+                  categoryEntries.map((entry) => (
+                    <div key={entry.id} className="py-2.5">
+                      <p className="text-[13px] font-medium leading-5 text-slate-900">{entry.title}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">{entryDetail(entry)}</p>
+                      {entry.description ? (
+                        <p className="mt-1 text-xs leading-5 text-slate-500">{entry.description}</p>
+                      ) : null}
+                    </div>
+                  ))
+                )}
               </div>
-
-              <p className="mt-2 text-sm leading-6 text-slate-700">{update.customerImpact}</p>
-
-              {update.actionRequired ? (
-                <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
-                  <span className="font-bold uppercase tracking-wide text-slate-500">Action required: </span>
-                  {update.actionRequired}
-                </p>
-              ) : null}
-
-              <p className="mt-2 text-[11px] font-medium text-slate-500">
-                {effectiveLabel(update)}
-                {scope ? ` · ${scope}` : ""}
-              </p>
-
-              {update.sourceUrl ? (
-                <a
-                  href={update.sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1.5 inline-block text-[11px] font-semibold text-[#0D1282] hover:underline"
-                >
-                  Official source
-                </a>
-              ) : null}
-            </article>
+            </div>
           );
         })}
       </div>

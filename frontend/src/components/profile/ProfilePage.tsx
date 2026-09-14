@@ -2,6 +2,7 @@
 
 import { FormEvent, ReactNode, useCallback, useEffect, useId, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { FiBriefcase, FiCamera, FiChevronDown, FiEye, FiEyeOff, FiLock, FiMail, FiMapPin, FiPhone, FiTrash2, FiUser } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { BiSolidEdit } from "react-icons/bi";
@@ -527,7 +528,7 @@ export default function ProfilePage() {
   const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.name || user.email;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
+    <div className="mx-auto max-w-8xl space-y-5">
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
 <div className="h-20 bg-linear-to-r from-blue-400 via-blue-300 to-blue-300" />
         {/*
@@ -785,7 +786,13 @@ export default function ProfilePage() {
             <InputField label="New Password" required type="password" maxLength={128} value={passwordForm.newPassword} onChange={(value) => setPasswordForm((current) => ({ ...current, newPassword: value }))} />
             <InputField label="Confirm New Password" required type="password" maxLength={128} value={passwordForm.confirmPassword} onChange={(value) => setPasswordForm((current) => ({ ...current, confirmPassword: value }))} />
           </div>
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <Link
+              href="/auth/forgot-password"
+              className="text-sm font-semibold text-[#0D1282] hover:underline"
+            >
+              Forgot password?
+            </Link>
             <button
               type="submit"
               disabled={busy || !passwordForm.currentPassword || passwordForm.newPassword.length < 8}
