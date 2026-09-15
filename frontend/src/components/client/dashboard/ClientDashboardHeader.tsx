@@ -85,15 +85,15 @@ export default function ClientDashboardHeader({
       </div>
 
       {/* Greeting + banner share one continuous background */}
-      <div className="relative grid overflow-hidden lg:grid-cols-[minmax(0,0.9fr)_minmax(440px,1.1fr)] lg:items-stretch xl:grid-cols-[minmax(0,0.88fr)_minmax(520px,1.12fr)]">
+      <div className="relative bg-white grid overflow-hidden lg:grid-cols-[minmax(0,0.9fr)_minmax(440px,1.1fr)] lg:items-stretch xl:grid-cols-[minmax(0,0.88fr)_minmax(520px,1.12fr)]">
         {/* Greeting */}
         <div className="relative flex min-w-0 flex-col justify-center px-5 py-6 sm:px-6 sm:py-7 lg:min-h-[240px] lg:px-7 lg:py-7 xl:px-8">
           <div className="relative z-10">
             {/* Client + date */}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-              <span className="inline-flex items-center rounded-full border border-[#0D1282]/[0.06] bg-[#0D1282]/[0.07] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#0D1282]">
+              {/* <span className="inline-flex items-center rounded-full border border-[#0D1282]/[0.06] bg-[#0D1282]/[0.07] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#0D1282]">
                 Client
-              </span>
+              </span> */}
 
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
                 <FiCalendar
@@ -151,7 +151,7 @@ export default function ClientDashboardHeader({
               {canCreate ? (
                 <Link
                   href="/client/dpd-labels"
-                  className="inline-flex min-h-10 border border-gray-300 items-center justify-center gap-2 rounded-xl bg-[#F0DE36] px-4 py-2.5 text-sm font-semibold text-[#0D1282] shadow-sm transition-colors duration-200 hover:bg-[#e5d331] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
+                  className="inline-flex min-h-10 border border-gray-500 items-center justify-center gap-2 rounded-lg bg-[#FFD400] px-4 py-2.5 text-xs font-semibold text-[#0D1282] shadow-sm transition-colors duration-200 hover:bg-[#ffffff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
                 >
                   <FiPlus
                     aria-hidden="true"
@@ -164,7 +164,7 @@ export default function ClientDashboardHeader({
 
               <Link
                 href="/client/tracking"
-                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-slate-200/90 bg-white/90 px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition-colors duration-200 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200/90 bg-white/90 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition-colors duration-200 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
               >
                 <FiSearch
                   aria-hidden="true"
@@ -176,15 +176,15 @@ export default function ClientDashboardHeader({
 
               {canPay ? (
                 <Link
-                  href="/client/payments"
-                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-slate-200/90 bg-white/90 px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition-colors duration-200 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
+                  href="/client/rate-card"
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200/90 bg-white/90 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition-colors duration-200 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
                 >
                   <FiCreditCard
                     aria-hidden="true"
                     className="h-4 w-4 shrink-0"
                   />
 
-                  Make Payment
+                  Rate Card
                 </Link>
               ) : null}
             </div>

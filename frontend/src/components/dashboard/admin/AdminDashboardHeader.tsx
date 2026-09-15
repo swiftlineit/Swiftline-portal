@@ -91,9 +91,9 @@ export default function AdminDashboardHeader({
           <div className="relative z-10">
             {/* Role + date */}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-              <span className="inline-flex items-center rounded-full border border-[#0D1282]/[0.06] bg-[#0D1282]/[0.07] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#0D1282]">
+              {/* <span className="inline-flex items-center rounded-full border border-[#0D1282]/[0.06] bg-[#0D1282]/[0.07] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#0D1282]">
                 {describeRole(user.role)}
-              </span>
+              </span> */}
 
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
                 <FiCalendar
@@ -130,8 +130,8 @@ export default function AdminDashboardHeader({
                     href={action.href}
                     className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11 ${
                       action.primary
-                        ? "bg-[#F0DE36] text-[#0D1282] shadow-sm hover:bg-[#e5d331]"
-                        : "border border-slate-200/90 bg-white/90 text-slate-700 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282]"
+                        ? "bg-[#F0DE36] text-[#0D1282] shadow-sm border border-slate-300 hover:bg-[#e5d331]"
+                        : "border border-slate-300 bg-white/90 text-slate-700 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282]"
                     }`}
                   >
                     <Icon

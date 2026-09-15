@@ -79,6 +79,8 @@ export type ShipmentListItem = {
     manifestNumber: string | null;
     manifestStatus: "DRAFT" | "PACKING" | "READY_TO_SEAL" | "SEALED" | "DISPATCHED" | "CANCELLED" | null;
     bagNumber: string | null;
+    /** Booked actual weight. Optional so cached responses still type-check. */
+    weightKg?: number | null;
     scannedAt: string | null;
   }>;
   /** Internal staff-only carrier-label state; omitted from client responses. */

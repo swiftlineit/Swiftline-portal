@@ -788,7 +788,8 @@ export function ClientDashboardShell({
 
 export function ClientDashboardLoading() {
   return (
-    <div className="flex h-full items-center justify-center bg-[#EEEDED]/60">
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#EEEDED]/60">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#0D1282]/20 border-t-[#0D1282]" />
       <p className="text-sm font-semibold text-[#0D1282]">
         Loading client dashboard...
       </p>

@@ -25,4 +25,10 @@ describe("address book CSV and Excel imports", () => {
     const parsed = await parseAddressBookImport(Buffer.from(csv), ".csv");
     assert.ok(parsed.rows[0]?.errors.some((issue) => issue.includes("must be in India")));
   });
+
+  test("rejects a dial code from a different country than the address", async () => {
+    const csv = buildAddressBookTemplateCsv().toString("utf8").replace("+44", "+1").replace("7911123456", "2025550123");
+    const parsed = await parseAddressBookImport(Buffer.from(csv), ".csv");
+    assert.ok(parsed.rows[0]?.errors.some((issue) => issue.includes("must match the address country")));
+  });
 });

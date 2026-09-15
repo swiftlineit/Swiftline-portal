@@ -9,6 +9,7 @@ import {
 import { isValidAadhaarNumber } from "./aadhaarValidation.service.js";
 import { normalizeCsbType } from "./csbType.service.js";
 import { isValidHsnCode, normalizeParcelItems } from "./parcelItems.service.js";
+import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
 
 const ukPostcodePattern = /^[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}$/;
@@ -302,6 +303,18 @@ export function validateShipmentDraftFields(
   const phoneNumber = parsePhoneNumberFromString(`${address.mobileCountryCode}${address.mobileNumber}`);
   if (hasText(address.mobileCountryCode) && hasText(address.mobileNumber) && !phoneNumber?.isValid()) {
     issues.push("Enter a valid mobile number including its country code");
+  }
+  // The dial code must belong to the destination country (GB goes with +44):
+  // a number that is valid elsewhere is still the wrong number for this lane.
+  // Gated on an otherwise valid number so a malformed entry reports only the
+  // format problem until it is fixed.
+  if (
+    hasText(address.mobileCountryCode)
+    && hasText(address.mobileNumber)
+    && phoneNumber?.isValid()
+    && !isDialCodeForCountry(address.countryCode ?? "", address.mobileCountryCode ?? "")
+  ) {
+    issues.push("Mobile country code must match the destination country");
   }
 
   const email = address.email ?? "";

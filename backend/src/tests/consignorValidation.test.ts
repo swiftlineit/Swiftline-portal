@@ -308,4 +308,44 @@ describe("consignor draft validation", () => {
     });
     assert.equal(issues.some((issue) => issue.toLowerCase().includes("consignor")), false);
   });
+
+  test("accepts a consignee dial code that matches the destination country", () => {
+    const issues = validateShipmentDraftFields(draftWith({}));
+    assert.equal(
+      issues.includes("Mobile country code must match the destination country"),
+      false,
+      issues.join(" | ")
+    );
+  });
+
+  test("accepts a shared North American dial code for either side of the border", () => {
+    // +1 serves the whole NANP area, so a region check would wrongly reject it.
+    const issues = validateShipmentDraftFields(draftWith({
+      consignee: {
+        mobileCountryCode: "+1",
+        mobileNumber: "4165550123",
+        countryCode: "CA",
+        countryName: "Canada",
+        postcode: "M5V 2T6",
+        townOrCity: "Toronto",
+        county: "Ontario",
+        addressLine1: "290 Bremner Boulevard"
+      }
+    }));
+    assert.equal(
+      issues.includes("Mobile country code must match the destination country"),
+      false,
+      issues.join(" | ")
+    );
+  });
+
+  test("flags a consignee dial code from a different country than the destination", () => {
+    const issues = validateShipmentDraftFields(draftWith({
+      consignee: { mobileCountryCode: "+1", mobileNumber: "2025550123" }
+    }));
+    assert.ok(
+      issues.includes("Mobile country code must match the destination country"),
+      issues.join(" | ")
+    );
+  });
 });

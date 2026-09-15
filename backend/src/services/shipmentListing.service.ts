@@ -136,6 +136,8 @@ export type ShipmentParcelManifestInfo = {
   manifestStatus: OperationsManifestStatus | null;
   /** Packing bag for the tooltip only; the chip always shows the manifest run. */
   bagNumber: string | null;
+  /** Booked actual weight for the tooltip only. */
+  weightKg: number | null;
   scannedAt: string | null;
 };
 
@@ -726,6 +728,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
                 manifestNumber: null,
                 manifestStatus: null,
                 bagNumber: null,
+                weightKg: parcel.actualWeightKg ?? null,
                 scannedAt: null
               };
             }
@@ -736,6 +739,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
               manifestNumber: header.manifestNumber,
               manifestStatus: header.status,
               bagNumber: (live.bagId && bagNumberById.get(live.bagId)) ?? null,
+              weightKg: parcel.actualWeightKg ?? null,
               scannedAt: live.scannedAt ? new Date(live.scannedAt).toISOString() : null
             };
           })

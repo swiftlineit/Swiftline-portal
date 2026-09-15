@@ -18,30 +18,15 @@ export default function ClientQuickAccess({
   const financialAccess = canMakePayment(account);
 
   const quickAccess = [
-    {
-      label: "Create Shipment",
-      description: "Upload an invoice and prepare a shipment draft",
-      href: "/client/dpd-labels",
-      show: canCreateShipment(account),
-    },
+ 
     {
       label: "Get Live Quote",
       description: "Estimate a rate before you commit",
       href: "/client/get-quote",
       show: canRequestQuote(account),
     },
-    {
-      label: "My Quotes",
-      description: "Review priced quotes and convert them",
-      href: "/client/quotes",
-      show: hasQuoteAccess(account),
-    },
-    {
-      label: "Tracking",
-      description: "Follow any shipment to its destination",
-      href: "/client/tracking",
-      show: true,
-    },
+ 
+  
     {
       label: "Support Tickets",
       description: "Message our team about a shipment",
@@ -55,74 +40,41 @@ export default function ClientQuickAccess({
       show: true,
     },
     {
-      label: "Credit Statements",
-      description: "Billing cycles and payment history",
-      href: "/client/credit/statements",
+      label: "invite Team Members",
+      description: "invite your colleagues to manage shipments",
+      href: "/client/team",
       show: financialAccess,
     },
-    {
-      label: "Payments",
-      description: "Add Customer Advance for bookings",
-      href: "/client/payments",
-      show: financialAccess,
-    },
+    
   ].filter((item) => item.show);
 
   return (
-    <>
-      <style jsx>{`
-        @keyframes arrowNudge {
-          0%,
-          100% {
-            transform: translateX(0);
-          }
+    <section className=" rounded-lg bg-white p-4 shadow-sm sm:px-5">
+     
 
-          50% {
-            transform: translateX(4px);
-          }
-        }
-      `}</style>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+        {quickAccess.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            className="group flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-[#03AED2] text-white px-3 py-2.5 transition-all shadow-sm duration-200 hover:border-[#0D1282]/25 hover:bg-white hover:shadow-[0_8px_20px_-14px_rgba(13,18,130,0.4)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/20 focus-visible:ring-offset-2"
+          >
+            <div className="min-w-0">
+              <h3 className="truncate text-sm font-semibold text-slate-100 transition-colors duration-200 group-hover:text-[#0D1282]">
+                {item.label}
+              </h3>
+              <p className="mt-0.5 truncate text-[10.5px] text-slate-700 ">
+                {item.description}
+              </p>
+            </div>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-        <div className="mb-5">
-          <h2 className="text-[15px] font-semibold tracking-[-0.02em] text-slate-900">
-            Quick access
-          </h2>
-
-          <p className="mt-0.5 text-[11px] text-slate-400">
-            Available for your role on this account
-          </p>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {quickAccess.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="group flex min-h-33 flex-col justify-between rounded-xl border border-slate-200 bg-slate-50/40 p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-[#0D1282]/25 hover:bg-white hover:shadow-[0_10px_26px_-18px_rgba(13,18,130,0.4)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/20 focus-visible:ring-offset-2"
-            >
-              <div>
-                <h3 className="text-[13px] font-semibold text-slate-900 transition-colors duration-200 group-hover:text-[#0D1282]">
-                  {item.label}
-                </h3>
-
-                <p className="mt-1.5 line-clamp-2 text-[10.5px] leading-4 text-slate-500">
-                  {item.description}
-                </p>
-              </div>
-
-              <div className="mt-4 flex justify-end">
-                <span className="relative flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-white text-[#0D1282] transition-all duration-200 group-hover:border-[#0D1282] group-hover:bg-[#0D1282] group-hover:text-white group-hover:shadow-[0_5px_14px_-7px_rgba(13,18,130,0.55)]">
-                  <FiArrowRight
-                    aria-hidden="true"
-                    className="h-3.5 w-3.5 animate-[arrowNudge_1.6s_ease-in-out_infinite] transition-transform duration-200 group-hover:animate-none group-hover:translate-x-0.5"
-                  />
-                </span>
-              </div>
-            </Link>
-          ))}
-        </div>
-      </section>
-    </>
+            <FiArrowRight
+              aria-hidden="true"
+              className="h-3.5 w-3.5 shrink-0 text-slate-300 transition-all duration-200 group-hover:translate-x-0.5 group-hover:text-[#0D1282]"
+            />
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }

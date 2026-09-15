@@ -199,7 +199,7 @@ export function StagePipelineChart({
                               : `calc(${height}% + 10px)`,
                           }}
                         >
-                          <div className="relative whitespace-nowrap rounded-lg bg-[#070B24] px-3 py-2 shadow-[0_10px_28px_-8px_rgba(7,11,36,0.55)]">
+                          <div className="relative whitespace-nowrap rounded bg-[#070B24] px-3 py-2 shadow-[0_10px_28px_-8px_rgba(7,11,36,0.55)]">
                             <div className="flex items-baseline justify-center gap-1.5">
                               <span className="text-[13px] font-semibold tabular-nums text-white">
                                 {formatFullCount(stage.count)}
@@ -222,7 +222,7 @@ export function StagePipelineChart({
                       ) : null}
 
                       <div
-                        className={`w-full max-w-15 rounded-t-lg transition-all duration-200 ${
+                        className={`w-full max-w-15 rounded-t transition-all duration-200 ${
                           active
                             ? "-translate-y-0.5 shadow-[0_10px_24px_-11px_rgba(13,18,130,0.6)]"
                             : "shadow-[0_4px_12px_-9px_rgba(13,18,130,0.28)]"

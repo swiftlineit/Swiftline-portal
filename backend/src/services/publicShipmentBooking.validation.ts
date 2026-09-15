@@ -2,6 +2,7 @@ import { z } from "zod";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { isValidAadhaarNumber, normalizeAadhaarNumber } from "./aadhaarValidation.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
+import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { parcelItemUnitTypeValues } from "./parcelItems.service.js";
 import { shipmentContentTypeValues } from "../models/shipmentDraft.model.js";
 
@@ -29,6 +30,10 @@ const addressSchema = z.object({
   }
   if (!parsePhoneNumberFromString(`${value.mobileCountryCode}${value.mobileNumber}`)?.isValid()) {
     context.addIssue({ code: "custom", path: ["mobileNumber"], message: "Enter a valid mobile number for the selected country code." });
+  } else if (!isDialCodeForCountry(value.countryCode, value.mobileCountryCode)) {
+    // The sender literals (IN / +91) always satisfy this; it bites only on a
+    // consignee code from a different country than the destination.
+    context.addIssue({ code: "custom", path: ["mobileCountryCode"], message: "Mobile country code must match the destination country." });
   }
   if (value.countryCode === "IN" && !/^[1-9]\d{5}$/.test(value.postcode)) {
     context.addIssue({ code: "custom", path: ["postcode"], message: "Enter a valid 6 digit PIN code." });

@@ -53,8 +53,10 @@ import {
   type ParcelItem
 } from "@/lib/parcelItems";
 import {
+  getDialCodeForCountryCode,
   getPostcodeError,
   getShipmentEmailError,
+  getShipmentMobileCountryMismatchError,
   getShipmentMobileError
 } from "@/lib/shipmentContactValidation";
 import {
@@ -271,6 +273,10 @@ function getReviewIssueDetail(
     const mobileError = getShipmentMobileError(contactForm.mobileCountryCode, contactForm.mobileNumber);
     if (mobileError) invalid.push(mobileError);
   }
+  // The dial code must belong to the destination country (GB goes with +44),
+  // so a number that is valid elsewhere still fails here.
+  const countryCodeMismatchError = getShipmentMobileCountryMismatchError(addressForm.countryCode, contactForm.mobileCountryCode);
+  if (countryCodeMismatchError) invalid.push(countryCodeMismatchError);
   if (!addressForm.countryCode.trim()) missing.push("Country is required");
   if (!addressForm.addressLine1.trim()) missing.push("Address line 1 is required");
   if (!addressForm.townOrCity.trim()) missing.push("Town or city is required");
@@ -807,6 +813,14 @@ export default function ClientDpdDraftReviewPage() {
       countryCode,
       countryName
     }));
+    // Keep the consignee dial code on the destination's code (a UK destination
+    // gets +44): a code from another country is invalid for this lane anyway.
+    const dialCode = getDialCodeForCountryCode(countryCode);
+    if (dialCode) {
+      setContactForm((current) => (
+        current.mobileCountryCode === dialCode ? current : { ...current, mobileCountryCode: dialCode }
+      ));
+    }
     setManualAddressConfirmationRequired(false);
     setReviewIssues([]);
   }
@@ -991,6 +1005,7 @@ export default function ClientDpdDraftReviewPage() {
       setSubmitAttempted(true);
       setReviewIssues(invalid);
       setError(`Correct this before saving: ${invalid[0]}`);
+      toast.error(`Correct this before saving: ${invalid[0]}`);
       return false;
     }
 
@@ -1045,6 +1060,7 @@ export default function ClientDpdDraftReviewPage() {
       setSubmitAttempted(true);
       setReviewIssues(issues);
       setError("Correct the highlighted details before creating a label.");
+      toast.error(issues[0]);
       return;
     }
     // The server refuses these outright; catching it here names the box and

@@ -3,7 +3,12 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { FiDownload, FiPrinter, FiRefreshCw } from "react-icons/fi";
+import {
+  FiChevronDown,
+  FiDownload,
+  FiPrinter,
+  FiRefreshCw,
+} from "react-icons/fi";
 import { toast } from "react-toastify";
 import { ClientDashboardLoading } from "@/components/client/ClientDashboardShell";
 import CreditRestrictionAlert from "@/components/credit/CreditRestrictionAlert";
@@ -241,15 +246,9 @@ export default function ClientCreditStatementDetailPage() {
     : "";
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5">
+    <div className="mx-auto max-w-8xl space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Link
-            href="/client/credit/statements"
-            className="text-sm font-semibold text-blue-900"
-          >
-            Back to statements
-          </Link>
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">
             {statement?.statementNumber || "Credit Statement"}
           </h1>
@@ -389,8 +388,8 @@ export default function ClientCreditStatementDetailPage() {
                 Billing Documents
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                GST, where applicable, is contained in each invoice and is not charged again
-                here.
+                GST, where applicable, is contained in each invoice and is not
+                charged again here.
               </p>
             </div>
             <table className="min-w-full text-left text-sm">
@@ -446,19 +445,22 @@ export default function ClientCreditStatementDetailPage() {
           </section>
 
           {statement.outstandingAmountMinor > 0 ? (
-            <section id="statement-payment" className="border border-slate-200 bg-white p-5">
+            <section
+              id="statement-payment"
+              className="border border-slate-200 rounded-2xl bg-white p-5"
+            >
               <div className="flex gap-1 border-b border-slate-200 pb-4">
                 <button
                   type="button"
                   onClick={() => setPaymentMode("ONLINE")}
-                  className={`h-9 px-4 text-sm font-semibold ${paymentMode === "ONLINE" ? "bg-blue-900 text-white" : "text-slate-600"}`}
+                  className={`h-9 px-4 text-sm font-semibold ${paymentMode === "ONLINE" ? "bg-blue-900 text-white rounded" : "text-slate-600"}`}
                 >
                   Pay Online
                 </button>
                 <button
                   type="button"
                   onClick={() => setPaymentMode("OFFLINE")}
-                  className={`h-9 px-4 text-sm font-semibold ${paymentMode === "OFFLINE" ? "bg-blue-900 text-white" : "text-slate-600"}`}
+                  className={`h-9 px-4 text-sm font-semibold ${paymentMode === "OFFLINE" ? "bg-blue-900 rounded text-white" : "text-slate-600"}`}
                 >
                   Record Offline Payment
                 </button>
@@ -472,7 +474,7 @@ export default function ClientCreditStatementDetailPage() {
                   step="0.01"
                   value={amountRupees}
                   onChange={(event) => setAmountRupees(event.target.value)}
-                  className="mt-2 h-11 w-full border border-slate-300 px-3 font-normal"
+                  className="mt-2 h-11 w-full border border-slate-300 rounded-lg px-3 font-normal"
                 />
                 <p className="mt-1 text-xs font-normal text-slate-500">
                   Maximum {money(MAX_OFFLINE_PAYMENT_RUPEES * 100)} per payment.
@@ -502,7 +504,7 @@ export default function ClientCreditStatementDetailPage() {
                   type="button"
                   onClick={() => void payOnline()}
                   disabled={busy}
-                  className="mt-4 h-10 bg-blue-900 px-5 text-sm font-semibold text-white disabled:opacity-60"
+                  className="mt-4 h-10 bg-white border text-black border-blue-800 px-5 rounded-lg text-sm font-semibold hover:bg-blue-900 hover:text-white disabled:opacity-60"
                 >
                   {busy ? "Starting..." : "Pay with Razorpay"}
                 </button>
@@ -513,25 +515,31 @@ export default function ClientCreditStatementDetailPage() {
                 >
                   <label className="text-sm font-semibold text-slate-700">
                     Method
-                    <select
-                      value={method}
-                      onChange={(event) =>
-                        setMethod(event.target.value as typeof method)
-                      }
-                      className="mt-2 h-11 w-full border border-slate-300 bg-white px-3 font-normal"
-                    >
-                      <option value="BANK_TRANSFER">Bank Transfer</option>
-                      <option value="UPI">UPI</option>
-                      <option value="CASH">Cash</option>
-                      <option value="CHEQUE">Cheque</option>
-                    </select>
+                    <div className="relative mt-2">
+                      <select
+                        value={method}
+                        onChange={(event) =>
+                          setMethod(event.target.value as typeof method)
+                        }
+                        className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white pl-3 pr-9 font-normal"
+                      >
+                        <option value="BANK_TRANSFER">Bank Transfer</option>
+                        <option value="UPI">UPI</option>
+                        <option value="CASH">Cash</option>
+                        <option value="CHEQUE">Cheque</option>
+                      </select>
+                      <FiChevronDown
+                        aria-hidden="true"
+                        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+                      />
+                    </div>
                   </label>
                   <label className="text-sm font-semibold text-slate-700">
                     Payment Reference
                     <input
                       value={reference}
                       onChange={(event) => setReference(event.target.value)}
-                      className="mt-2 h-11 w-full border border-slate-300 px-3 font-normal"
+                      className="mt-2 h-11 w-full border border-slate-300 px-3 font-normal rounded-lg"
                       placeholder="UTR, cheque or receipt number"
                     />
                   </label>
@@ -541,13 +549,14 @@ export default function ClientCreditStatementDetailPage() {
                       value={notes}
                       onChange={(event) => setNotes(event.target.value)}
                       rows={3}
-                      className="mt-2 w-full border border-slate-300 p-3 font-normal"
+                      className="mt-2 w-full border border-slate-300  rounded-lg p-3 font-normal"
                       placeholder="Optional payment note"
                     />
                   </label>
                   <button
                     disabled={busy}
-                    className="h-10 w-fit bg-blue-900 px-5 text-sm font-semibold text-white disabled:opacity-60"
+                    className="h-10 w-fit border border-blue-800 hover:bg-blue-900  hover:text-white px-5 text-sm font-semibold rounded-lg disabled:opacity-60"
+
                   >
                     {busy ? "Submitting..." : "Submit for Verification"}
                   </button>

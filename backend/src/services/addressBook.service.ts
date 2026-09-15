@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AddressBookPostalAddress, IAddressBookEntry } from "../models/addressBookEntry.model.js";
 import { isValidAadhaarNumber, normalizeAadhaarNumber } from "./aadhaarValidation.service.js";
 import { mapGoogleComponentsToGenericAddress } from "./addressMapping.service.js";
+import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { autocompletePlaces, getPlaceDetails } from "./googlePlaces.service.js";
 import { validateUkAddressWithPaf } from "./idealPostcodes.service.js";
 import { getCountryCodeByName, getPortalCountryNames } from "./reference/portalCountries.js";
@@ -38,6 +39,10 @@ export const addressBookInputSchema = z.object({
 }).superRefine((value, context) => {
   if (!parsePhoneNumberFromString(`${value.mobileCountryCode}${value.mobileNumber}`)?.isValid()) {
     context.addIssue({ code: "custom", path: ["mobileNumber"], message: "Enter a valid mobile number including its country code" });
+  } else if (!isDialCodeForCountry(value.countryCode, value.mobileCountryCode)) {
+    // A code from another country would fail again the moment the entry is
+    // picked into a shipment, so it is refused here instead.
+    context.addIssue({ code: "custom", path: ["mobileCountryCode"], message: "Mobile country code must match the address country" });
   }
   if (value.type === "SENDER" && value.countryCode !== "IN") {
     context.addIssue({ code: "custom", path: ["countryCode"], message: "Shipment sender addresses must be in India" });

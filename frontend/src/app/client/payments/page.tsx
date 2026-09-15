@@ -116,8 +116,22 @@ function renderPaymentInvoiceHtml(invoice: PaymentInvoiceDetails, logoUrl: strin
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${safe(invoice.invoiceNumber)}</title>
   <style>
+    @font-face {
+      font-family: "IBM Plex Sans";
+      src: url("/fonts/ibm-plex-sans/IBMPlexSans[wdth,wght].ttf") format("truetype");
+      font-weight: 100 700;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "IBM Plex Sans";
+      src: url("/fonts/ibm-plex-sans/IBMPlexSans-Italic[wdth,wght].ttf") format("truetype");
+      font-weight: 100 700;
+      font-style: italic;
+      font-display: swap;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; background: #f8fafc; color: #0f172a; font-family: Arial, Helvetica, sans-serif; }
+    body { margin: 0; background: #f8fafc; color: #0f172a; font-family: "IBM Plex Sans", Arial, Helvetica, sans-serif; }
     .page { width: min(860px, 100%); margin: 0 auto; background: #fff; padding: 40px; }
     .top { display: flex; min-height: 126px; align-items: flex-start; justify-content: space-between; gap: 24px; border-bottom: 2px solid #0f172a; padding-bottom: 16px; }
     .brand { display: flex; width: 180px; height: 120px; align-items: flex-start; justify-content: flex-start; }
@@ -521,7 +535,7 @@ export default function ClientPaymentsPage() {
 
   return (
     <>
-      <div className="mx-auto max-w-6xl space-y-6">
+      <div className="mx-auto max-w-8xl space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-slate-950">Payments</h1>

@@ -131,7 +131,7 @@ export default function DashboardPage() {
   return (
     <>
       <div className="-m-6 min-h-full bg-[#EEEDED]/60 p-6 lg:-m-8 lg:p-8">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-6">
+        <div className="flex w-full flex-col gap-6">
           <OperationsMarquee variant="staff" />
           <AdminDashboardHeader user={user} />
           <AdminUnavailableNotice sections={overview?.unavailable ?? []} />

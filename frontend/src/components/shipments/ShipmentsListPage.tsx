@@ -139,6 +139,10 @@ function formatMoney(shipment: ShipmentListItem) {
   }).format(shipment.shipmentInvoice.chargeableAmountMinor / 100);
 }
 
+function formatTotalWeight(value: number) {
+  return `${Number(value.toFixed(2))} kg`;
+}
+
 const dpdLabelPresentation: Record<DpdLabelStatus, { label: string; className: string }> = {
   AVAILABLE: { label: "DPD label available", className: "text-emerald-700" },
   NOT_AVAILABLE: { label: "DPD label not available", className: "text-red-600" },
@@ -336,7 +340,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
    * Columns a customer may hide. AWB and Actions are locked: one identifies the
    * row and the other is how anything gets done with it, so a table without
    * them is not a shorter table, it is a broken one.
+   *
+   * Staff see the shipment's total weight under the amount, so the heading
+   * names both; clients keep the charge-only heading they have always had.
    */
+  const amountColumnLabel = audience === "admin" ? "Amount & Weight" : "Chargeable Amount";
   const columnOptions: TableColumnOption[] = [
     { key: "awb", label: "AWB / Shipment No.", locked: true },
     { key: "consignee", label: "Consignee" },
@@ -344,7 +352,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     // toggled independently; clients never see this entry.
     ...(audience === "admin" ? [{ key: "parcels", label: "Parcels" }] : []),
     { key: "route", label: "Route" },
-    { key: "amount", label: "Chargeable Amount" },
+    { key: "amount", label: amountColumnLabel },
     { key: "status", label: "Status" },
     { key: "eta", label: "Estimated Delivery" },
     { key: "created", label: "Created" },
@@ -1428,7 +1436,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                 {shows("consignee") ? <th className="px-4 py-3">Consignee</th> : null}
                 {audience === "admin" && shows("parcels") ? <th className="px-4 py-3">Parcels</th> : null}
                 {shows("route") ? <th className="px-4 py-3">Route</th> : null}
-                {shows("amount") ? <th className="px-4 py-3">Chargeable Amount</th> : null}
+                {shows("amount") ? <th className="px-4 py-3">{amountColumnLabel}</th> : null}
                 {shows("status") ? <th className="px-4 py-3">Status</th> : null}
                 {/* The only sortable column on show. Consignee, Parcels, Route,
                     Amount and Status cannot be ordered by the server- see
@@ -1508,7 +1516,14 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     </td>
                   ) : null}
                   {shows("amount") ? (
-                    <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-950">{formatMoney(shipment)}</td>
+                    <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-950">
+                      {formatMoney(shipment)}
+                      {audience === "admin" ? (
+                        <p className="mt-0.5 text-xs font-medium text-slate-500">
+                          {formatTotalWeight(shipment.weightKg)} total
+                        </p>
+                      ) : null}
+                    </td>
                   ) : null}
                   {shows("status") ? (
                   <td className="px-4 py-3">

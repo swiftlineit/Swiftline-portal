@@ -48,8 +48,10 @@ import {
   type ParcelItem
 } from "@/lib/parcelItems";
 import {
+  getDialCodeForCountryCode,
   getPostcodeError,
   getShipmentEmailError,
+  getShipmentMobileCountryMismatchError,
   getShipmentMobileError,
   isPostcodeValidForCountry
 } from "@/lib/shipmentContactValidation";
@@ -231,6 +233,10 @@ function getReviewFormIssueDetail(
     const mobileError = getShipmentMobileError(draftCorrectionForm.mobileCountryCode, draftCorrectionForm.mobileNumber);
     if (mobileError) invalid.push(mobileError);
   }
+  // The dial code must belong to the destination country (GB goes with +44),
+  // so a number that is valid elsewhere still fails here.
+  const countryCodeMismatchError = getShipmentMobileCountryMismatchError(addressForm.countryCode, draftCorrectionForm.mobileCountryCode);
+  if (countryCodeMismatchError) invalid.push(countryCodeMismatchError);
   if (!draftCorrectionForm.email.trim()) {
     missing.push("Email is required");
   } else {
@@ -821,6 +827,14 @@ export default function DpdLabelDraftPage() {
       countryCode,
       countryName
     }));
+    // Keep the consignee dial code on the destination's code (a UK destination
+    // gets +44): a code from another country is invalid for this lane anyway.
+    const dialCode = getDialCodeForCountryCode(countryCode);
+    if (dialCode) {
+      setDraftCorrectionForm((current) => (
+        current.mobileCountryCode === dialCode ? current : { ...current, mobileCountryCode: dialCode }
+      ));
+    }
     setManualAddressConfirmationRequired(false);
     setReviewIssues([]);
   }

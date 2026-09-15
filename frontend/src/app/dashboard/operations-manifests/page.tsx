@@ -151,6 +151,7 @@ function OperationsManifestListPageContent() {
                   <th className="px-5 py-4">Route / Flight</th>
                   <th className="px-5 py-4 text-center">Bags</th>
                   <th className="px-5 py-4 text-center">Consignments</th>
+                  <th className="px-5 py-4 text-center">Weight</th>
                   <th className="px-5 py-4">Status</th>
                   <th className="px-5 py-4 text-right">Action</th>
                 </tr>
@@ -183,6 +184,9 @@ function OperationsManifestListPageContent() {
                     <td className="px-5 py-4 text-center">
                       {item.totalConsignments}
                     </td>
+                    <td className="px-5 py-4 text-center tabular-nums text-slate-800">
+                      {item.totalWeightKg.toFixed(2)}
+                    </td>
                     <td className="px-5 py-4">
                       <span className="rounded-4xl border border-[#0D1282]/20 bg-[#EEEDED] px-2 py-1 text-xs font-semibold text-[#0D1282]">
                         {item.status.replaceAll("_", " ")}
@@ -212,7 +216,7 @@ function OperationsManifestListPageContent() {
                 {!busy && !items.length ? (
                   <tr>
                     <td
-                      colSpan={7}
+                      colSpan={8}
                       className="px-5 py-14 text-center text-slate-500"
                     >
                       No operations manifests found.

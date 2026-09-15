@@ -17,6 +17,7 @@ import {
   type GeographyState,
 } from "@/lib/geography";
 import { formatAadhaarNumber, normalizeAadhaarNumber } from "@/lib/aadhaar";
+import { getDialCodeForCountryCode } from "@/lib/shipmentContactValidation";
 import type { PublicAddress, PublicSender } from "@/lib/publicShipmentBooking";
 import { BookingField } from "./BookingField";
 
@@ -229,6 +230,9 @@ function AddressPanel<T extends PublicAddress>({
               const country = countryCodeOptions.find(
                 (item) => item.code === countryCode,
               );
+              // Keep the receiver dial code on the destination's code: a code
+              // from another country is invalid for this lane anyway.
+              const dialCode = getDialCodeForCountryCode(countryCode);
               onChange({
                 ...value,
                 countryCode,
@@ -236,6 +240,7 @@ function AddressPanel<T extends PublicAddress>({
                 county: "",
                 townOrCity: "",
                 postcode: "",
+                ...(dialCode ? { mobileCountryCode: dialCode } : null),
               } as T);
             }}
           />

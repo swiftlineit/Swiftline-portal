@@ -6,6 +6,7 @@ import {
   getDashboardBanners,
   type DashboardBanner as DashboardBannerData,
 } from "@/lib/dashboardBanner";
+import Image from "next/image";
 
 type BannerSlide = {
   banner: DashboardBannerData;
@@ -218,9 +219,11 @@ export default function DashboardBanner() {
       className="group relative h-full min-h-52.5 overflow-hidden bg-slate-900 sm:min-h-55 lg:min-h-[240px]"
     >
       {/* Banner image */}
-      <img
+      <Image
         src={slide.imageSrc}
         alt={slideLabel}
+        height={240}
+        width={520}
         className="absolute inset-0 h-full w-full object-fill transition-transform duration-700 ease-out group-hover:scale-[1.025]"
       />
 

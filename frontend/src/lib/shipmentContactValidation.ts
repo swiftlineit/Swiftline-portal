@@ -1,4 +1,4 @@
-import { parsePhoneNumberFromString } from "libphonenumber-js";
+import { getCountryCallingCode, parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js";
 
 // Shared field-level validation for the shipment (create shipment) forms, used by
 // both the admin dashboard and the client portal review pages, and by the
@@ -7,6 +7,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js";
 
 export const shipmentEmailMessage = "Enter a valid email address (Gmail, Yahoo, or a business domain)";
 export const shipmentMobileMessage = "Enter a valid mobile number for the selected country code";
+export const shipmentMobileCountryMismatchMessage = "Mobile country code must match the destination country";
 export const shipmentPostcodeMessage = "Enter a valid postcode for the destination country";
 
 // Gmail and Yahoo families are the only consumer providers accepted. Any other
@@ -98,6 +99,37 @@ export function getShipmentMobileError(dialCode: string, mobileNumber: string): 
   const normalizedCode = code.startsWith("+") ? code : `+${code}`;
   const parsed = parsePhoneNumberFromString(`${normalizedCode}${digits}`);
   return parsed?.isValid() ? undefined : shipmentMobileMessage;
+}
+
+/**
+ * The dial code libphonenumber assigns a destination (GB -> "+44"), used to
+ * pre-select the consignee code when the destination country changes. Same
+ * library as the validators, so an auto-selected code always validates.
+ * Undefined for blank or unknown countries- callers then leave the field alone.
+ */
+export function getDialCodeForCountryCode(countryCode: string): string | undefined {
+  const code = countryCode.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return undefined;
+  try {
+    return `+${getCountryCallingCode(code as CountryCode)}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The dial code must belong to the destination country: a number that is valid
+ * elsewhere is still the wrong number for this lane. Compared on calling codes
+ * rather than the parsed region, because +1 is shared by the whole North
+ * American numbering plan. Undefined when acceptable; empty codes and unknown
+ * countries never fail here- presence checks own those cases.
+ */
+export function getShipmentMobileCountryMismatchError(countryCode: string, dialCode: string, place = "destination country"): string | undefined {
+  if (!dialCode.trim()) return undefined;
+  const expected = getDialCodeForCountryCode(countryCode);
+  if (!expected) return undefined;
+  const entered = dialCode.trim().startsWith("+") ? dialCode.trim() : `+${dialCode.trim()}`;
+  return entered === expected ? undefined : `Mobile country code must match the ${place}`;
 }
 
 // UK format is enforced strictly (the app is UK-delivery focused); other countries

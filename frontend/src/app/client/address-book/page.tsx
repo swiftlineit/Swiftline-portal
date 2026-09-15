@@ -48,6 +48,7 @@ import {
   type AddressBookValidationStatus,
 } from "@/lib/addressBook";
 import { formatAadhaarNumber, isValidAadhaarNumber, normalizeAadhaarNumber } from "@/lib/aadhaar";
+import { getDialCodeForCountryCode, getShipmentMobileCountryMismatchError } from "@/lib/shipmentContactValidation";
 import {
   createClientManualShipmentDraft,
   getClientDashboard,
@@ -693,7 +694,8 @@ function AddressFormDialog({
         ? {
             countryCode: "IN",
             countryName: "India",
-            mobileCountryCode: current.mobileCountryCode || "+91",
+            // Senders are always Indian, so only +91 can ever validate.
+            mobileCountryCode: "+91",
           }
         : {}),
       ...(nextType === "RECIPIENT" ? { aadhaarNumber: "" } : {}),
@@ -702,6 +704,13 @@ function AddressFormDialog({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    // Refused before the server sees it, like every other wrongly filled
+    // field: a saved mismatch would fail again on import into a shipment.
+    const countryCodeError = getShipmentMobileCountryMismatchError(form.countryCode, form.mobileCountryCode, "address country");
+    if (countryCodeError) {
+      setError(countryCodeError);
+      return;
+    }
     if (form.aadhaarNumber && !isValidAadhaarNumber(form.aadhaarNumber)) {
       setError("Enter a valid 12-digit Aadhaar number.");
       return;
@@ -860,12 +869,17 @@ function AddressFormDialog({
                   const country = countries.find(
                     (item) => item.iso2.toUpperCase() === event.target.value,
                   );
-                  if (country)
+                  if (country) {
+                    // Keep the dial code on the country's code: anything else
+                    // is invalid for the entry anyway.
+                    const dialCode = getDialCodeForCountryCode(event.target.value);
                     setForm((current) => ({
                       ...current,
                       countryCode: event.target.value,
                       countryName: country.name,
+                      ...(dialCode ? { mobileCountryCode: dialCode } : null),
                     }));
+                  }
                 }}
                 className="h-14 w-full rounded-xl border border-[#EEEDED] bg-white px-4 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#F0DE36]/35 disabled:bg-slate-100"
               >

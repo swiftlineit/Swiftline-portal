@@ -260,8 +260,10 @@ export default function ClientDashboardPage() {
   const shipmentCreationAllowed = selectedAccount ? canCreateShipment(selectedAccount) : false;
 
   return (
-      <div className="mx-auto flex max-w-375 flex-col gap-6">
+      <div className="flex w-full flex-col gap-6">
         <OperationsMarquee variant="client" />
+            <ClientQuickAccess account={selectedAccount} />
+
         <ClientDashboardHeader
           user={user}
           accounts={accounts}
@@ -306,6 +308,8 @@ export default function ClientDashboardPage() {
               wallet={selectedWallet}
             />
 
+
+
             {/* The control tower answers "where are my shipments, what is
                 broken, what do you need from me" before anything else on the
                 page. Its figures come counted from /client/overview. */}
@@ -346,7 +350,6 @@ export default function ClientDashboardPage() {
               shipments={recentShipments}
               canCreateShipment={shipmentCreationAllowed}
             />
-            <ClientQuickAccess account={selectedAccount} />
           </>
         )}
       </div>

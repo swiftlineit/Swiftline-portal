@@ -7,6 +7,7 @@ import { FiCheck, FiCreditCard, FiMapPin, FiPackage } from "react-icons/fi";
 import { isValidAadhaarNumber } from "@/lib/aadhaar";
 import {
   getPostcodeError,
+  getShipmentMobileCountryMismatchError,
   getShipmentMobileError,
   isAcceptableShipmentEmail,
 } from "@/lib/shipmentContactValidation";
@@ -100,6 +101,15 @@ function validateAddressStep(data: PublicShipmentFormData) {
         prefix === "sender"
           ? "Enter a valid 10 digit Indian mobile number."
           : mobileError || "Enter a valid mobile number.";
+    // The receiver dial code must belong to the destination country. The
+    // sender side is fixed to IN / +91, so only the consignee can mismatch.
+    if (prefix === "consignee") {
+      const countryCodeError = getShipmentMobileCountryMismatchError(
+        address.countryCode,
+        address.mobileCountryCode,
+      );
+      if (countryCodeError) errors[`${prefix}.mobileCountryCode`] = countryCodeError;
+    }
     const postcodeError =
       prefix === "sender"
         ? !/^[1-9]\d{5}$/.test(address.postcode)
