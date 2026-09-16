@@ -489,7 +489,12 @@ export async function updateBranch(request: Request, response: Response): Promis
   }
 
   const beforeSnapshot = branch.toObject() as unknown as Record<string, unknown>;
-  branch.set(buildBranchUpdate(parsed.data, userId));
+  const update = buildBranchUpdate(parsed.data, userId);
+  // Merge in memory for the active-branch check only. Persistence uses a
+  // targeted $set so legacy embedded entries (e.g. documents stored before
+  // storageKey became required) are never revalidated and cannot block
+  // unrelated edits. The payload itself was already validated by zod above.
+  branch.set(update);
 
   // An already-active branch must stay operationally valid after the edit.
   if (branch.status === "ACTIVE") {
@@ -498,7 +503,7 @@ export async function updateBranch(request: Request, response: Response): Promis
   }
 
   try {
-    await branch.save();
+    await Branch.updateOne({ _id: branch._id }, { $set: update });
   } catch (error) {
     if (isDuplicateKeyError(error)) {
       return response.status(409).json({ success: false, message: "Branch code or station code already exists" });
@@ -506,10 +511,13 @@ export async function updateBranch(request: Request, response: Response): Promis
     throw error;
   }
 
-  const changes = buildBranchDiff(beforeSnapshot, branch.toObject() as unknown as Record<string, unknown>);
-  await writeBranchAuditLog("BRANCH_UPDATED", branch._id as mongoose.Types.ObjectId, branch, userId, changes);
+  const updated = await Branch.findById(branchId).exec();
+  if (!updated) return response.status(404).json({ success: false, message: "Branch not found" });
 
-  return response.status(200).json({ success: true, branch });
+  const changes = buildBranchDiff(beforeSnapshot, updated.toObject() as unknown as Record<string, unknown>);
+  await writeBranchAuditLog("BRANCH_UPDATED", updated._id as mongoose.Types.ObjectId, updated, userId, changes);
+
+  return response.status(200).json({ success: true, branch: updated });
 }
 
 export async function updateBranchStatus(request: Request, response: Response): Promise<Response> {
@@ -689,6 +697,10 @@ export async function viewBranchDocument(request: Request, response: Response): 
   const branch = await Branch.findById(branchId).select("documents").lean().exec();
   const document = branch?.documents?.[docIndex];
   if (!document) return response.status(404).json({ success: false, message: "Document not found at this index." });
+  // Legacy entries stored before storageKey became required have no file to fetch.
+  if (!document.storageKey) {
+    return response.status(404).json({ success: false, message: "Document file is no longer available." });
+  }
 
   try {
     return await streamObjectToResponse({
@@ -793,15 +805,18 @@ export async function uploadBranchDocument(request: Request, response: Response)
   };
 
   const supersededKey = existingIndex >= 0 ? branch.documents[existingIndex]?.storageKey : undefined;
-  if (existingIndex >= 0) branch.documents[existingIndex] = docEntry;
-  else branch.documents.push(docEntry);
-
-  branch.updatedBy = userId;
-  await branch.save();
+  // Persist with a targeted $set so legacy entries missing a storageKey never
+  // revalidate and block the upload. The new entry always carries its key.
+  const currentDocuments = (branch.toObject() as unknown as { documents: Array<Record<string, unknown>> }).documents ?? [];
+  const nextDocuments = existingIndex >= 0
+    ? currentDocuments.map((doc, index) => (index === existingIndex ? { ...docEntry } : doc))
+    : [...currentDocuments, { ...docEntry }];
+  await Branch.updateOne({ _id: branch._id }, { $set: { documents: nextDocuments, updatedBy: userId } });
 
   if (supersededKey) void deleteObject(supersededKey).catch(() => undefined);
 
-  return response.status(200).json({ success: true, branch });
+  const updated = await Branch.findById(branchId).exec();
+  return response.status(200).json({ success: true, branch: updated });
 }
 
 export async function deleteBranchDocument(request: Request, response: Response): Promise<Response> {
@@ -827,14 +842,17 @@ export async function deleteBranchDocument(request: Request, response: Response)
     return response.status(404).json({ success: false, message: "Document not found at this index." });
   }
 
-  const removedKey = branch.documents[docIndex].storageKey;
-  branch.documents.splice(docIndex, 1);
-  branch.updatedBy = userId;
-  await branch.save();
+  const removedKey = branch.documents[docIndex]?.storageKey;
+  // Targeted $set: removing one entry must not revalidate the entries left
+  // behind, which may predate the required storageKey.
+  const nextDocuments = (branch.toObject() as unknown as { documents: unknown[] }).documents
+    .filter((_, index) => index !== docIndex);
+  await Branch.updateOne({ _id: branch._id }, { $set: { documents: nextDocuments, updatedBy: userId } });
 
-  void deleteObject(removedKey).catch(() => undefined);
+  if (removedKey) void deleteObject(removedKey).catch(() => undefined);
 
-  return response.status(200).json({ success: true, branch });
+  const updated = await Branch.findById(branchId).exec();
+  return response.status(200).json({ success: true, branch: updated });
 }
 
 /**

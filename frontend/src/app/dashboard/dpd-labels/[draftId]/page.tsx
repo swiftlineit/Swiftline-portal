@@ -21,6 +21,7 @@ import { ShipmentLabelsPanel } from "@/components/shipments/ShipmentLabelsPanel"
 import {
   ConsignorForm,
   ParcelKycState,
+  nextContactNameOnCompanyChange,
   consigneeContactFrom,
   consignorFormFromDraft,
   consignorFormToPatch,
@@ -706,10 +707,13 @@ export default function DpdLabelDraftPage() {
   }, [currentReviewIssues]);
 
   function getParcelFieldIssue(index: number, patterns: string[]) {
-    const parcelLabel = `parcel ${index + 1}`;
+    // The parcel number needs a trailing boundary: a plain substring search
+    // lets `parcel 1` match `parcel 10`, painting box 1 red for box 10's
+    // error. `parcel 1 item 2` still matches box 1, as it should.
+    const parcelPattern = new RegExp(`parcel ${index + 1}(?!\\d)`);
     return currentReviewIssues.find((issue) => {
       const normalizedIssue = issue.toLowerCase();
-      return normalizedIssue.includes(parcelLabel)
+      return parcelPattern.test(normalizedIssue)
         && patterns.some((pattern) => normalizedIssue.includes(pattern));
     });
   }
@@ -842,10 +846,12 @@ export default function DpdLabelDraftPage() {
   function handleCorrectionFieldChange(field: keyof DraftCorrectionForm) {
     return (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
       const preserveCase = field === "email" || field === "serviceType" || field === "serviceCode";
-      setDraftCorrectionForm((current) => ({
-        ...current,
-        [field]: preserveCase ? event.target.value : event.target.value.toUpperCase()
-      }));
+      const nextValue = preserveCase ? event.target.value : event.target.value.toUpperCase();
+      setDraftCorrectionForm((current) => (
+        field === "companyName"
+          ? { ...current, companyName: nextValue, contactName: nextContactNameOnCompanyChange(current.companyName, current.contactName, nextValue) }
+          : { ...current, [field]: nextValue }
+      ));
       setReviewIssues([]);
     };
   }

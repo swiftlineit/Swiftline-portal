@@ -3,6 +3,7 @@
 import mongoose from "mongoose";
 import { DpdShipment } from "../../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../../models/shipmentDraft.model.js";
+import { readShipmentBookingSnapshot } from "../shipmentBookingSnapshot.service.js";
 import { publicShipmentSourceIdentity } from "../shipmentSourceIdentity.service.js";
 import { buildCustomsInvoiceModel, type CustomsInvoiceModel } from "./customsInvoiceModel.service.js";
 import { renderCustomsInvoicePdfBuffer } from "./customsInvoicePdf.service.js";
@@ -43,7 +44,7 @@ export async function buildCustomsInvoiceForDraft(input: {
   }
 
   const booking = await DpdShipment.findOne({ shipmentDraftId: draft._id })
-    .select("swiftlineTrackingNumber")
+    .select("swiftlineTrackingNumber parcelNumbers currentShipmentSnapshot bookingSnapshot")
     .lean()
     .exec();
   const sourceIdentity = publicShipmentSourceIdentity(draft);
@@ -54,10 +55,26 @@ export async function buildCustomsInvoiceForDraft(input: {
     draftId: String(draft._id)
   });
 
+  // House airway bills in parcel order. The booking snapshot is authoritative:
+  // some bookings were stored with an empty parcelNumbers array, so the flat
+  // array is only a fallback.
+  const snapshot = booking
+    ? readShipmentBookingSnapshot(booking.currentShipmentSnapshot)
+      ?? readShipmentBookingSnapshot(booking.bookingSnapshot)
+    : null;
+  const snapshotNumbers = (snapshot?.parcels ?? [])
+    .map((parcel) => String(parcel.swiftlineParcelNumber ?? "").trim());
+  const parcelNumbers = snapshotNumbers.some(Boolean)
+    ? snapshotNumbers
+    : Array.isArray(booking?.parcelNumbers)
+      ? booking.parcelNumbers.map((value) => String(value ?? "").trim())
+      : [];
+
   return buildCustomsInvoiceModel({
     draft: draft as never,
     invoiceNumber,
-    invoiceDate: draft.createdAt ?? new Date()
+    invoiceDate: draft.createdAt ?? new Date(),
+    parcelNumbers
   });
 }
 

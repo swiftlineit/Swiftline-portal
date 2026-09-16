@@ -13,6 +13,24 @@ export type ManifestDocumentParty = {
   party: ManifestPartySnapshot | null;
 };
 
+export type ManifestDocumentItem = {
+  description: string;
+  hsnCode?: string;
+  unitType?: string;
+  quantity?: number;
+  unitRate?: number;
+};
+
+export function fullManifestParcelDescription(
+  items: ManifestDocumentItem[] | undefined,
+  fallback: string
+) {
+  const descriptions = (items ?? [])
+    .map((item) => item.description.trim())
+    .filter(Boolean);
+  return descriptions.length ? descriptions.join(", ") : fallback;
+}
+
 export type ManifestDocumentParcelRow = {
   serial: number; // 1-based across the whole document
   consignmentIndex: number; // 0-based
@@ -23,6 +41,7 @@ export type ManifestDocumentParcelRow = {
   parcelNumber: string; // Swiftline parcel barcode (EDI HAWB); "" on legacy summary rows
   weightKg: number;
   description: string;
+  items?: ManifestDocumentItem[];
   bagNumber: string;
   // The consignment's declared value, present only on its first parcel row so a
   // multi-box shipment is never counted twice.

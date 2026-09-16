@@ -53,7 +53,21 @@ export type ShipmentInvoiceParcel = {
   widthCm: number | null;
   heightCm: number | null;
   contentsDescription: string;
+  items?: Array<{
+    description: string;
+    hsnCode?: string;
+    unitType?: string;
+    quantity?: number;
+    unitRate?: number;
+  }>;
 };
+
+export function shipmentInvoiceParcelDescription(parcel: ShipmentInvoiceParcel) {
+  const descriptions = (parcel.items ?? [])
+    .map((item) => item.description.trim())
+    .filter(Boolean);
+  return descriptions.length ? descriptions.join(", ") : parcel.contentsDescription;
+}
 
 export type ShipmentInvoiceVersion = {
   revision: number;
@@ -136,12 +150,32 @@ async function fetchWithAuth(input: string, init: RequestInit = {}) {
   return fetch(input, { ...init, headers });
 }
 
+/**
+ * Short-lived in-memory cache for the invoice JSON, so hovering a row and then
+ * opening it (or opening the same invoice twice) never pays for two identical
+ * fetches. Cache only, never a source of truth: entries expire quickly and a
+ * failed fetch never overwrites a good one.
+ */
+const invoiceCache = new Map<string, { at: number; invoice: ShipmentInvoice }>();
+const INVOICE_CACHE_TTL_MS = 60_000;
+
+function invoiceCacheKey(draftId: string, audience: ShipmentInvoiceAudience, revision?: number) {
+  return `${audience}:${draftId}:${revision ?? "latest"}`;
+}
+
 export async function getShipmentInvoice(draftId: string, audience: ShipmentInvoiceAudience, revision?: number) {
+  const key = invoiceCacheKey(draftId, audience, revision);
+  const cached = invoiceCache.get(key);
+  if (cached && Date.now() - cached.at < INVOICE_CACHE_TTL_MS) return cached.invoice;
   const response = await fetchWithAuth(endpoint(draftId, audience, false, revision));
   const data = await response.json();
   if (!response.ok || !data.success) throw new Error(data.message || "Unable to load shipment invoice.");
-  return data.invoice as ShipmentInvoice;
+  const invoice = data.invoice as ShipmentInvoice;
+  invoiceCache.set(key, { at: Date.now(), invoice });
+  return invoice;
 }
+
+
 
 export async function downloadShipmentInvoicePdf(
   draftId: string,

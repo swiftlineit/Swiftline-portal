@@ -568,9 +568,14 @@ export async function listClientShipments(request: Request, response: Response):
   const requestedPage = Math.max(1, Number.parseInt(String(request.query.page ?? "1"), 10) || 1);
   const limit = Math.min(50, Math.max(1, Number.parseInt(String(request.query.limit ?? "10"), 10) || 10));
   const branchObjectIds = (branchId ? [branchId] : allowedBranchIds).map((id) => new mongoose.Types.ObjectId(id));
+  // Workspace table holds unbooked drafts only. Booked shipments live in the
+  // booked-shipments list. bookingState (indexed) is the discriminator: a
+  // rejected carrier booking can leave a stale DpdShipment pointing at an
+  // editable draft, so carrier-row existence alone would misclassify.
   const query = {
     businessAccountId: new mongoose.Types.ObjectId(businessAccountId),
     branchId: { $in: branchObjectIds },
+    bookingState: { $in: ["EDITABLE", "BOOKING", "REVIEW_REQUIRED"] as const },
     deletedAt: null
   };
   const total = await ShipmentDraft.countDocuments(query).exec();

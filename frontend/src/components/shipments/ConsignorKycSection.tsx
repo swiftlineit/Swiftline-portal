@@ -22,6 +22,7 @@ import {
 } from "@/lib/dpdLabels";
 import type { CsbType } from "@/lib/csbType";
 import type { ConsignorForm, ParcelKycState } from "@/lib/shipmentConsignor";
+import { nextContactNameOnCompanyChange } from "@/lib/shipmentConsignor";
 
 type ConsignorFieldIssues = Partial<Record<keyof ConsignorForm, string>>;
 
@@ -112,10 +113,20 @@ export function ConsignorKycSection({
   ];
 
   function setField(field: keyof ConsignorForm) {
-    return (event: ChangeEvent<HTMLInputElement>) => onFormChange({
-      ...form,
-      [field]: field === "email" ? event.target.value : event.target.value.toUpperCase()
-    });
+    return (event: ChangeEvent<HTMLInputElement>) => {
+      const nextValue = field === "email" ? event.target.value : event.target.value.toUpperCase();
+      if (field === "companyName") {
+        return onFormChange({
+          ...form,
+          companyName: nextValue,
+          contactName: nextContactNameOnCompanyChange(form.companyName, form.contactName, nextValue)
+        });
+      }
+      return onFormChange({
+        ...form,
+        [field]: nextValue
+      });
+    };
   }
 
   async function handleAddressSearch() {

@@ -126,8 +126,6 @@ export default function ShipmentInvoiceHistory({
                     <div className="flex justify-end gap-2">
                       <Link
                         href={shipmentInvoicePageUrl(draftId, audience, false, version.revision)}
-                        target="_blank"
-                        rel="noreferrer"
                         title={`View Invoice ${version.revision}`}
                         className="inline-flex  rounded-4xl h-9 items-center gap-2 border border-slate-300 px-3 font-semibold text-blue-900 hover:border-blue-900"
                       >

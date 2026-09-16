@@ -193,8 +193,9 @@ function drawBoxHeader(doc: PDFKit.PDFDocument, parcel: CustomsInvoiceBox, y: nu
     ? `${parcel.lengthCm.toFixed(2)} * ${parcel.widthCm.toFixed(2)} * ${parcel.heightCm.toFixed(2)}`
     : "NOT PROVIDED";
   box(doc, contentLeft, y, contentWidth, rowHeights.boxHeader);
+  const hawb = parcel.parcelNumber ? ` , HAWB:${parcel.parcelNumber.toUpperCase()}` : "";
   doc.font("Helvetica-Bold").fontSize(8).fillColor("#000000").text(
-    `BOX NO: ${parcel.boxNumber} , DIMENSIONS (CMS) ${dimensions} , ACTUAL WEIGHT - ${parcel.actualWeightKg.toFixed(2)} KG`,
+    `BOX NO: ${parcel.boxNumber}${hawb} , DIMENSIONS (CMS) ${dimensions} , ACTUAL WEIGHT - ${parcel.actualWeightKg.toFixed(2)} KG`,
     contentLeft, y + 8, { width: contentWidth, align: "center" }
   );
   return y + rowHeights.boxHeader;

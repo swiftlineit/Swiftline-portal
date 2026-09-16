@@ -393,17 +393,17 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       // The API clamps a page that no longer exists after data changes. Keep
       // local state and the persisted URL aligned with that server decision.
       setPage((current) => current === data.pagination.page ? current : data.pagination.page);
-      // Refresh or drop only the selections that belong to this page - a shipment
-      // manifested elsewhere in the meantime is no longer eligible and falls out,
-      // but selections on other pages are left untouched so they survive paging.
+      // Refresh only the selections that belong to this page - a shipment
+      // manifested elsewhere stays selected so its pieces/weight still count
+      // toward the selection stats, but it is excluded from the manifest
+      // action via `manifestSelection` below. Selections on other pages are
+      // left untouched so they survive paging.
       setSelected((current) => {
         if (!current.size) return current;
         const next = new Map(current);
         for (const shipment of data.shipments) {
           if (!next.has(shipment.id)) continue;
-          const stillSelectable = shipment.manifestEligible || (audience === "admin" && isStatusUpdateEligible(shipment));
-          if (stillSelectable) next.set(shipment.id, shipment);
-          else next.delete(shipment.id);
+          next.set(shipment.id, shipment);
         }
         return next;
       });
@@ -587,11 +587,20 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     return () => window.clearTimeout(timer);
   }, [restoringView, searchInput]);
 
-  // Staff may select anything they could act on; a client's rows are still
-  // gated on manifest eligibility because the manifest is their only action.
-  const selectable = useMemo(() => shipments.filter((shipment) => (
-    audience === "admin" ? shipment.manifestEligible || isStatusUpdateEligible(shipment) : shipment.manifestEligible
-  )), [audience, shipments]);
+  // A row already inside a shipment manifest stays checkable for stats only
+  // (count/pieces/weight). It never flows into `manifestSelection`, so the
+  // create-manifest API can never receive it. Rows ineligible for every reason
+  // (e.g. booking incomplete, no snapshot) stay disabled to avoid implying
+  // they can be acted on.
+  const isRowCheckable = useCallback((shipment: ShipmentListItem) => (
+    shipment.manifestEligible
+    || shipment.manifest !== null
+    || (audience === "admin" && isStatusUpdateEligible(shipment))
+  ), [audience]);
+  // Header select-all covers every checkable row on the page, including
+  // already-manifested rows, so one click gives full pcs/weight stats. The
+  // manifest/status actions still consume only their eligible subsets below.
+  const selectable = useMemo(() => shipments.filter(isRowCheckable), [shipments, isRowCheckable]);
   const selectedList = useMemo(() => [...selected.values()], [selected]);
   // Each flow works from the subset of the selection it can actually act on, so
   // a mixed selection never sends an ineligible row to the other flow's API.
@@ -601,6 +610,20 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     pieces: manifestSelection.reduce((sum, shipment) => sum + shipment.pieces, 0),
     weightKg: manifestSelection.reduce((sum, shipment) => sum + shipment.weightKg, 0)
   }), [manifestSelection]);
+  // Stats over everything checked, including already-manifested rows, so the
+  // operator can verify total pieces/weight without opening the dialog.
+  const selectionTotals = useMemo(() => ({
+    pieces: selectedList.reduce((sum, shipment) => sum + shipment.pieces, 0),
+    weightKg: selectedList.reduce((sum, shipment) => sum + shipment.weightKg, 0)
+  }), [selectedList]);
+  const inManifestCount = useMemo(
+    () => selectedList.filter((shipment) => shipment.manifest !== null).length,
+    [selectedList]
+  );
+  const otherIneligibleCount = useMemo(
+    () => selectedList.filter((shipment) => !shipment.manifestEligible && shipment.manifest === null).length,
+    [selectedList]
+  );
 
   // A manifest covers one business account and branch, so a mixed selection
   // cannot become one document.
@@ -641,8 +664,9 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
   const allSelected = selectable.length > 0 && selectable.every((shipment) => selected.has(shipment.id));
 
-  // Selects/deselects only the current page's eligible rows, leaving any
-  // selections already made on other pages untouched.
+  // Selects/deselects only the current page's checkable rows (including
+  // already-manifested rows for stats), leaving any selections already made
+  // on other pages untouched.
   function toggleAll() {
     setSelected((current) => {
       const next = new Map(current);
@@ -978,7 +1002,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
             <div className="min-h-6">
               {selectedList.length ? (
                 <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                  {selectedList.length} selected
+                  {selectedList.length} {selectedList.length === 1 ? "shipment" : "shipments"} selected
+                  {" · "}{selectionTotals.pieces} pcs · {selectionTotals.weightKg.toFixed(2)} kg
                 </span>
               ) : null}
             </div>
@@ -1079,17 +1104,35 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
       {activeFlow === "manifest" ? (
         <div className="mb-5 flex flex-col gap-4 rounded-2xl border border-[#0D1282]/20 bg-white px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          {manifestSelection.length ? (
+          {selectedList.length ? (
             <>
               <div>
                 <p className="text-sm font-semibold text-[#0D1282]">
-                  {manifestSelection.length} {manifestSelection.length === 1 ? "shipment" : "shipments"} selected
-                  {" · "}{manifestTotals.pieces} pcs · {manifestTotals.weightKg.toFixed(2)} kg
+                  {selectedList.length} {selectedList.length === 1 ? "shipment" : "shipments"} selected
+                  {" · "}{selectionTotals.pieces} pcs · {selectionTotals.weightKg.toFixed(2)} kg
                 </p>
-                {selectedList.length > manifestSelection.length ? (
+                {manifestSelection.length > 0 && manifestSelection.length < selectedList.length ? (
+                  <p className="mt-1 text-xs font-semibold text-[#0D1282]/80">
+                    {manifestSelection.length} eligible for new manifest
+                    {" · "}{manifestTotals.pieces} pcs · {manifestTotals.weightKg.toFixed(2)} kg
+                  </p>
+                ) : null}
+                {inManifestCount > 0 ? (
                   <p className="mt-1 text-xs font-semibold text-slate-600">
-                    {selectedList.length - manifestSelection.length} selected {selectedList.length - manifestSelection.length === 1 ? "shipment is" : "shipments are"} not
+                    {inManifestCount} {inManifestCount === 1 ? "shipment is" : "shipments are"} already
+                    inside a shipment manifest and will be left out.
+                  </p>
+                ) : null}
+                {otherIneligibleCount > 0 ? (
+                  <p className="mt-1 text-xs font-semibold text-slate-600">
+                    {otherIneligibleCount} selected {otherIneligibleCount === 1 ? "shipment is" : "shipments are"} not
                     manifest-eligible and will be left out.
+                  </p>
+                ) : null}
+                {!manifestSelection.length ? (
+                  <p className="mt-1 text-xs font-semibold text-amber-700">
+                    None of the selected shipments can go into a new manifest. Clear the selection
+                    and choose shipments that are not already manifested.
                   </p>
                 ) : null}
                 {mixedSelection ? (
@@ -1110,6 +1153,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   type="button"
                   onClick={() => setDialogOpen(true)}
                   disabled={mixedSelection || !manifestSelection.length}
+                  title={!manifestSelection.length ? "Selected shipments are already in a manifest or not manifest-eligible" : undefined}
                   className="h-9 rounded-4xl bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
                   Create Manifest
@@ -1463,7 +1507,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                       type="checkbox"
                       checked={selected.has(shipment.id)}
                       onChange={() => toggleOne(shipment)}
-                      disabled={!shipment.manifestEligible && !(audience === "admin" && isStatusUpdateEligible(shipment))}
+                      disabled={!isRowCheckable(shipment)}
                       aria-label={`Select shipment ${shipment.swiftlineTrackingNumber || shipment.id}`}
                       className="h-4 w-4 accent-[#0D1282] disabled:opacity-40"
                     />
@@ -1533,6 +1577,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     {audience === "admin" && shipment.dpdLabelStatus ? (
                       <DpdLabelAvailability status={shipment.dpdLabelStatus} />
                     ) : null}
+                    {shipment.manifest ? (
+                      <p className="mt-1 text-[10px] font-semibold leading-4 text-slate-500">
+                        Manifest: {shipment.manifest.manifestNumber}
+                      </p>
+                    ) : null}
                     {/* A booking that reached the carrier but has not completed is
                         shown here rather than being hidden from this table. */}
                     {shipment.bookingStatus !== "LABEL_RECEIVED" ? (
@@ -1578,8 +1627,6 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                       </Link>
                       <Link
                         href={shipmentInvoicePageUrl(shipment.id, audience)}
-                        target="_blank"
-                        rel="noreferrer"
                         className="inline-flex items-center gap-1 font-semibold text-blue-900 hover:text-blue-700"
                       >
                         <FiFileText aria-hidden="true" className="h-4 w-4" />Invoice

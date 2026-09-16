@@ -1,4 +1,4 @@
-import type { ManifestDocumentParcelRow } from "../../types/manifestDocument.js";
+import { fullManifestParcelDescription, type ManifestDocumentParcelRow } from "../../types/manifestDocument.js";
 import type { ManifestPartySnapshot } from "../shipmentManifest.service.js";
 import { ediCountryName } from "../reference/countryNames.js";
 import {
@@ -77,7 +77,7 @@ export const EDI_COLUMNS: readonly EdiColumn[] = [
   { header: "ConsigneeCountry", source: "CALC", type: "text", value: (row) => ediCountryName(consignee(row).countryCode || consignee(row).countryName) },
   { header: "PKG", source: "CONST", type: "number", value: () => 1 },
   { header: "Weight", source: "SNAP", type: "number", value: (row) => row.weightKg },
-  { header: "DescriptionofGoods", source: "SNAP", type: "text", value: (row) => ediText(row.description) },
+  { header: "DescriptionofGoods", source: "SNAP", type: "text", value: (row) => ediText(fullManifestParcelDescription(row.items, row.description)) },
   { header: "Value", source: "SNAP", type: "number", value: (row) => valueOf(row) },
   { header: "ExportInvoiceNo", source: "CALC", type: "text", value: (row) => hawbOf(row) },
   { header: "GSTInvoiceNo", source: "CALC", type: "text", value: (row) => hawbOf(row) },

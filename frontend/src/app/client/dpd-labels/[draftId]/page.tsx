@@ -72,6 +72,7 @@ import {
 import {
   ConsignorForm,
   ParcelKycState,
+  nextContactNameOnCompanyChange,
   consigneeContactFrom,
   consignorFormFromDraft,
   consignorFormToPatch,
@@ -349,8 +350,18 @@ function getReviewIssues(
   return allShipmentFormIssues(getReviewIssueDetail(addressForm, contactForm, parcelForms, csbType));
 }
 
+function patternMatches(normalizedIssue: string, pattern: string) {
+  // Parcel labels need a trailing boundary so `parcel 1` never matches
+  // `parcel 10` (which wrongly painted box 1 red), while `parcel 1 item 2`
+  // still matches box 1, as it should.
+  if (/^parcel \d+$/.test(pattern)) {
+    return new RegExp(`${pattern}(?!\\d)`).test(normalizedIssue);
+  }
+  return normalizedIssue.includes(pattern);
+}
+
 function findIssue(issues: string[], patterns: string[]) {
-  return issues.find((issue) => patterns.every((pattern) => issue.toLowerCase().includes(pattern)));
+  return issues.find((issue) => patterns.every((pattern) => patternMatches(issue.toLowerCase(), pattern)));
 }
 
 export default function ClientDpdDraftReviewPage() {
@@ -796,10 +807,12 @@ export default function ClientDpdDraftReviewPage() {
   function handleContactChange(field: keyof ContactForm) {
     return (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
       const preserveCase = field === "email" || field === "serviceType" || field === "serviceCode";
-      setContactForm((current) => ({
-        ...current,
-        [field]: preserveCase ? event.target.value : event.target.value.toUpperCase()
-      }));
+      const nextValue = preserveCase ? event.target.value : event.target.value.toUpperCase();
+      setContactForm((current) => (
+        field === "companyName"
+          ? { ...current, companyName: nextValue, contactName: nextContactNameOnCompanyChange(current.companyName, current.contactName, nextValue) }
+          : { ...current, [field]: nextValue }
+      ));
       setReviewIssues([]);
     };
   }

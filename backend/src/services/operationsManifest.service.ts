@@ -29,6 +29,8 @@ import {
   parseSealedSnapshot,
   type SealedSnapshot
 } from "./manifestDocument.service.js";
+import { fullManifestParcelDescription } from "../types/manifestDocument.js";
+import { normalizeParcelItems } from "./parcelItems.service.js";
 import {
   parcelDeclaredGoodsValueMinor,
   readShipmentBookingSnapshot,
@@ -713,6 +715,7 @@ export async function scanOperationsParcel(input: {
     parcelNumber: parcel.swiftlineParcelNumber.toUpperCase(),
     weightKg: roundWeight(parcel.actualWeightKg),
     contentsDescription: typeof parcel.contentsDescription === "string" ? parcel.contentsDescription : "",
+    items: normalizeParcelItems(parcel),
     valueMinor: snapshotParcelValueMinor(parcel)
   }));
   const incomingWeightKg = parcelWeightSnapshots.find((parcel) => parcel.parcelNumber === parcelNumber)?.weightKg ?? 0;
@@ -1338,6 +1341,7 @@ export async function sealOperationsManifest(
             parcelNumber: scan.parcelNumber,
             weightKg: roundWeight(snapshotByParcel.get(scan.parcelNumber)?.weightKg ?? 0),
             description: snapshotByParcel.get(scan.parcelNumber)?.contentsDescription ?? "",
+            items: snapshotByParcel.get(scan.parcelNumber)?.items,
             bagNumber: sealedBagNumberById.get(String(scan.bagId ?? "")) ?? "",
             valueMinor: snapshotByParcel.get(scan.parcelNumber)?.valueMinor ?? null
           }));
@@ -1586,7 +1590,9 @@ async function normalizeEditableManifestData(manifest: IOperationsManifest) {
       $or: [
         { parcelWeightSnapshots: { $exists: false } },
         { parcelWeightSnapshots: { $size: 0 } },
-        { "parcelWeightSnapshots.valueMinor": null }
+        { "parcelWeightSnapshots.valueMinor": null },
+        { "parcelWeightSnapshots.items": { $exists: false } },
+        { "parcelWeightSnapshots.items": { $size: 0 } }
       ]
     }).exec()
   ]);
@@ -1616,11 +1622,22 @@ async function normalizeEditableManifestData(manifest: IOperationsManifest) {
           parcelNumber: parcel.swiftlineParcelNumber.toUpperCase(),
           weightKg: roundWeight(parcel.actualWeightKg),
           contentsDescription: typeof parcel.contentsDescription === "string" ? parcel.contentsDescription : "",
+          items: normalizeParcelItems(parcel),
           valueMinor: snapshotParcelValueMinor(parcel)
         }));
         valueChanged = true;
       } else {
         valueChanged = fillMissingParcelValues(consignment.parcelWeightSnapshots, snapshot);
+        const snapshotItemsByParcel = new Map(
+          snapshot.parcels.map((parcel) => [parcel.swiftlineParcelNumber.toUpperCase(), normalizeParcelItems(parcel)])
+        );
+        for (const parcel of consignment.parcelWeightSnapshots) {
+          if (parcel.items?.length) continue;
+          const items = snapshotItemsByParcel.get(parcel.parcelNumber.toUpperCase());
+          if (!items?.length) continue;
+          parcel.items = items;
+          valueChanged = true;
+        }
       }
       const declaredValueMinor = snapshotDeclaredGoodsValueMinor(snapshot);
       if (consignment.declaredValueMinor !== declaredValueMinor) {
@@ -1778,7 +1795,7 @@ export async function buildOperationsManifestExcel(manifest: IOperationsManifest
       weightKg: row.weightKg,
       consignor: { formatted: normalizedManifestAddress(row.consignor.formatted), party: row.consignor.party },
       consignee: { formatted: normalizedManifestAddress(row.consignee.formatted), party: row.consignee.party },
-      description: row.description,
+      description: fullManifestParcelDescription(row.items, row.description),
       declaredValueMinor: row.declaredValueMinor,
       currency: row.currency,
       bagNumber: row.bagNumber,
@@ -1849,7 +1866,15 @@ export async function buildOperationsManifestPdf(manifest: IOperationsManifest) 
       const blockSize = Math.max(consignorLines.length, consigneeLines.length);
 
       consignment.parcels.forEach((parcel) => {
-        const blockHeight = blockSize * rowHeight;
+        const description = fullManifestParcelDescription(parcel.items, parcel.description);
+        document.font("Helvetica").fontSize(6.5);
+        const descriptionHeight = document.heightOfString(description, {
+          width: (widths[6] ?? 0) - 6,
+          align: "center",
+          lineGap: 1
+        });
+        const firstRowHeight = Math.max(rowHeight, descriptionHeight + 8);
+        const blockHeight = firstRowHeight + Math.max(0, blockSize - 1) * rowHeight;
         if (y + blockHeight > document.page.height - 28) {
           document.addPage();
           y = document.page.margins.top;
@@ -1866,15 +1891,16 @@ export async function buildOperationsManifestPdf(manifest: IOperationsManifest) 
               parcel.weightKg.toFixed(3),
               consignorLines[0] ?? "",
               consigneeLines[0] ?? "",
-              parcel.description,
+              description,
               parcel.declaredValueMinor != null ? (parcel.declaredValueMinor / 100).toFixed(2) : "",
               consignment.currency,
               parcel.bagNumber,
               consignment.serviceInfo
             ]
             : ["", "", "", "", consignorLines[row] ?? "", consigneeLines[row] ?? "", "", "", "", "", ""];
-          values.forEach((value, column) => drawCell(column, y, rowHeight, value, { align: "center", size: 6.5 }));
-          y += rowHeight;
+          const currentRowHeight = row === 0 ? firstRowHeight : rowHeight;
+          values.forEach((value, column) => drawCell(column, y, currentRowHeight, value, { align: "center", size: 6.5 }));
+          y += currentRowHeight;
         }
       });
     });

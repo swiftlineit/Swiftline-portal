@@ -32,6 +32,16 @@ function numberValue(record: Record<string, unknown>, key: string) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function parcelDescription(parcel: Record<string, unknown>) {
+  const items = Array.isArray(parcel.items) ? parcel.items : [];
+  const descriptions = items
+    .map((item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).description === "string"
+      ? ((item as Record<string, unknown>).description as string).trim()
+      : "")
+    .filter(Boolean);
+  return descriptions.join(", ") || textValue(parcel, "contentsDescription");
+}
+
 // The description column carries free-text box contents, so it takes the extra
 // width the numeric columns do not need. The rest are sized against their widest
 // content at 7pt: "Chargeable KG" as a header (50.5pt) and a lakh-scale amount
@@ -187,7 +197,7 @@ export function createShipmentInvoicePdf(invoice: ShipmentInvoiceDocument) {
 
   for (const [index, parcel] of parcels.entries()) {
     const values = [
-      textValue(parcel, "contentsDescription").toUpperCase(),
+      parcelDescription(parcel).toUpperCase(),
       numberValue(parcel, "actualWeightKg").toFixed(3),
       numberValue(parcel, "volumetricWeightKg").toFixed(3),
       numberValue(parcel, "chargeableWeightKg").toFixed(3),

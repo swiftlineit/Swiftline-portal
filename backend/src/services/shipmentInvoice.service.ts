@@ -15,6 +15,7 @@ import {
   type ShipmentPricingEstimate
 } from "./shipmentPricing.service.js";
 import { readShipmentBookingSnapshot } from "./shipmentBookingSnapshot.service.js";
+import { normalizeParcelItems } from "./parcelItems.service.js";
 
 async function syncProfitability(
   shipmentDraftId: mongoose.Types.ObjectId,
@@ -392,6 +393,7 @@ export async function ensureShipmentInvoiceForDraft(input: {
         lengthCm: typeof sourceParcel.lengthCm === "number" ? sourceParcel.lengthCm : null,
         widthCm: typeof sourceParcel.widthCm === "number" ? sourceParcel.widthCm : null,
         heightCm: typeof sourceParcel.heightCm === "number" ? sourceParcel.heightCm : null,
+        items: normalizeParcelItems(sourceParcel),
         contentsDescription: asString(sourceParcel.contentsDescription) || "Shipment goods"
       };
     })

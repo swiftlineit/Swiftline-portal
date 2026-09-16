@@ -66,6 +66,25 @@ export function consignorFormsMatch(form: ConsignorForm, consignor: ShipmentCons
   return (Object.keys(current) as Array<keyof ConsignorForm>).every((key) => form[key] === current[key]);
 }
 
+/**
+ * One-way Company → Contact Name autofill.
+ *
+ * Mirrors the company value into the contact name while the contact still holds
+ * its autofilled value (blank or equal to the previous company), so typing
+ * "AMAN" yields "AMAN" in both fields. Once the user edits the contact to
+ * something different it is left alone. Both fields stay editable afterwards.
+ */
+export function nextContactNameOnCompanyChange(
+  previousCompanyName: string,
+  previousContactName: string,
+  nextCompanyName: string
+): string {
+  if (previousContactName.trim() && previousContactName !== previousCompanyName) {
+    return previousContactName;
+  }
+  return nextCompanyName;
+}
+
 function comparableText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }

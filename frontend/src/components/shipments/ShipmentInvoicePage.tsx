@@ -10,6 +10,7 @@ import {
   ShipmentInvoice,
   ShipmentInvoiceAudience,
   ShipmentInvoiceParcel,
+  shipmentInvoiceParcelDescription,
 } from "@/lib/shipmentInvoices";
 
 function money(minor: number, currency: string) {
@@ -245,7 +246,7 @@ export default function ShipmentInvoicePage({
               </div>
               <div className="grid grid-cols-[1.8fr_repeat(5,1fr)] border-t border-slate-950 text-center text-[11px]">
                 <div className="border-r border-slate-950 px-3 py-3 font-semibold uppercase">
-                  {parcel.contentsDescription || "Shipment goods"}
+                  {shipmentInvoiceParcelDescription(parcel) || "Shipment goods"}
                 </div>
                 <div className="border-r border-slate-950 px-2 py-3">
                   {parcel.actualWeightKg.toFixed(3)}

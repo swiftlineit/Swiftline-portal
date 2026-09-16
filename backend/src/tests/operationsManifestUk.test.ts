@@ -11,6 +11,7 @@ import {
   convertInrMinorToGbpMinor,
   reconcileGbpMinorValues,
   uniqueUkDescriptionItems,
+  ukManifestTargetEntryCount,
   ukManifestConfiguredEntryCount,
   ukOperationsManifestFilename
 } from "../services/operationsManifestUk.service.js";
@@ -186,7 +187,15 @@ describe("UK operations manifest entry rules", () => {
     );
   });
 
-  it("uses eleven entries for fifteen bags when enough consignments exist", () => {
+  it("reduces the UK target by two while keeping at least one entry", () => {
+    assert.deepEqual(
+      [1, 9, 10, 15, 16, 19, 20, 25, 26, 35, 36, 50, 51, 65, 66, 85, 86, 100]
+        .map(ukManifestTargetEntryCount),
+      [1, 9, 9, 9, 11, 11, 13, 13, 16, 16, 18, 18, 24, 24, 31, 31, 32, 37]
+    );
+  });
+
+  it("uses nine entries for fifteen bags when enough consignments exist", () => {
     const entries = buildUkManifestEntries({
       manifestNumber: "SLC018",
       totalBags: 15,
@@ -201,8 +210,8 @@ describe("UK operations manifest entry rules", () => {
       consignments: Array.from({ length: 11 }, (_, index) => consignmentCandidate(index + 1))
     });
 
-    assert.equal(entries.length, 11);
-    assert.deepEqual(entries.map((entry) => entry.bags.length), [2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1]);
+    assert.equal(entries.length, 9);
+    assert.deepEqual(entries.map((entry) => entry.bags.length), [2, 2, 2, 2, 2, 2, 1, 1, 1]);
     assert.equal(Math.max(...entries.map((entry) => entry.bags.length)), 2);
   });
 
@@ -365,11 +374,11 @@ describe("CFL UK workbook", () => {
     assert.equal(sheet.getCell("J10").value, 21);
     assert.equal(sheet.getCell("J11").value, 632);
 
-    const entryRows = Array.from({ length: 15 }, (_, index) => 16 + index * 10);
+    const entryRows = Array.from({ length: 13 }, (_, index) => 16 + index * 10);
     const consignments = entryRows.map((row) => String(sheet.getCell(row, 3).value ?? ""));
     const bagReferences = entryRows.flatMap((row) => String(sheet.getCell(row, 11).value ?? "")
       .split(",").filter(Boolean));
-    assert.equal(new Set(consignments).size, 15);
+    assert.equal(new Set(consignments).size, 13);
     assert.equal(new Set(bagReferences).size, 21);
     assert.deepEqual(bagReferences.map(Number).sort((left, right) => left - right),
       Array.from({ length: 21 }, (_, index) => index + 1));
@@ -389,7 +398,7 @@ describe("CFL UK workbook", () => {
     });
     assert.equal(entryRows.reduce((sum, row) => sum + Number(sheet.getCell(row, 9).value), 0), 9.03);
     assert.match(String(sheet.getCell(16, 11).value), /^\d+,\d+$/);
-    assert.equal(sheet.getCell("B156").value, 15, "the entry block must extend beyond the demo template rows");
+    assert.equal(sheet.getCell("B136").value, 13);
   });
 
   it("rebalances bags so combined entry values stay at or below GBP 40 where possible", async () => {
@@ -403,7 +412,7 @@ describe("CFL UK workbook", () => {
     await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
     const sheet = workbook.getWorksheet("CFL Manifest Template");
     assert.ok(sheet);
-    const entryRows = Array.from({ length: 11 }, (_, index) => 16 + index * 10);
+    const entryRows = Array.from({ length: 9 }, (_, index) => 16 + index * 10);
     const valuesGbpMinor = entryRows.map((row) => Math.round(Number(sheet.getCell(row, 9).value) * 100));
     assert.ok(valuesGbpMinor.every((value) => value <= 4_000));
     assert.equal(valuesGbpMinor.reduce((sum, value) => sum + value, 0), 6_300);
@@ -499,7 +508,7 @@ describe("CFL UK workbook", () => {
     }));
     const firstSheet = workbooks[0]!;
     const secondSheet = workbooks[1]!;
-    const entryRows = Array.from({ length: 13 }, (_, index) => 16 + index * 10);
+    const entryRows = Array.from({ length: 9 }, (_, index) => 16 + index * 10);
     assert.deepEqual(
       entryRows.map((row) => [firstSheet.getCell(row, 3).value, firstSheet.getCell(row, 11).value]),
       entryRows.map((row) => [secondSheet.getCell(row, 3).value, secondSheet.getCell(row, 11).value])

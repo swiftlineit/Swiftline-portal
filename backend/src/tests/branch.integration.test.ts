@@ -288,8 +288,7 @@ describe("branch lifecycle", () => {
     assert.equal(invalid.statusCode(), 409);
   });
 
-  test("records a field-level diff on update", async () => {
-    const adminId = new mongoose.Types.ObjectId();
+  test("records a field-level diff on update", async () => {    const adminId = new mongoose.Types.ObjectId();
 
     const created = createResponseRecorder();
     await createBranch(
@@ -307,5 +306,57 @@ describe("branch lifecycle", () => {
     const changes = (auditEntry?.metadata as { changes?: Record<string, { from: unknown; to: unknown }> })?.changes;
     assert.ok(changes?.name, "the audit entry should record the changed name");
     assert.equal(changes?.name.to, "Pune Hub");
+  });
+
+  test("unrelated edits succeed when legacy documents lack a storageKey", async () => {
+    const adminId = new mongoose.Types.ObjectId();
+
+    const created = createResponseRecorder();
+    await createBranch(
+      controllerRequest({ userId: adminId, body: branchPayload({ code: "LKO-HUB", labelCode: "LKO", status: "DRAFT" }) }),
+      created.response
+    );
+    assert.equal(created.statusCode(), 201);
+    const branchId = String(created.body<{ branch: { _id: string } }>().branch._id);
+
+    // Legacy entries stored before storageKey became required. Written at the
+    // collection level to bypass mongoose validation, mirroring production data.
+    await Branch.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(branchId) },
+      {
+        $set: {
+          documents: [
+            { type: "PAN", title: "PAN", fileName: "pan.pdf", mimeType: "application/pdf", uploadedAt: new Date() },
+            { type: "GST", title: "GST", fileName: "gst.pdf", mimeType: "application/pdf", uploadedAt: new Date() }
+          ]
+        }
+      }
+    );
+
+    // An unrelated edit (e.g. the invoice phone number) must not be blocked by them.
+    const updated = createResponseRecorder();
+    await updateBranch(
+      controllerRequest({
+        userId: adminId,
+        params: { branchId },
+        body: { contact: { email: "lko@swiftline.test", phone: "+919817717689" } }
+      }),
+      updated.response
+    );
+    assert.equal(updated.statusCode(), 200);
+
+    const stored = await Branch.findById(branchId).lean().exec();
+    assert.equal(stored?.contact.phone, "+919817717689");
+    assert.equal(stored?.documents.length, 2);
+
+    // And the legacy entries remain removable one at a time.
+    const { deleteBranchDocument } = await import("../controllers/branch.controller.js");
+    const removed = createResponseRecorder();
+    await deleteBranchDocument(
+      controllerRequest({ userId: adminId, params: { branchId, docIndex: "0" } }),
+      removed.response
+    );
+    assert.equal(removed.statusCode(), 200);
+    assert.equal((await Branch.findById(branchId).lean().exec())?.documents.length, 1);
   });
 });

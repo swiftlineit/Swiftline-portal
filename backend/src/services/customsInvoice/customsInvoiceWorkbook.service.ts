@@ -215,7 +215,7 @@ export async function buildCustomsInvoiceWorkbook(invoice: CustomsInvoiceModel):
     addRow(
       [{
         column: 1,
-        value: `BOX NO: ${parcel.boxNumber} , DIMENSIONS (CMS) ${dimensions} , ACTUAL WEIGHT - ${parcel.actualWeightKg.toFixed(2)} KG`,
+        value: `BOX NO: ${parcel.boxNumber}${parcel.parcelNumber ? ` , HAWB:${parcel.parcelNumber.toUpperCase()}` : ""} , DIMENSIONS (CMS) ${dimensions} , ACTUAL WEIGHT - ${parcel.actualWeightKg.toFixed(2)} KG`,
         bold: true,
         align: "center"
       }],

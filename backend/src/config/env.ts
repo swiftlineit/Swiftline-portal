@@ -29,7 +29,8 @@ const environmentSchema = z.object({
   // internal accounts are newest-login-wins; client accounts remain multi-device.
   SINGLE_SESSION_ENFORCED: booleanFromEnv.default(false),
   // Always enforced server-side as a backstop to the browser's visible timeout.
-  SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
+  // Must stay above the browser's 35-minute warning plus 1-minute countdown.
+  SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(36),
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_PASSWORD: z.string().optional(),
   SMTP_HOST: z.string().optional(),

@@ -47,6 +47,8 @@ export type CustomsInvoiceItem = {
 
 export type CustomsInvoiceBox = {
   boxNumber: number;
+  /** House airway bill (Swiftline parcel number). Empty when the shipment is not booked yet. */
+  parcelNumber: string;
   lengthCm: number | null;
   widthCm: number | null;
   heightCm: number | null;
@@ -172,6 +174,8 @@ export function buildCustomsInvoiceModel(input: {
   invoiceNumber: string;
   invoiceDate?: Date;
   currency?: string;
+  /** Swiftline parcel numbers in parcel order, from the carrier booking when booked. */
+  parcelNumbers?: string[];
 }): CustomsInvoiceModel {
   const draft = input.draft;
   // The validated consignee address is preferred when one exists, so the invoice
@@ -191,6 +195,7 @@ export function buildCustomsInvoiceModel(input: {
 
     return {
       boxNumber: Number(parcel.sequence) || index + 1,
+      parcelNumber: text(input.parcelNumbers?.[index]),
       lengthCm: numberOrNull(parcel.lengthCm),
       widthCm: numberOrNull(parcel.widthCm),
       heightCm: numberOrNull(parcel.heightCm),

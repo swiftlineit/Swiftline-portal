@@ -324,6 +324,31 @@ describe("operations manifest safeguards", () => {
     assert.ok((sheet.getRow(15).height ?? 0) > 26, "the description row must grow with wrapped content");
   });
 
+  it("prints every item from a parcel instead of the bounded summary", async () => {
+    const manifest = sealedManifest();
+    const snapshot = manifest.sealedSnapshot as Record<string, unknown>;
+    const consignments = snapshot.consignments as Array<Record<string, unknown>>;
+    consignments[0]!.parcels = [{
+      parcelNumber: "SLDL22072026000001P01",
+      weightKg: 5,
+      description: "DRY SEVIYA, DRY FRUIT, DRY TEA, DRY MASALA, HAIR OIL, COTTON BRA, CREAM & FACE WASH, PLASTIC SPOON, COTTON SUIT",
+      items: [
+        "DRY SEVIYA", "DRY FRUIT", "DRY TEA", "DRY MASALA", "HAIR OIL", "COTTON BRA",
+        "CREAM & FACE WASH", "PLASTIC SPOON", "COTTON SUIT", "COTTON PAD", "COTTON T-SHIRT",
+        "COTTON LOWER", "REXINE JUTTI", "REXINE SHOES", "DRY PICKLE", "DRY PANJIRI", "DRY DESI GHEE"
+      ].map((description) => ({ description, hsnCode: "", unitType: "Pcs", quantity: 1, unitRate: 0 })),
+      bagNumber: "SLC00101",
+      valueMinor: 25_000_00
+    }];
+
+    const sheet = await manifestSheetRows(manifest);
+    const description = String(sheet.getCell(15, 7).value);
+
+    assert.match(description, /COTTON PAD/);
+    assert.match(description, /DRY DESI GHEE/);
+    assert.ok((sheet.getRow(15).height ?? 0) > 26, "the full item list must grow the description row");
+  });
+
   it("ends every parcel block on an empty line instead of a separator row", async () => {
     const sheet = await manifestSheetRows(sealedMultiParcelManifest());
     const serialRowNumbers: number[] = [];

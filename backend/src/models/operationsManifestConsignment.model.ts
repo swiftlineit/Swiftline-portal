@@ -2,6 +2,13 @@ import mongoose from "mongoose";
 
 export const operationsConsignmentStatusValues = ["PARTIAL", "COMPLETE", "REMOVED"] as const;
 export type OperationsConsignmentStatus = (typeof operationsConsignmentStatusValues)[number];
+type ParcelItemSnapshot = {
+  description: string;
+  hsnCode: string;
+  unitType: string;
+  quantity: number;
+  unitRate: number;
+};
 
 export interface IOperationsManifestConsignment extends mongoose.Document {
   manifestId: mongoose.Types.ObjectId;
@@ -14,7 +21,13 @@ export interface IOperationsManifestConsignment extends mongoose.Document {
   scannedParcelNumbers: string[];
   // Per-parcel facts captured at scan time. Each one prints as its own manifest row.
   // `valueMinor` is the box's own declared goods value from the shipment snapshot.
-  parcelWeightSnapshots: Array<{ parcelNumber: string; weightKg: number; contentsDescription?: string; valueMinor?: number | null }>;
+  parcelWeightSnapshots: Array<{
+    parcelNumber: string;
+    weightKg: number;
+    contentsDescription?: string;
+    items?: ParcelItemSnapshot[];
+    valueMinor?: number | null;
+  }>;
   manifestPieces: 1;
   weightKg: number;
   status: OperationsConsignmentStatus;
@@ -43,6 +56,14 @@ const operationsManifestConsignmentSchema = new mongoose.Schema<IOperationsManif
     parcelNumber: { type: String, required: true, trim: true, uppercase: true, maxlength: 80 },
     weightKg: { type: Number, required: true, min: 0.001 },
     contentsDescription: { type: String, trim: true, maxlength: 1000, default: "" },
+    items: [{
+      _id: false,
+      description: { type: String, trim: true, maxlength: 500, default: "" },
+      hsnCode: { type: String, trim: true, maxlength: 20, default: "" },
+      unitType: { type: String, trim: true, maxlength: 20, default: "Pcs" },
+      quantity: { type: Number, min: 0, default: 0 },
+      unitRate: { type: Number, min: 0, default: 0 }
+    }],
     valueMinor: { type: Number, min: 1, default: null }
   }],
   manifestPieces: { type: Number, required: true, enum: [1], default: 1 },

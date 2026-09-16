@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import type { IOperationsManifest } from "../models/operationsManifest.model.js";
 import type {
   ManifestDocumentConsignment,
+  ManifestDocumentItem,
   ManifestDocumentModel,
   ManifestDocumentParcelRow,
   ManifestDocumentParty
@@ -34,7 +35,14 @@ export type SealedSnapshot = {
     // Both absent on manifests sealed before parcels became individual rows.
     bagNumbers?: string[];
     // `valueMinor` is the parcel's own declared value; absent on pre-per-parcel seals.
-    parcels?: Array<{ parcelNumber: string; weightKg: number; description?: string; bagNumber: string; valueMinor?: number | null }>;
+    parcels?: Array<{
+      parcelNumber: string;
+      weightKg: number;
+      description?: string;
+      items?: ManifestDocumentItem[];
+      bagNumber: string;
+      valueMinor?: number | null;
+    }>;
   }>;
   sealedAt: string;
 };
@@ -109,6 +117,7 @@ export function buildManifestDocumentModel(snapshot: SealedSnapshot): ManifestDo
         parcelNumber: parcel.parcelNumber,
         weightKg: parcel.weightKg,
         description: parcel.description,
+        items: parcel.items,
         bagNumber: parcel.bagNumber,
         // Each parcel carries its own declared value. Manifests sealed before per-parcel
         // values fall back to the consignment value on its first parcel row.

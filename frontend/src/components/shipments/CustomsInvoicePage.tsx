@@ -186,7 +186,7 @@ export default function CustomsInvoicePage({
                   <Fragment key={`box-${parcel.boxNumber}`}>
                     <tr className="border-b border-slate-950">
                       <td colSpan={7} className="px-2 py-1.5 text-center font-bold">
-                        BOX NO: {parcel.boxNumber} , DIMENSIONS (CMS) {formatDimensions(parcel)} , ACTUAL WEIGHT - {parcel.actualWeightKg.toFixed(2)} KG
+                        BOX NO: {parcel.boxNumber}{parcel.parcelNumber ? ` , HAWB:${parcel.parcelNumber}` : ""} , DIMENSIONS (CMS) {formatDimensions(parcel)} , ACTUAL WEIGHT - {parcel.actualWeightKg.toFixed(2)} KG
                       </td>
                     </tr>
                     {parcel.items.map((item) => (

@@ -87,7 +87,9 @@ export async function downloadShipmentInvoicePdf(request: Request, response: Res
     const persistedInvoice = await ShipmentInvoice.findById(invoice._id).exec();
     if (!persistedInvoice) return response.status(404).json({ success: false, message: "Shipment invoice not found." });
 
-    await AuditLog.create({
+    // Recorded off the response path: the download must not wait for the
+    // audit write, and an audit failure must never fail the download itself.
+    void AuditLog.create({
       action: "SHIPMENT_INVOICE_DOWNLOADED",
       entityType: "SHIPMENT_INVOICE",
       entityId: persistedInvoice._id,
@@ -98,7 +100,7 @@ export async function downloadShipmentInvoicePdf(request: Request, response: Res
         invoiceNumber: persistedInvoice.invoiceNumber,
         revision: selectedInvoice.revision
       }
-    });
+    }).catch(() => { /* audit trail is best-effort here */ });
 
     const filename = `${persistedInvoice.invoiceNumber.replaceAll("/", "-")}-Invoice-${selectedInvoice.revision}.pdf`;
     response.setHeader("Content-Type", "application/pdf");

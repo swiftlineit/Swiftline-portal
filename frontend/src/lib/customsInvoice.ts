@@ -36,6 +36,8 @@ export type CustomsInvoiceItem = {
 
 export type CustomsInvoiceBox = {
   boxNumber: number;
+  /** House airway bill (Swiftline parcel number). Empty when the shipment is not booked yet. */
+  parcelNumber: string;
   lengthCm: number | null;
   widthCm: number | null;
   heightCm: number | null;

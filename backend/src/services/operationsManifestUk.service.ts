@@ -116,6 +116,16 @@ export function ukManifestConfiguredEntryCount(totalBags: number) {
   return 33 + Math.ceil((totalBags - 85) * 0.4);
 }
 
+/**
+ * CFL's UK workbook intentionally carries two fewer rows than the configured
+ * bag-band target. The final count is still capped by real consignments and
+ * validated against the three-bag-per-entry capacity below.
+ */
+export function ukManifestTargetEntryCount(totalBags: number) {
+  if (totalBags < 10) return totalBags;
+  return Math.max(1, ukManifestConfiguredEntryCount(totalBags) - 2);
+}
+
 function deterministicConsignmentOrder(manifestNumber: string, consignments: ManifestDocumentConsignment[]) {
   return [...consignments].sort((left, right) => {
     const digest = (value: string) => crypto
@@ -309,7 +319,7 @@ export function buildUkManifestEntries(input: {
     uniqueConsignments(input.consignments)
   );
   const entryCount = Math.min(
-    ukManifestConfiguredEntryCount(input.totalBags),
+    ukManifestTargetEntryCount(input.totalBags),
     candidates.length,
     input.bags.length
   );

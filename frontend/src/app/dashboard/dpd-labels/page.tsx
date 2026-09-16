@@ -402,7 +402,7 @@ export default function DpdLabelsPage() {
         <div>
           <h1 className="text-2xl  text-[#0D1282]">
             {" "}
-            <RiMenuAddLine className="inline-block mb-1 mr-1 text-lg" />
+            {/* <RiMenuAddLine className="inline-block mb-1 mr-1 text-lg" /> */}
             Create & Manage Shipment{" "}
           </h1>
 
@@ -869,8 +869,6 @@ export default function DpdLabelsPage() {
                                 item.shipmentDraft.id,
                                 "admin",
                               )}
-                              target="_blank"
-                              rel="noreferrer"
                               className="inline-flex items-center gap-1 font-semibold text-blue-900 hover:text-blue-700"
                             >
                               <FiFileText
@@ -898,8 +896,6 @@ export default function DpdLabelsPage() {
                                 "admin",
                                 true,
                               )}
-                              target="_blank"
-                              rel="noreferrer"
                               title="Print invoice"
                               aria-label="Print invoice"
                               className="inline-flex h-8 w-8 items-center justify-center border border-slate-200 text-slate-700 hover:border-blue-900 hover:text-blue-900"

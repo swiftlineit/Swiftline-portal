@@ -5,9 +5,11 @@ import Link from "next/link";
 import {
   FiCalendar,
   FiCreditCard,
-  FiPlus,
   FiSearch,
 } from "react-icons/fi";
+import { BsQuote } from "react-icons/bs";
+
+
 import type { ClientShellUser } from "@/components/client/ClientDashboardShell";
 import { panelSurface } from "@/components/dashboard/DashboardWidgets";
 import DashboardBanner from "@/components/dashboard/DashboardBanner";
@@ -150,16 +152,15 @@ export default function ClientDashboardHeader({
             <div className="mt-5 flex flex-wrap items-center gap-2 sm:gap-2.5">
               {canCreate ? (
                 <Link
-                  href="/client/dpd-labels"
+                  href="/client/get-quote"
                   className="inline-flex min-h-10 border border-gray-500 items-center justify-center gap-2 rounded-lg bg-[#FFD400] px-4 py-2.5 text-xs font-semibold text-[#0D1282] shadow-sm transition-colors duration-200 hover:bg-[#ffffff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
                 >
-                  <FiPlus
+                  <BsQuote
                     aria-hidden="true"
                     className="h-4 w-4 shrink-0"
                   />
-
-                  Create Shipment
-                </Link>
+        Get Live Quote
+                  </Link>
               ) : null}
 
               <Link
