@@ -1332,7 +1332,7 @@ export default function DpdLabelDraftPage() {
   if (loading || !user) return <DashboardLoading />;
 
   return (
-    <div className="xl:flex xl:h-[calc(100%-3.25rem)] xl:min-h-0 xl:flex-col">
+    <div className="xl:flex xl:h-full xl:min-h-0 xl:flex-col">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-950">Review Shipment</h1>
@@ -1354,7 +1354,7 @@ export default function DpdLabelDraftPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">Loading draft...</div>
       ) : (
         <div className="grid gap-6 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="space-y-6 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:pr-2 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400">
+          <div className="space-y-6 no-scrollbar xl:min-h-0 xl:overflow-y-auto xl:pr-2">
             <ShipmentImportBanner summary={shipmentImport} />
 
               {/* Customs route, first because CSB-V changes what is charged. */}
@@ -1437,7 +1437,7 @@ export default function DpdLabelDraftPage() {
                     value={draftCorrectionForm.deliveryInstructions}
                     onChange={handleCorrectionFieldChange("deliveryInstructions")}
                     rows={3}
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                    className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                   />
                 </label>
               </div>
@@ -1455,7 +1455,7 @@ export default function DpdLabelDraftPage() {
                       value={addressQuery}
                       onChange={(event) => setAddressQuery(event.target.value.toUpperCase())}
                       placeholder="POST CODE AB10 6DN"
-                      className="mt-2 h-11 w-full rounded-xl border border-slate-300 px-3.5 text-sm outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                      className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                     />
                   </label>
                   <button
@@ -1525,15 +1525,15 @@ export default function DpdLabelDraftPage() {
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/60 px-4 py-3">
                 <div>
-                  <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Parcel Details</h2>
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <h2 className="text-[13px] font-semibold uppercase tracking-wide text-slate-600">Parcel Details</h2>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
                     <SourceBadge>From invoice</SourceBadge>
                     <SourceBadge>Account default</SourceBadge>
                   </div>
                 </div>
               </div>
-              <div className="space-y-4 p-4">
-                <div className="grid gap-4 ">
+              <div className="space-y-3 p-3 sm:p-4">
+                <div className="grid items-end gap-3 sm:grid-cols-[minmax(150px,180px)_minmax(0,1fr)]">
                   <label className="block">
                     <ShipmentFieldLabel required>Number of Boxes</ShipmentFieldLabel>
                     <input
@@ -1544,42 +1544,42 @@ export default function DpdLabelDraftPage() {
                       value={parcelCountInput}
                       onChange={handleParcelCountChange}
                       onBlur={handleParcelCountBlur}
-                      className="mt-2 h-11 w-full rounded-xl border border-slate-300 px-3.5 text-sm outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                      className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                     />
                   </label>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
+  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
     {/* Summary */}
-    <div className="flex flex-wrap items-center gap-6">
-      <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded bg-[#0D1282]/10 text-xl">
-         <FiPackage className="h-5 w-5" />
+    <div className="flex flex-wrap items-center gap-4">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#0D1282]/10 text-[#0D1282]">
+         <FiPackage className="h-4 w-4" />
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
             Total Parcels
           </p>
-          <p className="text-lg font-bold text-slate-900">
+          <p className="text-base font-bold text-slate-900">
             {parcelForms.length}
           </p>
         </div>
       </div>
 
-      <div className="hidden h-10 w-px bg-slate-200 lg:block" />
+      <div className="hidden h-7 w-px bg-slate-200 sm:block" />
 
-      <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded bg-[#0D1282]/10 text-xl">
-           <FaWeight className="h-5 w-5" />
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#0D1282]/10 text-[#0D1282]">
+           <FaWeight className="h-4 w-4" />
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
             Total Weight
           </p>
-          <p className="text-lg font-bold text-slate-900">
+          <p className="text-base font-bold text-slate-900">
             {parcelForms
               .reduce((total, parcel) => total + (Number(parcel.weightKg) || 0), 0)
               .toFixed(2)}
-            <span className="ml-1 text-sm font-semibold text-slate-500">kg</span>
+            <span className="ml-1 text-[12px] font-semibold text-slate-500">kg</span>
           </p>
         </div>
       </div>
@@ -1590,7 +1590,7 @@ export default function DpdLabelDraftPage() {
       type="button"
       onClick={removeAllParcels}
       disabled={!parcelForms.length}
-      className="inline-flex h-10 items-center justify-center rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-600 transition hover:bg-red-100 hover:border-red-300 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+      className="inline-flex h-9 items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 text-[12px] font-semibold text-red-600 transition hover:bg-red-100 hover:border-red-300 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-red-700"
     >
       Remove All Boxes
     </button>
@@ -1599,18 +1599,18 @@ export default function DpdLabelDraftPage() {
                 </div>
 
                 {parcelForms.map((parcel, index) => (
-                  <div key={parcel.sequence} style={parcelRenderStyle} className="overflow-hidden rounded-xl border border-slate-200">
-                    <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <div key={parcel.sequence} style={parcelRenderStyle} className="overflow-hidden rounded-lg border border-slate-200">
+                    <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       <span>Parcel {index + 1} of {parcelForms.length}</span>
                        <button
                         type="button"
                         onClick={() => removeParcel(index)}
-                        className="rounded-full px-3 py-1 text-lg font-semibold uppercase tracking-[0.08em] text-red-500 hover:text-xl"
+                         className="inline-flex h-7 w-7 items-center justify-center rounded-md text-red-400 transition hover:bg-red-50 hover:text-red-600"
                       >
                       <FaRegWindowClose/>
                       </button>
                     </div>
-                    <div className="grid gap-4 p-3 md:grid-cols-4">
+                    <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-4">
                       <ShipmentTextField label="Actual Weight KG" required type="number" inputMode="decimal" max={costEstimate?.pricing.routeMaxBoxKg ?? undefined} value={parcel.weightKg} onChange={handleParcelFieldChange(index, "weightKg")} error={getParcelFieldIssue(index, ["weight"])} revealError={submitAttempted} />
                       <ShipmentTextField label="Length CM" required type="number" inputMode="decimal" value={parcel.lengthCm} onChange={handleParcelFieldChange(index, "lengthCm")} error={getParcelFieldIssue(index, ["length"])} revealError={submitAttempted} />
                       <ShipmentTextField label="Width CM" required type="number" inputMode="decimal" value={parcel.widthCm} onChange={handleParcelFieldChange(index, "widthCm")} error={getParcelFieldIssue(index, ["width"])} revealError={submitAttempted} />
@@ -1618,7 +1618,7 @@ export default function DpdLabelDraftPage() {
                       {/* Oversized parcels are accepted, not refused- the sender is told what
                           it will cost before they commit. */}
                       {exceedsStandardParcelSize(parcel) ? (
-                        <p className="md:col-span-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+                        <p className="col-span-full rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-900">
                           These dimensions exceed the standard parcel size of {standardParcelDimensionsLabel}. This box will be charged on its volumetric weight, so additional charges apply.
                         </p>
                       ) : null}
@@ -1631,7 +1631,7 @@ export default function DpdLabelDraftPage() {
                       </ShipmentSelectField>
                       <ShipmentTextField label="Reference" required tooltip="Can be a company name or a unique identifier of the shipment" value={parcel.shipmentReference1} onChange={handleParcelFieldChange(index, "shipmentReference1")} error={getParcelFieldIssue(index, ["reference"])} revealError={submitAttempted} />
                       {/* One row per distinct good, each with its own HSN code. */}
-                      <div className="md:col-span-4">
+                      <div className="col-span-full">
                         <ParcelItemsEditor
                           items={parcel.items}
                           onChange={(items: ParcelItem[]) => handleParcelItemsChange(index, items)}
@@ -1644,11 +1644,11 @@ export default function DpdLabelDraftPage() {
                   </div>
                 ))}
 
-                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
                   Enter the actual parcel contents. Incorrect or mismatched descriptions may result in inspection and additional penalty charges.
                 </p>
 
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid max-w-sm gap-3">
                   <ShipmentSelectField label="Service Type" required value={draftCorrectionForm.serviceType} onChange={handleCorrectionFieldChange("serviceType")}>
                       <option value="COURIER">Courier</option>
                       <option value="CARGO">Cargo</option>
@@ -1658,7 +1658,7 @@ export default function DpdLabelDraftPage() {
             </section>
           </div>
 
-          <aside className="space-y-4 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:pr-2 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400">
+          <aside className="space-y-4 no-scrollbar xl:min-h-0 xl:overflow-y-auto xl:pr-2">
             <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               {draft?.customerType === "INDIVIDUAL" ? (
                 <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
@@ -1673,7 +1673,7 @@ export default function DpdLabelDraftPage() {
   <select
     value={counterMethod}
     onChange={(event) => setCounterMethod(event.target.value as CounterPaymentInput["method"])}
-    className="h-10 w-full appearance-none rounded-xl border border-amber-300 bg-white pl-3 pr-9 text-sm outline-none focus:border-amber-500"
+    className="h-10 w-full appearance-none rounded-lg border border-amber-300 bg-white pl-3 pr-9 text-[13px] outline-none focus:border-amber-500"
   >
     <option value="CASH">Cash</option>
     <option value="UPI">UPI</option>
@@ -1687,7 +1687,7 @@ export default function DpdLabelDraftPage() {
                     value={counterReference}
                     onChange={(event) => setCounterReference(event.target.value.toUpperCase())}
                     placeholder="UTR, receipt or cheque number"
-                    className="mt-2 h-10 w-full rounded-xl border border-amber-300 bg-white px-3 text-sm outline-none focus:border-amber-500"
+                    className="mt-1.5 h-10 w-full rounded-lg border border-amber-300 bg-white px-3 text-[13px] outline-none focus:border-amber-500"
                   />
                 </div>
               ) : null}
@@ -1717,7 +1717,7 @@ export default function DpdLabelDraftPage() {
                   onClick={() => void handleCreateLabel(undefined, true)}
                   disabled={busy || isCurrentCountryPaused}
                   title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
-                  className="mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-500 bg-amber-50 px-4 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+                  className="mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-500 bg-amber-50 px-4 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-amber-800"
                 >
                   {/* <FiTruck aria-hidden="true" className="h-4 w-4" /> */}
                   {pendingAction === "BOOKING_NO_DPD" ? "Creating..." : "Create Shipment Without DPD Label"}

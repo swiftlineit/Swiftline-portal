@@ -195,6 +195,8 @@ export function shipmentListParams(input: {
   branchId?: string;
   sort?: string;
   destinationRegions?: ShipmentDestinationRegionCode[];
+  /** Staff-only operations manifest with a live scanned parcel. */
+  operationsManifestId?: string;
 } = {}) {
   const params = new URLSearchParams();
   params.set("page", String(input.page ?? 1));
@@ -210,6 +212,7 @@ export function shipmentListParams(input: {
   if (input.branchId) params.set("branchId", input.branchId);
   if (input.sort) params.set("sort", input.sort);
   if (input.destinationRegions?.length) params.set("destinationRegions", input.destinationRegions.join(","));
+  if (input.operationsManifestId) params.set("operationsManifestId", input.operationsManifestId);
   return params;
 }
 
@@ -231,6 +234,7 @@ export async function listShipments(audience: ShipmentAudience, input: {
   sort?: string;
   /** Staff-only destination groups. */
   destinationRegions?: ShipmentDestinationRegionCode[];
+  operationsManifestId?: string;
 } = {}) {
   const params = shipmentListParams(input);
   const base = shipmentListPath(audience);
@@ -240,6 +244,13 @@ export async function listShipments(audience: ShipmentAudience, input: {
     shipments: ShipmentListItem[];
     pagination: ShipmentListPagination;
   }>(`${base}?${params.toString()}`);
+}
+
+export function listShipmentOperationsManifestOptions() {
+  return requestJson<{
+    success: true;
+    manifests: Array<{ id: string; manifestNumber: string; status: string }>;
+  }>("/api/v1/shipments/operations-manifests/options");
 }
 
 export async function getShipmentDashboardSummary() {
@@ -264,4 +275,59 @@ export async function deleteBookedShipment(shipmentId: string) {
 
 export function shipmentDetailsHref(audience: ShipmentAudience, shipmentId: string) {
   return audience === "client" ? `/client/shipments/${shipmentId}` : `/dashboard/shipments/${shipmentId}`;
+}
+
+/**
+ * Scroll restoration for the shipments list.
+ *
+ * The list unmounts when a shipment detail opens, and both shells scroll
+ * their content container to the top on route changes. Saving the list's
+ * scroll offset (plus the shipment that was opened and the list URL query
+ * that produced the rows on screen) lets the list put the user back on the
+ * exact viewport they left, instead of the top of the page. The query is what
+ * tells a back-navigation apart from a fresh drill-down link: only an
+ * identical view has identical rows, so only it replays the offset.
+ * Stored in tab-scoped sessionStorage next to the persisted list filters.
+ */
+export type ShipmentListScrollState = { top: number; id: string; search: string };
+
+export function shipmentListScrollKey(audience: ShipmentAudience) {
+  return `swiftline:shipments:v2:${audience}:scroll`;
+}
+
+export function readShipmentListScrollState(audience: ShipmentAudience): ShipmentListScrollState | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = window.sessionStorage.getItem(shipmentListScrollKey(audience));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") return null;
+    const top = typeof parsed.top === "number" && Number.isFinite(parsed.top) && parsed.top > 0 ? parsed.top : 0;
+    if (!top) return null;
+    return {
+      top,
+      id: typeof parsed.id === "string" ? parsed.id : "",
+      // Entries written before the query was recorded predate this check and
+      // belong to the default view, which is exactly what a bare URL shows.
+      search: typeof parsed.search === "string" ? parsed.search : ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function clearShipmentListScrollState(audience: ShipmentAudience) {
+  try {
+    if (typeof window === "undefined") return;
+    window.sessionStorage.removeItem(shipmentListScrollKey(audience));
+  } catch {
+    // Storage pressure must never break the list.
+  }
+}
+
+/** Which shipments list (if any) a pathname is the collection root of. */
+export function shipmentListAudienceForPath(pathname: string | null | undefined): ShipmentAudience | null {
+  if (pathname === "/dashboard/shipments") return "admin";
+  if (pathname === "/client/shipments") return "client";
+  return null;
 }

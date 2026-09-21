@@ -86,6 +86,8 @@ describe("shipment manifest workbook", () => {
     assert.equal(line.consignmentNumber, "SLDL21072026000001");
     assert.equal(line.pieces, 2);
     assert.equal(line.weightKg, 10);
+    // No pricing parcels on this snapshot, so chargeable falls back to actual.
+    assert.equal(line.chargeableWeightKg, 10);
     assert.equal(line.description, "Clothing, Documents");
     assert.equal(line.declaredValueMinor, 25_000_00);
     assert.equal(line.bagNumber, "BAG-01");
@@ -215,15 +217,16 @@ describe("shipment manifest workbook", () => {
     assert.equal(sheet.getCell("B15").value, "SLDL210720260001");
     assert.equal(sheet.getCell("C15").value, 2);
     assert.equal(sheet.getCell("D15").value, 10);
+    assert.equal(sheet.getCell("E15").value, 10);
     // The fixed ten-row block starts at the contact name (no company) and keeps each
     // field on its own row: name, address 1, address 2 (blank here), city, …
-    assert.equal(sheet.getCell("E15").value, "Mr. Ravi Sharma");
-    assert.equal(sheet.getCell("E16").value, "1 Export Road");
-    assert.equal(sheet.getCell("E17").value, "");
-    assert.equal(sheet.getCell("E18").value, "Delhi");
-    assert.equal(sheet.getCell("H15").value, 25000);
-    assert.equal(sheet.getCell("J15").value, "BAG-01");
-    assert.equal(sheet.getCell("K15").value, "EXP");
+    assert.equal(sheet.getCell("F15").value, "Mr. Ravi Sharma");
+    assert.equal(sheet.getCell("F16").value, "1 Export Road");
+    assert.equal(sheet.getCell("F17").value, "");
+    assert.equal(sheet.getCell("F18").value, "Delhi");
+    assert.equal(sheet.getCell("I15").value, 25000);
+    assert.equal(sheet.getCell("K15").value, "BAG-01");
+    assert.equal(sheet.getCell("L15").value, "EXP");
     assert.equal(sheet.autoFilter, undefined);
     assert.notEqual(sheet.views[0]?.state, "frozen");
     assert.equal(sheet.getCell("A2").font.bold, true);
@@ -269,13 +272,14 @@ describe("handover manifest", () => {
     });
 
     assert.deepEqual(line.parcels, [
-      { awbNumber: "S1", forwardingNumber: "P1", weightKg: 4.5, product: "PARCEL" },
-      { awbNumber: "S2", forwardingNumber: "P2", weightKg: 5.5, product: "DOCUMENTS" }
+      { awbNumber: "S1", forwardingNumber: "P1", weightKg: 4.5, chargeableWeightKg: 4.5, product: "PARCEL" },
+      { awbNumber: "S2", forwardingNumber: "P2", weightKg: 5.5, chargeableWeightKg: 5.5, product: "DOCUMENTS" }
     ]);
     assert.equal(line.destination, "United Kingdom");
     assert.equal(line.remark, "DONE");
     assert.equal(line.pieces, 2);
     assert.equal(line.weightKg, 10);
+    assert.equal(line.chargeableWeightKg, 10);
   });
 
   it("takes shipper and receiver from the two contact names, and service from the service type", () => {
@@ -342,7 +346,32 @@ describe("handover manifest", () => {
     assert.deepEqual(rows.map((row) => row[7]), ["PARCEL", "DOCUMENTS", "PARCEL", "DOCUMENTS"]);
     assert.deepEqual(rows.map((row) => row[8]), ["1", "1", "1", "1"]);
     assert.deepEqual(rows.map((row) => row[9]), ["4.50", "5.50", "4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[10]), ["4.50", "5.50", "4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[11]), ["DONE", "DONE", "DONE", "DONE"]);
     assert.deepEqual([...new Set(rows.map((row) => row[6]))], ["COURIER"]);
+  });
+
+  it("carries the pricing snapshot's chargeable weight on the line, parcels and rows", () => {
+    const snapshot = bookingSnapshot();
+    snapshot.pricing = {
+      parcels: [
+        { sequence: 1, chargeableWeightKg: 6 },
+        { sequence: 2, chargeableWeightKg: 7 }
+      ]
+    } as unknown as ShipmentBookingSnapshot["pricing"];
+    const line = buildHandoverManifestLine({
+      shipmentDraftId: new mongoose.Types.ObjectId(),
+      dpdShipmentId: new mongoose.Types.ObjectId(),
+      snapshot,
+      declaredValueMinor: 0,
+      bagNumber: "1"
+    });
+
+    assert.equal(line.chargeableWeightKg, 13);
+    assert.deepEqual(line.parcels?.map((parcel) => parcel.chargeableWeightKg), [6, 7]);
+    const rows = manifestRows([line]);
+    assert.deepEqual(rows.map((row) => row[9]), ["4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[10]), ["6.00", "7.00"]);
   });
 
   it("keeps a legacy line without per-parcel data as a single summary row", () => {
@@ -360,6 +389,29 @@ describe("handover manifest", () => {
     assert.equal(rows[0]?.[1], "SLDL210720260001");
     assert.equal(rows[0]?.[8], "2");
     assert.equal(rows[0]?.[6], "EXP");
+    // Legacy lines carry no chargeable weight, so it falls back to actual.
+    assert.equal(rows[0]?.[9], "10.00");
+    assert.equal(rows[0]?.[10], "10.00");
+  });
+
+  it("states a pre-chargeable line's shipment total only on its first parcel row", () => {
+    // Sealed before per-parcel chargeable weights were captured: neither the
+    // line nor its parcels carry them, so the total must not repeat as if
+    // every parcel weighed that much.
+    const legacyParcelLine = buildHandoverManifestLine({
+      shipmentDraftId: new mongoose.Types.ObjectId(),
+      dpdShipmentId: new mongoose.Types.ObjectId(),
+      snapshot: bookingSnapshot(),
+      declaredValueMinor: 0,
+      bagNumber: "1"
+    });
+    delete legacyParcelLine.chargeableWeightKg;
+    legacyParcelLine.parcels?.forEach((parcel) => { delete parcel.chargeableWeightKg; });
+
+    const rows = manifestRows([legacyParcelLine]);
+    assert.equal(rows.length, 2);
+    assert.deepEqual(rows.map((row) => row[9]), ["4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[10]), ["10.00", ""]);
   });
 
   it("renders a PDF for handover lines and for legacy lines without the new fields", async () => {

@@ -104,7 +104,7 @@ export function ShipmentTextField({
         maxLength={maxLength}
         max={max}
         aria-invalid={Boolean(error && showError)}
-        className={`mt-2 h-11 w-full min-w-0 rounded-xl border px-3.5 text-sm outline-none transition focus:ring-2 ${
+        className={`mt-1.5 h-10 w-full min-w-0 rounded-xl border px-3 text-[13px] outline-none transition focus:ring-2 ${
           readOnly
             ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500"
             : error && showError
@@ -123,7 +123,7 @@ export function ShipmentFixedCountryField({ label, mode = "country" }: { label: 
   return (
     <label className="block min-w-0">
       <ShipmentFieldLabel required>{label}</ShipmentFieldLabel>
-      <div className="mt-2 flex h-11 w-full min-w-0 cursor-not-allowed items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-3.5 text-sm text-slate-600">
+      <div className="mt-1.5 flex h-10 w-full min-w-0 cursor-not-allowed items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-3 text-[13px] text-slate-600">
         <span className="flex h-5 w-7 shrink-0 items-center justify-center overflow-hidden [&_img]:rounded-none">
           <FlagImage iso2="in" size="20px" />
         </span>
@@ -158,7 +158,7 @@ export function ShipmentSelectField({
   return (
     <label className="block min-w-0">
       <ShipmentFieldLabel required={required}>{label}</ShipmentFieldLabel>
-      <span className="relative mt-2 block">
+      <span className="relative mt-1.5 block">
         {flagCountryCode ? (
           <span className="pointer-events-none absolute left-3 top-1/2 z-10 flex h-5 w-7 -translate-y-1/2 items-center justify-center overflow-hidden [&_img]:rounded-none">
             <FlagImage iso2={flagCountryCode.toLowerCase()} size="20px" />
@@ -169,7 +169,7 @@ export function ShipmentSelectField({
           onChange={onChange}
           onBlur={() => { setTouched(true); toastFieldError(error, value); }}
           aria-invalid={Boolean(error && showError)}
-          className={`h-11 w-full appearance-none rounded-xl border bg-white pr-12 text-sm outline-none transition focus:ring-2 ${flagCountryCode ? "pl-12" : "pl-3.5"} ${
+          className={`h-10 w-full appearance-none rounded-xl border bg-white pr-10 text-[13px] outline-none transition focus:ring-2 ${flagCountryCode ? "pl-11" : "pl-3"} ${
             error && showError
               ? "border-red-400 focus:border-red-500 focus:ring-red-100"
               : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"
@@ -243,7 +243,7 @@ export function ShipmentPhoneCodeField({
             <button
               {...rootProps}
               type="button"
-              className={`flex h-11 w-full min-w-0 items-center gap-2 rounded-xl border bg-white px-3.5 text-left text-sm outline-none transition focus:ring-2 ${
+              className={`flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border bg-white px-3 text-left text-[13px] outline-none transition focus:ring-2 ${
                 error && showError
                   ? "border-red-400 focus:border-red-500 focus:ring-red-100"
                   : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"
@@ -303,7 +303,7 @@ export function ShipmentCsbTypeField({
               className="mt-0.5 h-4 w-4 shrink-0 accent-blue-900"
             />
             <span className="block min-w-0">
-              <span className={`block text-sm font-semibold ${checked ? "text-blue-950" : "text-slate-900"}`}>
+              <span className={`block text-[13px] font-semibold ${checked ? "text-blue-950" : "text-slate-900"}`}>
                 {option.label}
               </span>
               <span className="mt-1 block text-xs leading-5 text-slate-500">{option.description}</span>

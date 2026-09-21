@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   deleteBookedShipmentHandler,
   listAdminBookedShipments,
+  listStaffOperationsManifestOptions,
   summarizeAdminBookedShipments
 } from "../controllers/shipmentListing.controller.js";
 import {
@@ -19,6 +20,7 @@ shipmentRouter.use(requireRole("admin", "operations", "delivery"));
 // Staff global search, over every account this user may see.
 shipmentRouter.get("/search", searchStaff);
 shipmentRouter.get("/summary", summarizeAdminBookedShipments);
+shipmentRouter.get("/operations-manifests/options", listStaffOperationsManifestOptions);
 // Documents the customer sent after booking, which is where a held shipment
 // gets unblocked.
 shipmentRouter.get("/:draftId/documents", listStaffShipmentDocuments);

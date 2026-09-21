@@ -407,7 +407,7 @@ describe("operations manifest safeguards", () => {
       if (rowNumber <= 14) return;
       const serial = row.getCell(1).value;
       if (typeof serial === "number") {
-        dataRows.push({ serial, weight: row.getCell(4).value, description: row.getCell(7).value, bag: row.getCell(10).value });
+        dataRows.push({ serial, weight: row.getCell(4).value, description: row.getCell(8).value, bag: row.getCell(11).value });
       }
     });
 
@@ -427,7 +427,7 @@ describe("operations manifest safeguards", () => {
     consignments[0]!.description = "RAKHI, CHOCOLATE, DOODH, DAHI, LASSI, PANEER, KHOYA, CHEENI, CHAIPATTI, TISSUE, DYES, TOOTHPASTE, LEMONS, TEA, LOCKS";
 
     const sheet = await manifestSheetRows(manifest);
-    const descriptionCell = sheet.getCell(15, 7);
+    const descriptionCell = sheet.getCell(15, 8);
 
     assert.equal(descriptionCell.value, consignments[0]!.description);
     assert.ok((sheet.getRow(15).height ?? 0) > 26, "the description row must grow with wrapped content");
@@ -451,7 +451,7 @@ describe("operations manifest safeguards", () => {
     }];
 
     const sheet = await manifestSheetRows(manifest);
-    const description = String(sheet.getCell(15, 7).value);
+    const description = String(sheet.getCell(15, 8).value);
 
     assert.match(description, /COTTON PAD/);
     assert.match(description, /DRY DESI GHEE/);
@@ -472,7 +472,7 @@ describe("operations manifest safeguards", () => {
     // The row closing each block carries no data in any column.
     for (const start of serialRowNumbers) {
       const closingRow = sheet.getRow(start + (second - first) - 1);
-      for (let column = 1; column <= 11; column += 1) {
+      for (let column = 1; column <= 12; column += 1) {
         const value = closingRow.getCell(column).value;
         assert.ok(value === null || value === undefined || value === "", `column ${column} must be blank on the closing line`);
       }

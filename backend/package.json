@@ -28,6 +28,7 @@
     "audit:individual-rate-card-band": "tsx src/scripts/migrateIndividualRateCardBand.ts",
     "migrate:individual-rate-card-band": "tsx src/scripts/migrateIndividualRateCardBand.ts --apply",
     "backfill:manifest-party-snapshots": "tsx src/scripts/backfillManifestPartySnapshots.ts",
+    "backfill:manifest-chargeable-weights": "tsx src/scripts/backfillManifestChargeableWeights.ts",
     "audit:shipment-event-notes": "tsx src/scripts/backfillShipmentEventNotes.ts",
     "backfill:shipment-event-notes": "tsx src/scripts/backfillShipmentEventNotes.ts --apply",
     "audit:charge-finalized": "tsx src/scripts/backfillChargeFinalizedAt.ts",

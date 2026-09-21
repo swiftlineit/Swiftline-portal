@@ -15,6 +15,7 @@ import Sidebar from "@/components/Sidebar";
 import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import { AuthenticatedUser } from "@/lib/useAdminUser";
 import { logout } from "@/lib/auth";
+import { readShipmentListScrollState, shipmentListAudienceForPath } from "@/lib/shipmentsList";
 import SessionTimeoutGuard from "@/components/SessionTimeoutGuard";
 import DeepLinkTarget from "@/components/DeepLinkTarget";
 import NotificationBell from "@/components/NotificationBell";
@@ -98,7 +99,16 @@ export default function DashboardShell({
 
   // The dashboard uses an inner scroll container. Reset it on route changes so
   // a previously scrolled detail screen cannot hide the next page's heading.
+  // The shipments list restores its own exact viewport when returning from a
+  // detail page, so leave the scroller alone for that return trip - the list
+  // replays the saved offset once its rows reload. A fresh drill-down link
+  // with different filters still opens at the top.
   useEffect(() => {
+    const audience = shipmentListAudienceForPath(pathname);
+    if (audience) {
+      const saved = readShipmentListScrollState(audience);
+      if (saved && (!window.location.search || saved.search === window.location.search)) return;
+    }
     contentScrollRef.current?.scrollTo({
       top: 0,
       behavior: "auto",

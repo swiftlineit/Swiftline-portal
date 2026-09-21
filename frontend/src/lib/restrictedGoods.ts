@@ -27,7 +27,7 @@ export const restrictedCategories: RestrictedCategory[] = [
   { label: "Plants / Seeds", keywords: ["plant", "plants", "seed", "seeds", "sapling", "sappling"] },
   { label: "Pornographic Material", keywords: ["pornographic", "pornography", "porn", "obscene material"] },
   { label: "Counterfeit Goods", keywords: ["counterfeit", "fake goods", "replica goods", "duplicate goods"] },
-  { label: "Loose Battery / Power Bank", keywords: ["battery", "loose battery", "loose batteries", "power bank", "powerbank", "lithium", "lithium battery", "lithium batteries"] },
+  { label: "Loose Battery / Power Bank", keywords: ["battery", "loose battery", "loose batteries", "power bank", "powerbank", "lithium", "lithium battery", "lithium batteries", "trimmer"] },
   { label: "Perishable Fresh Food", keywords: ["perishable", "food", "fresh food", "fresh fruit", "fresh vegetable", "raw meat", "fresh fish"] },
   { label: "Human Remains / Ashes", keywords: ["human remains", "human ashes", "cremated", "cremation ash", "ash", "ashes of"] }
 ];

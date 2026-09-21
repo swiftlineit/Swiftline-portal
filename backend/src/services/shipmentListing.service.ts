@@ -11,6 +11,7 @@ import { ShipmentManifest } from "../models/shipmentManifest.model.js";
 import { OperationsManifest, type OperationsManifestStatus } from "../models/operationsManifest.model.js";
 import { OperationsManifestBag } from "../models/operationsManifestBag.model.js";
 import { OperationsManifestScan } from "../models/operationsManifestScan.model.js";
+import { OperationsManifestConsignment } from "../models/operationsManifestConsignment.model.js";
 import { isDpdLabelDestination } from "./als/alsPayload.service.js";
 import { dateRangeCondition } from "../utils/dateRangeFilter.js";
 import { normalizeCsbType } from "./csbType.service.js";
@@ -49,6 +50,8 @@ export type ShipmentListingFilter = {
   attention?: boolean;
   /** Staff-only destination groups, matched against the effective consignee address. */
   destinationRegions?: ShipmentDestinationRegionCode[];
+  /** Staff-only current parcel membership in an operations manifest. */
+  operationsManifestId?: mongoose.Types.ObjectId;
   page: number;
   limit: number;
   /** Manifest assignments are per actor role, so eligibility is role-scoped. */
@@ -339,6 +342,23 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   if (destinationCondition) Object.assign(draftFilter, destinationCondition);
   const createdAt = dateRangeCondition(filter.dateFrom, filter.dateTo);
   if (createdAt) draftFilter.createdAt = createdAt;
+
+  if (filter.actorRole === "admin" && filter.operationsManifestId) {
+    // Match the live accepted scans used by the staff Parcels column. A
+    // consignment can remain stored after all of its scans were removed.
+    const consignmentIds = await OperationsManifestScan.distinct("consignmentId", {
+      manifestId: filter.operationsManifestId,
+      status: "ACCEPTED",
+      consignmentId: { $ne: null }
+    }).exec() as mongoose.Types.ObjectId[];
+    const manifestDraftIds = consignmentIds.length
+      ? await OperationsManifestConsignment.distinct("shipmentDraftId", {
+        _id: { $in: consignmentIds },
+        manifestId: filter.operationsManifestId
+      }).exec() as mongoose.Types.ObjectId[]
+      : [];
+    draftFilter._id = { $in: manifestDraftIds };
+  }
 
   const bookingCreatedAt = indiaBookingDayCondition(filter.bookedDate);
   let allowedDraftIds = await findBookedDraftIds(draftFilter, {

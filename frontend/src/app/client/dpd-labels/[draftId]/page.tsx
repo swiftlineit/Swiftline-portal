@@ -1224,7 +1224,7 @@ export default function ClientDpdDraftReviewPage() {
   if (loading || !user) return <ClientDashboardLoading />;
 
   return (
-      <div className="lg:flex lg:h-[calc(100%-3.25rem)] lg:min-h-0 lg:flex-col">
+      <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-slate-950">Review Shipment Draft</h1>
@@ -1248,7 +1248,7 @@ export default function ClientDpdDraftReviewPage() {
           <div className="border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500">Draft not found.</div>
         ) : (
           <div className="grid gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-5 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400">
+            <div className="space-y-5 no-scrollbar lg:min-h-0 lg:overflow-y-auto lg:pr-2">
               <ShipmentImportBanner summary={shipmentImport} />
 
               {/* Customs route, first because CSB-V changes what is charged. */}
@@ -1329,7 +1329,7 @@ export default function ClientDpdDraftReviewPage() {
                       value={contactForm.deliveryInstructions}
                       onChange={handleContactChange("deliveryInstructions")}
                       rows={3}
-                      className="mt-2 w-full border rounded-2xl border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px] outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                     />
                   </label>
                 </div>
@@ -1351,7 +1351,7 @@ export default function ClientDpdDraftReviewPage() {
                           }
                         }}
                         placeholder="POST CODE AB10 6DN"
-                        className="mt-2 h-10 w-full border border-slate-300 px-3 text-sm outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                        className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                       />
                     </label>
                     <button
@@ -1418,10 +1418,10 @@ export default function ClientDpdDraftReviewPage() {
                 </div>
               </section>
 
-              <section className="border border-slate-200 bg-white rounded-2xl">
+              <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <SectionHeader title="Parcel Details" />
-                <div className="space-y-4 p-4">
-                  <div className="grid gap-4 md:grid-cols-[160px_minmax(0,1fr)]">
+                <div className="space-y-3 p-3 sm:p-4">
+                  <div className="grid items-end gap-3 sm:grid-cols-[minmax(150px,180px)_minmax(0,1fr)]">
                     <label className="block">
                       <ShipmentFieldLabel required>Number of Boxes</ShipmentFieldLabel>
                       <input
@@ -1432,38 +1432,38 @@ export default function ClientDpdDraftReviewPage() {
                         value={parcelCountInput}
                         onChange={handleParcelCountChange}
                         onBlur={handleParcelCountBlur}
-                        className="mt-2 h-10 w-full border rounded-xl border-slate-300 px-3 text-sm outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                        className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                       />
                     </label>
-                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                   <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
+  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
     {/* Summary */}
-    <div className="flex flex-wrap items-center gap-6">
-      <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded bg-[#0D1282]/10 text-[#0D1282]">
-            <FiPackage className="h-5 w-5" />
+    <div className="flex flex-wrap items-center gap-4">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#0D1282]/10 text-[#0D1282]">
+            <FiPackage className="h-4 w-4" />
         </div>
         <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
             Total Boxes
           </p>
-          <p className="text-lg font-bold text-slate-900">
+          <p className="text-base font-bold text-slate-900">
             {parcelForms.length}
           </p>
         </div>
       </div>
 
-      <div className="h-10 w-px bg-slate-200" />
+      <div className="hidden h-7 w-px bg-slate-200 sm:block" />
 
-      <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded bg-[#0D1282]/10 text-[#0D1282]">
-          <FaWeight className="h-5 w-5" />
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#0D1282]/10 text-[#0D1282]">
+          <FaWeight className="h-4 w-4" />
         </div>
         <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
             Total Weight
           </p>
-          <p className="text-lg font-bold text-slate-900">
+          <p className="text-base font-bold text-slate-900">
             {totalWeight.toFixed(2)} kg
           </p>
         </div>
@@ -1475,7 +1475,7 @@ export default function ClientDpdDraftReviewPage() {
       type="button"
       onClick={removeAllParcels}
       disabled={!parcelForms.length}
-      className="inline-flex h-10 items-center justify-center rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-600 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+      className="inline-flex h-9 items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 text-[12px] font-semibold text-red-600 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-red-700"
     >
       Remove All Boxes
     </button>
@@ -1484,18 +1484,18 @@ export default function ClientDpdDraftReviewPage() {
                   </div>
 
                   {parcelForms.map((parcel, index) => (
-                    <div key={parcel.sequence} style={parcelRenderStyle} className="border border-slate-200">
-                      <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold uppercase text-slate-500">
+                    <div key={parcel.sequence} style={parcelRenderStyle} className="overflow-hidden rounded-lg border border-slate-200">
+                      <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         <span>Parcel {index + 1} of {parcelForms.length}</span>
                         <button
                           type="button"
                           onClick={() => removeParcel(index)}
-                          className="rounded-full px-3 py-1 text-lg font-semibold uppercase tracking-[0.08em] text-red-500 hover:text-xl"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-red-400 transition hover:bg-red-50 hover:text-red-600"
                         >
                           <FaRegWindowClose/>
                         </button>
                       </div>
-                      <div className="grid gap-4 p-3 md:grid-cols-4">
+                      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-4">
                         <ShipmentTextField label="Actual Weight KG" required type="number" inputMode="decimal" max={costEstimate?.pricing.routeMaxBoxKg ?? undefined} value={parcel.weightKg} onChange={handleParcelChange(index, "weightKg")} error={findIssue(currentReviewIssues, [`parcel ${index + 1}`, "weight"])} revealError={submitAttempted} />
                         <ShipmentTextField label="Length CM" required type="number" inputMode="decimal" value={parcel.lengthCm} onChange={handleParcelChange(index, "lengthCm")} error={findIssue(currentReviewIssues, [`parcel ${index + 1}`, "length"])} revealError={submitAttempted} />
                         <ShipmentTextField label="Width CM" required type="number" inputMode="decimal" value={parcel.widthCm} onChange={handleParcelChange(index, "widthCm")} error={findIssue(currentReviewIssues, [`parcel ${index + 1}`, "width"])} revealError={submitAttempted} />
@@ -1503,7 +1503,7 @@ export default function ClientDpdDraftReviewPage() {
                         {/* Oversized parcels are accepted, not refused- the sender is told what
                             it will cost before they commit. */}
                         {exceedsStandardParcelSize(parcel) ? (
-                          <p className="md:col-span-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+                          <p className="col-span-full rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-900">
                             These dimensions exceed the standard parcel size of {standardParcelDimensionsLabel}. This box will be charged on its volumetric weight, so additional charges apply.
                           </p>
                         ) : null}
@@ -1516,7 +1516,7 @@ export default function ClientDpdDraftReviewPage() {
                         </ShipmentSelectField>
                         <ShipmentTextField label="Reference" required tooltip="Can be a company name or a unique identifier of the shipment" value={parcel.shipmentReference1} onChange={handleParcelChange(index, "shipmentReference1")} error={findIssue(currentReviewIssues, [`parcel ${index + 1}`, "reference"])} revealError={submitAttempted} />
                         {/* One row per distinct good, each with its own HSN code. */}
-                        <div className="md:col-span-4">
+                        <div className="col-span-full">
                           <ParcelItemsEditor
                             items={parcel.items}
                             onChange={(items) => handleParcelItemsChange(index, items)}
@@ -1529,11 +1529,11 @@ export default function ClientDpdDraftReviewPage() {
                     </div>
                   ))}
 
-                  <p className="border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
                     Enter the actual parcel contents. Incorrect or mismatched descriptions may result in inspection and additional penalty charges.
                   </p>
 
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid max-w-sm gap-3">
                     <ShipmentSelectField label="Service Type" required value={contactForm.serviceType} onChange={handleContactChange("serviceType")}>
                         <option value="COURIER"> Swiftline Courier</option>
                         <option value="CARGO"> Swiftline Cargo</option>
@@ -1543,7 +1543,7 @@ export default function ClientDpdDraftReviewPage() {
               </section>
             </div>
 
-            <aside className="space-y-4 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400">
+            <aside className="space-y-4 no-scrollbar lg:min-h-0 lg:overflow-y-auto lg:pr-2">
               <section className="border border-slate-200 bg-white p-4 rounded-2xl">
                 {isCurrentCountryPaused ? (
                   <div className="mb-3 rounded-xl border border-[#D71313]/20 bg-[#FFF1F1] px-3 py-2 text-xs font-semibold text-[#991B1B]">
@@ -1569,7 +1569,7 @@ export default function ClientDpdDraftReviewPage() {
                     onClick={() => void handleCreateLabel(undefined, true)}
                     disabled={busy || isCurrentCountryPaused}
                     title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
-                    className="mt-2 inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 border border-amber-500 bg-amber-50 px-4 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+                    className="mt-2 inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 border border-amber-500 bg-amber-50 px-4 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-amber-800"
                   >
                     {/* <FiTruck aria-hidden="true" className="h-4 w-4" /> */}
                     {pendingAction === "BOOKING_NO_DPD" ? "Processing..." : "Create Shipment Without DPD Label"}
@@ -1649,8 +1649,8 @@ export default function ClientDpdDraftReviewPage() {
 
 function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-      <h2 className="text-sm font-semibold uppercase text-slate-500">{title}</h2>
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5">
+      <h2 className="text-[13px] font-semibold uppercase tracking-wide text-slate-600">{title}</h2>
       {action}
     </div>
   );

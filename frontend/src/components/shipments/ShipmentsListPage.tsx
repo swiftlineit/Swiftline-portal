@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FiAlertTriangle, FiArchive, FiArrowDown, FiExternalLink, FiFileText, FiPlus, FiSearch, FiTrash2, FiX } from "react-icons/fi";
 import { BsArrowCounterclockwise } from "react-icons/bs";
@@ -32,11 +32,15 @@ import {
   type ShipmentDestinationRegionCode
 } from "@/lib/shipmentDestinationRegions";
 import {
+  clearShipmentListScrollState,
   deleteBookedShipment,
+  listShipmentOperationsManifestOptions,
   listShipments,
+  readShipmentListScrollState,
   shipmentDetailsHref,
   shipmentListParams,
   shipmentListPath,
+  shipmentListScrollKey,
   shipmentStatusOptions,
   type DpdLabelStatus,
   type ShipmentAudience,
@@ -61,6 +65,7 @@ const shipmentViewQueryKeys = [
   "businessAccountId",
   "creationSource",
   "destinationRegions",
+  "operationsManifestId",
   "view",
   "page",
   "limit",
@@ -77,6 +82,7 @@ type ShipmentViewState = {
   businessAccountId: string;
   creationSource: string;
   destinationRegions: ShipmentDestinationRegionCode[];
+  operationsManifestId: string;
   page: number;
   limit: number;
   sort: string;
@@ -119,6 +125,7 @@ function readShipmentViewState(value: string | null): ShipmentViewState | null {
           parsed.destinationRegions.filter((value): value is string => typeof value === "string").join(",")
         )
         : [],
+      operationsManifestId: typeof parsed.operationsManifestId === "string" ? parsed.operationsManifestId : "",
       page: typeof parsed.page === "number" && Number.isInteger(parsed.page) && parsed.page > 0 ? parsed.page : 1,
       limit: typeof parsed.limit === "number" && defaultPageSizeOptions.includes(parsed.limit)
         ? parsed.limit
@@ -128,6 +135,22 @@ function readShipmentViewState(value: string | null): ShipmentViewState | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The shell owns the scrollable element (an inner overflow container, not the
+ * window). Staff marks it with `data-dashboard-scroll`; the client shell uses
+ * the same layout without the marker, so fall back to the main scroller.
+ */
+function getShipmentsScroller(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-dashboard-scroll]")
+    ?? document.querySelector<HTMLElement>("main div.overflow-y-auto");
+}
+
+function isShipmentRowVisible(row: HTMLElement, scroller: HTMLElement) {
+  const rowRect = row.getBoundingClientRect();
+  const scrollerRect = scroller.getBoundingClientRect();
+  return rowRect.top >= scrollerRect.top && rowRect.bottom <= scrollerRect.bottom;
 }
 
 function formatMoney(shipment: ShipmentListItem) {
@@ -160,6 +183,115 @@ function DpdLabelAvailability({ status }: { status: DpdLabelStatus }) {
 
 function getAccountLabel(account: BusinessAccount) {
   return `${account.accountId} - ${account.company.companyName || account.contact.email}`;
+}
+
+function BusinessAccountFilter({
+  accounts,
+  value,
+  onSelect
+}: {
+  accounts: BusinessAccount[];
+  value: string;
+  onSelect: (value: string) => void;
+}) {
+  const inputId = useId();
+  const listboxId = useId();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [highlighted, setHighlighted] = useState(0);
+  const choices = useMemo(() => [
+    { value: "", label: "All Business Accounts" },
+    { value: PUBLIC_BOOKING_FILTER_VALUE, label: "Public online" },
+    ...accounts.map((account) => ({ value: account._id, label: getAccountLabel(account) }))
+  ], [accounts]);
+  const selectedLabel = choices.find((choice) => choice.value === value)?.label ?? "Selected business account";
+  const suggestions = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    return (term ? choices.filter((choice) => choice.label.toLowerCase().includes(term)) : choices).slice(0, 50);
+  }, [choices, query]);
+  const activeIndex = Math.min(highlighted, Math.max(suggestions.length - 1, 0));
+
+  useEffect(() => {
+    if (!open) return;
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [open]);
+
+  function selectChoice(nextValue: string) {
+    onSelect(nextValue);
+    setQuery("");
+    setOpen(false);
+    setHighlighted(0);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      setOpen(false);
+      setQuery("");
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setOpen(true);
+      setHighlighted((current) => Math.min(current + 1, Math.max(suggestions.length - 1, 0)));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setOpen(true);
+      setHighlighted((current) => Math.max(current - 1, 0));
+    } else if (event.key === "Enter" && open && suggestions[activeIndex]) {
+      event.preventDefault();
+      selectChoice(suggestions[activeIndex].value);
+    }
+  }
+
+  return (
+    <div ref={containerRef} className="relative min-w-0">
+      <label htmlFor={inputId} className="mb-1.5 block text-xs font-semibold text-slate-600">Business account</label>
+      <div className="relative">
+        <FiSearch aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <input
+          id={inputId}
+          type="text"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-activedescendant={open && suggestions[activeIndex] ? `${listboxId}-${activeIndex}` : undefined}
+          autoComplete="off"
+          value={open ? query : selectedLabel}
+          onFocus={() => { setQuery(""); setHighlighted(0); setOpen(true); }}
+          onClick={() => { if (!open) { setQuery(""); setOpen(true); } }}
+          onChange={(event) => { setQuery(event.target.value); setHighlighted(0); setOpen(true); }}
+          onBlur={() => setOpen(false)}
+          onKeyDown={handleKeyDown}
+          placeholder="Search account name or ID"
+          className="h-11 w-full rounded-lg border border-slate-300 bg-white pl-10 pr-10 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 hover:border-slate-400 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/10"
+        />
+        <FiArrowDown aria-hidden="true" className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400/70" />
+      </div>
+      {open ? (
+        <div id={listboxId} role="listbox" className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+          {suggestions.length ? suggestions.map((choice, index) => (
+            <button
+              key={choice.value}
+              id={`${listboxId}-${index}`}
+              type="button"
+              role="option"
+              aria-selected={choice.value === value}
+              title={choice.label}
+              onMouseDown={(event) => { event.preventDefault(); selectChoice(choice.value); }}
+              onMouseEnter={() => setHighlighted(index)}
+              className={`block w-full truncate rounded-md px-3 py-2 text-left text-sm ${index === activeIndex ? "bg-[#0D1282]/5 text-[#0D1282]" : "text-slate-700 hover:bg-slate-50"}`}
+            >
+              {choice.label}
+            </button>
+          )) : <p className="px-3 py-3 text-sm text-slate-500">No accounts found.</p>}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function truncateBusinessAccountName(value: string, maxLength = 14) {
@@ -230,6 +362,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     ? PUBLIC_BOOKING_FILTER_VALUE
     : "";
   const destinationRegionsFromQuery = parseShipmentDestinationRegions(searchParams.get("destinationRegions"));
+  const operationsManifestFromQuery = audience === "admin" ? searchParams.get("operationsManifestId") ?? "" : "";
   const allShipmentsViewFromQuery = searchParams.get("view") === "all";
   const pageFromQuery = parsePositiveInteger(searchParams.get("page"), 1);
   const limitFromQuery = parsePageSize(searchParams.get("limit"));
@@ -254,6 +387,10 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   );
   const [creationSource, setCreationSource] = useState(creationSourceFromQuery);
   const [destinationRegions, setDestinationRegions] = useState<ShipmentDestinationRegionCode[]>(destinationRegionsFromQuery);
+  const [operationsManifestId, setOperationsManifestId] = useState(operationsManifestFromQuery);
+  const [operationsManifests, setOperationsManifests] = useState<Array<{ id: string; manifestNumber: string; status: string }>>([]);
+  const [operationsManifestOptionsLoaded, setOperationsManifestOptionsLoaded] = useState(false);
+  const [operationsManifestOptionsError, setOperationsManifestOptionsError] = useState("");
   const [accounts, setAccounts] = useState<BusinessAccount[]>([]);
   const [bulkStatus, setBulkStatus] = useState<ShipmentOperationalStatus>("PARCEL_COLLECTED");
   const [bulkStatusNote, setBulkStatusNote] = useState("");
@@ -306,6 +443,36 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const [rebookingId, setRebookingId] = useState<string | null>(null);
   const [restoringView, setRestoringView] = useState(true);
   const restoredView = useRef(false);
+  // Exact-viewport return: the offset (and shipment row) left behind when a
+  // detail/invoice page opens. Restored once the rows reload; see the effects
+  // below. Kept in a ref so reading it never re-renders the table.
+  const pendingScrollRestore = useRef<{ top: number; id: string } | null>(null);
+  const scrollRestoreDone = useRef(false);
+  const scrollSaveFrame = useRef(0);
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
+  // Briefly flags the row the user came back to, so it is findable even when
+  // the restored viewport lands it mid-table.
+  const [restoredRowId, setRestoredRowId] = useState<string | null>(null);
+
+  // Pins the current viewport plus the shipment being opened, synchronously on
+  // the click that leaves the list - before Next swaps the route and the shell
+  // resets its scroller. The scroll listener below keeps the offset fresh for
+  // browser-back returns; this pins the row id for the highlight. The list URL
+  // query is recorded too, so the return trip can tell "same view" (replay the
+  // offset) from "fresh drill-down link" (open at the top).
+  const rememberScrollPosition = useCallback((shipmentId: string) => {
+    try {
+      const scroller = getShipmentsScroller();
+      const top = scroller ? scroller.scrollTop : window.scrollY;
+      if (top <= 0 && !shipmentId) return;
+      window.sessionStorage.setItem(
+        shipmentListScrollKey(audience),
+        JSON.stringify({ top, id: shipmentId, search: window.location.search })
+      );
+    } catch {
+      // Storage pressure must never block navigation.
+    }
+  }, [audience]);
 
   // A selection may span pages, but it must never survive a change to the
   // query that defines those pages. Otherwise hidden rows from an earlier
@@ -319,6 +486,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     dateTo: dateRange.to,
     creationSource,
     destinationRegions: [...destinationRegions].sort(),
+    operationsManifestId,
     rebookedOnly,
     search,
     sort,
@@ -385,6 +553,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         businessAccountId: creationSource ? "" : businessAccountId,
         creationSource: creationSource === PUBLIC_BOOKING_FILTER_VALUE ? "PUBLIC_ONLINE" : undefined,
         destinationRegions: audience === "admin" ? destinationRegions : [],
+        operationsManifestId: audience === "admin" ? operationsManifestId : "",
         sort,
         attention: attentionOnly
       });
@@ -416,13 +585,31 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     } finally {
       if (!options.background) setLoading(false);
     }
-  }, [attentionOnly, audience, bookedDate, businessAccountId, creationSource, dateRange, destinationRegions, limit, page, rebookedOnly, search, sort, status]);
+  }, [attentionOnly, audience, bookedDate, businessAccountId, creationSource, dateRange, destinationRegions, operationsManifestId, limit, page, rebookedOnly, search, sort, status]);
 
   // The URL wins when it contains a dashboard drill-down or an explicit
   // filter. Otherwise restore only this audience's last view from the tab
   // session, then fetch the current rows from the server.
   useEffect(() => {
     if (restoredView.current) return;
+
+    // Exact-viewport return: a bare return to the list replays the saved
+    // offset (the session view restores the same rows), and so does a return
+    // to an identical filtered/paginated view - the list syncs its own
+    // page/filters into the URL, so back-navigation lands on a query URL that
+    // must NOT be mistaken for a fresh drill-down link. Only an identical
+    // query replays; a different one opens at the top.
+    if (!allShipmentsViewFromQuery) {
+      const savedScroll = readShipmentListScrollState(audience);
+      pendingScrollRestore.current = savedScroll
+        && (!hasShipmentViewQuery || savedScroll.search === window.location.search)
+        ? savedScroll
+        : null;
+    } else {
+      pendingScrollRestore.current = null;
+    }
+    scrollRestoreDone.current = false;
+    setRestoredRowId(null);
 
     const saved = !hasShipmentViewQuery
       ? readShipmentViewState(
@@ -446,6 +633,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         setBusinessAccountId(audience === "admin" && !saved.creationSource ? saved.businessAccountId : "");
         setCreationSource(audience === "admin" ? saved.creationSource : "");
         setDestinationRegions(audience === "admin" ? saved.destinationRegions : []);
+        setOperationsManifestId(audience === "admin" ? saved.operationsManifestId : "");
         setPage(saved.page);
         setLimit(saved.limit);
         setSort(saved.sort);
@@ -453,7 +641,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       setRestoringView(false);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [audience, hasShipmentViewQuery]);
+  }, [allShipmentsViewFromQuery, audience, hasShipmentViewQuery]);
 
   // The sidebar's All Shipments link is an explicit reset command. It must win
   // over both the current in-memory filters and the tab's saved view, otherwise
@@ -462,10 +650,18 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   useEffect(() => {
     if (!allShipmentsViewFromQuery) return;
 
+    // A reset is a fresh start at the top: drop any saved detail-return offset
+    // so it cannot pull this clean list back down.
+    pendingScrollRestore.current = null;
+    scrollRestoreDone.current = true;
+    clearShipmentListScrollState(audience);
+    getShipmentsScroller()?.scrollTo({ top: 0, behavior: "auto" });
+
     const timer = window.setTimeout(() => {
       // Mark this reset complete only when the deferred callback runs, matching
       // the Strict Mode-safe restoration path above.
       restoredView.current = true;
+      setRestoredRowId(null);
       setSearchInput("");
       setSearch("");
       setStatus("");
@@ -476,6 +672,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       setBusinessAccountId("");
       setCreationSource("");
       setDestinationRegions([]);
+      setOperationsManifestId("");
       setPage(1);
       setLimit(defaultPageSizeOptions[0]);
       setSort("booked:desc");
@@ -484,7 +681,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [allShipmentsViewFromQuery, router, shipmentPagePath]);
+  }, [allShipmentsViewFromQuery, audience, router, shipmentPagePath]);
 
   // Deferred so the fetch's setState lands after the first paint rather than
   // cascading a render, matching the other listing screens.
@@ -493,6 +690,101 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [allShipmentsViewFromQuery, load, restoringView]);
+
+  // Records where the user is in the list so a detail/invoice visit can return
+  // to the exact viewport. The offset is saved continuously (throttled) and is
+  // pinned with the shipment id on the link click that leaves the list, which
+  // is what covers the Back button, the browser back gesture, and a fallback
+  // push to the bare list route alike.
+  useEffect(() => {
+    const scrollerEl = getShipmentsScroller();
+    if (!scrollerEl) return;
+    const scroller: HTMLElement = scrollerEl;
+
+    function persist(top: number, overrides?: { id?: string; search?: string }) {
+      try {
+        const key = shipmentListScrollKey(audience);
+        const previous = readShipmentListScrollState(audience);
+        const id = overrides?.id ?? previous?.id ?? "";
+        const search = overrides?.search ?? previous?.search ?? "";
+        if (top <= 0 && !id) {
+          window.sessionStorage.removeItem(key);
+          return;
+        }
+        window.sessionStorage.setItem(key, JSON.stringify({ top, id, search }));
+      } catch {
+        // Storage pressure must never break the list.
+      }
+    }
+
+    function handleScroll() {
+      if (scrollSaveFrame.current) return;
+      scrollSaveFrame.current = window.requestAnimationFrame(() => {
+        scrollSaveFrame.current = 0;
+        persist(scroller.scrollTop, { search: window.location.search });
+      });
+    }
+
+    scroller.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", handleScroll);
+      if (scrollSaveFrame.current) {
+        window.cancelAnimationFrame(scrollSaveFrame.current);
+        scrollSaveFrame.current = 0;
+      }
+      // Last offset before the list unmounts (detail open, tab switch). Only
+      // a real offset is written: a zero here would mean the shell already
+      // reset the scroller, and it must not clobber the click-time save.
+      if (scroller.scrollTop > 0) persist(scroller.scrollTop);
+    };
+  }, [audience]);
+
+  // Replays the saved viewport once the rows for the restored filters have
+  // loaded. Runs after the shells' route-change scroll-to-top, so it wins the
+  // race by design; a second rAF pass covers late layout shifts from images.
+  useEffect(() => {
+    if (restoringView || loading || allShipmentsViewFromQuery) return;
+    const saved = pendingScrollRestore.current;
+    if (!saved || scrollRestoreDone.current) return;
+    if (!shipments.length) return;
+
+    scrollRestoreDone.current = true;
+    const targetTop: number = saved.top;
+    const targetId: string = saved.id;
+    let attempts = 0;
+    let highlightTimer = 0;
+
+    function apply() {
+      attempts += 1;
+      const scroller = getShipmentsScroller();
+      if (!scroller) return;
+      try {
+        scroller.scrollTop = targetTop;
+      } catch {
+        // A detached scroller must not break the table.
+      }
+      const row = targetId ? rowRefs.current.get(targetId) : undefined;
+      if (row && !isShipmentRowVisible(row, scroller)) {
+        row.scrollIntoView({ block: "center", behavior: "auto" });
+      }
+      // One follow-up pass: table fonts/images can shift heights after paint.
+      if (attempts < 2) {
+        window.requestAnimationFrame(apply);
+        return;
+      }
+      if (targetId && rowRefs.current.has(targetId)) {
+        setRestoredRowId(targetId);
+        highlightTimer = window.setTimeout(() => setRestoredRowId(null), 3500);
+      }
+      pendingScrollRestore.current = null;
+    }
+
+    const frame = window.requestAnimationFrame(apply);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(highlightTimer);
+    };
+  }, [allShipmentsViewFromQuery, audience, loading, restoringView, shipments]);
 
   // Keep the view addressable for refreshes/browser history and keep a
   // tab-scoped fallback for navigation links that return to the bare list
@@ -510,6 +802,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       businessAccountId: audience === "admin" && !creationSource ? businessAccountId : "",
       creationSource: audience === "admin" ? creationSource : "",
       destinationRegions: audience === "admin" ? destinationRegions : [],
+      operationsManifestId: audience === "admin" ? operationsManifestId : "",
       page,
       limit,
       sort
@@ -540,6 +833,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       params.set("businessAccountId", businessAccountId);
     }
     if (audience === "admin" && destinationRegions.length) params.set("destinationRegions", destinationRegions.join(","));
+    if (audience === "admin" && operationsManifestId) params.set("operationsManifestId", operationsManifestId);
     if (page > 1) params.set("page", String(page));
     if (limit !== defaultPageSizeOptions[0]) params.set("limit", String(limit));
     if (sort !== "booked:desc") params.set("sort", sort);
@@ -551,7 +845,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         { scroll: false }
       );
     }
-  }, [allShipmentsViewFromQuery, attentionOnly, audience, bookedDate, businessAccountId, creationSource, dateRange.from, dateRange.to, destinationRegions, limit, page, rebookedOnly, restoringView, router, search, sort, status]);
+  }, [allShipmentsViewFromQuery, attentionOnly, audience, bookedDate, businessAccountId, creationSource, dateRange.from, dateRange.to, destinationRegions, operationsManifestId, limit, page, rebookedOnly, restoringView, router, search, sort, status]);
 
   useEffect(() => {
     if (previousSelectionScope.current === selectionScope) return;
@@ -569,6 +863,16 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     listBusinessAccounts()
       .then((data) => { if (mounted) setAccounts(data.accounts); })
       .catch(() => { /* the filter stays empty; the table still loads */ });
+    return () => { mounted = false; };
+  }, [audience]);
+
+  useEffect(() => {
+    if (audience !== "admin") return;
+    let mounted = true;
+    listShipmentOperationsManifestOptions()
+      .then((data) => { if (mounted) setOperationsManifests(data.manifests); })
+      .catch(() => { if (mounted) setOperationsManifestOptionsError("Unable to load operations manifests."); })
+      .finally(() => { if (mounted) setOperationsManifestOptionsLoaded(true); });
     return () => { mounted = false; };
   }, [audience]);
 
@@ -767,6 +1071,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
   async function handleRebook(shipmentId: string) {
     if (rebookingId) return;
+    rememberScrollPosition(shipmentId);
     setRebookingId(shipmentId);
     try {
       const result = await rebookShipmentDraft(shipmentId);
@@ -804,7 +1109,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
   return (
     <div className="mx-auto max-w-8xl ">
-      <section className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="mb-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold text-[#0D1282]">Shipments
@@ -846,23 +1151,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
           </div>
         </div>
 
-        <div className="px-5 py-5 sm:px-6">
-          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 sm:p-5">
-            <div
-              className={`grid gap-4 ${
-                audience === "admin"
-                  ? "md:grid-cols-2 xl:grid-cols-12"
-                  : "md:grid-cols-2 xl:grid-cols-8"
-              }`}
-            >
+        <div className="px-5 py-4 sm:px-6">
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+            <div className="grid gap-x-3 gap-y-4 md:grid-cols-2 xl:grid-cols-12">
               {/* Search */}
-              <label
-                className={`block min-w-0 ${
-                  audience === "admin"
-                    ? "xl:col-span-4"
-                    : "xl:col-span-3"
-                }`}
-              >
+              <label className={`block min-w-0 md:col-span-2 ${audience === "admin" ? "xl:col-span-4" : "xl:col-span-8"}`}>
                 <span className="mb-1.5 block text-xs font-semibold text-slate-600">
                   Search
                 </span>
@@ -894,72 +1187,28 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                 </div>
               </label>
 
-              {/* Date range */}
-              <div
-                className={`min-w-0 ${
-                  audience === "admin"
-                    ? "xl:col-span-4"
-                    : "xl:col-span-3"
-                }`}
-              >
-                <span className="mb-1.5 block text-xs font-semibold text-slate-600">
-                  Date range
-                </span>
-
-                <div className="[&_*]:rounded-lg">
-                  <DateRangeFilter
-                    value={dateRange}
-                    onChange={(value) => {
-                      setBookedDate("");
-                      setDateRange(value);
+              {/* Business account */}
+              {audience === "admin" ? (
+                <div className="min-w-0 md:col-span-2 xl:col-span-4">
+                  <BusinessAccountFilter
+                    accounts={accounts}
+                    value={creationSource || businessAccountId}
+                    onSelect={(value) => {
+                      if (value === PUBLIC_BOOKING_FILTER_VALUE) {
+                        setBusinessAccountId("");
+                        setCreationSource(PUBLIC_BOOKING_FILTER_VALUE);
+                      } else {
+                        setCreationSource("");
+                        setBusinessAccountId(value);
+                      }
                       setPage(1);
                     }}
                   />
                 </div>
-              </div>
-
-              {/* Business account */}
-              {audience === "admin" ? (
-                <label className="block min-w-0 xl:col-span-2">
-                  <span className="mb-1.5 block text-xs font-semibold text-slate-600">
-                    Business account
-                  </span>
-
-                  <div className="relative">
-                    <select
-                      value={creationSource || businessAccountId}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        if (value === PUBLIC_BOOKING_FILTER_VALUE) {
-                          setBusinessAccountId("");
-                          setCreationSource(PUBLIC_BOOKING_FILTER_VALUE);
-                        } else {
-                          setCreationSource("");
-                          setBusinessAccountId(value);
-                        }
-                        setPage(1);
-                      }}
-                      className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm font-medium text-slate-900 outline-none transition hover:border-slate-400 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/10"
-                    >
-                      <option value="">All Business Accounts</option>
-                      <option value={PUBLIC_BOOKING_FILTER_VALUE}>Public online</option>
-                      {accounts.map((account) => (
-                        <option key={account._id} value={account._id}>
-                          {getAccountLabel(account)}
-                        </option>
-                      ))}
-                    </select>
-
-                    <FiArrowDown
-                      aria-hidden="true"
-                      className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400/70"
-                    />
-                  </div>
-                </label>
               ) : null}
 
               {/* Status */}
-              <label className="block min-w-0 xl:col-span-2">
+              <label className={`block min-w-0 ${audience === "admin" ? "xl:col-span-2" : "md:col-span-2 xl:col-span-4"}`}>
                 <span className="mb-1.5 block text-xs font-semibold text-slate-600">
                   Status
                 </span>
@@ -994,21 +1243,62 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                 </div>
               </label>
 
+              {audience === "admin" ? (
+                <label className="block min-w-0 xl:col-span-2">
+                  <span className="mb-1.5 block text-xs font-semibold text-slate-600">Operations manifest</span>
+                  <div className="relative">
+                    <select
+                      value={operationsManifestId}
+                      onChange={(event) => {
+                        setOperationsManifestId(event.target.value);
+                        setPage(1);
+                      }}
+                      className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm font-medium text-slate-900 outline-none transition hover:border-slate-400 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/10"
+                    >
+                      <option value="">All manifests</option>
+                      {operationsManifestId && !operationsManifests.some((manifest) => manifest.id === operationsManifestId) ? (
+                        <option value={operationsManifestId}>
+                          {operationsManifestOptionsLoaded ? "Selected manifest unavailable" : "Loading selected manifest..."}
+                        </option>
+                      ) : null}
+                      {!operationsManifestOptionsLoaded && !operationsManifestId ? <option disabled>Loading manifests...</option> : null}
+                      {operationsManifests.map((manifest) => (
+                        <option key={manifest.id} value={manifest.id}>
+                          {manifest.manifestNumber}{manifest.status === "CANCELLED" ? " (Cancelled)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <FiArrowDown aria-hidden="true" className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400/70" />
+                  </div>
+                  {operationsManifestOptionsError ? <span className="mt-1 block text-xs text-red-700">{operationsManifestOptionsError}</span> : null}
+                </label>
+              ) : null}
             </div>
-          </div>
 
-          {/* Bulk actions */}
-          <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-h-6">
+            <div className="mt-3 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+              <div className="min-w-0 w-full xl:max-w-[420px]">
+                <span className="mb-1.5 block text-xs font-semibold text-slate-600">Date range</span>
+                <div className="min-w-0 [&_*]:rounded-lg">
+                  <DateRangeFilter
+                    fluid
+                    value={dateRange}
+                    onChange={(value) => {
+                      setBookedDate("");
+                      setDateRange(value);
+                      setPage(1);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 xl:justify-end">
               {selectedList.length ? (
                 <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
                   {selectedList.length} {selectedList.length === 1 ? "shipment" : "shipments"} selected
                   {" · "}{selectionTotals.pieces} pcs · {selectionTotals.weightKg.toFixed(2)} kg
                 </span>
               ) : null}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() =>
@@ -1044,7 +1334,9 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   Update Status
                 </button>
               ) : null}
+              </div>
             </div>
+          </div>
           </div>
         </div>
       </section>
@@ -1442,6 +1734,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
             businessAccountId: creationSource ? "" : businessAccountId,
             creationSource: creationSource === PUBLIC_BOOKING_FILTER_VALUE ? "PUBLIC_ONLINE" : undefined,
             destinationRegions: audience === "admin" ? destinationRegions : [],
+            operationsManifestId: audience === "admin" ? operationsManifestId : "",
             sort,
             attention: attentionOnly
           })}
@@ -1501,7 +1794,14 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
             </thead>
             <tbody>
               {shipments.map((shipment) => (
-                <tr key={shipment.id} className="border-b border-slate-100 transition hover:bg-slate-50/70 last:border-b-0">
+                <tr
+                  key={shipment.id}
+                  ref={(node) => {
+                    if (node) rowRefs.current.set(shipment.id, node);
+                    else rowRefs.current.delete(shipment.id);
+                  }}
+                  className={`border-b border-slate-100 transition hover:bg-slate-50/70 last:border-b-0${restoredRowId === shipment.id ? " bg-[#0D1282]/5" : ""}`}
+                >
                   <td className="px-4 py-3">
                     <input
                       type="checkbox"
@@ -1621,12 +1921,14 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     <div className="flex flex-wrap items-center gap-3">
                       <Link
                         href={shipmentDetailsHref(audience, shipment.id)}
+                        onClick={() => rememberScrollPosition(shipment.id)}
                         className="inline-flex items-center gap-1 font-semibold text-blue-900 hover:text-blue-700"
                       >
                         <FiExternalLink aria-hidden="true" className="h-4 w-4" />View Details
                       </Link>
                       <Link
                         href={shipmentInvoicePageUrl(shipment.id, audience)}
+                        onClick={() => rememberScrollPosition(shipment.id)}
                         className="inline-flex items-center gap-1 font-semibold text-blue-900 hover:text-blue-700"
                       >
                         <FiFileText aria-hidden="true" className="h-4 w-4" />Invoice

@@ -32,7 +32,7 @@ import {
   FiUsers,
 } from "react-icons/fi";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { IconType } from "react-icons";
 import Sidebar, {
   filterNavigation,
@@ -46,6 +46,7 @@ import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import RateCardTray from "@/components/rate-cards/RateCardTray";
 import GlobalSearch from "@/components/client/GlobalSearch";
 import { getClientDashboard } from "@/lib/clientDashboard";
+import { readShipmentListScrollState, shipmentListAudienceForPath } from "@/lib/shipmentsList";
 import { BsWhatsapp, BsCurrencyRupee } from "react-icons/bs";
 import OperationsCalendarIcon from "@/components/OperationsCalendarIcon";
 import { ShellPortalBackButton } from "@/components/PortalBackButton";
@@ -281,6 +282,8 @@ export function ClientDashboardShell({
   children: ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const contentScrollRef = useRef<HTMLDivElement>(null);
 
   // The permission-gated links depend on an API call, so the whole list stays
   // empty until it settles and every link then appears in one paint.
@@ -296,6 +299,20 @@ export function ClientDashboardShell({
     () => setMobileNavOpen(false),
     [],
   );
+
+  // Inner scroll container, matching the staff shell. Reset on route changes
+  // so a scrolled detail screen cannot hide the next page's heading - except
+  // the shipments list returning from a detail page, which restores its own
+  // exact viewport. A fresh drill-down link with different filters still
+  // opens at the top.
+  useEffect(() => {
+    const audience = shipmentListAudienceForPath(pathname);
+    if (audience) {
+      const saved = readShipmentListScrollState(audience);
+      if (saved && (!window.location.search || saved.search === window.location.search)) return;
+    }
+    contentScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [pathname]);
 
   // Taken from the dashboard call the navigation already makes, so search costs
   // no extra request. Search stays hidden until it resolves- a box that
@@ -741,7 +758,11 @@ export function ClientDashboardShell({
             </div>
           ) : null}
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 [overflow-anchor:none] scrollbar-none [-ms-overflow-style:none] sm:px-6 lg:px-8 lg:py-6 [&::-webkit-scrollbar]:hidden">
+          <div
+            ref={contentScrollRef}
+            data-dashboard-scroll
+            className="min-h-0 flex-1 overflow-y-auto px-4 py-4 [overflow-anchor:none] scrollbar-none [-ms-overflow-style:none] sm:px-6 lg:px-8 lg:py-6 [&::-webkit-scrollbar]:hidden"
+          >
             <div className="mb-4 flex items-center">
               <ShellPortalBackButton />
             </div>

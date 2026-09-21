@@ -34,6 +34,7 @@ const exactHoldLabels: Record<string, string> = {
   restricted_item_check: "Restricted item check",
   operational_delay: "Operational delay",
   missed_connection: "Missed connection",
+  offloaded: "Offloaded",
   other: "Other"
 };
 
@@ -46,6 +47,7 @@ const publicHoldLabels: Record<string, string> = {
   restricted_item_check: "Shipment contents review",
   operational_delay: "Operational delay",
   missed_connection: "Transport connection delay",
+  offloaded: "Offloaded from transport",
   other: "Shipment under review"
 };
 

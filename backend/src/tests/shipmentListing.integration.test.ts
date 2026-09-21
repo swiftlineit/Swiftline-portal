@@ -9,6 +9,8 @@ import { LabelDocument } from "../models/labelDocument.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
+import { OperationsManifestConsignment } from "../models/operationsManifestConsignment.model.js";
+import { OperationsManifestScan } from "../models/operationsManifestScan.model.js";
 import { listDpdShipments as listDpdShipmentsController } from "../controllers/dpdShipment.controller.js";
 import {
   allShipmentStatuses,
@@ -233,6 +235,46 @@ describe("shipment listing read path", () => {
     assert.ok(result.shipments.length > 0);
     assert.ok(result.shipments.every((shipment) => shipment.creationSource === "PUBLIC_ONLINE"));
     assert.ok(result.shipments.some((shipment) => shipment.id === String(publicBooking.draft._id)));
+  });
+
+  test("filters every page by live operations manifest scans before pagination", async () => {
+    const first = await createBookedDraft(accountOneId, "OPS-MANIFEST-ONE");
+    const removed = await createBookedDraft(accountOneId, "OPS-MANIFEST-REMOVED");
+    const elsewhere = await createBookedDraft(accountOneId, "OPS-MANIFEST-OTHER");
+    const selectedManifestId = new mongoose.Types.ObjectId();
+    const otherManifestId = new mongoose.Types.ObjectId();
+    const firstConsignmentId = new mongoose.Types.ObjectId();
+    const removedConsignmentId = new mongoose.Types.ObjectId();
+    const otherConsignmentId = new mongoose.Types.ObjectId();
+
+    await OperationsManifestConsignment.collection.insertMany([
+      { _id: firstConsignmentId, manifestId: selectedManifestId, shipmentDraftId: first.draft._id, status: "PARTIAL" },
+      { _id: removedConsignmentId, manifestId: selectedManifestId, shipmentDraftId: removed.draft._id, status: "PARTIAL" },
+      { _id: otherConsignmentId, manifestId: otherManifestId, shipmentDraftId: elsewhere.draft._id, status: "PARTIAL" }
+    ] as never[]);
+    await OperationsManifestScan.collection.insertMany([
+      { manifestId: selectedManifestId, consignmentId: firstConsignmentId, parcelNumber: "OPS-LIVE-ONE", scanRequestId: `ops-one-${firstConsignmentId}`, status: "ACCEPTED" },
+      { manifestId: selectedManifestId, consignmentId: removedConsignmentId, parcelNumber: "OPS-REMOVED", scanRequestId: `ops-removed-${removedConsignmentId}`, status: "REMOVED" },
+      { manifestId: otherManifestId, consignmentId: otherConsignmentId, parcelNumber: "OPS-LIVE-OTHER", scanRequestId: `ops-other-${otherConsignmentId}`, status: "ACCEPTED" }
+    ] as never[]);
+
+    const base = {
+      page: 99,
+      limit: 1,
+      actorRole: "admin" as const,
+      bookingStatuses: allShipmentStatuses,
+      businessAccountIds: [accountOneId],
+      operationsManifestId: selectedManifestId
+    };
+    const filtered = await listBookedShipments(base);
+    assert.equal(filtered.pagination.total, 1);
+    assert.equal(filtered.pagination.page, 1);
+    assert.deepEqual(filtered.shipments.map((shipment) => shipment.id), [String(first.draft._id)]);
+
+    const other = await listBookedShipments({ ...base, operationsManifestId: otherManifestId });
+    assert.deepEqual(other.shipments.map((shipment) => shipment.id), [String(elsewhere.draft._id)]);
+    const client = await listBookedShipments({ ...base, actorRole: "client" });
+    assert.ok(client.pagination.total > 1, "the staff-only filter must not change client lists");
   });
 
   test("dashboard summary mode preserves the visible shipment fields without loading detail collections", async () => {

@@ -8,6 +8,8 @@ export interface ShipmentManifestLineSnapshot {
   consignmentNumber: string;
   pieces: number;
   weightKg: number;
+  /** Shipment-level chargeable weight (max of actual vs volumetric, per parcel). */
+  chargeableWeightKg?: number;
   consignor: Record<string, unknown>;
   consignee: Record<string, unknown>;
   description: string;
@@ -41,6 +43,8 @@ export interface ShipmentManifestParcelSnapshot {
   awbNumber: string;
   forwardingNumber: string;
   weightKg: number;
+  /** That parcel's own chargeable weight; absent on lines sealed before it was captured. */
+  chargeableWeightKg?: number;
   product: string;
 }
 
@@ -67,6 +71,7 @@ const manifestLineSchema = new mongoose.Schema<ShipmentManifestLineSnapshot>({
   consignmentNumber: { type: String, required: true, trim: true, maxlength: 80 },
   pieces: { type: Number, required: true, min: 1 },
   weightKg: { type: Number, required: true, min: 0 },
+  chargeableWeightKg: { type: Number, min: 0 },
   consignor: { type: mongoose.Schema.Types.Mixed, required: true },
   consignee: { type: mongoose.Schema.Types.Mixed, required: true },
   description: { type: String, required: true, trim: true, maxlength: 1000 },
@@ -87,6 +92,7 @@ const manifestLineSchema = new mongoose.Schema<ShipmentManifestLineSnapshot>({
       awbNumber: { type: String, trim: true, maxlength: 80, default: "" },
       forwardingNumber: { type: String, trim: true, maxlength: 80, default: "" },
       weightKg: { type: Number, min: 0, default: 0 },
+      chargeableWeightKg: { type: Number, min: 0 },
       product: { type: String, trim: true, maxlength: 60, default: "" }
     }, { _id: false })],
     default: undefined

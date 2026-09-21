@@ -222,7 +222,7 @@ export function ParcelItemsEditor({
             </ShipmentFieldLabel>
 
             <p
-              className="mt-1 truncate text-sm font-semibold text-slate-900"
+              className="mt-1 truncate text-[13px] font-semibold text-slate-900"
               title={itemSummary}
             >
               {itemSummary}
@@ -313,7 +313,7 @@ export function ParcelItemsEditor({
 
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 sm:px-5 sm:py-4">
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-slate-900">
+                    <p className="text-[13px] font-semibold text-slate-900">
                       Items
                     </p>
 
@@ -384,7 +384,7 @@ export function ParcelItemsEditor({
                                 !item.hsnCode
                               }
                               aria-label={`Remove item ${index + 1}`}
-                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 text-xs font-semibold text-red-600 transition hover:border-red-200 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:border-slate-200 disabled:hover:bg-transparent"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 text-xs font-semibold text-red-600 transition hover:border-red-200 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-red-700 disabled:hover:border-slate-200 disabled:hover:bg-transparent"
                             >
                               <FiMinus
                                 aria-hidden="true"
@@ -439,7 +439,7 @@ export function ParcelItemsEditor({
                                 title="Letters only - record quantities in the Qty and Unit Rate fields."
                                 maxLength={120}
                                 aria-invalid={showDescriptionError}
-                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-sm outline-none transition focus:ring-2 ${
+                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
                                   showDescriptionError ||
                                   (revealError && !item.description.trim())
                                     ? "border-red-400 bg-red-50 focus:border-red-500 focus:ring-red-100"
@@ -517,7 +517,7 @@ export function ParcelItemsEditor({
                                   requireHsnCode ? "HS code" : "Optional"
                                 }
                                 aria-invalid={showHsnError}
-                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-sm outline-none transition focus:ring-2 ${
+                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
                                   showHsnError
                                     ? "border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
                                     : "border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
@@ -538,7 +538,7 @@ export function ParcelItemsEditor({
                                       event.target.value,
                                     )
                                   }
-                                  className="h-10 w-full appearance-none rounded-lg border border-slate-300 bg-white py-0 pl-3 pr-9 text-sm outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                                className="h-10 w-full appearance-none rounded-lg border border-slate-300 bg-white py-0 pl-3 pr-9 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                                 >
                                   {parcelItemUnitTypeValues.map((unit) => (
                                     <option key={unit} value={unit}>
@@ -574,7 +574,7 @@ export function ParcelItemsEditor({
                                 aria-invalid={Boolean(
                                   revealError && quantityError,
                                 )}
-                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-sm outline-none transition focus:ring-2 ${
+                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
                                   revealError && quantityError
                                     ? "border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
                                     : "border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
@@ -602,7 +602,7 @@ export function ParcelItemsEditor({
                                 aria-invalid={Boolean(
                                   revealError && unitRateError,
                                 )}
-                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-sm outline-none transition focus:ring-2 ${
+                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
                                   revealError && unitRateError
                                     ? "border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
                                     : "border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
@@ -617,7 +617,7 @@ export function ParcelItemsEditor({
 
                               <div
                                 aria-label={`Item ${index + 1} amount`}
-                                className="mt-1 flex h-10 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700"
+                                className="mt-1 flex h-10 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700"
                               >
                                 {getParcelItemAmount(item).toFixed(2)}
                               </div>

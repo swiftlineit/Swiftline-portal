@@ -6,8 +6,8 @@ const border = "#222222";
 const ink = "#111111";
 const muted = "#f2f2f2";
 
-/** Sr, AWB/Parcel, Forwarding, Destination, Shipper, Receiver, Service, Product, Pcs, Weight, Remark. */
-const columnWidths = [26, 92, 96, 78, 90, 90, 74, 62, 30, 44, 50];
+/** Sr, AWB/Parcel, Forwarding, Destination, Shipper, Receiver, Service, Product, Pcs, Weight, Chargeable Weight, Remark. */
+const columnWidths = [26, 92, 96, 78, 90, 90, 74, 62, 30, 44, 44, 50];
 const columnHeadings = [
   "Sr.\nNo.",
   "AWB No. /\nParcel No",
@@ -19,6 +19,7 @@ const columnHeadings = [
   "Product",
   "Pcs",
   "Weight",
+  "Chg Wt",
   "Remark"
 ];
 
@@ -53,6 +54,10 @@ function manifestDate(value: Date) {
  * One row per physical parcel, each carrying only its own barcode, forwarding
  * number, weight and product. Lines sealed before per-parcel data existed keep a
  * single summary row so historical manifests still render every column.
+ * Chargeable weight falls back to the actual weight on legacy lines. A line
+ * sealed before per-parcel chargeable weights were captured states its shipment
+ * total only on its first parcel row (like goods value elsewhere), never
+ * repeated as if every parcel weighed that much.
  */
 export function manifestRows(lines: ShipmentManifestLineSnapshot[]) {
   return lines.flatMap((line) => {
@@ -64,9 +69,10 @@ export function manifestRows(lines: ShipmentManifestLineSnapshot[]) {
       service: line.service || line.serviceInfo,
       remark: line.remark || "DONE"
     };
+    const lineChargeableKg = typeof line.chargeableWeightKg === "number" ? line.chargeableWeightKg : line.weightKg;
 
     if (line.parcels?.length) {
-      return line.parcels.map((parcel) => [
+      return line.parcels.map((parcel, parcelIndex) => [
         parcel.awbNumber || formatManifestConsignmentNumber(line.consignmentNumber),
         parcel.forwardingNumber,
         shared.destination,
@@ -76,6 +82,9 @@ export function manifestRows(lines: ShipmentManifestLineSnapshot[]) {
         parcel.product || line.product || line.description,
         "1",
         parcel.weightKg.toFixed(2),
+        typeof parcel.chargeableWeightKg === "number"
+          ? parcel.chargeableWeightKg.toFixed(2)
+          : (parcelIndex === 0 ? lineChargeableKg.toFixed(2) : ""),
         shared.remark
       ]);
     }
@@ -90,6 +99,7 @@ export function manifestRows(lines: ShipmentManifestLineSnapshot[]) {
       line.product || line.description,
       String(line.pieces),
       line.weightKg.toFixed(2),
+      lineChargeableKg.toFixed(2),
       shared.remark
     ]];
   }).map((values, index) => [String(index + 1), ...values]);

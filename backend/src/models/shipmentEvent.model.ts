@@ -61,6 +61,9 @@ export const shipmentHoldReasonValues = [
   // the client is told why it stopped moving, rather than left to infer it from
   // a gap between "flight assigned" and the next scan.
   "missed_connection",
+  // A shipment offloaded from its booked flight/vehicle. Kept separate from a
+  // missed connection so operations can say it was deliberately removed.
+  "offloaded",
   "other"
 ] as const;
 

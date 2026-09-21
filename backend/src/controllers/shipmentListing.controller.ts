@@ -4,6 +4,7 @@ import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
+import { OperationsManifest } from "../models/operationsManifest.model.js";
 import { deleteBookedShipment } from "../services/shipmentDraftDeletion.service.js";
 import { ShipmentDraftPolicyError } from "../services/shipmentDraftPolicy.service.js";
 import {
@@ -79,7 +80,8 @@ function sendShipmentExport(
   response: Response,
   format: TableExportFormat,
   shipments: unknown[],
-  accountLabel: string
+  accountLabel: string,
+  operationsManifestNumber?: string
 ) {
   return sendTableExport(response, format, {
     title: "Shipments",
@@ -92,8 +94,24 @@ function sendShipmentExport(
       From: request.query.dateFrom,
       To: request.query.dateTo,
       Rebooked: request.query.rebooked === "1" || request.query.rebooked === "true" ? "Yes" : undefined,
-      "Booking source": request.query.creationSource === "PUBLIC_ONLINE" ? "Public online" : undefined
+      "Booking source": request.query.creationSource === "PUBLIC_ONLINE" ? "Public online" : undefined,
+      "Operations manifest": operationsManifestNumber
     })
+  });
+}
+
+export async function listStaffOperationsManifestOptions(request: Request, response: Response) {
+  const branchIds = staffBranchIds(request, null);
+  const manifests = await OperationsManifest.find(
+    branchIds ? { branchId: { $in: branchIds } } : {}
+  ).select("manifestNumber status").sort({ createdAt: -1 }).lean().exec();
+  return response.status(200).json({
+    success: true,
+    manifests: manifests.map((manifest) => ({
+      id: String(manifest._id),
+      manifestNumber: manifest.manifestNumber,
+      status: manifest.status
+    }))
   });
 }
 
@@ -101,6 +119,21 @@ export async function listAdminBookedShipments(request: Request, response: Respo
   const businessAccountId = objectIdParam(request, "businessAccountId");
   const branchId = objectIdParam(request, "branchId");
   const format = exportFormat(request);
+  const operationsManifestValue = typeof request.query.operationsManifestId === "string"
+    ? request.query.operationsManifestId : "";
+  if (operationsManifestValue && !mongoose.Types.ObjectId.isValid(operationsManifestValue)) {
+    return response.status(400).json({ success: false, message: "Select a valid operations manifest." });
+  }
+  const allowedManifestBranchIds = staffBranchIds(request, null);
+  const operationsManifest = operationsManifestValue
+    ? await OperationsManifest.findOne({
+      _id: operationsManifestValue,
+      ...(allowedManifestBranchIds ? { branchId: { $in: allowedManifestBranchIds } } : {})
+    }).select("manifestNumber").lean().exec()
+    : null;
+  if (operationsManifestValue && !operationsManifest) {
+    return response.status(404).json({ success: false, message: "Operations manifest not found." });
+  }
 
   const result = await listBookedShipments({
     ...(format ? listWindow(request, format) : pagination(request)),
@@ -113,6 +146,7 @@ export async function listAdminBookedShipments(request: Request, response: Respo
     sort: typeof request.query.sort === "string" ? request.query.sort : "",
     destinationRegions: destinationRegionsParam(request),
     creationSource: creationSourceParam(request),
+    operationsManifestId: operationsManifest ? operationsManifest._id : undefined,
     ...dateRangeParams(request.query),
     businessAccountIds: businessAccountId ? [businessAccountId] : undefined,
     branchIds: staffBranchIds(request, branchId),
@@ -121,7 +155,7 @@ export async function listAdminBookedShipments(request: Request, response: Respo
     bookingStatuses: allShipmentStatuses
   });
 
-  if (format) return sendShipmentExport(request, response, format, result.shipments, "Swiftline staff");
+  if (format) return sendShipmentExport(request, response, format, result.shipments, "Swiftline staff", operationsManifest?.manifestNumber);
   return response.status(200).json({ success: true, ...result });
 }
 

@@ -229,17 +229,63 @@ export function manifestBusinessAccountName(snapshot: ShipmentBookingSnapshot | 
   return text(company.companyName);
 }
 
+/**
+ * The shipment's chargeable weight from its immutable pricing snapshot,
+ * matched to parcels by sequence (falling back to position). Snapshots sealed
+ * before pricing carried per-parcel chargeable weights fall back to the actual
+ * weight so legacy manifests still render a sensible value.
+ */
+export function manifestChargeableWeightKg(snapshot: ShipmentBookingSnapshot, fallbackKg: number): number {
+  const priced = Array.isArray(snapshot.pricing?.parcels) ? snapshot.pricing.parcels : [];
+  if (!priced.length) return fallbackKg;
+  const bySequence = new Map<number, number>();
+  priced.forEach((parcel) => {
+    const sequence = Number(parcel.sequence);
+    const chargeable = Number(parcel.chargeableWeightKg);
+    if (Number.isInteger(sequence) && Number.isFinite(chargeable) && chargeable >= 0) {
+      bySequence.set(sequence, chargeable);
+    }
+  });
+  let total = 0;
+  let matched = 0;
+  snapshot.parcels.forEach((parcel, index) => {
+    const raw = bySequence.get(Number(parcel.sequence)) ?? priced[index]?.chargeableWeightKg;
+    const value = Number(raw);
+    if (Number.isFinite(value) && value >= 0) {
+      total += value;
+      matched += 1;
+    }
+  });
+  return matched ? Number(total.toFixed(3)) : fallbackKg;
+}
+
+/** One parcel's own chargeable weight, falling back to its actual weight. */
+export function manifestParcelChargeableWeightKg(
+  snapshot: ShipmentBookingSnapshot,
+  sequence: unknown,
+  index: number,
+  fallbackKg: number
+): number {
+  const priced = Array.isArray(snapshot.pricing?.parcels) ? snapshot.pricing.parcels : [];
+  const raw = priced.find((parcel) => Number(parcel.sequence) === Number(sequence))?.chargeableWeightKg
+    ?? priced[index]?.chargeableWeightKg;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Number(value.toFixed(3)) : fallbackKg;
+}
+
 export function buildManifestLine(input: ManifestLineInput): ShipmentManifestLineSnapshot {
   const descriptions = [...new Set(input.snapshot.parcels
     .map((parcel) => text(parcel.contentsDescription))
     .filter(Boolean))];
+  const weightKg = Number(input.snapshot.parcels.reduce((total, parcel) => total + parcel.actualWeightKg, 0).toFixed(3));
 
   return {
     shipmentDraftId: input.shipmentDraftId,
     dpdShipmentId: input.dpdShipmentId,
     consignmentNumber: input.snapshot.tracking.swiftlineTrackingNumber,
     pieces: input.snapshot.parcels.length,
-    weightKg: Number(input.snapshot.parcels.reduce((total, parcel) => total + parcel.actualWeightKg, 0).toFixed(3)),
+    weightKg,
+    chargeableWeightKg: manifestChargeableWeightKg(input.snapshot, weightKg),
     consignor: { formatted: formatConsignor(input.snapshot), party: consignorPartySnapshot(input.snapshot) },
     consignee: { formatted: formatPersonAddress(input.snapshot.consignee, true), party: consigneePartySnapshot(input.snapshot.consignee) },
     description: descriptions.join(", ") || "Shipment contents",
@@ -265,10 +311,11 @@ function partyPersonName(party: ManifestPartySnapshot) {
 export function buildHandoverManifestLine(input: ManifestLineInput & { remark?: string }): ShipmentManifestLineSnapshot {
   const line = buildManifestLine(input);
   const parties = buildManifestParties(input.snapshot);
-  const parcels = input.snapshot.parcels.map((parcel) => ({
+  const parcels = input.snapshot.parcels.map((parcel, index) => ({
     awbNumber: text(parcel.swiftlineParcelNumber),
     forwardingNumber: text(parcel.carrierParcelNumber),
     weightKg: parcel.actualWeightKg,
+    chargeableWeightKg: manifestParcelChargeableWeightKg(input.snapshot, parcel.sequence, index, parcel.actualWeightKg),
     product: text(parcel.shipmentContentType)
   }));
 
@@ -341,7 +388,7 @@ const manifestBorder: Partial<ExcelJS.Borders> = {
 // ExcelJS enables wrapping but does not calculate the row height that Excel
 // needs to display the wrapped value. Keep these widths in sync with the
 // worksheet columns so long first-row descriptions get enough vertical space.
-const manifestColumnWidths = [7, 25, 9, 13, 44, 44, 32, 14, 11, 14, 14];
+const manifestColumnWidths = [7, 25, 9, 13, 13, 44, 44, 32, 14, 11, 14, 14];
 
 function wrappedManifestLineCount(value: unknown, width: number) {
   return String(value ?? "").split(/\r?\n/).reduce<number>((total, line) => {
@@ -488,6 +535,7 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
     { key: "consignment", width: 25 },
     { key: "pieces", width: 9 },
     { key: "weight", width: 13 },
+    { key: "chargeable", width: 13 },
     // Wide enough that a long address line stays on its own row instead of wrapping.
     { key: "consignor", width: 44 },
     { key: "consignee", width: 44 },
@@ -498,18 +546,18 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
     { key: "service", width: 14 }
   ];
 
-  worksheet.mergeCells("A2:K2");
+  worksheet.mergeCells("A2:L2");
   worksheet.getCell("A2").value = "Courier Manifest";
   worksheet.getRow(1).height = 10;
   worksheet.getRow(2).height = 24;
-  styleRange(worksheet, 2, 1, 2, 11, {
+  styleRange(worksheet, 2, 1, 2, 12, {
     font: { bold: true, size: 14, color: { argb: manifestColours.text } },
     fill: solidFill(manifestColours.white),
     alignment: { horizontal: "center", vertical: "middle" },
     border: manifestBorder
   });
 
-  styleRange(worksheet, 3, 1, 12, 11, {
+  styleRange(worksheet, 3, 1, 12, 12, {
     font: { size: 10, color: { argb: manifestColours.text } },
     fill: solidFill(manifestColours.white),
     alignment: { vertical: "middle", horizontal: "left", wrapText: true },
@@ -563,11 +611,11 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
 
   worksheet.getRow(13).height = 10;
 
-  const headings = ["S.No *", "Consignment No. *", "Pieces *", "Weight (kg)", "Consignor *", "Consignee *", "Description *", "Value *", "Currency *", "Bag No *", "Service Info"];
+  const headings = ["S.No *", "Consignment No. *", "Pieces *", "Weight (kg)", "Chargeable Weight (kg)", "Consignor *", "Consignee *", "Description *", "Value *", "Currency *", "Bag No *", "Service Info"];
   const headingRow = worksheet.getRow(14);
   headingRow.values = headings;
   headingRow.height = 32;
-  styleRange(worksheet, 14, 1, 14, 11, {
+  styleRange(worksheet, 14, 1, 14, 12, {
     font: { bold: true, size: 10, color: { argb: manifestColours.text } },
     fill: solidFill(manifestColours.white),
     alignment: { horizontal: "center", vertical: "middle", wrapText: true },
@@ -595,6 +643,7 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
           formatManifestConsignmentNumber(line.consignmentNumber),
           line.pieces,
           line.weightKg,
+          typeof line.chargeableWeightKg === "number" ? line.chargeableWeightKg : line.weightKg,
           consignorLines[0] ?? "",
           consigneeLines[0] ?? "",
           line.description,
@@ -606,12 +655,12 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
         row.values = values;
         row.height = manifestBodyRowHeight(values, 26);
       } else {
-        row.getCell(5).value = consignorLines[offset] ?? "";
-        row.getCell(6).value = consigneeLines[offset] ?? "";
+        row.getCell(6).value = consignorLines[offset] ?? "";
+        row.getCell(7).value = consigneeLines[offset] ?? "";
         row.height = 18;
       }
 
-      for (let column = 1; column <= 11; column += 1) {
+      for (let column = 1; column <= 12; column += 1) {
         const cell = row.getCell(column);
         cell.font = { size: 10, color: { argb: manifestColours.text } };
         cell.fill = solidFill(manifestColours.white);
@@ -627,11 +676,12 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
 
     worksheet.getCell(firstRowNumber, 2).font = { bold: true, size: 10, color: { argb: manifestColours.text } };
     worksheet.getCell(firstRowNumber, 4).numFmt = "0.000";
-    if (typeof declaredValue === "number") worksheet.getCell(firstRowNumber, 8).numFmt = "#,##0.00";
+    worksheet.getCell(firstRowNumber, 5).numFmt = "0.000";
+    if (typeof declaredValue === "number") worksheet.getCell(firstRowNumber, 9).numFmt = "#,##0.00";
   });
 
   const lastRow = Math.max(14, worksheet.rowCount);
-  worksheet.pageSetup.printArea = `A1:K${lastRow}`;
+  worksheet.pageSetup.printArea = `A1:L${lastRow}`;
   worksheet.headerFooter.oddFooter = "Swiftline Portal | Computer Generated Manifest | Page &P of &N";
 
   const buffer = await workbook.xlsx.writeBuffer();

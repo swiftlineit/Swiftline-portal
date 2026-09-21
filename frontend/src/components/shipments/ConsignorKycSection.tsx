@@ -177,15 +177,15 @@ export function ConsignorKycSection({
 
   return (
     <>
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/60 px-4 py-3">
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/60 px-4 py-2.5">
           <div>
-            <h2 className="text-sm font-semibold uppercase text-slate-500">Consignor Details</h2>
-            <p className="mt-1 text-xs text-slate-500">The Indian sender. Country and code are fixed to India.</p>
+            <h2 className="text-[13px] font-semibold uppercase tracking-wide text-slate-600">Consignor Details</h2>
+            <p className="mt-0.5 text-[11px] text-slate-500">Indian sender · Country and code are fixed.</p>
           </div>
           {headerAction}
         </div>
-        <div className="grid gap-4 p-4 md:grid-cols-2">
+        <div className="grid gap-3 p-3 sm:p-4 md:grid-cols-2">
           <ShipmentTextField label="Consignor Company" value={form.companyName} onChange={setField("companyName")} readOnly={readOnly} />
           <ShipmentTextField label="Consignor Contact Name" required value={form.contactName} onChange={setField("contactName")} error={fieldIssues.contactName} revealError={submitAttempted} readOnly={readOnly} />
           <ShipmentTextField label="Consignor Email" required type="email" inputMode="email" value={form.email} onChange={setField("email")} error={fieldIssues.email} revealError={submitAttempted} readOnly={readOnly} />
@@ -196,12 +196,12 @@ export function ConsignorKycSection({
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 bg-slate-50/60 px-4 py-3">
-          <h2 className="text-sm font-semibold uppercase text-slate-500">Consignor Pickup Address</h2>
-          <p className="mt-1 text-xs text-slate-500">Search an Indian address, then adjust the fields as needed.</p>
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 bg-slate-50/60 px-4 py-2.5">
+          <h2 className="text-[13px] font-semibold uppercase tracking-wide text-slate-600">Consignor Pickup Address</h2>
+          <p className="mt-0.5 text-[11px] text-slate-500">Search an Indian address, then adjust the fields as needed.</p>
         </div>
-        <div className="space-y-4 p-4">
+        <div className="space-y-3 p-3 sm:p-4">
           {!readOnly ? (
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
               <label className="block">
@@ -216,14 +216,14 @@ export function ConsignorKycSection({
                     }
                   }}
                   placeholder="Building, street, area or PIN code"
-                  className="mt-2 h-11 w-full rounded-xl border border-slate-300 px-3.5 text-sm outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                 />
               </label>
               <button
                 type="button"
                 onClick={handleAddressSearch}
                 disabled={addressBusy}
-                className="mt-8 inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                className="mt-7 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-[13px] font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
               >
                 <FiSearch aria-hidden="true" className="h-4 w-4" />
                 Search
@@ -238,11 +238,11 @@ export function ConsignorKycSection({
                   key={prediction.placeId}
                   type="button"
                   onClick={() => handleSelectPrediction(prediction)}
-                  className="flex w-full items-start gap-3 border-b border-slate-100 px-3 py-3 text-left last:border-b-0 hover:bg-blue-50"
+                  className="flex w-full items-start gap-3 border-b border-slate-100 px-3 py-2.5 text-left last:border-b-0 hover:bg-blue-50"
                 >
                   <FiMapPin aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-blue-900" />
                   <span>
-                    <span className="block text-sm font-semibold text-slate-950">{prediction.mainText || prediction.text}</span>
+                    <span className="block text-[13px] font-semibold text-slate-950">{prediction.mainText || prediction.text}</span>
                     <span className="mt-1 block text-xs text-slate-500">{prediction.secondaryText || prediction.text}</span>
                   </span>
                 </button>
@@ -264,62 +264,66 @@ export function ConsignorKycSection({
                 onChange={(event) => onFormChange({ ...form, pickupInstructions: event.target.value.toUpperCase() })}
                 readOnly={readOnly}
                 rows={3}
-                className={`mt-2 w-full rounded-xl border px-3.5 py-2.5 text-sm outline-none transition focus:ring-2 ${readOnly ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500" : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"}`}
+                className={`mt-1.5 w-full rounded-lg border px-3 py-2 text-[13px] outline-none transition focus:ring-2 ${readOnly ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500" : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"}`}
               />
             </label>
           </div>
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-3">
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-2.5">
           <div>
-            <h2 className="text-sm font-semibold uppercase text-slate-600">KYC Documents</h2>
-            <p className="mt-1 text-xs text-slate-500">
+            <h2 className="text-[13px] font-semibold uppercase tracking-wide text-slate-600">KYC Documents</h2>
+            <p className="mt-0.5 max-w-3xl text-[11px] leading-4 text-slate-500">
               {csbType === "CSB_V"
                 ? "Complete all customs documents for CSB-V."
                 : "PAN and Aadhaar are optional for CSB-IV. Attach them to keep them on file."} PDF, JPG or PNG up to 5 MB.
             </p>
           </div>
-          <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-bold text-blue-900">
+          <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-blue-900">
             {csbType === "CSB_V" ? "CSB-V · 9 REQUIRED" : "CSB-IV · ALL OPTIONAL"}
           </span>
         </div>
 
-        <div className="space-y-5 p-4 sm:p-5">
-          <label className={`flex items-center gap-3 rounded-xl border p-3.5 transition ${kycUseForAll ? "border-blue-300 bg-blue-50/70" : "border-slate-200 bg-slate-50"}`}>
+        <div className="space-y-3 p-3 sm:p-4">
+          <div className="grid items-start gap-3 rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 sm:p-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,300px)]">
+          <label className={`flex min-h-10 items-center gap-2.5 rounded-md border px-2.5 py-2 transition ${kycUseForAll ? "border-blue-300 bg-blue-50/70" : "border-slate-200 bg-white"}`}>
             <input
               type="checkbox"
               checked={kycUseForAll}
               disabled={readOnly}
               onChange={(event) => onKycUseForAllChange(event.target.checked)}
-              className="h-5 w-5 shrink-0 accent-blue-900"
+              className="h-4 w-4 shrink-0 accent-blue-900"
             />
-            <span>
-              <span className="block text-xs font-semibold text-slate-900">Use the same KYC for every parcel</span>
-              <span className="mt-0.5 block text-xs text-slate-500">
+            <span className="min-w-0">
+              <span className="block text-[12px] font-semibold text-slate-900">Use the same KYC for every parcel</span>
+              <span className="mt-0.5 block text-[11px] leading-4 text-slate-500">
                 {kycUseForAll
-                  ? "One Aadhaar number and document set applies to every parcel."
-                  : "Each parcel needs its own Aadhaar number and complete document set below."}
+                  ? "One Aadhaar and document set applies to all parcels."
+                  : "Each parcel uses its own Aadhaar and documents."}
               </span>
             </span>
           </label>
 
           {kycUseForAll ? (
-            <div className="space-y-4">
-              <div className="max-w-sm rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                <ShipmentTextField
-                  label="Aadhaar Number"
-                  required={aadhaarRequired}
-                  inputMode="numeric"
-                  value={formatAadhaarNumber(form.aadhaarNumber)}
-                  onChange={(event) => onFormChange({ ...form, aadhaarNumber: normalizeAadhaarNumber(event.target.value) })}
-                  error={sharedAadhaarError}
-                  revealError={submitAttempted}
-                  readOnly={readOnly}
-                  placeholder="1234 5678 9012"
-                />
-              </div>
+            <ShipmentTextField
+              label="Aadhaar Number"
+              required={aadhaarRequired}
+              inputMode="numeric"
+              value={formatAadhaarNumber(form.aadhaarNumber)}
+              onChange={(event) => onFormChange({ ...form, aadhaarNumber: normalizeAadhaarNumber(event.target.value) })}
+              error={sharedAadhaarError}
+              revealError={submitAttempted}
+              readOnly={readOnly}
+              placeholder="1234 5678 9012"
+            />
+          ) : null}
+          </div>
+
+          {kycUseForAll ? (
+            <div>
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Shared documents</p>
               <KycSlotRow
                 slots={kycSlots}
                 documents={sharedKycDocuments}
@@ -338,34 +342,30 @@ export function ConsignorKycSection({
               />
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {parcels.map((parcel, index) => {
                 const saved = parcel.sequence <= savedParcelCount;
                 return (
-                  <div key={parcel.sequence} className="overflow-hidden rounded-xl border border-slate-200">
-                    <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Parcel {index + 1}
+                  <div key={parcel.sequence} className="overflow-hidden rounded-lg border border-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      <span>Parcel {index + 1}</span>
+                      <span className="font-medium normal-case tracking-normal text-slate-400">{saved ? "Saved" : "Save shipment to upload"}</span>
                     </div>
-                    <div className="space-y-4 p-3 sm:p-4">
-                      <div className="max-w-sm">
-                      <ShipmentTextField
-                        label="Aadhaar Number"
-                        required={aadhaarRequired}
-                        inputMode="numeric"
-                        value={formatAadhaarNumber(parcel.aadhaarNumber)}
-                        onChange={(event) => onParcelAadhaarChange(parcel.sequence, normalizeAadhaarNumber(event.target.value))}
-                        error={aadhaarError(parcel.aadhaarNumber)}
-                        revealError={submitAttempted}
-                        readOnly={readOnly}
-                        placeholder="1234 5678 9012"
-                      />
+                    <div className="space-y-3 p-3">
+                      <div className="max-w-xs">
+                        <ShipmentTextField
+                          label="Aadhaar Number"
+                          required={aadhaarRequired}
+                          inputMode="numeric"
+                          value={formatAadhaarNumber(parcel.aadhaarNumber)}
+                          onChange={(event) => onParcelAadhaarChange(parcel.sequence, normalizeAadhaarNumber(event.target.value))}
+                          error={aadhaarError(parcel.aadhaarNumber)}
+                          revealError={submitAttempted}
+                          readOnly={readOnly}
+                          placeholder="1234 5678 9012"
+                        />
                       </div>
                       <div>
-                        {!saved ? (
-                          <p className="mb-2 flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800">
-                            Save the shipment to upload this parcel&apos;s documents.
-                          </p>
-                        ) : null}
                         <KycSlotRow
                           slots={kycSlots}
                           documents={parcel.kycDocuments}
@@ -415,7 +415,7 @@ function KycSlotRow({
   onOpen: (type: ShipmentKycDocumentType) => Promise<Blob>;
 }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
       {slots.map((slot) => (
         <KycSlot
           key={slot.type}
@@ -498,7 +498,7 @@ function KycSlot({
   }
 
   return (
-    <div className={`flex min-h-32 flex-col gap-3 rounded-xl border p-3.5 text-xs transition ${missing && submitAttempted ? "border-red-300 bg-red-50" : document ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50/70"}`}>
+    <div className={`flex min-h-28 flex-col gap-2 rounded-lg border p-2.5 text-[11px] transition ${missing && submitAttempted ? "border-red-300 bg-red-50" : document ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50/70"}`}>
       <span className="flex items-start justify-between gap-2 font-semibold uppercase tracking-wide text-slate-700">
         <span>
           {slot.title}
@@ -514,7 +514,7 @@ function KycSlot({
           placeholder="Document name"
           disabled={disabled}
           maxLength={80}
-          className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs outline-none focus:border-blue-900 focus:ring-1 focus:ring-blue-100 disabled:bg-slate-100"
+          className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-blue-900 focus:ring-1 focus:ring-blue-100 disabled:bg-slate-100"
         />
       ) : null}
 
@@ -539,7 +539,7 @@ function KycSlot({
               type="button"
               onClick={() => inputRef.current?.click()}
               disabled={busy || disabled || !labelReady}
-              className="mt-auto inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 font-semibold text-slate-700 transition hover:border-blue-900 hover:text-blue-900 disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-auto inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-2 font-semibold text-slate-700 transition hover:border-blue-900 hover:text-blue-900 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <FiUploadCloud aria-hidden="true" className="h-3.5 w-3.5" />
               {busy ? "..." : "Upload"}

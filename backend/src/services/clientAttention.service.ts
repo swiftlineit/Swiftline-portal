@@ -160,6 +160,7 @@ export function exceptionTypeForHoldReason(reason?: string | null): ShipmentExce
     case "address_issue":
       return "ADDRESS_PROBLEM";
     case "missed_connection":
+    case "offloaded":
       return "MISSED_CONNECTION";
     default:
       return "SHIPMENT_DELAYED";
