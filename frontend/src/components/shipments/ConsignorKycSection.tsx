@@ -255,7 +255,7 @@ export function ConsignorKycSection({
             <ShipmentTextField label="Pickup Address Line 1" required value={form.addressLine1} onChange={setField("addressLine1")} error={fieldIssues.addressLine1} revealError={submitAttempted} readOnly={readOnly} />
             <ShipmentTextField label="Pickup Address Line 2" value={form.addressLine2} onChange={setField("addressLine2")} readOnly={readOnly} />
             <ShipmentTextField label="Town / City" required value={form.townOrCity} onChange={setField("townOrCity")} error={fieldIssues.townOrCity} revealError={submitAttempted} readOnly={readOnly} />
-            <ShipmentTextField label="State" value={form.county} onChange={setField("county")} readOnly={readOnly} />
+            <ShipmentTextField label="State" required value={form.county} onChange={setField("county")} error={fieldIssues.county} revealError={submitAttempted} readOnly={readOnly} />
             <ShipmentTextField label="PIN Code" required inputMode="numeric" value={form.postcode} onChange={(event) => onFormChange({ ...form, postcode: event.target.value.replace(/\D/g, "").slice(0, 6) })} error={fieldIssues.postcode} revealError={submitAttempted} readOnly={readOnly} />
             <label className="block md:col-span-2">
               <ShipmentFieldLabel>Pickup Instructions</ShipmentFieldLabel>

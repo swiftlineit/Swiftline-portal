@@ -39,12 +39,15 @@ import { useShipmentDraftAutosave } from "@/lib/useShipmentDraftAutosave";
 import { getDraftRateCardContext, type ClientCountryRateCard } from "@/lib/countryRateCards";
 import { findRestrictedCategories } from "@/lib/restrictedGoods";
 import { normalizeCsbType, type CsbType } from "@/lib/csbType";
+import { maxParcelsPerShipment } from "@/lib/shipmentLimits";
 import { defaultDeclarationNote } from "@/lib/customsInvoice";
 import {
   composeContentsDescription,
   createEmptyParcelItem,
   getHsnCodeError,
   getPositiveNumberError,
+  isUntouchedParcelItem,
+  mergeSavedParcelItemsWithLocalRows,
   normalizeParcelItems,
   type ParcelItem
 } from "@/lib/parcelItems";
@@ -144,7 +147,7 @@ type ParcelForm = {
   aadhaarNumber: string;
 };
 
-const maxParcelCount = 100;
+const maxParcelCount = maxParcelsPerShipment;
 const prohibitedItems = [
   "Alcohol / Liquor",
   "Tobacco / Nicotine / Vape",
@@ -345,6 +348,13 @@ function normalizeParcelForms(parcels: ShipmentDraft["parcelList"]): ParcelForm[
   }));
 }
 
+function comparableParcelForms(parcels: ParcelForm[]): ParcelForm[] {
+  return parcels.map((parcel) => ({
+    ...parcel,
+    items: parcel.items.filter((item) => !isUntouchedParcelItem(item))
+  }));
+}
+
 function isParcelFormEmpty(parcel: ParcelForm) {
   return !parcel.weightKg && !parcel.lengthCm && !parcel.widthCm && !parcel.heightCm
     && parcel.shipmentContentType === "PARCEL"
@@ -473,7 +483,8 @@ export default function DpdLabelDraftPage() {
       draftCorrectionForm.mobileCountryCode !== (draft.consigneeEnteredAddress.mobileCountryCode || "+44") ||
       draftCorrectionForm.mobileNumber !== (draft.consigneeEnteredAddress.mobileNumber ?? "") ||
       draftCorrectionForm.deliveryInstructions !== (draft.consigneeEnteredAddress.deliveryInstructions ?? "") ||
-      JSON.stringify(parcelForms) !== JSON.stringify(normalizeParcelForms(draft.parcelList)) ||
+      JSON.stringify(comparableParcelForms(parcelForms))
+        !== JSON.stringify(comparableParcelForms(normalizeParcelForms(draft.parcelList))) ||
       draftCorrectionForm.serviceType !== (draft.serviceType ?? "COURIER") ||
       draftCorrectionForm.serviceCode !== (draft.serviceCode ?? "") ||
       insuranceOptIn !== (draft.insuranceOptIn ?? false) ||
@@ -639,7 +650,7 @@ export default function DpdLabelDraftPage() {
     onSaved: (nextDraft, isLatest) => {
       setDraft(nextDraft);
       if (!isLatest) return;
-      syncDraftCorrectionForm(nextDraft);
+      syncDraftCorrectionForm(nextDraft, true);
       syncConsignorForm(nextDraft);
       syncAddressForm(nextDraft);
     },
@@ -681,6 +692,7 @@ export default function DpdLabelDraftPage() {
     aadhaarNumber: getFieldIssue(consignorReviewIssues, ["aadhaar"]),
     addressLine1: getFieldIssue(consignorReviewIssues, ["consignor address line 1"]),
     townOrCity: getFieldIssue(consignorReviewIssues, ["consignor town"]),
+    county: getFieldIssue(consignorReviewIssues, ["consignor state"]),
     postcode: getFieldIssue(consignorReviewIssues, ["pin code"])
   }), [consignorReviewIssues]);
   const destinationCountries = useMemo(() => {
@@ -718,7 +730,7 @@ export default function DpdLabelDraftPage() {
     });
   }
 
-  function syncDraftCorrectionForm(nextDraft: ShipmentDraft) {
+  function syncDraftCorrectionForm(nextDraft: ShipmentDraft, preserveLocalItemRows = false) {
     setDraftCorrectionForm({
       companyName: nextDraft.consigneeEnteredAddress.companyName ?? "",
       contactName: nextDraft.consigneeEnteredAddress.contactName ?? "",
@@ -730,7 +742,15 @@ export default function DpdLabelDraftPage() {
       serviceCode: nextDraft.serviceCode ?? ""
     });
     const nextParcels = normalizeParcelForms(nextDraft.parcelList);
-    setParcelForms(nextParcels);
+    setParcelForms((current) => preserveLocalItemRows
+      ? nextParcels.map((parcel, index) => ({
+          ...parcel,
+          items: mergeSavedParcelItemsWithLocalRows(
+            parcel.items,
+            current[index]?.items ?? []
+          )
+        }))
+      : nextParcels);
     setParcelCountInput(String(nextParcels.length));
     setCsbType(normalizeCsbType(nextDraft.csbType));
     setInsuranceOptIn(nextDraft.insuranceOptIn ?? false);
@@ -1312,7 +1332,7 @@ export default function DpdLabelDraftPage() {
   if (loading || !user) return <DashboardLoading />;
 
   return (
-    <>
+    <div className="xl:flex xl:h-[calc(100%-3.25rem)] xl:min-h-0 xl:flex-col">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-950">Review Shipment</h1>
@@ -1333,8 +1353,8 @@ export default function DpdLabelDraftPage() {
       {!draft ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-8 text-sm text-slate-500 shadow-sm">Loading draft...</div>
       ) : (
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="space-y-6">
+        <div className="grid gap-6 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="space-y-6 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:pr-2 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400">
             <ShipmentImportBanner summary={shipmentImport} />
 
               {/* Customs route, first because CSB-V changes what is charged. */}
@@ -1615,6 +1635,7 @@ export default function DpdLabelDraftPage() {
                         <ParcelItemsEditor
                           items={parcel.items}
                           onChange={(items: ParcelItem[]) => handleParcelItemsChange(index, items)}
+                          parcelLabel={`Parcel ${index + 1}`}
                           revealError={submitAttempted}
                           requireHsnCode={csbType === "CSB_V"}
                         />
@@ -1637,7 +1658,7 @@ export default function DpdLabelDraftPage() {
             </section>
           </div>
 
-          <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+          <aside className="space-y-4 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:pr-2 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400">
             <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               {draft?.customerType === "INDIVIDUAL" ? (
                 <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
@@ -1837,6 +1858,6 @@ export default function DpdLabelDraftPage() {
           }}
         />
       ) : null}
-    </>
+    </div>
   );
 }

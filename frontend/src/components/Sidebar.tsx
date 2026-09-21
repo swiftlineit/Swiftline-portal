@@ -167,6 +167,12 @@ const staffNavigation: Array<
     icon: FiTruck,
     items: [
       {
+        label: "Origin Scans",
+        href: "/dashboard/operations-scans",
+        icon: FiPackage,
+        roles: withAdmin(OPERATIONS_AREA),
+      },
+      {
         label: "Pickup Requests",
         href: "/dashboard/pickups",
         icon: FiTruck,

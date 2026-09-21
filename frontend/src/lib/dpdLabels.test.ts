@@ -20,7 +20,7 @@ describe("shipment status choices", () => {
         "EXPORT_CUSTOMS_CLEARED",
         "FLIGHT_DEPARTED"
       ]),
-      ["READY_FOR_EXPORT", "ORIGIN_HUB_DISPATCHED"]
+      ["READY_FOR_EXPORT", "ORIGIN_HUB_DISPATCHED", "IN_TRANSIT"]
     );
   });
 });

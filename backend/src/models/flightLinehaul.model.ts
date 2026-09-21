@@ -1,6 +1,10 @@
 import mongoose from "mongoose";
 
 export const flightLinehaulStatusValues = [
+  // These legacy values remain readable for flights created before the
+  // simplified lifecycle. New flights use only BOOKING_CONFIRMED (shown as
+  // "Booked"), CARGO_ALLOCATED, DEPARTED, ARRIVED_DESTINATION, CLOSED and
+  // CANCELLED.
   "PLANNED",
   "BOOKING_CONFIRMED",
   "CARGO_ALLOCATED",
@@ -108,7 +112,7 @@ const schema = new mongoose.Schema<IFlightLinehaul>(
     totalShipments: { type: Number, required: true, min: 0, default: 0 },
     totalBags: { type: Number, required: true, min: 0, default: 0 },
     totalPieces: { type: Number, required: true, min: 0, default: 0 },
-    status: { type: String, enum: flightLinehaulStatusValues, required: true, default: "PLANNED", index: true },
+    status: { type: String, enum: flightLinehaulStatusValues, required: true, default: "BOOKING_CONFIRMED", index: true },
     connection: { type: connectionSchema, default: null },
     customsStatus: { type: String, enum: flightCustomsStatusValues, default: "PENDING", index: true },
     customsClearedAt: { type: Date, default: null },
@@ -132,19 +136,5 @@ const schema = new mongoose.Schema<IFlightLinehaul>(
 schema.index({ branchId: 1, status: 1, scheduledDepartureAt: -1 });
 schema.index({ branchId: 1, flightNumber: 1, scheduledDepartureAt: 1 }, { unique: false });
 schema.index({ "connection.transitAirportCode": 1 });
-// A MAWB identifies one active physical air-cargo movement. Empty legacy
-// values are excluded so older draft records remain readable, while closed or
-// cancelled flights may release the number for a corrected record.
-schema.index(
-  { mawbNumber: 1 },
-  {
-    unique: true,
-    name: "uniq_active_flight_mawb",
-    partialFilterExpression: {
-      mawbNumber: { $gt: "" },
-      status: { $in: flightLinehaulStatusValues.filter((status) => status !== "CANCELLED" && status !== "CLOSED") }
-    }
-  }
-);
 
 export const FlightLinehaul = mongoose.model<IFlightLinehaul>("FlightLinehaul", schema);

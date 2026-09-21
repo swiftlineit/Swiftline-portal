@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import { FiArrowLeft, FiCheckCircle, FiClock, FiFileText, FiMapPin, FiPackage, FiTruck, FiChevronDown  } from "react-icons/fi";
+import { FiCheckCircle, FiClock, FiFileText, FiMapPin, FiPackage, FiTruck, FiChevronDown  } from "react-icons/fi";
 import { BsArrowCounterclockwise } from "react-icons/bs";
 import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
@@ -39,6 +39,7 @@ import {
   openShipmentParcelKycDocument,
   previewShipmentAmendment,
   reconcileDpdShipmentDocuments,
+  refreshCarrierTracking,
   releaseDpdShipment,
   shipmentHoldReasonOptions,
   shipmentOperationalStatusOptions,
@@ -84,6 +85,7 @@ function getDestination(draft: ShipmentDraft) {
 }
 
 function getShipmentStatus(history: DpdShipmentHistoryItem | null) {
+  if (history?.currentEvent?.status === "PARCEL_COLLECTED") return "Booking Confirmed";
   if (history?.currentEvent?.status === "DESTINATION_ARRIVED" && history.trackingJourney?.context.gatewayLabel) {
     return `Arrived at ${history.trackingJourney.context.gatewayLabel}`;
   }
@@ -113,23 +115,23 @@ function canGenerateDpdCarrierLabel(history: DpdShipmentHistoryItem | null) {
 }
 
 function getTrackingEvents(draft: ShipmentDraft, history: DpdShipmentHistoryItem | null) {
-  // The public journey groups some operational events. The staff detail page
-  // must retain every checkpoint, especially Parcel Collected, even when the
-  // public journey has already reached Origin Received.
+  if (history?.trackingJourney?.milestones.length) {
+    return history.trackingJourney.milestones.map((milestone) => ({
+      label: milestone.label,
+      value: milestone.reachedAt ? formatDashboardDate(milestone.reachedAt) : "Pending",
+      done: Boolean(milestone.reachedAt)
+    }));
+  }
+
+  const originFacility = history?.branch?.city ? `Origin Facility ${history.branch.city}` : "Origin Facility";
   const orderedStatuses: Array<{ status: string; label: string }> = [
-    { status: "SHIPMENT_BOOKED", label: "Shipment Booked" },
-    { status: "PARCEL_COLLECTED", label: "Parcel Collected" },
-    { status: "WAREHOUSE_SCAN_IN", label: "Warehouse Scan In" },
-    { status: "ORIGIN_HUB_PROCESSED", label: "Origin Hub Processed" },
-    { status: "READY_FOR_EXPORT", label: "Ready for Export" },
-    { status: "ORIGIN_HUB_DISPATCHED", label: "Dispatched from Delhi Hub" },
-    { status: "DESTINATION_ARRIVED", label: history?.trackingJourney?.context.gatewayLabel
-      ? `Arrived at ${history.trackingJourney.context.gatewayLabel}`
-      : "Arrived at Destination Gateway" },
-    { status: "IMPORT_CUSTOMS_CLEARANCE", label: "Customs Clearance in Progress" },
-    { status: "IMPORT_CUSTOMS_CLEARED", label: "Customs Cleared" },
-    { status: "DELIVERY_PARTNER_TRANSFERRED", label: `Transferred to ${history?.trackingJourney?.context.deliveryPartnerName || "Delivery Partner"}` },
-    { status: "DELIVERY_HUB_ARRIVED", label: "Arrived at Delivery Hub" },
+    { status: "SHIPMENT_BOOKED", label: "Booking Confirmed" },
+    { status: "WAREHOUSE_SCAN_IN", label: `Received at ${originFacility}` },
+    { status: "ORIGIN_HUB_PROCESSED", label: "Processing for Export" },
+    { status: "READY_FOR_EXPORT", label: "Ready for Dispatch" },
+    { status: "ORIGIN_HUB_DISPATCHED", label: `Departed from ${originFacility}` },
+    { status: "IN_TRANSIT", label: "In International Transit" },
+    { status: "DESTINATION_ARRIVED", label: "Arrived in Destination Country" },
     { status: "OUT_FOR_DELIVERY", label: "Out for Delivery" },
     { status: "DELIVERED", label: "Delivered" }
   ];
@@ -139,7 +141,7 @@ function getTrackingEvents(draft: ShipmentDraft, history: DpdShipmentHistoryItem
 
   if (history?.dpdShipment && !eventsByStatus.has("SHIPMENT_BOOKED")) {
     events.push({
-      label: "Shipment Booked",
+      label: "Booking Confirmed",
       value: `${formatDashboardDate(history.dpdShipment.createdAt)} • Shipment booked with Swiftline and awaiting collection.`,
       done: true
     });
@@ -242,6 +244,7 @@ export default function AdminShipmentDetailsPage() {
   const [cancellationBusy, setCancellationBusy] = useState(false);
   const [cancellationError, setCancellationError] = useState("");
   const [rebooking, setRebooking] = useState(false);
+  const [refreshingCarrier, setRefreshingCarrier] = useState(false);
 
   const totalWeight = useMemo(() => (
     draft?.parcelList.reduce((total, parcel) => total + (Number(parcel.weightKg) || 0), 0) ?? 0
@@ -272,6 +275,9 @@ export default function AdminShipmentDetailsPage() {
     () => (history?.events ?? []).map((event) => event.status),
     [history]
   );
+  const canRefreshCarrierTracking = canManageDpdLabel
+    && Boolean(history?.dpdShipment.dpdShipmentId?.match(/^\d+$/))
+    && recordedStatuses.some((status) => ["IN_TRANSIT", "DESTINATION_ARRIVED", "OUT_FOR_DELIVERY"].includes(status));
   const statusChoices = useMemo(
     () => shipmentOperationalStatusOptions.map((option) => ({
       ...option,
@@ -495,6 +501,29 @@ export default function AdminShipmentDetailsPage() {
     }
   }
 
+  async function handleCarrierRefresh() {
+    if (!history?.dpdShipment || refreshingCarrier) return;
+    setRefreshingCarrier(true);
+    try {
+      const result = await refreshCarrierTracking(history.dpdShipment.id);
+      const appliedMessage = result.result.applied
+        ? `${result.result.applied} new tracking milestone${result.result.applied === 1 ? "" : "s"} applied.`
+        : "ALS tracking is already up to date.";
+      if (result.result.reviewRequired) {
+        toast.warning(
+          `${appliedMessage} ${result.result.reviewRequired} carrier event${result.result.reviewRequired === 1 ? " needs" : "s need"} Operations review.`,
+        );
+      } else {
+        toast.success(appliedMessage);
+      }
+      await loadShipment();
+    } catch (caughtError) {
+      toast.error(caughtError instanceof Error ? caughtError.message : "ALS tracking refresh failed.");
+    } finally {
+      setRefreshingCarrier(false);
+    }
+  }
+
   if (loading || !user) return <DashboardLoading />;
 
   return (
@@ -518,6 +547,17 @@ export default function AdminShipmentDetailsPage() {
               >
                 <BsArrowCounterclockwise aria-hidden="true" className="h-4 w-4" />
                 {rebooking ? "Rebooking..." : "Rebook"}
+              </button>
+            ) : null}
+            {canRefreshCarrierTracking ? (
+              <button
+                type="button"
+                onClick={() => void handleCarrierRefresh()}
+                disabled={refreshingCarrier}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-blue-700 bg-white px-4 text-sm font-semibold text-blue-800 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <BsArrowCounterclockwise aria-hidden="true" className="h-4 w-4" />
+                {refreshingCarrier ? "Refreshing ALS..." : "Refresh ALS Tracking"}
               </button>
             ) : null}
             {history?.dpdShipment && !cancellationLocked ? (
@@ -875,7 +915,7 @@ export default function AdminShipmentDetailsPage() {
                   <ConfirmationValue label="Customer Reference" value={history.bookingConfirmation.customerReference || "Not provided"} />
                   <ConfirmationValue label="Base Charge" value={formatMoneyMinor(history.bookingConfirmation.baseAmountMinor)} />
                   <ConfirmationValue label="GST" value={history.bookingConfirmation.gstAmountMinor === 0 ? "-" : formatMoneyMinor(history.bookingConfirmation.gstAmountMinor)} />
-                  <ConfirmationValue label="Total" value={formatMoneyMinor(history.bookingConfirmation.totalAmountMinor)} emphasis />
+                  <ConfirmationValue label="Total" value={formatMoneyMinor(history.bookingConfirmation.totalAmountMinor)} />
                   <ConfirmationValue label="Advance / Credit" value={`${formatMoneyMinor(history.bookingConfirmation.advanceAmountMinor)} / ${formatMoneyMinor(history.bookingConfirmation.creditAmountMinor)}`} />
                 </dl>
               </section>
@@ -940,7 +980,44 @@ export default function AdminShipmentDetailsPage() {
               onSubmit={handleAmendment}
             />
 
-          <ParcelActivityPanel activities={history?.parcelActivities} />
+          {history?.carrierTrackingReviews?.length ? (
+            <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5" aria-labelledby="carrier-review-heading">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 id="carrier-review-heading" className="text-sm font-semibold uppercase tracking-wide text-amber-950">
+                    Carrier events needing review
+                  </h2>
+                  <p className="mt-1 text-sm text-amber-900">
+                    These ALS updates were not guessed into a customer status. Operations should verify them before making a manual correction.
+                  </p>
+                </div>
+                <span className="rounded-full bg-amber-200 px-3 py-1 text-xs font-semibold text-amber-950">
+                  {history.carrierTrackingReviews.length} pending
+                </span>
+              </div>
+              <div className="mt-4 grid gap-3">
+                {history.carrierTrackingReviews.map((event) => (
+                  <article key={event.id} className="rounded-xl border border-amber-200 bg-white p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold text-slate-950">{event.description || event.eventState}</p>
+                      <time className="text-xs font-medium text-slate-500" dateTime={event.eventAt}>
+                        {formatDateTime(event.eventAt)}
+                      </time>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-700">
+                      {event.location || "Location not supplied"} · ALS state: {event.eventState || "blank"}
+                    </p>
+                    <p className="mt-2 text-xs font-medium text-amber-900">{event.processingNote}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <ParcelActivityPanel
+            activities={history?.parcelActivities}
+            progress={history?.parcelProgress}
+          />
 
           <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
               {/* Destination card */}
@@ -1058,10 +1135,10 @@ export default function AdminShipmentDetailsPage() {
   );
 }
 
-function ConfirmationValue({ label, value, emphasis = false }: { label: string; value: string; emphasis?: boolean }) {
+function ConfirmationValue({ label, value }: { label: string; value: string }) {
   return (
-    <div className={`min-w-0 border-b border-slate-200 px-5 py-4 sm:border-r xl:border-b-0 `}>
-      <dt className={`text-xs font-semibold uppercase `}>{label}</dt>
+    <div className="min-w-0 border-b border-slate-200 px-5 py-4 sm:border-r xl:border-b-0">
+      <dt className="text-xs font-semibold uppercase">{label}</dt>
       <dd className="mt-2 wrap-break-words font-semibold">{value}</dd>
     </div>
   );

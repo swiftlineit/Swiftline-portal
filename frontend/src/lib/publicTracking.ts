@@ -1,8 +1,7 @@
 import { apiUrl } from "@/lib/api";
 import type { DeliveryEstimate } from "@/components/shipments/ShipmentJourney";
 import type { TrackingJourney } from "@/lib/shipmentJourney";
-import type { TrackingPosition } from "@/lib/shipmentTracking";
-import type { ParcelActivity } from "@/lib/shipmentTracking";
+import type { ParcelActivity, ParcelProgress, TrackingPosition } from "@/lib/shipmentTracking";
 
 /**
  * The tracking card as someone with no account sees it.
@@ -50,6 +49,7 @@ export type PublicTracking = {
   attention: { label: string; detail: string } | null;
   journey: TrackingJourney;
   parcelActivities: ParcelActivity[];
+  parcelProgress: ParcelProgress | null;
 
   events: PublicTrackingEvent[];
 };

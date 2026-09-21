@@ -34,6 +34,7 @@ import {
   acknowledgeException,
   updateException,
   resolveException,
+  formatFlightStatus,
   type FlightDetail,
   type FlightStatus,
 } from "@/lib/flightLinehaul";
@@ -55,32 +56,35 @@ const tabs = [
 type Tab = (typeof tabs)[number];
 
 const statusFlow: FlightStatus[] = [
-  "PLANNED",
   "BOOKING_CONFIRMED",
   "CARGO_ALLOCATED",
-  "MANIFEST_READY",
-  "HANDED_TO_AIRLINE",
   "DEPARTED",
-  "IN_TRANSIT",
-  "CONNECTION",
   "ARRIVED_DESTINATION",
-  "CUSTOMS",
-  "HANDED_TO_FINAL_MILE",
   "CLOSED",
 ];
 const allowedNext: Record<string, FlightStatus[]> = {
-  PLANNED: ["BOOKING_CONFIRMED", "CANCELLED"],
+  // Legacy values can still complete safely, but new flights only see the
+  // short lifecycle below.
+  PLANNED: ["BOOKING_CONFIRMED", "CARGO_ALLOCATED", "CANCELLED"],
   BOOKING_CONFIRMED: ["CARGO_ALLOCATED", "CANCELLED"],
-  CARGO_ALLOCATED: ["MANIFEST_READY", "CANCELLED"],
-  MANIFEST_READY: ["HANDED_TO_AIRLINE", "CANCELLED"],
+  CARGO_ALLOCATED: ["DEPARTED", "CANCELLED"],
+  MANIFEST_READY: ["DEPARTED", "CANCELLED"],
   HANDED_TO_AIRLINE: ["DEPARTED", "CANCELLED"],
-  DEPARTED: ["IN_TRANSIT"],
-  IN_TRANSIT: ["CONNECTION", "ARRIVED_DESTINATION"],
+  DEPARTED: ["ARRIVED_DESTINATION"],
+  IN_TRANSIT: ["ARRIVED_DESTINATION"],
   CONNECTION: ["ARRIVED_DESTINATION"],
-  ARRIVED_DESTINATION: ["CUSTOMS"],
-  CUSTOMS: ["HANDED_TO_FINAL_MILE"],
+  ARRIVED_DESTINATION: ["CLOSED"],
+  CUSTOMS: ["CLOSED"],
   HANDED_TO_FINAL_MILE: ["CLOSED"],
 };
+
+function lifecycleTimelineStatus(status: FlightStatus): FlightStatus {
+  if (["PLANNED", "BOOKING_CONFIRMED"].includes(status)) return "BOOKING_CONFIRMED";
+  if (["MANIFEST_READY", "HANDED_TO_AIRLINE"].includes(status)) return "CARGO_ALLOCATED";
+  if (["IN_TRANSIT", "CONNECTION"].includes(status)) return "DEPARTED";
+  if (["CUSTOMS", "HANDED_TO_FINAL_MILE"].includes(status)) return "ARRIVED_DESTINATION";
+  return status;
+}
 
 function statusBadge(status: string) {
   const base =
@@ -157,7 +161,7 @@ export default function FlightDetailPage() {
         actionReason,
         meta,
       );
-      toast.success(`Flight moved to ${transitionTo}.`);
+      toast.success(`Flight moved to ${formatFlightStatus(transitionTo)}.`);
       setTransitionTo("");
       setActionReason("");
       setActualDepartureAt("");
@@ -192,7 +196,7 @@ export default function FlightDetailPage() {
                 {flight.flightLinehaulNumber}
               </span>
               <span className={statusBadge(flight.status)}>
-                {flight.status.replaceAll("_", " ")}
+                {formatFlightStatus(flight.status)}
               </span>
             </div>
 
@@ -345,23 +349,11 @@ export default function FlightDetailPage() {
       {nextOptions.length ? (
         <section className="overflow-hidden rounded-xl border border-[#DDE3EC] bg-white shadow-[0_4px_16px_rgba(15,23,42,0.035)]">
           <div className="flex flex-col gap-3 border-b border-[#EEF1F4] bg-[#FBFCFD] px-4 py-3.5 sm:flex-row sm:items-start sm:justify-between sm:px-5">
-            <div className="flex min-w-0 items-start gap-3">
-              
-              <div>
-                <h2 className="text-sm font-bold text-slate-950">Update flight status</h2>
-                <p className="mt-0.5 max-w-2xl text-xs leading-5 text-slate-500">
-                  Move this flight to its next operational milestone. Departure and arrival changes can also update shipment tracking.
-
-                     <span>
-                The system validates every active shipment first. If a required earlier milestone is missing, the entire update is blocked.
-              </span>
-                </p>
-                
-              </div>
-            </div>
-
-            <div className="flex max-w-xl items-start gap-2 rounded-lg border border-[#DDE3EC] bg-white px-3 py-2 text-[11px] leading-4 text-slate-500">
-           
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold text-slate-950">Update flight status</h2>
+              <p className="mt-0.5 max-w-2xl text-xs leading-5 text-slate-500">
+                Choose the next flight milestone. Actual departure and arrival also update shipment tracking. The system validates every active shipment first; a missing earlier milestone blocks the change.
+              </p>
             </div>
           </div>
 
@@ -376,7 +368,7 @@ export default function FlightDetailPage() {
                 <option value="">Select status</option>
                 {nextOptions.map((s) => (
                   <option key={s} value={s}>
-                    {s.replaceAll("_", " ")}
+                    {formatFlightStatus(s)}
                   </option>
                 ))}
               </select>
@@ -1170,7 +1162,7 @@ function ShipmentsTab({
                   <td className="px-4 py-3 text-center">{a.pieces}</td>
                   <td className="px-4 py-3">
                     <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${a.status === "ALLOCATED" ? "bg-emerald-50 text-emerald-700" : a.status === "OFFLOADED" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600"}`}
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${a.status === "ALLOCATED" ? "bg-emerald-50 text-emerald-700" : a.status === "CARRIED" ? "bg-blue-50 text-blue-700" : a.status === "OFFLOADED" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600"}`}
                     >
                       {a.status}
                     </span>
@@ -1556,7 +1548,7 @@ function ManifestTab({
 
 function TimelineTab({ detail }: { detail: FlightDetail }) {
   const flight = detail.flight;
-  const idx = statusFlow.indexOf(flight.status as FlightStatus);
+  const idx = statusFlow.indexOf(lifecycleTimelineStatus(flight.status));
   return (
     <div className="space-y-4">
       <div className="relative pl-6">
@@ -1573,7 +1565,7 @@ function TimelineTab({ detail }: { detail: FlightDetail }) {
               <p
                 className={`ml-4 text-sm ${current ? "font-bold text-[#0D1282]" : done ? "font-semibold text-emerald-700" : future ? "text-slate-400" : "text-slate-600"}`}
               >
-                {s.replaceAll("_", " ")}
+                {formatFlightStatus(s)}
                 {current ? " • current" : done ? " • done" : ""}
               </p>
               {current && flight.scheduledDepartureAt ? (
@@ -2325,6 +2317,7 @@ function HandoverTab({
       ? new Date(f.arrivalAt).toISOString().slice(0, 16)
       : "",
     customsStatus: f.customsStatus,
+    customsNote: "",
     customsClearedAt: f.customsClearedAt
       ? new Date(f.customsClearedAt as string).toISOString().slice(0, 16)
       : "",
@@ -2344,6 +2337,7 @@ function HandoverTab({
         ? new Date(f.arrivalAt).toISOString().slice(0, 16)
         : "",
       customsStatus: f.customsStatus,
+      customsNote: "",
       customsClearedAt: f.customsClearedAt
         ? new Date(f.customsClearedAt as string).toISOString().slice(0, 16)
         : "",
@@ -2355,6 +2349,9 @@ function HandoverTab({
       handoverReference: f.handoverReference ?? "",
     });
   }, [f]);
+
+  const customsNoteIsCustomerVisible = form.customsStatus === "HELD"
+    || f.customsStatus === "HELD";
 
   return (
     <section className="overflow-hidden rounded-xl border border-[#DDE3EC] bg-white">
@@ -2379,6 +2376,25 @@ function HandoverTab({
             onChange={(e) => setForm({ ...form, arrivalAt: e.target.value })}
             className="mt-1.5 h-11 w-full rounded-lg border border-[#CDD5DF] bg-white px-3 text-sm"
           />
+        </label>
+
+        <label className="text-xs font-semibold text-slate-600 sm:col-span-2 lg:col-span-3">
+          Customs note {form.customsStatus === "HELD" ? "*" : customsNoteIsCustomerVisible ? "(customer-visible release)" : "(internal)"}
+          <textarea
+            value={form.customsNote}
+            onChange={(e) => setForm({ ...form, customsNote: e.target.value })}
+            rows={3}
+            required={form.customsStatus === "HELD"}
+            placeholder={form.customsStatus === "HELD"
+              ? "Explain the customs hold for the customer and Operations"
+              : customsNoteIsCustomerVisible
+                ? "Explain that the customs hold was released"
+              : "Optional internal note for customs processing or clearance"}
+            className="mt-1.5 w-full resize-none rounded-lg border border-[#CDD5DF] bg-white px-3 py-2.5 text-sm"
+          />
+          <span className="mt-1 block text-[11px] font-normal leading-4 text-slate-500">
+            Processing and Cleared stay internal. A Hold is shown to customers; changing away from Held records the release.
+          </span>
         </label>
 
         <label className="text-xs font-semibold text-slate-600">
@@ -2465,6 +2481,7 @@ function HandoverTab({
                   ? new Date(form.arrivalAt).toISOString()
                   : null,
                 customsStatus: form.customsStatus,
+                customsNote: form.customsNote,
                 customsClearedAt: form.customsClearedAt
                   ? new Date(form.customsClearedAt).toISOString()
                   : null,

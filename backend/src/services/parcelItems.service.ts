@@ -23,7 +23,8 @@ export const defaultParcelItemUnitType: ParcelItemUnitType = "Pcs";
 // Must stay <= the `contentsDescription` maxlength in shipmentDraft.model.ts and
 // the length the DPD payload validator enforces.
 export const contentsDescriptionMaxLength = 120;
-export const maxParcelItems = 20;
+export const maxParcelsPerShipment = 100;
+export const maxParcelItems = 50;
 
 export type ParcelItemInput = {
   description?: unknown;

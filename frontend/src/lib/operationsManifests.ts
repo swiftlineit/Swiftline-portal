@@ -24,6 +24,7 @@ export type OperationsManifest = {
   id: string;
   manifestNumber: string;
   branchId: string;
+  flightLinehaulId?: string | null;
   branch?: { name: string; code: string } | null;
   header: ManifestHeader;
   status: ManifestStatus;
@@ -37,7 +38,8 @@ export type OperationsManifest = {
 export type OperationsBag = {
   id: string;
   bagNumber: string;
-  status: "OPEN" | "CLOSED" | "REOPENED" | "CANCELLED";
+  barcode?: string;
+  status: "OPEN" | "CLOSED" | "READY" | "REOPENED" | "CANCELLED";
   totalConsignments: number;
   totalPhysicalParcels: number;
   totalWeightKg: number;
@@ -46,6 +48,10 @@ export type OperationsParcelValue = {
   parcelNumber: string;
   valueMinor: number | null;
 };
+export type OperationsParcelDisposition =
+  | "HELD"
+  | "DEFERRED_TO_NEXT_MANIFEST"
+  | "CANCELLED";
 export type OperationsConsignment = {
   id: string;
   bagId: string;
@@ -55,6 +61,12 @@ export type OperationsConsignment = {
   displayConsignmentNumber: string;
   expectedParcelNumbers: string[];
   scannedParcelNumbers: string[];
+  parcelDispositions: Array<{
+    parcelNumber: string;
+    disposition: OperationsParcelDisposition;
+    reason: string;
+    recordedAt: string;
+  }>;
   parcelValues: OperationsParcelValue[];
   weightKg: number;
   status: "PARTIAL" | "COMPLETE";
@@ -313,7 +325,11 @@ export const runManifestAction = (
   id: string,
   action: "seal" | "dispatch" | "cancel",
   reason = "",
-  options?: { confirmMixedDestinations?: boolean },
+  options?: {
+    confirmMixedDestinations?: boolean;
+    method?: "BUTTON" | "BARCODE_SCAN";
+    scannedBarcode?: string;
+  },
 ) =>
   request<{ success: true; message: string }>(
     `/api/v1/operations-manifests/${id}/${action}`,
@@ -335,6 +351,20 @@ export const runBagAction = (
     `/api/v1/operations-manifests/${id}/bags/${bagId}/${action}`,
     { method: "POST", body: JSON.stringify(reason ? { reason } : {}) },
   );
+export const closeAllOperationsBags = (id: string) =>
+  request<{ success: true; message: string; result: { closed: number; bagNumbers: string[] } }>(
+    `/api/v1/operations-manifests/${id}/bags/close-all`,
+    { method: "POST", body: "{}" },
+  );
+export const markOperationsBagReady = (manifestId: string, bagBarcode: string) =>
+  request<{
+    success: true;
+    message: string;
+    result: { bagNumber: string; updatedShipments: number; alreadyReady: boolean };
+  }>(`/api/v1/operations-manifests/${manifestId}/bags/ready`, {
+    method: "POST",
+    body: JSON.stringify({ bagBarcode }),
+  });
 export const removeOperationsScan = (
   id: string,
   scanId: string,
@@ -344,6 +374,20 @@ export const removeOperationsScan = (
     method: "POST",
     body: JSON.stringify({ reason }),
   });
+export const setOperationsParcelDisposition = (
+  manifestId: string,
+  consignmentId: string,
+  parcelNumber: string,
+  disposition: OperationsParcelDisposition,
+  reason: string,
+) =>
+  request<{ success: true; message: string }>(
+    `/api/v1/operations-manifests/${manifestId}/consignments/${consignmentId}/parcel-disposition`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ parcelNumber, disposition, reason }),
+    },
+  );
 
 // The EDI export lives at its own path; xlsx and pdf share the export.<format> route.
 // `fileName` builds the download name from the manifest number.

@@ -1,13 +1,9 @@
 import mongoose from "mongoose";
 import { connectDatabase } from "../config/database.js";
+import { orphanedFlightCostSheetPipeline } from "../services/flightLinehaulIndexMigration.service.js";
 
 const apply = process.argv.includes("--apply");
 const ACTIVE_MANIFEST_STATUSES = ["DRAFT", "PACKING", "READY_TO_SEAL", "SEALED", "DISPATCHED"];
-const ACTIVE_FLIGHT_STATUSES = [
-  "PLANNED", "BOOKING_CONFIRMED", "CARGO_ALLOCATED", "MANIFEST_READY",
-  "HANDED_TO_AIRLINE", "DEPARTED", "IN_TRANSIT", "CONNECTION",
-  "ARRIVED_DESTINATION", "CUSTOMS", "HANDED_TO_FINAL_MILE"
-];
 const MANIFEST_INDEX_NAME = "uniq_active_manifest_per_flight";
 const ACTIVE_ALLOCATION_INDEX_NAME = "uniq_active_flight_shipment";
 const LEGACY_ALLOCATION_INDEX_NAME = "uniq_flight_shipment";
@@ -46,25 +42,6 @@ async function duplicateActiveAllocations() {
   ]).toArray();
 }
 
-async function duplicateActiveMawbs() {
-  return mongoose.connection.collection("flightlinehauls").aggregate([
-    {
-      $match: {
-        mawbNumber: { $type: "string", $gt: "" },
-        status: { $in: ACTIVE_FLIGHT_STATUSES }
-      }
-    },
-    {
-      $group: {
-        _id: "$mawbNumber",
-        count: { $sum: 1 },
-        flightNumbers: { $push: "$flightNumber" }
-      }
-    },
-    { $match: { count: { $gt: 1 } } }
-  ]).toArray();
-}
-
 async function duplicateFlightCostSheets() {
   return mongoose.connection.collection("flightcostsheets").aggregate([
     {
@@ -88,26 +65,10 @@ async function duplicateFlightCostSheets() {
   ]).toArray();
 }
 
-async function standaloneFlightCostSheets() {
-  return mongoose.connection.collection("flightcostsheets").aggregate([
-    {
-      $lookup: {
-        from: "operationsmanifests",
-        localField: "operationsManifestId",
-        foreignField: "_id",
-        as: "manifest"
-      }
-    },
-    {
-      $match: {
-        $or: [
-          { manifest: { $size: 0 } },
-          { "manifest.flightLinehaulId": { $not: { $type: "objectId" } } }
-        ]
-      }
-    },
-    { $project: { _id: 1, operationsManifestId: 1 } }
-  ]).toArray();
+async function orphanedFlightCostSheets() {
+  return mongoose.connection.collection("flightcostsheets")
+    .aggregate(orphanedFlightCostSheetPipeline())
+    .toArray();
 }
 
 async function attachedFlightCostSheetMappings() {
@@ -143,25 +104,23 @@ async function migrate() {
   try {
     const duplicates = await duplicateActiveManifests();
     const duplicateAllocations = await duplicateActiveAllocations();
-    const duplicateMawbs = await duplicateActiveMawbs();
     const duplicateCostSheets = await duplicateFlightCostSheets();
-    const standaloneCostSheets = await standaloneFlightCostSheets();
+    const orphanedCostSheets = await orphanedFlightCostSheets();
     console.log("Flight linehaul index audit.", {
       apply,
       duplicateManifestGroups: duplicates,
       duplicateAllocationGroups: duplicateAllocations,
-      duplicateActiveMawbs: duplicateMawbs,
       duplicateFlightCostSheetGroups: duplicateCostSheets,
-      standaloneCostSheets
+      orphanedCostSheets
     });
-    if (duplicates.length || duplicateAllocations.length || duplicateMawbs.length || duplicateCostSheets.length) {
-      throw new Error("Resolve duplicate active manifests/allocations/MAWBs/cost sheets before creating the unique indexes. Nothing was changed.");
+    if (duplicates.length || duplicateAllocations.length || duplicateCostSheets.length) {
+      throw new Error("Resolve duplicate active manifests/allocations/cost sheets before creating the unique indexes. Nothing was changed.");
     }
-    if (standaloneCostSheets.length && apply) {
-      throw new Error("Resolve standalone flight cost sheets before applying the unique flight cost-sheet index. Nothing was changed.");
+    if (orphanedCostSheets.length && apply) {
+      throw new Error("Resolve orphaned flight cost sheets before applying the unique flight cost-sheet index. Nothing was changed.");
     }
     if (!apply) {
-      console.log(`Dry run passed. Re-run with --apply to create or repair ${MANIFEST_INDEX_NAME}, ${ACTIVE_ALLOCATION_INDEX_NAME}, ${FLIGHT_MAWB_INDEX_NAME}, and ${FLIGHT_COST_SHEET_INDEX_NAME}.`);
+      console.log(`Dry run passed. Re-run with --apply to create or repair ${MANIFEST_INDEX_NAME}, ${ACTIVE_ALLOCATION_INDEX_NAME}, and ${FLIGHT_COST_SHEET_INDEX_NAME}, and remove the retired ${FLIGHT_MAWB_INDEX_NAME} constraint.`);
       return;
     }
 
@@ -169,6 +128,12 @@ async function migrate() {
     if (allocationIndexes.includes(LEGACY_ALLOCATION_INDEX_NAME)) {
       await mongoose.connection.collection("flightshipmentallocations").dropIndex(LEGACY_ALLOCATION_INDEX_NAME);
       console.log(`Dropped legacy ${LEGACY_ALLOCATION_INDEX_NAME}.`);
+    }
+
+    const flightIndexes = await existingIndexNames("flightlinehauls");
+    if (flightIndexes.includes(FLIGHT_MAWB_INDEX_NAME)) {
+      await mongoose.connection.collection("flightlinehauls").dropIndex(FLIGHT_MAWB_INDEX_NAME);
+      console.log(`Dropped retired ${FLIGHT_MAWB_INDEX_NAME}.`);
     }
 
     await mongoose.connection.collection("operationsmanifests").createIndex(
@@ -190,17 +155,6 @@ async function migrate() {
         partialFilterExpression: { status: "ALLOCATED" }
       }
     );
-    await mongoose.connection.collection("flightlinehauls").createIndex(
-      { mawbNumber: 1 },
-      {
-        unique: true,
-        name: FLIGHT_MAWB_INDEX_NAME,
-        partialFilterExpression: {
-          mawbNumber: { $gt: "" },
-          status: { $in: ACTIVE_FLIGHT_STATUSES }
-        }
-      }
-    );
     const costSheetMappings = await attachedFlightCostSheetMappings();
     if (costSheetMappings.length) {
       await mongoose.connection.collection("flightcostsheets").bulkWrite(
@@ -220,7 +174,7 @@ async function migrate() {
         partialFilterExpression: { flightLinehaulId: { $type: "objectId" } }
       }
     );
-    console.log(`Created or confirmed ${MANIFEST_INDEX_NAME}, ${ACTIVE_ALLOCATION_INDEX_NAME}, ${FLIGHT_MAWB_INDEX_NAME}, and ${FLIGHT_COST_SHEET_INDEX_NAME}.`);
+    console.log(`Created or confirmed ${MANIFEST_INDEX_NAME}, ${ACTIVE_ALLOCATION_INDEX_NAME}, and ${FLIGHT_COST_SHEET_INDEX_NAME}.`);
   } finally {
     await mongoose.disconnect();
   }

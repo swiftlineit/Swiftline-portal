@@ -909,6 +909,9 @@ async function createLabelForShipmentDraftInternal(
 
     booking.bookingSnapshot = bookingSnapshot;
     booking.currentShipmentSnapshot = bookingSnapshot;
+    // DPD/ALS may return no per-piece carrier numbers. The portal's physical
+    // scan workflow must always retain its own Swiftline parcel labels.
+    booking.parcelNumbers = bookingSnapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber);
     booking.snapshotRevision = 1;
     await measureShipmentBookingStage(timings, "bookingWriteMs", () => booking.save());
 
@@ -1357,7 +1360,10 @@ export async function generateDpdLabelForExistingShipment(
     claimedShipment.dpdTransactionId = docket.docketId;
     claimedShipment.forwardingNumber = docket.forwardingNumber;
     claimedShipment.entryNumber = docket.entryNumber;
-    claimedShipment.parcelNumbers = docket.parcelNumbers;
+    const bookingSnapshot = readShipmentBookingSnapshot(claimedShipment.currentShipmentSnapshot)
+      ?? readShipmentBookingSnapshot(claimedShipment.bookingSnapshot);
+    claimedShipment.parcelNumbers = bookingSnapshot?.parcels.map((parcel) => parcel.swiftlineParcelNumber)
+      ?? docket.parcelNumbers;
     claimedShipment.requestSnapshot = docket.requestSnapshot;
     claimedShipment.responseSnapshot = docket.responseSnapshot;
     claimedShipment.status = "DPD_CREATED";

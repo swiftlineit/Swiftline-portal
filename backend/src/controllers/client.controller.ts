@@ -24,7 +24,10 @@ import {
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
-import { loadShipmentParcelActivities } from "../services/shipmentParcelActivity.service.js";
+import {
+  loadShipmentParcelActivities,
+  loadShipmentParcelProgress
+} from "../services/shipmentParcelActivity.service.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import {
   createShipmentImportBatch,
@@ -1099,7 +1102,7 @@ function serializeClientShipmentDetails(params: {
   journey?: TrackingJourney;
 }) {
   const { draft, dpdShipment, labels, events, currentInvoiceRevision, currentInvoiceNumber, journey } = params;
-  const currentEvent = events[0] ?? null;
+  const currentEvent = events.find((event) => event.status !== "PARCEL_COLLECTED") ?? null;
   const originalBookingSnapshot = readShipmentBookingSnapshot(dpdShipment?.bookingSnapshot);
   const snapshotIsCurrent = (currentInvoiceRevision ?? 1) <= (dpdShipment?.snapshotRevision ?? 1);
   const currentShipmentSnapshot = snapshotIsCurrent
@@ -1191,7 +1194,7 @@ export async function getClientShipmentDetails(request: Request, response: Respo
     });
   }
 
-  const [labels, events, currentInvoice, originBranch, parcelActivities] = await Promise.all([
+  const [labels, events, currentInvoice, originBranch, parcelActivities, parcelProgress] = await Promise.all([
     dpdShipment
       ? LabelDocument.find({
           dpdShipmentId: dpdShipment._id,
@@ -1207,7 +1210,8 @@ export async function getClientShipmentDetails(request: Request, response: Respo
     draft.branchId
       ? Branch.findById(draft.branchId).select("address.city").lean().exec()
       : Promise.resolve(null),
-    loadShipmentParcelActivities(draft._id)
+    loadShipmentParcelActivities(draft._id),
+    loadShipmentParcelProgress(draft._id)
   ]);
 
   /**
@@ -1254,8 +1258,9 @@ export async function getClientShipmentDetails(request: Request, response: Respo
         eventAt: activity.eventAt,
         message: activity.customerMessage
       })),
+      parcelProgress,
       trackingPosition: buildTrackingPosition({
-        events,
+        events: events.filter((event) => event.status !== "PARCEL_COLLECTED"),
         journey,
         destinationCity: draft.consigneeEnteredAddress?.townOrCity ?? "",
         audience: "AUTHENTICATED"

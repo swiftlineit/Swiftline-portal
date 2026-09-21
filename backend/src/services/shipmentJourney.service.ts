@@ -82,31 +82,29 @@ const milestoneDefinitions: Array<{
   key: string;
   canonicalStatus: string;
   statuses: readonly string[];
+  customerJourney: boolean;
 }> = [
-  { key: "BOOKED", canonicalStatus: "SHIPMENT_BOOKED", statuses: ["SHIPMENT_BOOKED", "SHIPMENT_CREATED"] },
-  { key: "COLLECTED", canonicalStatus: "PARCEL_COLLECTED", statuses: ["PARCEL_COLLECTED"] },
-  { key: "ORIGIN_RECEIVED", canonicalStatus: "WAREHOUSE_SCAN_IN", statuses: ["WAREHOUSE_SCAN_IN"] },
-  { key: "ORIGIN_PROCESSED", canonicalStatus: "ORIGIN_HUB_PROCESSED", statuses: ["ORIGIN_HUB_PROCESSED"] },
-  { key: "EXPORT_READY", canonicalStatus: "READY_FOR_EXPORT", statuses: ["READY_FOR_EXPORT", "EXPORT_CUSTOMS_CLEARED", "FLIGHT_ASSIGNED"] },
-  { key: "ORIGIN_DISPATCHED", canonicalStatus: "ORIGIN_HUB_DISPATCHED", statuses: ["ORIGIN_HUB_DISPATCHED", "FLIGHT_DEPARTED"] },
-  // International transit is the active phase established by departure. It is
-  // customer-visible without asking Operations to record a duplicate scan.
-  { key: "INTERNATIONAL_TRANSIT", canonicalStatus: "IN_TRANSIT", statuses: ["ORIGIN_HUB_DISPATCHED", "FLIGHT_DEPARTED", "IN_TRANSIT"] },
-  { key: "GATEWAY_ARRIVED", canonicalStatus: "DESTINATION_ARRIVED", statuses: ["DESTINATION_ARRIVED"] },
-  { key: "CUSTOMS_IN_PROGRESS", canonicalStatus: "IMPORT_CUSTOMS_CLEARANCE", statuses: ["IMPORT_CUSTOMS_CLEARANCE"] },
-  { key: "CUSTOMS_CLEARED", canonicalStatus: "IMPORT_CUSTOMS_CLEARED", statuses: ["IMPORT_CUSTOMS_CLEARED"] },
-  { key: "PARTNER_TRANSFERRED", canonicalStatus: "DELIVERY_PARTNER_TRANSFERRED", statuses: ["DELIVERY_PARTNER_TRANSFERRED"] },
-  { key: "DELIVERY_HUB", canonicalStatus: "DELIVERY_HUB_ARRIVED", statuses: ["DELIVERY_HUB_ARRIVED"] },
-  { key: "OUT_FOR_DELIVERY", canonicalStatus: "OUT_FOR_DELIVERY", statuses: ["OUT_FOR_DELIVERY"] },
-  { key: "DELIVERED", canonicalStatus: "DELIVERED", statuses: ["DELIVERED"] }
+  { key: "BOOKED", canonicalStatus: "SHIPMENT_BOOKED", statuses: ["SHIPMENT_BOOKED", "SHIPMENT_CREATED"], customerJourney: true },
+  { key: "COLLECTED", canonicalStatus: "PARCEL_COLLECTED", statuses: ["PARCEL_COLLECTED"], customerJourney: false },
+  { key: "ORIGIN_RECEIVED", canonicalStatus: "WAREHOUSE_SCAN_IN", statuses: ["WAREHOUSE_SCAN_IN"], customerJourney: true },
+  { key: "ORIGIN_PROCESSED", canonicalStatus: "ORIGIN_HUB_PROCESSED", statuses: ["ORIGIN_HUB_PROCESSED"], customerJourney: true },
+  { key: "EXPORT_READY", canonicalStatus: "READY_FOR_EXPORT", statuses: ["READY_FOR_EXPORT", "EXPORT_CUSTOMS_CLEARED", "FLIGHT_ASSIGNED"], customerJourney: true },
+  { key: "ORIGIN_DISPATCHED", canonicalStatus: "ORIGIN_HUB_DISPATCHED", statuses: ["ORIGIN_HUB_DISPATCHED", "FLIGHT_DEPARTED"], customerJourney: true },
+  { key: "INTERNATIONAL_TRANSIT", canonicalStatus: "IN_TRANSIT", statuses: ["IN_TRANSIT", "FLIGHT_DEPARTED"], customerJourney: true },
+  { key: "DESTINATION_ARRIVED", canonicalStatus: "DESTINATION_ARRIVED", statuses: ["DESTINATION_ARRIVED"], customerJourney: true },
+  { key: "CUSTOMS_IN_PROGRESS", canonicalStatus: "IMPORT_CUSTOMS_CLEARANCE", statuses: ["IMPORT_CUSTOMS_CLEARANCE"], customerJourney: false },
+  { key: "CUSTOMS_CLEARED", canonicalStatus: "IMPORT_CUSTOMS_CLEARED", statuses: ["IMPORT_CUSTOMS_CLEARED"], customerJourney: false },
+  { key: "PARTNER_TRANSFERRED", canonicalStatus: "DELIVERY_PARTNER_TRANSFERRED", statuses: ["DELIVERY_PARTNER_TRANSFERRED"], customerJourney: false },
+  { key: "DELIVERY_HUB", canonicalStatus: "DELIVERY_HUB_ARRIVED", statuses: ["DELIVERY_HUB_ARRIVED"], customerJourney: false },
+  { key: "OUT_FOR_DELIVERY", canonicalStatus: "OUT_FOR_DELIVERY", statuses: ["OUT_FOR_DELIVERY"], customerJourney: true },
+  { key: "DELIVERED", canonicalStatus: "DELIVERED", statuses: ["DELIVERED"], customerJourney: true }
 ];
 
 const stageDefinitions: Array<{ key: string; label: string; milestoneKeys: readonly string[] }> = [
-  { key: "ORIGIN", label: "Origin", milestoneKeys: ["BOOKED", "COLLECTED", "ORIGIN_RECEIVED", "ORIGIN_PROCESSED"] },
+  { key: "ORIGIN", label: "Origin", milestoneKeys: ["BOOKED", "ORIGIN_RECEIVED", "ORIGIN_PROCESSED"] },
   { key: "EXPORT", label: "Export", milestoneKeys: ["EXPORT_READY", "ORIGIN_DISPATCHED"] },
   { key: "INTERNATIONAL", label: "International Transit", milestoneKeys: ["INTERNATIONAL_TRANSIT"] },
-  { key: "GATEWAY_CUSTOMS", label: "Gateway & Customs", milestoneKeys: ["GATEWAY_ARRIVED", "CUSTOMS_IN_PROGRESS", "CUSTOMS_CLEARED"] },
-  { key: "LAST_MILE", label: "Last Mile", milestoneKeys: ["PARTNER_TRANSFERRED", "DELIVERY_HUB", "OUT_FOR_DELIVERY"] },
+  { key: "DESTINATION", label: "Destination", milestoneKeys: ["DESTINATION_ARRIVED", "OUT_FOR_DELIVERY"] },
   { key: "DELIVERED", label: "Delivered", milestoneKeys: ["DELIVERED"] }
 ];
 
@@ -148,25 +146,27 @@ function gatewayLabel(profile: TrackingProfile, code: string, suppliedName: stri
   return name ? `${titleCase(name)} Gateway (${code})` : `Gateway (${code})`;
 }
 
-function transitLabel(profile: TrackingProfile, destinationCountryName: string) {
-  if (profile === "UK") return "In Transit to United Kingdom";
-  if (profile === "USA") return "In Transit to United States";
-  if (profile === "CANADA") return "In Transit to Canada";
-  if (profile === "EUROPE") return "In Transit to Europe";
-  return `In Transit to ${destinationCountryName || "Destination"}`;
+function originFacilityLocation(value: string) {
+  const location = value
+    .replace(/\s+origin\s+facility$/i, "")
+    .replace(/\s+(?:origin\s+)?hub$/i, "")
+    .trim();
+  return location || value;
 }
 
 function milestoneLabel(key: string, context: TrackingJourneyContext) {
+  const originLocation = originFacilityLocation(context.originHubName);
+  const originFacilityLabel = originLocation ? `Origin Facility ${originLocation}` : "Origin Facility";
   const labels: Record<string, string> = {
     BOOKED: "Booking Confirmed",
     COLLECTED: "Shipment Collected",
-    ORIGIN_RECEIVED: `Shipment Received at ${context.originHubName}`,
-    ORIGIN_PROCESSED: `Shipment Processed at ${context.originHubName}`,
-    EXPORT_READY: "Ready for Export",
-    ORIGIN_DISPATCHED: `Dispatched from ${context.originHubName}`,
-    INTERNATIONAL_TRANSIT: transitLabel(context.profile, context.destinationCountryName),
-    GATEWAY_ARRIVED: `Arrived at ${context.gatewayLabel}`,
-    CUSTOMS_IN_PROGRESS: "Customs Clearance in Progress",
+    ORIGIN_RECEIVED: `Received at ${originFacilityLabel}`,
+    ORIGIN_PROCESSED: "Processing for Export",
+    EXPORT_READY: "Ready for Dispatch",
+    ORIGIN_DISPATCHED: `Departed from ${originFacilityLabel}`,
+    INTERNATIONAL_TRANSIT: "In International Transit",
+    DESTINATION_ARRIVED: "Arrived in Destination Country",
+    CUSTOMS_IN_PROGRESS: "Customs Processing",
     CUSTOMS_CLEARED: "Customs Cleared",
     PARTNER_TRANSFERRED: context.profile === "UK"
       ? "Transferred to DPD Network"
@@ -256,9 +256,7 @@ export function buildTrackingJourney(input: {
   };
 
   const rawMilestones = milestoneDefinitions
-    // Collection is conditional; it appears once it actually happened and is
-    // never shown as a required pending step for a counter drop-off.
-    .filter((definition) => definition.key !== "COLLECTED" || firstReachedAt(input.events, definition.statuses))
+    .filter((definition) => definition.customerJourney)
     .map((definition) => ({
       key: definition.key,
       label: milestoneLabel(definition.key, context),
@@ -372,9 +370,26 @@ export function normalizeVisibleTrackingHistory<T extends VisibleHistoryEvent>(
     });
   }
 
+  // A shipment cannot be released twice without another hold. The data layer
+  // now makes a customs release idempotent, but this small display guard keeps
+  // historical double-writes from appearing in admin, client and public views.
+  let releasedSinceLastHold = false;
+  const coherentHistory = visible
+    .sort((left, right) => eventTime(left.eventAt) - eventTime(right.eventAt))
+    .filter((event) => {
+      if (event.status === "ON_HOLD") {
+        releasedSinceLastHold = false;
+        return true;
+      }
+      if (event.status !== "RELEASED_FROM_HOLD") return true;
+      if (releasedSinceLastHold) return false;
+      releasedSinceLastHold = true;
+      return true;
+    });
+
   // API event arrays have always been newest-first. Frontends that present a
   // chronological story can continue sorting locally without a contract change.
-  return visible.sort((left, right) => eventTime(right.eventAt) - eventTime(left.eventAt));
+  return coherentHistory.sort((left, right) => eventTime(right.eventAt) - eventTime(left.eventAt));
 }
 
 /**

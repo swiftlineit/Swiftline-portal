@@ -102,7 +102,7 @@ export default function ClientOperationsCalendarPage() {
                   {stat.label}
                 </dt>
                 <dd className="order-1 text-lg font-semibold tabular-nums text-slate-900">
-                  {loading ? "—" : stat.value}
+                  {loading ? "-" : stat.value}
                 </dd>
               </div>
             ))}

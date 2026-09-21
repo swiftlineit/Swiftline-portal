@@ -228,6 +228,74 @@ async function createManifestFixture(flightId: mongoose.Types.ObjectId, shipment
   return { manifest, bag, consignment };
 }
 
+async function createUnattachedDispatchedManifest(input: {
+  shipment: Awaited<ReturnType<typeof createShipment>>;
+  flightNumber: string;
+  mawbNumber: string;
+  departureDate: string;
+  scannedParcelNumbers?: string[];
+  parcelDispositions?: Array<{
+    parcelNumber: string;
+    disposition: "HELD" | "DEFERRED_TO_NEXT_MANIFEST" | "CANCELLED";
+    reason: string;
+  }>;
+}) {
+  const manifest = await OperationsManifest.create({
+    manifestNumber: `OM-${String(manifestSequence()).padStart(6, "0")}`,
+    branchId,
+    flightLinehaulId: null,
+    header: {
+      destinationAgent: "Test Agent",
+      destinationCountryCode: "GB",
+      destinationCountryName: "United Kingdom",
+      flightNumber: input.flightNumber,
+      departureDate: input.departureDate,
+      mawbNumber: input.mawbNumber,
+      originIataCode: "DEL",
+      destinationIataCode: "LHR",
+      valueType: "LV"
+    },
+    status: "DISPATCHED",
+    createdBy: userId
+  });
+  const bag = await OperationsManifestBag.create({
+    manifestId: manifest._id,
+    sequence: 1,
+    bagNumber: `BAG-${String(manifest._id).slice(-8)}`,
+    barcode: `BAR-${String(manifest._id).slice(-8)}`,
+    status: "CLOSED",
+    createdBy: userId
+  });
+  const parcelNumbers = input.shipment.snapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber);
+  const scannedParcelNumbers = input.scannedParcelNumbers ?? parcelNumbers;
+  await OperationsManifestConsignment.create({
+    manifestId: manifest._id,
+    bagId: bag._id,
+    shipmentDraftId: input.shipment.draft._id,
+    dpdShipmentId: input.shipment.dpd._id,
+    businessAccountId: input.shipment.draft.businessAccountId,
+    consignmentNumber: input.shipment.snapshot.tracking.swiftlineTrackingNumber,
+    expectedParcelNumbers: parcelNumbers,
+    scannedParcelNumbers,
+    parcelDispositions: (input.parcelDispositions ?? []).map((disposition) => ({
+      ...disposition,
+      recordedBy: userId,
+      recordedAt: new Date()
+    })),
+    parcelWeightSnapshots: parcelNumbers.map((parcelNumber, index) => ({ parcelNumber, weightKg: index === 0 ? 2 : 5 })),
+    manifestPieces: 1,
+    weightKg: 7,
+    status: "COMPLETE",
+    consignorSnapshot: {},
+    consigneeSnapshot: input.shipment.snapshot.consignee,
+    description: "TEST GOODS",
+    currency: "INR",
+    serviceInfo: "TEST",
+    dpdLabelGenerated: true
+  });
+  return manifest;
+}
+
 function manifestSequence() {
   return Date.now() + flightSequence;
 }
@@ -261,7 +329,7 @@ after(async () => {
 });
 
 describe("flight linehaul workflow boundaries", () => {
-  test("requires valid airline identity and prevents duplicate active MAWBs", async () => {
+  test("requires valid airline identity and allows repeated airline flight and MAWB references", async () => {
     await expectServiceError(() => createFlightLinehaul({
       branchId: String(branchId), flightNumber: "AI9001", mawbNumber: "098-12345678",
       originIataCode: "DEL", destinationIataCode: "LHR", scheduledDepartureAt: new Date(Date.now() + 86_400_000).toISOString(),
@@ -269,11 +337,100 @@ describe("flight linehaul workflow boundaries", () => {
     }), 400);
 
     const first = await createFlight();
-    await expectServiceError(() => createFlightLinehaul({
-      branchId: String(branchId), flightNumber: "AI9002", airlineName: "Air India", mawbNumber: first.mawbNumber,
+    const second = await createFlightLinehaul({
+      branchId: String(branchId), flightNumber: first.flightNumber, airlineName: "Air India", mawbNumber: first.mawbNumber,
       originIataCode: "DEL", destinationIataCode: "LHR", scheduledDepartureAt: new Date(Date.now() + 172_800_000).toISOString(),
       scheduledArrivalAt: new Date(Date.now() + 190_000_000).toISOString(), capacityKg: 10, userId
+    });
+    assert.notEqual(String(second._id), String(first._id));
+  });
+
+  test("creates a selected flight and manifest attachment atomically", async () => {
+    const shipment = await createShipment();
+    const scheduledDepartureAt = new Date(Date.now() + 10 * 86_400_000);
+    const scheduledArrivalAt = new Date(scheduledDepartureAt.getTime() + 4 * 60 * 60 * 1000);
+    const manifest = await createUnattachedDispatchedManifest({
+      shipment,
+      flightNumber: "AI-777",
+      mawbNumber: "098-77777777",
+      departureDate: scheduledDepartureAt.toISOString().slice(0, 10)
+    });
+
+    const flight = await createFlightLinehaul({
+      branchId: String(branchId),
+      flightNumber: "AI-777", airlineName: "Air India", mawbNumber: "098-77777777",
+      originIataCode: "DEL", destinationIataCode: "LHR",
+      scheduledDepartureAt: scheduledDepartureAt.toISOString(), scheduledArrivalAt: scheduledArrivalAt.toISOString(),
+      capacityKg: 20, manifestId: String(manifest._id), userId
+    });
+
+    const [attachedManifest, allocation, storedFlight] = await Promise.all([
+      OperationsManifest.findById(manifest._id).lean().exec(),
+      FlightShipmentAllocation.findOne({ flightLinehaulId: flight._id, shipmentDraftId: shipment.draft._id, status: "ALLOCATED" }).lean().exec(),
+      FlightLinehaul.findById(flight._id).lean().exec()
+    ]);
+    assert.equal(String(attachedManifest?.flightLinehaulId), String(flight._id));
+    assert.ok(allocation);
+    assert.equal(storedFlight?.totalShipments, 1);
+  });
+
+  test("attaches only scanned parcels and leaves a held parcel out of the flight allocation", async () => {
+    const shipment = await createShipment({ parcelCount: 3 });
+    const scheduledDepartureAt = new Date(Date.now() + 12 * 86_400_000);
+    const scheduledArrivalAt = new Date(scheduledDepartureAt.getTime() + 4 * 60 * 60 * 1000);
+    const parcelNumbers = shipment.snapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber);
+    const manifest = await createUnattachedDispatchedManifest({
+      shipment,
+      flightNumber: "AI-779",
+      mawbNumber: "098-77777779",
+      departureDate: scheduledDepartureAt.toISOString().slice(0, 10),
+      scannedParcelNumbers: parcelNumbers.slice(0, 2),
+      parcelDispositions: [{
+        parcelNumber: parcelNumbers[2]!,
+        disposition: "HELD",
+        reason: "Payment verification pending"
+      }]
+    });
+
+    const flight = await createFlightLinehaul({
+      branchId: String(branchId),
+      flightNumber: "AI-779", airlineName: "Air India", mawbNumber: "098-77777779",
+      originIataCode: "DEL", destinationIataCode: "LHR",
+      scheduledDepartureAt: scheduledDepartureAt.toISOString(), scheduledArrivalAt: scheduledArrivalAt.toISOString(),
+      capacityKg: 20, manifestId: String(manifest._id), userId
+    });
+
+    const allocation = await FlightShipmentAllocation.findOne({
+      flightLinehaulId: flight._id,
+      shipmentDraftId: shipment.draft._id,
+      status: "ALLOCATED"
+    }).lean().exec();
+    assert.deepEqual(allocation?.activeParcelNumbers, parcelNumbers.slice(0, 2));
+    assert.equal(allocation?.pieces, 2);
+    assert.equal(allocation?.offloadedParcelNumbers?.includes(parcelNumbers[2]!), false);
+  });
+
+  test("does not leave an empty flight behind when the selected manifest cannot be attached", async () => {
+    const shipment = await createShipment();
+    const scheduledDepartureAt = new Date(Date.now() + 11 * 86_400_000);
+    const scheduledArrivalAt = new Date(scheduledDepartureAt.getTime() + 4 * 60 * 60 * 1000);
+    const flightNumber = "AI-778";
+    const manifest = await createUnattachedDispatchedManifest({
+      shipment,
+      flightNumber,
+      mawbNumber: "098-77777778",
+      departureDate: scheduledDepartureAt.toISOString().slice(0, 10)
+    });
+
+    await expectServiceError(() => createFlightLinehaul({
+      branchId: String(branchId), flightNumber, airlineName: "Air India", mawbNumber: "098-77777778",
+      originIataCode: "DEL", destinationIataCode: "LHR",
+      scheduledDepartureAt: scheduledDepartureAt.toISOString(), scheduledArrivalAt: scheduledArrivalAt.toISOString(),
+      capacityKg: 1, manifestId: String(manifest._id), userId
     }), 409);
+
+    assert.equal(await FlightLinehaul.countDocuments({ flightNumber }), 0);
+    assert.equal((await OperationsManifest.findById(manifest._id).lean().exec())?.flightLinehaulId, null);
   });
 
   test("search and allocation accept only hub-processed, live, labelled shipments", async () => {

@@ -12,7 +12,7 @@ import {
   type DeliveryEstimate,
 } from "@/components/shipments/ShipmentJourney";
 import ParcelActivityPanel from "@/components/shipments/ParcelActivityPanel";
-import type { ParcelActivity } from "@/lib/shipmentTracking";
+import type { ParcelActivity, ParcelProgress } from "@/lib/shipmentTracking";
 
 /**
  * A tracked shipment, as the two signed-in portals draw it.
@@ -68,6 +68,7 @@ export type TrackingResultRecord = {
   journey?: TrackingJourney | null;
   position?: TrackingPosition | null;
   parcelActivities?: ParcelActivity[];
+  parcelProgress?: ParcelProgress | null;
 };
 
 /**
@@ -161,7 +162,10 @@ export default function TrackingResult({
         </div>
       ) : null}
 
-      <ParcelActivityPanel activities={record.parcelActivities} />
+      <ParcelActivityPanel
+        activities={record.parcelActivities}
+        progress={record.parcelProgress}
+      />
 
       {/* The journey and the promised date lead, because "where is it and will
           it arrive on time" is the whole reason anyone opens this. */}

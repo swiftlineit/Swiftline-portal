@@ -10,18 +10,21 @@ import {
   cancelOperationsBag,
   cancelOperationsManifest,
   closeOperationsBag,
+  closeOperationsBags,
   createOperationsBag,
   createOperationsManifest,
   deleteOperationsManifest,
   dispatchOperationsManifest,
   getOperationsManifestDetail,
   listOperationsManifests,
+  markOperationsBagReady,
   moveOperationsConsignment,
   OperationsManifestServiceError,
   removeOperationsScan,
   reopenOperationsBag,
   scanOperationsParcel,
   sealOperationsManifest,
+  setOperationsParcelDisposition,
   updateOperationsManifest
 } from "../services/operationsManifest.service.js";
 import {
@@ -185,6 +188,41 @@ export const closeBag = (request: Request, response: Response) => bagAction(requ
 export const reopenBag = (request: Request, response: Response) => bagAction(request, response, "reopen");
 export const cancelBag = (request: Request, response: Response) => bagAction(request, response, "cancel");
 
+export async function closeAllBags(request: Request, response: Response) {
+  try {
+    const actorId = userId(request);
+    if (!actorId) return response.status(401).json({ success: false, message: "Unauthorized" });
+    const result = await closeOperationsBags(String(request.params.manifestId), actorId);
+    return response.json({
+      success: true,
+      message: result.closed ? `${result.closed} bag${result.closed === 1 ? "" : "s"} closed.` : "Every bag is already closed.",
+      result
+    });
+  } catch (error) { return sendError(response, error); }
+}
+
+export async function markBagReady(request: Request, response: Response) {
+  try {
+    const actorId = userId(request);
+    const input = parsedBody(response, z.object({
+      bagBarcode: z.string().trim().min(1, "Scan the closed bag barcode.").max(80)
+    }), request.body);
+    if (!actorId || !input) return;
+    const result = await markOperationsBagReady({
+      manifestId: String(request.params.manifestId),
+      bagBarcode: input.bagBarcode,
+      userId: actorId
+    });
+    return response.json({
+      success: true,
+      message: result.alreadyReady
+        ? `${result.bagNumber} was already Ready for Dispatch.`
+        : `${result.bagNumber} is Ready for Dispatch. ${result.updatedShipments} shipment milestone(s) updated.`,
+      result
+    });
+  } catch (error) { return sendError(response, error); }
+}
+
 export async function removeScan(request: Request, response: Response) {
   try { const actorId = userId(request); const input = parsedBody(response, reasonSchema, request.body); if (!actorId || !input) return; await removeOperationsScan({ manifestId: String(request.params.manifestId), scanId: String(request.params.scanId), ...input, userId: actorId }); return response.json({ success: true, message: "Parcel scan removed." }); }
   catch (error) { return sendError(response, error); }
@@ -193,6 +231,24 @@ export async function removeScan(request: Request, response: Response) {
 export async function moveConsignment(request: Request, response: Response) {
   try { const actorId = userId(request); const input = parsedBody(response, reasonSchema.extend({ targetBagId: z.string() }), request.body); if (!actorId || !input) return; await moveOperationsConsignment({ manifestId: String(request.params.manifestId), consignmentId: String(request.params.consignmentId), ...input, userId: actorId }); return response.json({ success: true, message: "Consignment moved." }); }
   catch (error) { return sendError(response, error); }
+}
+
+export async function setParcelDisposition(request: Request, response: Response) {
+  try {
+    const actorId = userId(request);
+    const input = parsedBody(response, reasonSchema.extend({
+      parcelNumber: z.string().trim().min(1).max(80),
+      disposition: z.enum(["HELD", "DEFERRED_TO_NEXT_MANIFEST", "CANCELLED"])
+    }), request.body);
+    if (!actorId || !input) return;
+    await setOperationsParcelDisposition({
+      manifestId: String(request.params.manifestId),
+      consignmentId: String(request.params.consignmentId),
+      ...input,
+      userId: actorId
+    });
+    return response.json({ success: true, message: "Parcel disposition recorded." });
+  } catch (error) { return sendError(response, error); }
 }
 
 export async function sealManifest(request: Request, response: Response) {
@@ -208,7 +264,20 @@ export async function sealManifest(request: Request, response: Response) {
 }
 
 export async function dispatchManifest(request: Request, response: Response) {
-  try { const actorId = userId(request); if (!actorId) return response.status(401).json({ success: false, message: "Unauthorized" }); await dispatchOperationsManifest(String(request.params.manifestId), actorId); return response.json({ success: true, message: "Manifest dispatched and permanently locked." }); }
+  try {
+    const actorId = userId(request);
+    const input = parsedBody(response, z.object({
+      method: z.enum(["BUTTON", "BARCODE_SCAN"]).optional().default("BUTTON"),
+      scannedBarcode: z.string().trim().max(80).optional()
+    }).superRefine((data, context) => {
+      if (data.method === "BARCODE_SCAN" && !data.scannedBarcode) {
+        context.addIssue({ code: "custom", path: ["scannedBarcode"], message: "Scan the manifest dispatch barcode." });
+      }
+    }), request.body ?? {});
+    if (!actorId || !input) return;
+    await dispatchOperationsManifest(String(request.params.manifestId), actorId, input);
+    return response.json({ success: true, message: "Manifest dispatched and permanently locked." });
+  }
   catch (error) { return sendError(response, error); }
 }
 

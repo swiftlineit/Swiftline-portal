@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-export const allocationStatusValues = ["ALLOCATED", "REMOVED", "OFFLOADED"] as const;
+export const allocationStatusValues = ["ALLOCATED", "CARRIED", "REMOVED", "OFFLOADED"] as const;
 export type AllocationStatus = (typeof allocationStatusValues)[number];
 
 export interface IFlightShipmentAllocation extends mongoose.Document {
@@ -62,7 +62,8 @@ const schema = new mongoose.Schema<IFlightShipmentAllocation>(
   { timestamps: true }
 );
 
-// Enforce one active allocation per shipment (terminal statuses allow multiple historical rows)
+// Enforce one pre-departure allocation per shipment. CARRIED rows are immutable
+// flight history, so a held/deferred parcel can be allocated to a later flight.
 schema.index(
   { shipmentDraftId: 1 },
   {

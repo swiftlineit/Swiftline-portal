@@ -1,4 +1,5 @@
 import type { IShipmentDraft, ShipmentAddressSnapshot } from "../models/shipmentDraft.model.js";
+import { maxParcelsPerShipment } from "./parcelItems.service.js";
 import { carrierShipmentSourceIdentity } from "./shipmentSourceIdentity.service.js";
 
 /**
@@ -9,9 +10,6 @@ import { carrierShipmentSourceIdentity } from "./shipmentSourceIdentity.service.
  * invoices and manifests, and the printed label.
  */
 export const SWIFTLINE_SERVICE_CODE = "EXPRESS WORLDWIDE";
-
-/** Operational cap on how many parcels one booking may carry. */
-const MAX_PARCELS_PER_SHIPMENT = 10;
 
 const supportedShipmentContentTypes = new Set([
   "DOCUMENTS", "PARCEL", "MERCHANDISE", "SAMPLES", "GIFTS", "RETURNS", "OTHER"
@@ -155,8 +153,8 @@ export function validateShipmentPayload(payload: ShipmentPayload): string[] {
     issues.push("At least one parcel is required");
   }
 
-  if (payload.parcels.length > MAX_PARCELS_PER_SHIPMENT) {
-    issues.push(`Number of Parcels (PCS) must be ${MAX_PARCELS_PER_SHIPMENT} or fewer`);
+  if (payload.parcels.length > maxParcelsPerShipment) {
+    issues.push(`Number of Parcels (PCS) must be ${maxParcelsPerShipment} or fewer`);
   }
 
   payload.parcels.forEach((parcel, index) => {

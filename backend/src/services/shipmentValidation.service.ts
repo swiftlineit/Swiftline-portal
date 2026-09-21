@@ -8,7 +8,7 @@ import {
 } from "../models/shipmentDraft.model.js";
 import { isValidAadhaarNumber } from "./aadhaarValidation.service.js";
 import { normalizeCsbType } from "./csbType.service.js";
-import { isValidHsnCode, normalizeParcelItems } from "./parcelItems.service.js";
+import { isValidHsnCode, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "./parcelItems.service.js";
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
 
@@ -56,6 +56,7 @@ function validateConsignor(draft: IShipmentDraft): string[] {
   }
   if (!hasText(consignor.addressLine1)) issues.push("Consignor address line 1 is required");
   if (!hasText(consignor.townOrCity)) issues.push("Consignor town or city is required");
+  if (!hasText(consignor.county)) issues.push("Consignor state is required");
   if (!hasText(consignor.postcode)) {
     issues.push("Consignor PIN code is required");
   } else if (!indianPostcodePattern.test(consignor.postcode.trim())) {
@@ -211,6 +212,9 @@ function validateParcel(
   if (!items.length) {
     issues.push(`${label}: at least one content item is required`);
   }
+  if (items.length > maxParcelItems) {
+    issues.push(`${label}: can contain at most ${maxParcelItems} items`);
+  }
 
   items.forEach((item, itemIndex) => {
     const itemLabel = `${label} item ${itemIndex + 1}`;
@@ -328,8 +332,8 @@ export function validateShipmentDraftFields(
     issues.push("At least one parcel is required");
   }
 
-  if (draft.parcelList.length > 10) {
-    issues.push("Number of Parcels (PCS) must be 10 or fewer");
+  if (draft.parcelList.length > maxParcelsPerShipment) {
+    issues.push(`Number of Parcels (PCS) must be ${maxParcelsPerShipment} or fewer`);
   }
 
   if ((draft.parcelCount ?? draft.parcelList.length) !== draft.parcelList.length) {

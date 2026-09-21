@@ -42,6 +42,7 @@ const createSchema = z.object({
   capacityKg: z.coerce.number().positive().max(100000),
   destinationAgent: z.string().trim().max(1000).optional().default(""),
   finalMileCarrier: z.string().trim().max(200).optional().default(""),
+  manifestId: z.string().trim().min(1, "Select a dispatched operations manifest."),
   connection: z
     .object({
       transitAirportCode: z.string().trim().max(3).optional().default(""),
@@ -71,11 +72,12 @@ export async function createFlight(request: Request, response: Response) {
       capacityKg: input.capacityKg,
       destinationAgent: input.destinationAgent,
       finalMileCarrier: input.finalMileCarrier,
+      manifestId: input.manifestId,
       connection: input.connection as never,
       userId: actorId
     };
     const flight = await service.createFlightLinehaul(payload);
-    return response.status(201).json({ success: true, message: "Flight created.", flightId: String((flight as unknown as { _id: unknown })._id), flightLinehaulNumber: (flight as unknown as { flightLinehaulNumber: string }).flightLinehaulNumber });
+    return response.status(201).json({ success: true, message: "Flight created and manifest attached.", flightId: String((flight as unknown as { _id: unknown })._id), flightLinehaulNumber: (flight as unknown as { flightLinehaulNumber: string }).flightLinehaulNumber });
   } catch (error) {
     return sendError(response, error);
   }
@@ -369,6 +371,7 @@ export async function updateHandover(request: Request, response: Response) {
       z.object({
         arrivalAt: z.string().optional().nullable(),
         customsStatus: z.enum(["PENDING", "SUBMITTED", "CLEARED", "HELD"]).optional(),
+        customsNote: z.string().trim().max(500).optional(),
         customsClearedAt: z.string().optional().nullable(),
         destinationAgent: z.string().trim().max(1000).optional(),
         finalMileCarrier: z.string().trim().max(200).optional(),

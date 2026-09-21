@@ -71,7 +71,7 @@ function ParcelStatusList({ rows }: { rows: ParcelRow[] }) {
           </span>
           {showWeight ? (
             <span className="shrink-0 tabular-nums text-slate-300">
-              {row.weightKg != null ? formatParcelWeight(row.weightKg) : "—"}
+              {row.weightKg != null ? formatParcelWeight(row.weightKg) : "-"}
             </span>
           ) : null}
           <span className="shrink-0 text-right text-slate-300">

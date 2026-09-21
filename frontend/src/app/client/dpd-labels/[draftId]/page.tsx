@@ -43,12 +43,15 @@ import {
 import { getDraftRateCardContext, type ClientCountryRateCard } from "@/lib/countryRateCards";
 import { findRestrictedCategories } from "@/lib/restrictedGoods";
 import { normalizeCsbType, type CsbType } from "@/lib/csbType";
+import { maxParcelsPerShipment } from "@/lib/shipmentLimits";
 import { defaultDeclarationNote } from "@/lib/customsInvoice";
 import {
   composeContentsDescription,
   createEmptyParcelItem,
   getHsnCodeError,
   getPositiveNumberError,
+  isUntouchedParcelItem,
+  mergeSavedParcelItemsWithLocalRows,
   normalizeParcelItems,
   type ParcelItem
 } from "@/lib/parcelItems";
@@ -142,7 +145,7 @@ type ParcelForm = {
   aadhaarNumber: string;
 };
 
-const maxParcelCount = 100;
+const maxParcelCount = maxParcelsPerShipment;
 const prohibitedItems = [
   "Alcohol / Liquor",
   "Tobacco / Nicotine / Vape",
@@ -237,6 +240,13 @@ function normalizeParcels(draft: ShipmentDraft): ParcelForm[] {
   }));
 }
 
+function comparableParcelForms(parcels: ParcelForm[]): ParcelForm[] {
+  return parcels.map((parcel) => ({
+    ...parcel,
+    items: parcel.items.filter((item) => !isUntouchedParcelItem(item))
+  }));
+}
+
 function isParcelEmpty(parcel: ParcelForm) {
   return !parcel.weightKg && !parcel.lengthCm && !parcel.widthCm && !parcel.heightCm
     && parcel.shipmentContentType === "PARCEL"
@@ -287,6 +297,8 @@ function getReviewIssueDetail(
     const postcodeError = getPostcodeError(addressForm.countryCode, addressForm.postcode);
     if (postcodeError) invalid.push(postcodeError);
   }
+  if (!parcelForms.length) missing.push("At least one parcel is required");
+  if (parcelForms.length > maxParcelCount) invalid.push(`Number of Parcels (PCS) must be ${maxParcelCount} or fewer`);
   parcelForms.forEach((parcel, index) => {
     const label = `Parcel ${index + 1}`;
     const weight = Number(parcel.weightKg);
@@ -513,6 +525,7 @@ export default function ClientDpdDraftReviewPage() {
     aadhaarNumber: findIssue(consignorReviewIssues, ["aadhaar"]),
     addressLine1: findIssue(consignorReviewIssues, ["consignor address line 1"]),
     townOrCity: findIssue(consignorReviewIssues, ["consignor town"]),
+    county: findIssue(consignorReviewIssues, ["consignor state"]),
     postcode: findIssue(consignorReviewIssues, ["pin code"])
   }), [consignorReviewIssues]);
 
@@ -641,7 +654,8 @@ export default function ClientDpdDraftReviewPage() {
       || forceGst !== (draft.forceGst ?? false)
       || csbType !== normalizeCsbType(draft.csbType)
       || declarationNote !== (draft.declarationNote ?? defaultDeclarationNote)
-      || JSON.stringify(parcelForms) !== JSON.stringify(normalizeParcels(draft))
+      || JSON.stringify(comparableParcelForms(parcelForms))
+        !== JSON.stringify(comparableParcelForms(normalizeParcels(draft)))
       || contactForm.companyName !== (draft.consigneeEnteredAddress.companyName ?? "")
       || contactForm.contactName !== (draft.consigneeEnteredAddress.contactName ?? "")
       || contactForm.email !== (draft.consigneeEnteredAddress.email ?? "")
@@ -673,7 +687,7 @@ export default function ClientDpdDraftReviewPage() {
     onSaved: (nextDraft, isLatest) => {
       // A response for an older edit advances the server baseline without
       // replacing newer text that is still on screen.
-      if (isLatest) syncDraft(nextDraft);
+      if (isLatest) syncDraft(nextDraft, true);
       else setDraft(nextDraft);
     },
     onError: (caughtError) => {
@@ -691,7 +705,7 @@ export default function ClientDpdDraftReviewPage() {
     }
   });
 
-  function syncDraft(nextDraft: ShipmentDraft) {
+  function syncDraft(nextDraft: ShipmentDraft, preserveLocalItemRows = false) {
     const address = nextDraft.consigneeEnteredAddress;
     setDraft(nextDraft);
     setAddressForm({
@@ -727,7 +741,15 @@ export default function ClientDpdDraftReviewPage() {
     });
     setParcelKyc(parcelKycBySequence);
     const nextParcels = normalizeParcels(nextDraft);
-    setParcelForms(nextParcels);
+    setParcelForms((current) => preserveLocalItemRows
+      ? nextParcels.map((parcel, index) => ({
+          ...parcel,
+          items: mergeSavedParcelItemsWithLocalRows(
+            parcel.items,
+            current[index]?.items ?? []
+          )
+        }))
+      : nextParcels);
     setParcelCountInput(String(nextParcels.length));
   }
 
@@ -1202,7 +1224,7 @@ export default function ClientDpdDraftReviewPage() {
   if (loading || !user) return <ClientDashboardLoading />;
 
   return (
-      <>
+      <div className="lg:flex lg:h-[calc(100%-3.25rem)] lg:min-h-0 lg:flex-col">
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-slate-950">Review Shipment Draft</h1>
@@ -1225,8 +1247,8 @@ export default function ClientDpdDraftReviewPage() {
         {!draft ? (
           <div className="border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500">Draft not found.</div>
         ) : (
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-5">
+          <div className="grid gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="space-y-5 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400">
               <ShipmentImportBanner summary={shipmentImport} />
 
               {/* Customs route, first because CSB-V changes what is charged. */}
@@ -1498,6 +1520,7 @@ export default function ClientDpdDraftReviewPage() {
                           <ParcelItemsEditor
                             items={parcel.items}
                             onChange={(items) => handleParcelItemsChange(index, items)}
+                            parcelLabel={`Parcel ${index + 1}`}
                             revealError={submitAttempted}
                             requireHsnCode={csbType === "CSB_V"}
                           />
@@ -1520,7 +1543,7 @@ export default function ClientDpdDraftReviewPage() {
               </section>
             </div>
 
-            <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+            <aside className="space-y-4 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400">
               <section className="border border-slate-200 bg-white p-4 rounded-2xl">
                 {isCurrentCountryPaused ? (
                   <div className="mb-3 rounded-xl border border-[#D71313]/20 bg-[#FFF1F1] px-3 py-2 text-xs font-semibold text-[#991B1B]">
@@ -1620,7 +1643,7 @@ export default function ClientDpdDraftReviewPage() {
             onSelect={(entry) => { applySavedAddress(entry, true); }}
           />
         ) : null}
-      </>
+      </div>
   );
 }
 

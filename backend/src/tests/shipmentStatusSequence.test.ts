@@ -88,16 +88,26 @@ describe("shipment status sequence", () => {
   });
 
   it("says nothing about statuses that are not on the ladder", () => {
-    for (const offLadder of ["ON_HOLD", "RELEASED_FROM_HOLD", "SHIPMENT_CANCELLED", "IN_TRANSIT", "LOST"]) {
+    for (const offLadder of [
+      "ON_HOLD",
+      "RELEASED_FROM_HOLD",
+      "SHIPMENT_CANCELLED",
+      "IMPORT_CUSTOMS_CLEARANCE",
+      "IMPORT_CUSTOMS_CLEARED",
+      "DELIVERY_PARTNER_TRANSFERRED",
+      "DELIVERY_HUB_ARRIVED",
+      "LOST"
+    ]) {
       assert.equal(isOperationalStatus(offLadder), false);
       assert.deepEqual(findMissingPrerequisites(offLadder, []), []);
     }
+    assert.equal(isOperationalStatus("IN_TRANSIT"), true);
   });
 
   it("reads as a sentence for one missing step and for several", () => {
     assert.equal(
       describeMissingPrerequisites("ORIGIN_HUB_PROCESSED", ["WAREHOUSE_SCAN_IN"]),
-      "Origin Hub Processed cannot be recorded yet. Warehouse Scan In is still outstanding- "
+      "Processing for Export cannot be recorded yet. Received at Origin Facility is still outstanding- "
         + "shipment progress must be recorded in order."
     );
     assert.equal(
@@ -105,13 +115,13 @@ describe("shipment status sequence", () => {
         "WAREHOUSE_SCAN_IN",
         "ORIGIN_HUB_PROCESSED"
       ]),
-      "Ready For Export cannot be recorded yet. Warehouse Scan In and Origin Hub Processed "
+      "Ready for Dispatch cannot be recorded yet. Received at Origin Facility and Processing for Export "
         + "are still outstanding- shipment progress must be recorded in order."
     );
   });
 
   it("titles a status the way the timeline shows it", () => {
-    assert.equal(formatShipmentEventLabel("IMPORT_CUSTOMS_CLEARANCE"), "Import Customs Clearance");
+    assert.equal(formatShipmentEventLabel("IMPORT_CUSTOMS_CLEARANCE"), "Customs Processing");
     assert.equal(formatShipmentEventLabel(""), "Shipment Created");
     assert.equal(formatShipmentEventLabel(null), "Shipment Created");
   });
@@ -131,9 +141,9 @@ describe("shipment status sequence", () => {
   it("uses one canonical stage for historical aliases without rewriting stored events", () => {
     assert.equal(canonicalShipmentStatus("EXPORT_CUSTOMS_CLEARED"), "READY_FOR_EXPORT");
     assert.equal(canonicalShipmentStatus("FLIGHT_ASSIGNED"), "READY_FOR_EXPORT");
-    assert.equal(canonicalShipmentStatus("FLIGHT_DEPARTED"), "ORIGIN_HUB_DISPATCHED");
+    assert.equal(canonicalShipmentStatus("FLIGHT_DEPARTED"), "IN_TRANSIT");
     assert.equal(canonicalShipmentStatus("DESTINATION_ARRIVED"), "DESTINATION_ARRIVED");
-    assert.equal(formatShipmentEventLabel("FLIGHT_DEPARTED"), "Origin Hub Dispatched");
+    assert.equal(formatShipmentEventLabel("FLIGHT_DEPARTED"), "In International Transit");
   });
 
   it("keeps one visible filter while matching every historical alias internally", () => {
@@ -148,29 +158,25 @@ describe("shipment status sequence", () => {
       "FLIGHT_ASSIGNED"
     ]);
     assert.deepEqual(equivalentCurrentStatusValues("ORIGIN_HUB_DISPATCHED"), [
-      "ORIGIN_HUB_DISPATCHED",
+      "ORIGIN_HUB_DISPATCHED"
+    ]);
+    assert.deepEqual(equivalentCurrentStatusValues("IN_TRANSIT"), [
+      "IN_TRANSIT",
       "FLIGHT_DEPARTED"
     ]);
   });
 
-  it("blocks out-for-delivery and delivered when partner milestones are missing", () => {
-    const throughCustoms = [
+  it("keeps customs and partner activity outside the required customer ladder", () => {
+    const throughDestination = [
       "WAREHOUSE_SCAN_IN",
       "ORIGIN_HUB_PROCESSED",
       "READY_FOR_EXPORT",
       "ORIGIN_HUB_DISPATCHED",
-      "DESTINATION_ARRIVED",
-      "IMPORT_CUSTOMS_CLEARANCE",
-      "IMPORT_CUSTOMS_CLEARED"
+      "IN_TRANSIT",
+      "DESTINATION_ARRIVED"
     ];
-    assert.deepEqual(findMissingPrerequisites("OUT_FOR_DELIVERY", throughCustoms), [
-      "DELIVERY_PARTNER_TRANSFERRED",
-      "DELIVERY_HUB_ARRIVED"
-    ]);
-    assert.deepEqual(findMissingPrerequisites("DELIVERED", [...throughCustoms, "DELIVERY_PARTNER_TRANSFERRED"]), [
-      "DELIVERY_HUB_ARRIVED",
-      "OUT_FOR_DELIVERY"
-    ]);
+    assert.deepEqual(findMissingPrerequisites("OUT_FOR_DELIVERY", throughDestination), []);
+    assert.deepEqual(findMissingPrerequisites("DELIVERED", throughDestination), ["OUT_FOR_DELIVERY"]);
   });
 
   it("blocks adding an earlier milestone after a later one exists", () => {
@@ -183,7 +189,7 @@ describe("shipment status sequence", () => {
     assert.deepEqual(findRecordedLaterMilestones("ORIGIN_HUB_PROCESSED", recorded), ["READY_FOR_EXPORT", "ORIGIN_HUB_DISPATCHED"]);
     assert.match(
       describeRecordedLaterMilestones("ORIGIN_HUB_PROCESSED", ["ORIGIN_HUB_DISPATCHED"]),
-      /cannot be recorded because Origin Hub Dispatched is already recorded/
+      /cannot be recorded because Departed from Origin Facility is already recorded/
     );
   });
 });

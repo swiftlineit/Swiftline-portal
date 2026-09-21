@@ -32,7 +32,7 @@ export type ShipmentOperationalStatus = (typeof shipmentOperationalStatusValues)
  */
 const legacyStatusAliases: Partial<Record<ShipmentOperationalStatus, readonly ShipmentEventStatus[]>> = {
   READY_FOR_EXPORT: ["EXPORT_CUSTOMS_CLEARED", "FLIGHT_ASSIGNED"],
-  ORIGIN_HUB_DISPATCHED: ["FLIGHT_DEPARTED"]
+  IN_TRANSIT: ["FLIGHT_DEPARTED"]
 };
 
 /** Every stored name that proves the requested current milestone happened. */
@@ -70,6 +70,10 @@ export function hasRecordedMilestone(
   recorded: Iterable<ShipmentEventStatus | string>
 ): boolean {
   const already = new Set(recorded);
+  // Before origin dispatch and actual flight departure were separated, the
+  // legacy FLIGHT_DEPARTED row represented both movements. Keep that evidence
+  // valid for historical shipments without making it a current-status alias.
+  if (status === "ORIGIN_HUB_DISPATCHED" && already.has("FLIGHT_DEPARTED")) return true;
   return equivalentMilestoneStatuses(status).some((candidate) => already.has(candidate));
 }
 
@@ -86,7 +90,23 @@ export function isOperationalStatus(value: string): value is ShipmentOperational
  */
 export function formatShipmentEventLabel(value?: string | null): string {
   if (!value) return "Shipment Created";
-  return canonicalShipmentStatus(value)
+  const status = canonicalShipmentStatus(value);
+  const approvedLabels: Partial<Record<ShipmentEventStatus | ShipmentOperationalStatus, string>> = {
+    SHIPMENT_BOOKED: "Booking Confirmed",
+    WAREHOUSE_SCAN_IN: "Received at Origin Facility",
+    ORIGIN_HUB_PROCESSED: "Processing for Export",
+    READY_FOR_EXPORT: "Ready for Dispatch",
+    ORIGIN_HUB_DISPATCHED: "Departed from Origin Facility",
+    IN_TRANSIT: "In International Transit",
+    DESTINATION_ARRIVED: "Arrived in Destination Country",
+    IMPORT_CUSTOMS_CLEARANCE: "Customs Processing",
+    IMPORT_CUSTOMS_CLEARED: "Customs Cleared",
+    DELIVERY_PARTNER_TRANSFERRED: "Transferred to Delivery Partner",
+    DELIVERY_HUB_ARRIVED: "Arrived at Delivery Hub",
+    OUT_FOR_DELIVERY: "Out for Delivery",
+    DELIVERED: "Delivered"
+  };
+  return approvedLabels[status as ShipmentEventStatus | ShipmentOperationalStatus] ?? status
     .toLowerCase()
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());

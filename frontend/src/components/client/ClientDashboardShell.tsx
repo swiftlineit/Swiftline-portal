@@ -103,6 +103,12 @@ const clientNavigation: Array<
         icon: FiPlusSquare,
         access: "booking",
       },
+      {
+        label:"Shipments Draft",
+        href:"/client/dpd-labels#drafts",
+        icon:FiPackage,
+        access:"booking"
+      },
        {
         label: "My Shipments",
         href: "/client/shipments",

@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import Image from "next/image";
 import { useParams } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import ParcelScanner from "@/components/driver/ParcelScanner";
 import {
   FiAlertTriangle,
   FiArchive,
@@ -22,6 +22,7 @@ import { DashboardLoading } from "@/components/DashboardShell";
 import {
   createOperationsBag,
   createOperationsScanSession,
+  closeAllOperationsBags,
   disconnectOperationsScanSession,
   downloadOperationsManifest,
   getActiveOperationsScanSession,
@@ -31,9 +32,11 @@ import {
   runBagAction,
   runManifestAction,
   scanOperationsParcel,
+  setOperationsParcelDisposition,
   type ManifestDetail,
   type OperationsBag,
   type OperationsConsignment,
+  type OperationsParcelDisposition,
   type OperationsScanSession,
 } from "@/lib/operationsManifests";
 import { OPERATIONS_AREA } from "@/lib/roles";
@@ -82,18 +85,25 @@ export default function OperationsManifestWorkspace() {
     try {
       const result = await getOperationsManifest(manifestId);
       setData(result);
-      // Default to the newest open bag, because packing rolls forward as bags fill.
+      // Prefer the newest open bag while packing, but keep a closed/ready bag
+      // selectable so its consignments and omitted-parcel decisions remain
+      // visible after physical packing finishes.
       setActiveBagId((current) =>
         current &&
         result.bags.some(
-          (bag) =>
-            bag.id === current && ["OPEN", "REOPENED"].includes(bag.status),
+          (bag) => bag.id === current && bag.status !== "CANCELLED",
         )
           ? current
-          : ([...result.bags]
-              .reverse()
-              .find((bag) => ["OPEN", "REOPENED"].includes(bag.status))?.id ??
-            ""),
+          : (() => {
+              const activeBags = result.bags.filter((bag) => bag.status !== "CANCELLED");
+              return (
+                [...activeBags]
+                  .reverse()
+                  .find((bag) => ["OPEN", "REOPENED"].includes(bag.status))?.id ??
+                activeBags.at(-1)?.id ??
+                ""
+              );
+            })(),
       );
     } catch (error) {
       toast.error(
@@ -297,6 +307,10 @@ export default function OperationsManifestWorkspace() {
       );
     await refreshAction(
       async () => {
+        if (action === "close") {
+          await closeAllOperationsBags(manifestId);
+          return;
+        }
         for (const bag of targets)
           await runBagAction(manifestId, bag.id, action);
       },
@@ -322,6 +336,27 @@ export default function OperationsManifestWorkspace() {
       );
     requestReason(`Remove ${parcelNumber} from this bag`, (reason) =>
       removeOperationsScan(manifestId, scan.id, reason),
+    );
+  }
+
+  function requestParcelDisposition(
+    consignmentId: string,
+    parcelNumber: string,
+    disposition: OperationsParcelDisposition,
+  ) {
+    const action = disposition === "HELD"
+      ? "Hold"
+      : disposition === "DEFERRED_TO_NEXT_MANIFEST"
+        ? "Move to next manifest"
+        : "Cancel parcel";
+    requestReason(`${action}: ${parcelNumber}`, (reason) =>
+      setOperationsParcelDisposition(
+        manifestId,
+        consignmentId,
+        parcelNumber,
+        disposition,
+        reason,
+      ),
     );
   }
 
@@ -356,9 +391,10 @@ export default function OperationsManifestWorkspace() {
           busy={busy}
           onExport={(format, view) => void exportFile(format, view)}
           onSeal={() => void handleSeal()}
+          sealBlocked={data.sealingIssues.length > 0}
           onDispatch={() =>
             void refreshAction(
-              () => runManifestAction(manifestId, "dispatch"),
+              () => runManifestAction(manifestId, "dispatch", "", { method: "BUTTON" }),
               "Manifest dispatched.",
             )
           }
@@ -553,16 +589,20 @@ export default function OperationsManifestWorkspace() {
                     item.bagIds?.includes(activeBagId) ??
                     item.bagId === activeBagId,
                 )}
-                canEdit
+                canRemove={canEdit}
+                canDecide={canEdit}
                 onRemove={requestParcelRemoval}
+                onDisposition={requestParcelDisposition}
               />
             </div>
           </div>
         ) : (
           <ConsignmentTable
             rows={data.consignments}
-            canEdit={false}
+            canRemove={false}
+            canDecide={manifest.status === "SEALED"}
             onRemove={requestParcelRemoval}
+            onDisposition={requestParcelDisposition}
           />
         )}
 
@@ -696,12 +736,14 @@ function ManifestHeader({
   onExport,
   onSeal,
   onDispatch,
+  sealBlocked,
 }: {
   data: ManifestDetail;
   busy: boolean;
   onExport: (format: "xlsx" | "pdf" | "edi" | "uk", view?: boolean) => void;
   onSeal: () => void;
   onDispatch: () => void;
+  sealBlocked: boolean;
 }) {
   const { manifest } = data;
   return (
@@ -731,7 +773,7 @@ function ManifestHeader({
             <ActionButton
               onClick={() => onExport("pdf", true)}
               icon={<FiPrinter />}
-              label="View ManifestPDF"
+              label="View Manifest PDF"
             />
             <ActionButton
               onClick={() => onExport("xlsx")}
@@ -760,7 +802,9 @@ function ManifestHeader({
         {manifest.status === "READY_TO_SEAL" ? (
           <button
             onClick={onSeal}
-            className="inline-flex h-10 items-center gap-2 rounded-4xl bg-[#F0DE36] px-4 text-sm font-semibold text-[#0D1282] hover:brightness-95"
+            disabled={busy || sealBlocked}
+            title={sealBlocked ? "Resolve the sealing requirements shown below first." : undefined}
+            className="inline-flex h-10 items-center gap-2 rounded-4xl bg-[#F0DE36] px-4 text-sm font-semibold text-[#0D1282] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <FiCheck />
             Seal Manifest
@@ -774,7 +818,7 @@ function ManifestHeader({
             className="inline-flex h-10 items-center gap-2 rounded-4xl bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             < IoMdSend />
-            Dispatch
+            Confirm Dispatch
           </button>
         ) : null}
       </div>
@@ -822,6 +866,7 @@ function BagButton({
   onAction: (action: "close" | "reopen" | "cancel") => void;
 }) {
   const open = ["OPEN", "REOPENED"].includes(bag.status);
+  const statusLabel = bag.status === "READY" ? "READY" : open ? "OPEN" : "CLOSED";
   return (
     <div
       className={`rounded border p-2.5 transition ${active ? "border-[#0D1282] bg-[#EEEDED]/70" : "border-[#EEEDED] hover:border-[#0D1282]/30"}`}
@@ -834,7 +879,7 @@ function BagButton({
           <span
             className={`shrink-0  px-1.5 py-0.5 text-[10px] font-semibold ${open ? " text-emerald-700" : " text-slate-600"}`}
           >
-            {open ? "OPEN" : "CLOSED"}
+            {statusLabel}
           </span>
         </div>
         <p className="mt-1.5 text-[11px] text-slate-500">
@@ -873,12 +918,20 @@ function BagButton({
 
 function ConsignmentTable({
   rows,
-  canEdit,
+  canRemove,
+  canDecide,
   onRemove,
+  onDisposition,
 }: {
   rows: OperationsConsignment[];
-  canEdit: boolean;
+  canRemove: boolean;
+  canDecide: boolean;
   onRemove: (parcel: string) => void;
+  onDisposition: (
+    consignmentId: string,
+    parcel: string,
+    disposition: OperationsParcelDisposition,
+  ) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-[#EEEDED] bg-white shadow-sm">
@@ -894,8 +947,12 @@ function ConsignmentTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-[#EEEDED]">
-          {rows.map((item) => (
-            <tr key={item.id} className="align-top hover:bg-[#EEEDED]/35">
+          {rows.map((item) => {
+            const unscannedParcels = item.expectedParcelNumbers.filter(
+              (parcel) => !item.scannedParcelNumbers.includes(parcel),
+            );
+            return (
+              <tr key={item.id} className="align-top hover:bg-[#EEEDED]/35">
               <td className="px-3 py-3">
                 <span className="font-mono text-xs font-semibold text-[#0D1282]">
                   {item.displayConsignmentNumber || item.consignmentNumber}
@@ -940,7 +997,7 @@ function ConsignmentTable({
                           <span className={`text-[10px] font-semibold ${parcelValue ? "text-slate-600" : "text-[#D71313]"}`}>
                             {parcelValue ? formatMoney(parcelValue) : "Goods value unavailable"}
                           </span>
-                          {canEdit ? (
+                          {canRemove ? (
                             <button
                               type="button"
                               onClick={() => onRemove(parcel)}
@@ -951,6 +1008,57 @@ function ConsignmentTable({
                             </button>
                           ) : null}
                         </div>
+                      </div>
+                    );
+                  })}
+                  {unscannedParcels.map((parcel) => {
+                    const recorded = item.parcelDispositions?.find(
+                      (entry) => entry.parcelNumber === parcel,
+                    );
+                    const statusLabel = recorded?.disposition === "HELD"
+                      ? "Held"
+                      : recorded?.disposition === "DEFERRED_TO_NEXT_MANIFEST"
+                        ? "Next manifest"
+                        : recorded?.disposition === "CANCELLED"
+                          ? "Cancelled"
+                          : "Decision required";
+                    return (
+                      <div
+                        key={parcel}
+                        className="rounded border border-amber-300 bg-amber-50 px-2 py-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-mono text-[10px] text-slate-800">
+                            {parcel}
+                          </span>
+                          <span className={`text-[10px] font-semibold ${recorded ? "text-amber-800" : "text-[#D71313]"}`}>
+                            {statusLabel}
+                          </span>
+                        </div>
+                        {recorded?.reason ? (
+                          <p className="mt-1 text-[10px] leading-4 text-slate-600">
+                            {recorded.reason}
+                          </p>
+                        ) : null}
+                        {canDecide && (!recorded || canRemove) ? (
+                          <div className="mt-2 grid grid-cols-3 gap-1">
+                            {([
+                              ["HELD", "Hold"],
+                              ["DEFERRED_TO_NEXT_MANIFEST", "Next"],
+                              ["CANCELLED", "Cancel"],
+                            ] as const).map(([disposition, label]) => (
+                              <button
+                                key={disposition}
+                                type="button"
+                                aria-pressed={recorded?.disposition === disposition}
+                                onClick={() => onDisposition(item.id, parcel, disposition)}
+                                className={`min-h-7 rounded border px-1 text-[10px] font-semibold transition ${recorded?.disposition === disposition ? "border-[#0D1282] bg-[#0D1282] text-white" : "border-slate-300 bg-white text-slate-700 hover:border-[#0D1282] hover:text-[#0D1282]"}`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -971,8 +1079,9 @@ function ConsignmentTable({
                   </p>
                 ) : null}
               </td>
-            </tr>
-          ))}
+              </tr>
+            );
+          })}
           {!rows.length ? (
             <tr>
               <td

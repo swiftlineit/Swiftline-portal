@@ -7,7 +7,8 @@ import { AuditLog, type AuditEntityType } from "../models/auditLog.model.js";
 import { Branch } from "../models/branch.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
-import { canAccessBranch } from "../middleware/branchAccess.middleware.js";
+import { CarrierTrackingEvent } from "../models/carrierTrackingEvent.model.js";
+import { allowedBranchIds, canAccessBranch } from "../middleware/branchAccess.middleware.js";
 import { labelContentType, labelFileExtension } from "../services/labelStorage.service.js";
 import {
   ShipmentEvent,
@@ -75,8 +76,18 @@ import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
 import { resolveTrackingGatewayCode } from "../services/shipmentGateway.service.js";
 import {
   loadShipmentParcelActivities,
-  loadShipmentParcelActivitiesByDraftIds
+  loadShipmentParcelActivitiesByDraftIds,
+  loadShipmentParcelProgress,
+  loadShipmentParcelProgressByDraftIds
 } from "../services/shipmentParcelActivity.service.js";
+import {
+  AlsTrackingServiceError,
+  refreshAlsTrackingForShipment
+} from "../services/als/alsTracking.service.js";
+import {
+  recordShipmentOperationsScan,
+  ShipmentOperationsScanError
+} from "../services/shipmentOperationsScan.service.js";
 
 // Where the scan happened. Optional on every action: Operations records it when
 // they know it, and an event without one is still a valid event.
@@ -133,6 +144,13 @@ const bulkStatusUpdateSchema = z.object({
 });
 
 const correctShipmentGatewaySchema = z.object({ gatewayCode: gatewayCodeSchema });
+const operationsScanSchema = z.object({
+  action: z.enum(["RECEIVE", "PROCESS"]),
+  barcode: z.string().trim().min(1).max(120),
+  location: z.string().trim().max(120).optional().default(""),
+  deviceId: z.string().trim().max(120).optional().default(""),
+  scanRequestId: z.string().uuid()
+});
 
 // The price the customer accepted, as returned by the cost estimate endpoint.
 // Optional: booking paths that were never quoted through the estimator have no
@@ -151,6 +169,77 @@ function getAuthenticatedUserId(request: Request): mongoose.Types.ObjectId | nul
   return id && mongoose.Types.ObjectId.isValid(String(id))
     ? new mongoose.Types.ObjectId(String(id))
     : null;
+}
+
+export async function scanShipmentOperationsMilestone(request: Request, response: Response) {
+  const actorId = getAuthenticatedUserId(request);
+  if (!actorId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  const parsed = operationsScanSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return response.status(400).json({
+      success: false,
+      message: parsed.error.issues[0]?.message ?? "Check the scan details."
+    });
+  }
+  try {
+    const result = await recordShipmentOperationsScan({
+      ...parsed.data,
+      userId: actorId,
+      allowedBranchIds: allowedBranchIds(request)
+    });
+    const scanProgress = result.progress;
+    const progressText = `${scanProgress.scannedParcels} of ${scanProgress.totalParcels} parcel${scanProgress.totalParcels === 1 ? "" : "s"} scanned.`;
+    return response.status(result.alreadyRecorded ? 200 : 201).json({
+      success: true,
+      message: result.alreadyRecorded
+        ? `${scanProgress.parcelNumber} was already scanned for ${result.statusLabel}. ${scanProgress.milestoneRecorded ? "No duplicate timeline event was created." : progressText}`
+        : scanProgress.milestoneRecorded
+          ? `${result.statusLabel} recorded for ${result.swiftlineTrackingNumber || parsed.data.barcode}.`
+          : `${scanProgress.parcelNumber} scanned. ${progressText} Scan the remaining parcels before the shipment milestone is recorded.`,
+      result
+    });
+  } catch (error) {
+    if (error instanceof ShipmentOperationsScanError) {
+      return response.status(error.statusCode).json({ success: false, message: error.message });
+    }
+    throw error;
+  }
+}
+
+export async function refreshCarrierTracking(request: Request, response: Response) {
+  const userId = getAuthenticatedUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  if (!mongoose.Types.ObjectId.isValid(String(request.params.id ?? ""))) {
+    return response.status(404).json({ success: false, message: "Shipment not found." });
+  }
+  const shipment = await DpdShipment.findById(String(request.params.id)).select("shipmentDraftId").lean().exec();
+  if (!shipment) return response.status(404).json({ success: false, message: "Shipment not found." });
+  const draft = await ShipmentDraft.findById(shipment.shipmentDraftId).select("branchId").lean().exec();
+  if (!draft || !canAccessBranch(request, draft.branchId)) {
+    return response.status(404).json({ success: false, message: "Shipment not found." });
+  }
+  try {
+    const result = await refreshAlsTrackingForShipment({ shipmentDraftId: shipment.shipmentDraftId, userId });
+    await AuditLog.create({
+      action: "CARRIER_TRACKING_REFRESHED",
+      entityType: "DPD_SHIPMENT",
+      entityId: shipment._id,
+      performedBy: userId,
+      performedAt: new Date(),
+      metadata: {
+        provider: "ALS",
+        carrierAwbNumber: result.carrierAwbNumber,
+        appliedEvents: result.applied,
+        reviewRequired: result.reviewRequired
+      }
+    });
+    return response.json({ success: true, message: "ALS tracking refreshed.", result });
+  } catch (error) {
+    if (error instanceof AlsTrackingServiceError) {
+      return response.status(error.statusCode).json({ success: false, message: error.message });
+    }
+    throw error;
+  }
 }
 
 function serializeDpdShipment(shipment: {
@@ -975,6 +1064,7 @@ export async function listDpdShipments(request: Request, response: Response): Pr
           trackingSummary: null,
           trackingAttention: null,
           parcelActivities: [],
+          parcelProgress: null,
           trackingPosition: null
         };
       })
@@ -993,8 +1083,11 @@ export async function listDpdShipments(request: Request, response: Response): Pr
       .lean()
       .exec()
   ]);
-  const eventsByDraftId = await getShipmentEventsByDraftIds(draftIds as mongoose.Types.ObjectId[]);
-  const parcelActivitiesByDraftId = await loadShipmentParcelActivitiesByDraftIds(draftIds as mongoose.Types.ObjectId[]);
+  const [eventsByDraftId, parcelActivitiesByDraftId, parcelProgressByDraftId] = await Promise.all([
+    getShipmentEventsByDraftIds(draftIds as mongoose.Types.ObjectId[]),
+    loadShipmentParcelActivitiesByDraftIds(draftIds as mongoose.Types.ObjectId[]),
+    loadShipmentParcelProgressByDraftIds(draftIds as mongoose.Types.ObjectId[])
+  ]);
   const labelsByShipment = new Map<string, typeof labels>();
   const draftsById = new Map(drafts.map((draft) => [String(draft._id), draft]));
   const branchesById = new Map(branches.map((branch) => [String(branch._id), branch]));
@@ -1083,6 +1176,7 @@ export async function listDpdShipments(request: Request, response: Response): Pr
           : null,
         trackingAttention: buildTrackingAttention(events),
         parcelActivities: parcelActivitiesByDraftId.get(String(shipment.shipmentDraftId)) ?? [],
+        parcelProgress: parcelProgressByDraftId.get(String(shipment.shipmentDraftId)) ?? null,
         trackingPosition: draft && journey
           ? buildTrackingPosition({
             events,
@@ -1171,8 +1265,11 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
   if (!draft || !shipment) {
     return response.status(404).json({ success: false, message: "Booked shipment not found" });
   }
+  if (!canAccessBranch(request, draft.branchId)) {
+    return response.status(404).json({ success: false, message: "Booked shipment not found" });
+  }
 
-  const [labels, events, branch, shipmentInvoice, parcelActivities] = await Promise.all([
+  const [labels, events, branch, shipmentInvoice, parcelActivities, parcelProgress, carrierTrackingReviews] = await Promise.all([
     LabelDocument.find({
       dpdShipmentId: shipment._id,
       labelVersion: shipment.snapshotRevision || 1
@@ -1186,7 +1283,14 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
       .select("invoiceNumber currency totalAmountMinor status revision")
       .lean()
       .exec(),
-    loadShipmentParcelActivities(shipmentDraftId)
+    loadShipmentParcelActivities(shipmentDraftId),
+    loadShipmentParcelProgress(shipmentDraftId),
+    CarrierTrackingEvent.find({ shipmentDraftId, processingStatus: "REVIEW_REQUIRED" })
+      .select("carrierAwbNumber eventState description location eventAt processingNote receivedAt")
+      .sort({ eventAt: -1, receivedAt: -1 })
+      .limit(50)
+      .lean()
+      .exec()
   ]);
 
   const journey = await loadShipmentJourney({
@@ -1228,6 +1332,17 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
       trackingSummary: buildTrackingSummary({ draft, dpdShipment: shipment, events }),
       trackingAttention: buildTrackingAttention(events),
       parcelActivities,
+      parcelProgress,
+      carrierTrackingReviews: carrierTrackingReviews.map((event) => ({
+        id: String(event._id),
+        carrierAwbNumber: event.carrierAwbNumber,
+        eventState: event.eventState,
+        description: event.description,
+        location: event.location,
+        eventAt: event.eventAt,
+        processingNote: event.processingNote,
+        receivedAt: event.receivedAt
+      })),
       trackingPosition: buildTrackingPosition({
         events,
         journey,

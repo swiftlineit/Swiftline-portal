@@ -182,8 +182,8 @@ function formatStageLabel(status: string) {
   // Defensive fallback during a staggered frontend/backend deployment. The
   // current API returns canonical values, but an old cached response must still
   // use the one visible stage name rather than exposing legacy filters again.
-  if (status === "EXPORT_CUSTOMS_CLEARED" || status === "FLIGHT_ASSIGNED") return "Ready for Export";
-  if (status === "FLIGHT_DEPARTED") return "Dispatched from Delhi Hub";
+  if (status === "EXPORT_CUSTOMS_CLEARED" || status === "FLIGHT_ASSIGNED") return "Ready for Dispatch";
+  if (status === "FLIGHT_DEPARTED") return "In International Transit";
   return status;
 }
 

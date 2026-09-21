@@ -3,7 +3,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { isValidAadhaarNumber, normalizeAadhaarNumber } from "./aadhaarValidation.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
-import { parcelItemUnitTypeValues } from "./parcelItems.service.js";
+import { maxParcelItems, maxParcelsPerShipment, parcelItemUnitTypeValues } from "./parcelItems.service.js";
 import { shipmentContentTypeValues } from "../models/shipmentDraft.model.js";
 
 const cleanText = (max: number) => z.string().trim().max(max);
@@ -66,7 +66,7 @@ const parcelSchema = z.object({
   shipmentContentType: z.enum(shipmentContentTypeValues),
   shipmentReference1: requiredText("Shipment reference", 120).transform((value) => value.toUpperCase()),
   shipmentReference2: cleanText(120).default("").transform((value) => value.toUpperCase()),
-  items: z.array(itemSchema).min(1, "Add at least one item.").max(20),
+  items: z.array(itemSchema).min(1, "Add at least one item.").max(maxParcelItems),
 });
 
 export const publicShipmentDraftPayloadSchema = z.object({
@@ -75,7 +75,7 @@ export const publicShipmentDraftPayloadSchema = z.object({
   serviceType: z.enum(["COURIER", "CARGO"]),
   csbType: z.enum(["CSB_IV", "CSB_V"]),
   kycUseForAllParcels: z.boolean().default(true),
-  parcels: z.array(parcelSchema).min(1, "Add at least one parcel.").max(10, "A booking can contain up to 10 parcels."),
+  parcels: z.array(parcelSchema).min(1, "Add at least one parcel.").max(maxParcelsPerShipment, `A booking can contain up to ${maxParcelsPerShipment} parcels.`),
 }).superRefine((value, context) => {
   if (value.consignee.countryCode === "IN") {
     context.addIssue({

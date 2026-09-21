@@ -12,6 +12,8 @@ import {
   listDpdShipments,
   reconcileDpdShipmentDocuments,
   releaseDpdShipment,
+  refreshCarrierTracking,
+  scanShipmentOperationsMilestone,
   resetDevelopmentShipmentBooking,
   updateDpdShipmentOperationalStatus,
   bulkUpdateDpdShipmentOperationalStatus
@@ -50,6 +52,7 @@ const requireBilling = requireRole("admin", "operations", "finance");
 
 dpdShipmentRouter.get("/", listDpdShipments);
 dpdShipmentRouter.post("/bulk-status", requireOperations, bulkUpdateDpdShipmentOperationalStatus);
+dpdShipmentRouter.post("/operations-scan", requireOperations, scanShipmentOperationsMilestone);
 dpdShipmentRouter.get("/drafts/:draftId/invoice", requireBilling, getShipmentInvoice);
 dpdShipmentRouter.get("/drafts/:draftId/invoice/pdf", requireBilling, downloadShipmentInvoicePdf);
 // Customs ("shipment") invoice: the goods declaration, separate from the GST invoice above.
@@ -66,6 +69,7 @@ dpdShipmentRouter.post("/:id/charge-verification/finalize", requireChargeVerific
 dpdShipmentRouter.post("/:id/hold", requireOperations, holdDpdShipment);
 dpdShipmentRouter.post("/:id/release", requireOperations, releaseDpdShipment);
 dpdShipmentRouter.post("/:id/reconcile-documents", requireOperations, reconcileDpdShipmentDocuments);
+dpdShipmentRouter.post("/:id/refresh-carrier-tracking", requireOperations, refreshCarrierTracking);
 dpdShipmentRouter.post("/:id/generate-label", requireOperations, generateExistingDpdLabel);
 dpdShipmentRouter.post("/:id/status-events", requireOperations, updateDpdShipmentOperationalStatus);
 dpdShipmentRouter.patch("/:id/gateway", requireOperations, correctDpdShipmentGateway);

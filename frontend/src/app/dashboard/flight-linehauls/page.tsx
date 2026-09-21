@@ -8,7 +8,6 @@ import {
   FiCheckCircle,
   FiChevronDown,
   FiClock,
-  FiMapPin,
   FiNavigation,
   FiPackage,
   FiPlus,
@@ -23,6 +22,7 @@ import { useAdminUser } from "@/lib/useAdminUser";
 import {
   getFlightSummary,
   listFlights,
+  formatFlightStatus,
   type FlightCardSummary,
   type FlightListItem,
 } from "@/lib/flightLinehaul";
@@ -30,17 +30,10 @@ import { normalizeFlightNumber } from "@/lib/flightNumber";
 
 const statusOptions = [
   "",
-  "PLANNED",
   "BOOKING_CONFIRMED",
   "CARGO_ALLOCATED",
-  "MANIFEST_READY",
-  "HANDED_TO_AIRLINE",
   "DEPARTED",
-  "IN_TRANSIT",
-  "CONNECTION",
   "ARRIVED_DESTINATION",
-  "CUSTOMS",
-  "HANDED_TO_FINAL_MILE",
   "CLOSED",
   "CANCELLED",
 ];
@@ -54,8 +47,6 @@ function statusColor(status: string) {
     return "border-amber-200 bg-amber-50 text-amber-700";
   if (status === "CLOSED")
     return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "HANDED_TO_FINAL_MILE")
-    return "border-violet-200 bg-violet-50 text-violet-700";
   return "border-slate-200 bg-slate-50 text-slate-700";
 }
 
@@ -113,17 +104,12 @@ export default function FlightLinehaulDashboardPage() {
         <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-6">
           <div className="flex min-w-0 items-start gap-3.5">
             <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                Flight operations
-              </p>
-
-              <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950 sm:text-[27px]">
+              <h1 className="text-2xl font-bold tracking-tight text-slate-950 sm:text-[27px]">
                 Flight &amp; Linehaul Control Centre
               </h1>
 
               <p className="mt-1.5 max-w-3xl text-sm leading-6 text-slate-500">
-                Manage capacity, allocation, departures, transit, arrivals,
-                customs, handover and operational exceptions from one view.
+                Create flights from dispatched manifests, record actual departure and arrival, and manage destination operations.
               </p>
             </div>
           </div>
@@ -163,25 +149,14 @@ export default function FlightLinehaulDashboardPage() {
               tone="primary"
             />
             <Card
-              label="Awaiting flight"
+              label="Cargo allocated"
               value={cards.awaitingFlight}
               icon={<FiPackage />}
-            />
-            <Card
-              label="Ready for handover"
-              value={cards.readyForHandover}
-              icon={<FiTruck />}
             />
             <Card
               label="Departed"
               value={cards.departed}
               icon={<FiArrowRight />}
-              tone="primary"
-            />
-            <Card
-              label="In transit"
-              value={cards.inTransit}
-              icon={<FiMapPin />}
               tone="primary"
             />
             <Card
@@ -273,7 +248,7 @@ export default function FlightLinehaulDashboardPage() {
                 <option value="">All statuses</option>
                 {statusOptions.filter(Boolean).map((s) => (
                   <option key={s} value={s}>
-                    {s.replaceAll("_", " ")}
+                    {formatFlightStatus(s)}
                   </option>
                 ))}
               </select>
@@ -497,7 +472,7 @@ export default function FlightLinehaulDashboardPage() {
                             item.status,
                           )}`}
                         >
-                          {item.status.replaceAll("_", " ")}
+                          {formatFlightStatus(item.status)}
                         </span>
 
                         {item.connection?.riskLevel &&

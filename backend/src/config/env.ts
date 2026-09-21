@@ -130,6 +130,13 @@ const environmentSchema = z.object({
   // Portal values are held in INR; ALS declares customs value in GBP.
   ALS_INR_PER_GBP: z.coerce.number().positive().optional(),
   ALS_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  // Read-only ALS tracking is independently switchable from paid label booking.
+  // Polling stays dark until every tracking setting is explicitly configured.
+  ALS_TRACKING_ENABLED: booleanFromEnv.default(false),
+  ALS_TRACKING_API_URL: z.string().url().optional(),
+  ALS_TRACKING_COMPANY_ID: z.coerce.number().int().positive().optional(),
+  ALS_TRACKING_CUSTOMER_CODE: z.string().trim().min(1).optional(),
+  ALS_TRACKING_TIMEOUT_MS: z.coerce.number().int().positive().max(60000).default(15000),
   // Used server-side only. Historical cost sheets persist the fetched rate so
   // their INR totals never move when a later market rate is published.
   EXCHANGE_RATE_API_KEY: z.string().trim().min(1).optional(),

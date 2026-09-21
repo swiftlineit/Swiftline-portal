@@ -234,7 +234,10 @@ export async function updateMyDeliveryStatus(request: Request, response: Respons
     if (allowed[row.status] !== status) fail(409, "Complete the delivery steps in order.");
 
     const trackingStatus = status === "ACCEPTED" ? "DELIVERY_PARTNER_TRANSFERRED" : "OUT_FOR_DELIVERY";
-    await requireDeliveryMilestoneReady(row.shipmentDraftId, trackingStatus);
+    // Partner handover is supporting activity rather than a required customer
+    // rung. Both driver actions still require the shipment to have reached the
+    // destination and be eligible for the next public milestone.
+    await requireDeliveryMilestoneReady(row.shipmentDraftId, "OUT_FOR_DELIVERY");
 
     const [partner, now] = await Promise.all([
       row.deliveryPartnerId

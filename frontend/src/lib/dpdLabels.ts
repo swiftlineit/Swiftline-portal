@@ -487,6 +487,17 @@ export type DpdShipmentHistoryItem = {
   trackingJourney?: TrackingJourney | null;
   trackingPosition?: import("@/lib/shipmentTracking").TrackingPosition | null;
   parcelActivities?: import("@/lib/shipmentTracking").ParcelActivity[];
+  parcelProgress?: import("@/lib/shipmentTracking").ParcelProgress | null;
+  carrierTrackingReviews?: Array<{
+    id: string;
+    carrierAwbNumber: string;
+    eventState: string;
+    description: string;
+    location: string;
+    eventAt: string;
+    processingNote: string;
+    receivedAt: string;
+  }>;
 };
 
 export type ShipmentBookingConfirmation = {
@@ -542,15 +553,12 @@ export type ShipmentHoldReason = (typeof shipmentHoldReasonOptions)[number]["val
 
 export const shipmentOperationalStatusOptions = [
   { value: "PARCEL_COLLECTED", label: "Shipment Collected" },
-  { value: "WAREHOUSE_SCAN_IN", label: "Shipment Received at Delhi Hub" },
-  { value: "ORIGIN_HUB_PROCESSED", label: "Shipment Processed at Delhi Hub" },
-  { value: "READY_FOR_EXPORT", label: "Ready for Export" },
-  { value: "ORIGIN_HUB_DISPATCHED", label: "Dispatched from Delhi Hub" },
-  { value: "DESTINATION_ARRIVED", label: "Arrived at Destination Gateway" },
-  { value: "IMPORT_CUSTOMS_CLEARANCE", label: "Customs Clearance in Progress" },
-  { value: "IMPORT_CUSTOMS_CLEARED", label: "Customs Cleared" },
-  { value: "DELIVERY_PARTNER_TRANSFERRED", label: "Transferred to Delivery Partner" },
-  { value: "DELIVERY_HUB_ARRIVED", label: "Arrived at Delivery Hub" },
+  { value: "WAREHOUSE_SCAN_IN", label: "Received at Origin Facility" },
+  { value: "ORIGIN_HUB_PROCESSED", label: "Processing for Export" },
+  { value: "READY_FOR_EXPORT", label: "Ready for Dispatch" },
+  { value: "ORIGIN_HUB_DISPATCHED", label: "Departed from Origin Facility" },
+  { value: "IN_TRANSIT", label: "In International Transit" },
+  { value: "DESTINATION_ARRIVED", label: "Arrived in Destination Country" },
   { value: "OUT_FOR_DELIVERY", label: "Out for Delivery" },
   { value: "DELIVERED", label: "Delivered" }
 ] as const;
@@ -577,7 +585,7 @@ export function findMissingStatusPrerequisites(
   const already = new Set(recorded);
   const legacyAliases: Partial<Record<ShipmentOperationalStatus, readonly string[]>> = {
     READY_FOR_EXPORT: ["EXPORT_CUSTOMS_CLEARED", "FLIGHT_ASSIGNED"],
-    ORIGIN_HUB_DISPATCHED: ["FLIGHT_DEPARTED"]
+    IN_TRANSIT: ["FLIGHT_DEPARTED"]
   };
   return ladder.slice(0, index).filter((status) => status !== "PARCEL_COLLECTED").filter((status) => (
     !already.has(status)
@@ -590,9 +598,10 @@ export function hasRecordedOperationalStatus(
   recorded: Iterable<string>
 ): boolean {
   const already = new Set(recorded);
+  if (target === "ORIGIN_HUB_DISPATCHED" && already.has("FLIGHT_DEPARTED")) return true;
   const legacyAliases: Partial<Record<ShipmentOperationalStatus, readonly string[]>> = {
     READY_FOR_EXPORT: ["EXPORT_CUSTOMS_CLEARED", "FLIGHT_ASSIGNED"],
-    ORIGIN_HUB_DISPATCHED: ["FLIGHT_DEPARTED"]
+    IN_TRANSIT: ["FLIGHT_DEPARTED"]
   };
   return [target, ...(legacyAliases[target] ?? [])].some((status) => already.has(status));
 }
@@ -701,7 +710,7 @@ async function parseApiResponse<T>(response: Response): Promise<T> {
     const validationError = formatShipmentValidationIssues(data.validationIssues);
     const formattedError = findFirstApiError(data.errors);
     const listError = Array.isArray(data.errors) && typeof data.errors[0] === "string" ? data.errors[0] : "";
-    throw new Error(validationError || data.message || formattedError || listError || "DPD label request failed");
+    throw new Error(validationError || formattedError || listError || data.message || "DPD label request failed");
   }
 
   return data as T;
@@ -949,6 +958,18 @@ export async function reconcileDpdShipmentDocuments(dpdShipmentId: string) {
   return parseApiResponse<{
     success: true;
     message: string;
+  }>(response);
+}
+
+export async function refreshCarrierTracking(dpdShipmentId: string) {
+  const response = await fetchWithAuth(
+    apiUrl(`/api/v1/dpd-shipments/${dpdShipmentId}/refresh-carrier-tracking`),
+    { method: "POST" },
+  );
+  return parseApiResponse<{
+    success: true;
+    message: string;
+    result: { applied: number; reviewRequired: number; state: string };
   }>(response);
 }
 

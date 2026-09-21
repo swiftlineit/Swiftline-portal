@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-export const operationsBagStatusValues = ["OPEN", "CLOSED", "REOPENED", "CANCELLED"] as const;
+export const operationsBagStatusValues = ["OPEN", "CLOSED", "READY", "REOPENED", "CANCELLED"] as const;
 export type OperationsBagStatus = (typeof operationsBagStatusValues)[number];
 
 export interface IOperationsManifestBag extends mongoose.Document {
@@ -15,6 +15,8 @@ export interface IOperationsManifestBag extends mongoose.Document {
   createdBy: mongoose.Types.ObjectId;
   closedBy?: mongoose.Types.ObjectId | null;
   closedAt?: Date | null;
+  readyBy?: mongoose.Types.ObjectId | null;
+  readyAt?: Date | null;
   reopenedBy?: mongoose.Types.ObjectId | null;
   reopenedAt?: Date | null;
   cancelledBy?: mongoose.Types.ObjectId | null;
@@ -36,6 +38,8 @@ const operationsManifestBagSchema = new mongoose.Schema<IOperationsManifestBag>(
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   closedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   closedAt: { type: Date, default: null },
+  readyBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  readyAt: { type: Date, default: null },
   reopenedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   reopenedAt: { type: Date, default: null },
   cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },

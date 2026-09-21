@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 
 export const operationsConsignmentStatusValues = ["PARTIAL", "COMPLETE", "REMOVED"] as const;
 export type OperationsConsignmentStatus = (typeof operationsConsignmentStatusValues)[number];
+export const operationsParcelDispositionValues = ["HELD", "DEFERRED_TO_NEXT_MANIFEST", "CANCELLED"] as const;
+export type OperationsParcelDisposition = (typeof operationsParcelDispositionValues)[number];
 type ParcelItemSnapshot = {
   description: string;
   hsnCode: string;
@@ -19,6 +21,13 @@ export interface IOperationsManifestConsignment extends mongoose.Document {
   consignmentNumber: string;
   expectedParcelNumbers: string[];
   scannedParcelNumbers: string[];
+  parcelDispositions: Array<{
+    parcelNumber: string;
+    disposition: OperationsParcelDisposition;
+    reason: string;
+    recordedBy: mongoose.Types.ObjectId;
+    recordedAt: Date;
+  }>;
   // Per-parcel facts captured at scan time. Each one prints as its own manifest row.
   // `valueMinor` is the box's own declared goods value from the shipment snapshot.
   parcelWeightSnapshots: Array<{
@@ -51,6 +60,14 @@ const operationsManifestConsignmentSchema = new mongoose.Schema<IOperationsManif
   consignmentNumber: { type: String, required: true, trim: true, uppercase: true, maxlength: 80, index: true },
   expectedParcelNumbers: [{ type: String, required: true, trim: true, uppercase: true, maxlength: 80 }],
   scannedParcelNumbers: [{ type: String, required: true, trim: true, uppercase: true, maxlength: 80 }],
+  parcelDispositions: [{
+    _id: false,
+    parcelNumber: { type: String, required: true, trim: true, uppercase: true, maxlength: 80 },
+    disposition: { type: String, enum: operationsParcelDispositionValues, required: true },
+    reason: { type: String, required: true, trim: true, minlength: 5, maxlength: 500 },
+    recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    recordedAt: { type: Date, required: true }
+  }],
   parcelWeightSnapshots: [{
     _id: false,
     parcelNumber: { type: String, required: true, trim: true, uppercase: true, maxlength: 80 },

@@ -3,7 +3,10 @@ import type {
   PublicShipmentFormData,
 } from "@/lib/publicShipmentBooking";
 import { BookingField, BookingSelect } from "./BookingField";
-import HsCodeSearchField from "./HsCodeSearchField";
+import { ParcelItemsEditor } from "@/components/shipments/ParcelItemsEditor";
+import type { ParcelItem } from "@/lib/parcelItems";
+import { maxParcelItems } from "@/lib/parcelItems";
+import { maxParcelsPerShipment } from "@/lib/shipmentLimits";
 
 export const KYC_DOCUMENTS = [
   ["iec", "IEC"],
@@ -29,6 +32,26 @@ function emptyItem() {
     quantity: 1,
     unitRate: 0,
   };
+}
+
+function toEditorItems(items: PublicParcel["items"]): ParcelItem[] {
+  return items.map((item) => ({
+    description: item.description,
+    hsnCode: item.hsnCode,
+    unitType: item.unitType,
+    quantity: item.quantity ? String(item.quantity) : "",
+    unitRate: item.unitRate ? String(item.unitRate) : "",
+  }));
+}
+
+function fromEditorItems(items: ParcelItem[]): PublicParcel["items"] {
+  return items.map((item) => ({
+    description: item.description,
+    hsnCode: item.hsnCode,
+    unitType: item.unitType as PublicParcel["items"][number]["unitType"],
+    quantity: Number(item.quantity) || 0,
+    unitRate: Number(item.unitRate) || 0,
+  }));
 }
 
 export function emptyParcel(reference = ""): PublicParcel {
@@ -248,119 +271,15 @@ function ParcelEditor({
           </p>
         </div>
       </div>
-      <div className="mt-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h4 className="text-sm font-bold text-slate-900">Declared items</h4>
-          <button
-            type="button"
-            onClick={() =>
-              onChange({ ...parcel, items: [...parcel.items, emptyItem()] })
-            }
-            className="text-xs font-bold text-[#0D1282] hover:underline"
-          >
-            + Add item
-          </button>
-        </div>
-        {parcel.items.map((item, itemIndex) => (
-          <div
-            key={itemIndex}
-            className="grid gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-[minmax(180px,2fr)_1fr_0.8fr_0.8fr_auto]"
-          >
-            <BookingField
-              label="Description"
-              required
-              value={item.description}
-              revealError={revealErrors}
-              error={errors[`parcels.${index}.items.${itemIndex}.description`]}
-              onChange={(event) =>
-                onChange({
-                  ...parcel,
-                  items: parcel.items.map((row, rowIndex) =>
-                    rowIndex === itemIndex
-                      ? { ...row, description: event.target.value }
-                      : row,
-                  ),
-                })
-              }
-              placeholder="Cotton shirts"
-            />
-            <HsCodeSearchField
-              description={item.description}
-              value={item.hsnCode}
-              required={csbType === "CSB_V"}
-              revealError={revealErrors}
-              error={errors[`parcels.${index}.items.${itemIndex}.hsnCode`]}
-              onChange={(hsnCode) =>
-                onChange({
-                  ...parcel,
-                  items: parcel.items.map((row, rowIndex) =>
-                    rowIndex === itemIndex ? { ...row, hsnCode } : row,
-                  ),
-                })
-              }
-            />
-            <BookingField
-              label="Quantity"
-              required
-              type="number"
-              min="1"
-              max="100000"
-              value={item.quantity || ""}
-              revealError={revealErrors}
-              error={errors[`parcels.${index}.items.${itemIndex}.quantity`]}
-              onChange={(event) =>
-                onChange({
-                  ...parcel,
-                  items: parcel.items.map((row, rowIndex) =>
-                    rowIndex === itemIndex
-                      ? { ...row, quantity: Number(event.target.value) || 0 }
-                      : row,
-                  ),
-                })
-              }
-            />
-            <BookingField
-              label="Unit value (₹)"
-              required
-              type="number"
-              min="0.01"
-              max="100000000"
-              step="0.01"
-              value={item.unitRate || ""}
-              revealError={revealErrors}
-              error={errors[`parcels.${index}.items.${itemIndex}.unitRate`]}
-              onChange={(event) =>
-                onChange({
-                  ...parcel,
-                  items: parcel.items.map((row, rowIndex) =>
-                    rowIndex === itemIndex
-                      ? { ...row, unitRate: Number(event.target.value) || 0 }
-                      : row,
-                  ),
-                })
-              }
-            />
-            {parcel.items.length > 1 ? (
-              <button
-                type="button"
-                aria-label={`Remove item ${itemIndex + 1}`}
-                onClick={() =>
-                  onChange({
-                    ...parcel,
-                    items: parcel.items.filter(
-                      (_, rowIndex) => rowIndex !== itemIndex,
-                    ),
-                  })
-                }
-                className="self-end pb-3 text-xs font-semibold text-red-600"
-              >
-                Remove
-              </button>
-            ) : (
-              <span />
-            )}
-          </div>
-        ))}
+      <div className="mt-5">
+        <ParcelItemsEditor
+          items={toEditorItems(parcel.items)}
+          onChange={(items) => onChange({ ...parcel, items: fromEditorItems(items) })}
+          parcelLabel={`Parcel ${index + 1}`}
+          revealError={revealErrors}
+          requireHsnCode={csbType === "CSB_V"}
+          maxItems={maxParcelItems}
+        />
       </div>
     </section>
   );
@@ -465,7 +384,7 @@ export default function ShipmentDetailsStep({
           }
         />
       ))}
-      {data.parcels.length < 10 ? (
+      {data.parcels.length < maxParcelsPerShipment ? (
         <button
           type="button"
           onClick={() =>

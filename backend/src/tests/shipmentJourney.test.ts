@@ -14,6 +14,7 @@ const completedEvents = [
   "ORIGIN_HUB_PROCESSED",
   "READY_FOR_EXPORT",
   "ORIGIN_HUB_DISPATCHED",
+  "IN_TRANSIT",
   "DESTINATION_ARRIVED",
   "IMPORT_CUSTOMS_CLEARANCE",
   "IMPORT_CUSTOMS_CLEARED",
@@ -54,7 +55,7 @@ describe("destination-aware shipment journey", () => {
     assert.equal(resolveTrackingProfile("DE", "OTHER"), "OTHER");
   });
 
-  it("names the country rather than the region on a non-regional lane", () => {
+  it("uses the approved international-transit wording on every lane", () => {
     const journey = buildTrackingJourney({
       destinationCountryCode: "TR",
       destinationCountryName: "Turkey",
@@ -65,8 +66,8 @@ describe("destination-aware shipment journey", () => {
     assert.equal(journey.context.profile, "OTHER");
     assert.equal(journey.context.destinationCountryName, "Turkey");
     assert.ok(
-      journey.milestones.some((milestone) => milestone.label === "In Transit to Turkey"),
-      "the transit milestone should name Turkey"
+      journey.milestones.some((milestone) => milestone.label === "In International Transit"),
+      "the transit milestone should use the approved customer wording"
     );
   });
 
@@ -81,7 +82,7 @@ describe("destination-aware shipment journey", () => {
 
     assert.deepEqual(journey.context.routeSegments, ["Delhi Hub", "LHR Gateway", "DPD Network", "Delivery"]);
     assert.equal(journey.context.deliveryPartnerCode, "DPD");
-    assert.equal(formatTrackingEventLabel("DESTINATION_ARRIVED", journey), "Arrived at London Gateway (LHR)");
+    assert.equal(formatTrackingEventLabel("DESTINATION_ARRIVED", journey), "Arrived in Destination Country");
     assert.equal(formatTrackingEventLabel("DELIVERY_PARTNER_TRANSFERRED", journey), "Transferred to DPD Network");
     assert.equal(formatTrackingEventLabel("DELIVERY_HUB_ARRIVED", journey), "Arrived at DPD Delivery Hub");
   });
@@ -103,8 +104,8 @@ describe("destination-aware shipment journey", () => {
         : event)
     });
 
-    assert.equal(formatTrackingEventLabel("DESTINATION_ARRIVED", usa), "Arrived at New York Gateway (JFK)");
-    assert.equal(formatTrackingEventLabel("DESTINATION_ARRIVED", canada), "Arrived at Vancouver Gateway (YVR)");
+    assert.equal(formatTrackingEventLabel("DESTINATION_ARRIVED", usa), "Arrived in Destination Country");
+    assert.equal(formatTrackingEventLabel("DESTINATION_ARRIVED", canada), "Arrived in Destination Country");
   });
 
   it("keeps the Europe wording and includes the destination-country leg", () => {
@@ -117,8 +118,8 @@ describe("destination-aware shipment journey", () => {
         : event)
     });
 
-    assert.equal(formatTrackingEventLabel("ORIGIN_HUB_DISPATCHED", journey), "Dispatched from Delhi Hub");
-    assert.equal(journey.milestones.find((item) => item.key === "INTERNATIONAL_TRANSIT")?.label, "In Transit to Europe");
+    assert.equal(formatTrackingEventLabel("ORIGIN_HUB_DISPATCHED", journey), "Departed from Origin Facility Delhi");
+    assert.equal(journey.milestones.find((item) => item.key === "INTERNATIONAL_TRANSIT")?.label, "In International Transit");
     assert.deepEqual(journey.context.routeSegments, [
       "Delhi Hub",
       "FRA Gateway",
@@ -139,16 +140,41 @@ describe("destination-aware shipment journey", () => {
     });
 
     assert.equal(journey.context.gatewayCode, "");
-    assert.equal(formatTrackingEventLabel("DESTINATION_ARRIVED", journey), "Arrived at Canada Gateway");
+    assert.equal(formatTrackingEventLabel("DESTINATION_ARRIVED", journey), "Arrived in Destination Country");
   });
 
-  it("shows collection only when it was actually recorded", () => {
+  it("does not show international transit until an actual flight-departure event exists", () => {
+    const dispatched = buildTrackingJourney({
+      destinationCountryCode: "GB",
+      destinationCountryName: "United Kingdom",
+      originHubName: "Delhi Hub",
+      events: [
+        { status: "ORIGIN_HUB_DISPATCHED", eventAt: "2026-08-01T08:00:00.000Z" }
+      ]
+    });
+    assert.equal(dispatched.milestones.find((item) => item.key === "ORIGIN_DISPATCHED")?.reachedAt !== null, true);
+    assert.equal(dispatched.milestones.find((item) => item.key === "INTERNATIONAL_TRANSIT")?.reachedAt, null);
+
+    const departed = buildTrackingJourney({
+      destinationCountryCode: "GB",
+      destinationCountryName: "United Kingdom",
+      originHubName: "Delhi Hub",
+      events: [
+        { status: "ORIGIN_HUB_DISPATCHED", eventAt: "2026-08-01T08:00:00.000Z" },
+        { status: "IN_TRANSIT", eventAt: "2026-08-01T12:00:00.000Z" }
+      ]
+    });
+    assert.equal(departed.milestones.find((item) => item.key === "INTERNATIONAL_TRANSIT")?.reachedAt !== null, true);
+  });
+
+  it("keeps collection out of the nine-stage customer journey", () => {
     const journey = buildTrackingJourney({
       destinationCountryCode: "US",
       destinationCountryName: "United States",
       events: completedEvents.filter((event) => event.status !== "PARCEL_COLLECTED")
     });
     assert.equal(journey.milestones.some((item) => item.key === "COLLECTED"), false);
+    assert.equal(journey.milestones.length, 9);
   });
 });
 
@@ -160,7 +186,7 @@ describe("visible tracking history", () => {
     events: []
   });
 
-  it("collapses the two legacy export statuses into one Ready for Export milestone", () => {
+  it("collapses the two legacy export statuses into one Ready for Dispatch milestone", () => {
     const history = normalizeVisibleTrackingHistory([
       {
         status: "FLIGHT_ASSIGNED",
@@ -177,9 +203,9 @@ describe("visible tracking history", () => {
     ], journey);
 
     assert.equal(history.length, 1);
-    assert.equal(history[0]?.statusLabel, "Ready for Export");
+    assert.equal(history[0]?.statusLabel, "Ready for Dispatch");
     assert.equal(history[0]?.eventAt, "2026-08-22T01:37:00.000Z");
-    assert.equal(history[0]?.note, "Shipment prepared and ready for export.");
+    assert.equal(history[0]?.note, "Shipment is ready for dispatch.");
   });
 
   it("collapses genuine repeated milestones but keeps repeatable holds", () => {
@@ -191,6 +217,19 @@ describe("visible tracking history", () => {
     ], journey);
 
     assert.equal(history.filter((event) => event.status === "PARCEL_COLLECTED").length, 1);
+    assert.equal(history.filter((event) => event.status === "ON_HOLD").length, 2);
+  });
+
+  it("hides an impossible duplicate release until another hold occurs", () => {
+    const history = normalizeVisibleTrackingHistory([
+      { status: "ON_HOLD", eventAt: "2026-08-23T09:00:00.000Z", note: "Customs query", location: "LHR" },
+      { status: "RELEASED_FROM_HOLD", eventAt: "2026-08-23T10:00:00.000Z", note: "Released", location: "LHR" },
+      { status: "RELEASED_FROM_HOLD", eventAt: "2026-08-23T10:00:01.000Z", note: "Released", location: "LHR" },
+      { status: "ON_HOLD", eventAt: "2026-08-24T09:00:00.000Z", note: "A new query", location: "LHR" },
+      { status: "RELEASED_FROM_HOLD", eventAt: "2026-08-24T10:00:00.000Z", note: "Released again", location: "LHR" }
+    ], journey);
+
+    assert.equal(history.filter((event) => event.status === "RELEASED_FROM_HOLD").length, 2);
     assert.equal(history.filter((event) => event.status === "ON_HOLD").length, 2);
   });
 
@@ -230,7 +269,7 @@ describe("visible tracking history", () => {
     ]);
 
     assert.equal(history.length, 1);
-    assert.equal(history[0]?.statusLabel, "Ready For Export");
-    assert.equal(history[0]?.note, "Shipment prepared and ready for export.");
+    assert.equal(history[0]?.statusLabel, "Ready for Dispatch");
+    assert.equal(history[0]?.note, "Shipment is ready for dispatch.");
   });
 });

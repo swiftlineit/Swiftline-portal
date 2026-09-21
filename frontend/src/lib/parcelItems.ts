@@ -10,7 +10,7 @@
 const hsnCodePattern = /^\d{4}(?:\d{2}(?:\d{2}(?:\d{2})?)?)?$/;
 
 export const contentsDescriptionMaxLength = 120;
-export const maxParcelItems = 20;
+export const maxParcelItems = 50;
 
 // Unit of measure per item line on the customs (shipment) invoice.
 export const parcelItemUnitTypeValues = ["Pkt", "Pcs", "Set", "Box", "Kg", "Pair"] as const;
@@ -112,6 +112,47 @@ export function composeContentsDescription(items: ParcelItem[]): string {
  */
 export function createEmptyParcelItem(): ParcelItem {
   return { description: "", hsnCode: "", unitType: defaultParcelItemUnitType, quantity: "", unitRate: "" };
+}
+
+/** A newly added UI row that carries no user-entered item data yet. */
+export function isUntouchedParcelItem(item: ParcelItem): boolean {
+  return !item.description.trim()
+    && !item.hsnCode.trim()
+    && !item.quantity.trim()
+    && !item.unitRate.trim()
+    && (!item.unitType.trim() || item.unitType === defaultParcelItemUnitType);
+}
+
+/**
+ * Applies the server-normalized item values after a save without discarding
+ * local-only rows. Blank and partially started rows are intentionally absent
+ * from the persisted response, but must stay visible while the user completes
+ * the form.
+ */
+export function mergeSavedParcelItemsWithLocalRows(
+  savedItems: ParcelItem[],
+  localItems: ParcelItem[]
+): ParcelItem[] {
+  const persistedItems = savedItems.filter(
+    (item) => item.description.trim() || item.hsnCode.trim()
+  );
+  let persistedIndex = 0;
+
+  const merged = localItems.map((localItem) => {
+    if (!localItem.description.trim() && !localItem.hsnCode.trim()) {
+      return localItem;
+    }
+
+    const savedItem = persistedItems[persistedIndex];
+    persistedIndex += 1;
+    return savedItem ?? localItem;
+  });
+
+  if (persistedIndex < persistedItems.length) {
+    merged.push(...persistedItems.slice(persistedIndex));
+  }
+
+  return merged.length ? merged : [createEmptyParcelItem()];
 }
 
 export function normalizeParcelItems(parcel: {

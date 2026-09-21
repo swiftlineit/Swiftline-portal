@@ -16,7 +16,7 @@ import {
   type IShipmentDraft
 } from "../models/shipmentDraft.model.js";
 import { normalizeCsbType } from "../services/csbType.service.js";
-import { defaultParcelItemUnitType, normalizeParcelItems } from "../services/parcelItems.service.js";
+import { defaultParcelItemUnitType, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "../services/parcelItems.service.js";
 import { findRestrictedCategories } from "../services/restrictedGoods.service.js";
 import {
   buildPricingInputFromDraft,
@@ -93,7 +93,7 @@ const amendmentParcelSchema = z.object({
     unitType: z.string().trim().max(12).default(defaultParcelItemUnitType),
     quantity: z.coerce.number().min(0).max(1_000_000).default(0),
     unitRate: z.coerce.number().min(0).max(10_000_000).default(0)
-  })).max(20).optional(),
+  })).max(maxParcelItems).optional(),
   contentsDescription: z.string().trim().min(1).max(120),
   shipmentReference1: z.string().trim().max(120).optional(),
   shipmentReference2: z.string().trim().max(120).optional()
@@ -118,7 +118,7 @@ const createShipmentAmendmentSchema = z.object({
   changes: z.object({
     serviceType: z.enum(shipmentServiceTypeValues).optional(),
     consigneeEnteredAddress: amendmentAddressSchema.optional(),
-    parcelList: z.array(amendmentParcelSchema).min(1).max(10).optional()
+    parcelList: z.array(amendmentParcelSchema).min(1).max(maxParcelsPerShipment).optional()
   }).refine((changes) => Boolean(changes.serviceType || changes.consigneeEnteredAddress || changes.parcelList), {
     message: "At least one amendment change is required."
   })
@@ -202,7 +202,12 @@ function getValidationIssues(error: z.ZodError) {
     const path = issue.path.join(".");
 
     if (path === "changes") return "At least one amendment change is required.";
-    if (path === "changes.parcelList") return "At least one parcel is required.";
+    if (path === "changes.parcelList") {
+      if (issue.code === "too_big") return `Number of Parcels (PCS) must be ${maxParcelsPerShipment} or fewer.`;
+      return "At least one parcel is required.";
+    }
+    const itemsPath = path.match(/^changes\.parcelList\.(\d+)\.items$/);
+    if (itemsPath && issue.code === "too_big") return `Parcel ${Number(itemsPath[1]) + 1} can contain at most ${maxParcelItems} items.`;
     if (path.endsWith(".weightKg")) return "Parcel weight must be zero or greater.";
     if (path.endsWith(".contentsDescription")) return "Parcel contents description is required.";
     if (path.endsWith(".townOrCity")) return "Town or city must be 80 characters or fewer.";

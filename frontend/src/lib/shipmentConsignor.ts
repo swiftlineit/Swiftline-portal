@@ -145,6 +145,7 @@ export function getConsignorFormIssueDetail(
   // Aadhaar now lives in the KYC section (shared or per parcel); see getKycIssues.
   if (!form.addressLine1.trim()) missing.push("Consignor address line 1 is required");
   if (!form.townOrCity.trim()) missing.push("Consignor town or city is required");
+  if (!form.county.trim()) missing.push("Consignor state is required");
   if (!form.postcode.trim()) {
     missing.push("Consignor PIN code is required");
   } else if (!/^[1-9]\d{5}$/.test(form.postcode.trim())) {

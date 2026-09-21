@@ -450,8 +450,8 @@ function ClientShipmentTable({
         </div>
       ) : null}
 
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-left text-sm">
+      <div className="overflow-x-auto"  >
+        <table id="drafts"  className="min-w-full text-left text-sm">
           <thead className="border-b border-slate-200 bg-slate-100 text-xs uppercase text-slate-500">
             <tr>
               <th className="w-12 px-4 py-3">

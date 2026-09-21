@@ -258,6 +258,7 @@ export type ClientShipmentDetails = {
   trackingJourney?: import("@/lib/shipmentJourney").TrackingJourney | null;
   trackingPosition?: import("@/lib/shipmentTracking").TrackingPosition | null;
   parcelActivities?: import("@/lib/shipmentTracking").ParcelActivity[];
+  parcelProgress?: import("@/lib/shipmentTracking").ParcelProgress | null;
 };
 
 export type ClientPrepaidAccount = {
@@ -339,7 +340,8 @@ async function parseApiResponse<T>(response: Response): Promise<T> {
 
   if (!response.ok || !data.success) {
     const validationError = formatShipmentValidationIssues(data.validationIssues);
-    throw new Error(validationError || data.message || "Client dashboard request failed.");
+    const listError = Array.isArray(data.errors) && typeof data.errors[0] === "string" ? data.errors[0] : "";
+    throw new Error(validationError || listError || data.message || "Client dashboard request failed.");
   }
 
   return data as T;

@@ -15,21 +15,96 @@ import { normalizePortalRole } from "../utils/portalRole.js";
 import {
   buildOperationsManifestExcel,
   buildOperationsManifestPdf,
+  buildManifestSealReadinessIssues,
   buildManifestDispatchIssues,
   buildManifestDispatchTrackingEvent,
+  buildManifestReadyTrackingEvent,
   allocateOperationsManifestNumber,
   calculateScannedParcelWeight,
   chooseOperationsBagForParcel,
+  deferredParcelEligibility,
   deleteOperationsManifest,
   formatOperationsBagNumber,
   formatOperationsManifestNumber,
   isOperationsBagWeightAllowed,
   isOperationsManifestNumberReusable,
   OPERATIONS_MANIFEST_ORIGIN_ADDRESS,
+  sealingIssues,
   shouldReactivateTrailingOperationsBag,
   summarizeBagComposition,
-  summarizeManifestDestinations
+  summarizeManifestDestinations,
+  unaccountedManifestParcelNumbers
 } from "../services/operationsManifest.service.js";
+
+describe("operations manifest omitted parcels", () => {
+  it("requires every unscanned parcel to have an explicit disposition", () => {
+    assert.deepEqual(unaccountedManifestParcelNumbers({
+      expectedParcelNumbers: ["P01", "P02", "P03", "P04"],
+      scannedParcelNumbers: ["P01", "P02", "P03"],
+      parcelDispositions: []
+    }), ["P04"]);
+    assert.deepEqual(unaccountedManifestParcelNumbers({
+      expectedParcelNumbers: ["P01", "P02", "P03", "P04"],
+      scannedParcelNumbers: ["P01", "P02", "P03"],
+      parcelDispositions: [{ parcelNumber: "P04", disposition: "HELD" }]
+    }), []);
+  });
+
+  it("releases held and deferred parcels only after the earlier manifest dispatches", () => {
+    const prior = {
+      manifestStatus: "DISPATCHED",
+      manifestNumber: "SLC017",
+      expectedParcelNumbers: ["P01", "P02"],
+      scannedParcelNumbers: ["P01"],
+      parcelDispositions: [{ parcelNumber: "P02", disposition: "DEFERRED_TO_NEXT_MANIFEST" as const }]
+    };
+    assert.equal(deferredParcelEligibility("P02", [prior]).allowed, true);
+    assert.equal(deferredParcelEligibility("P02", [{ ...prior, manifestStatus: "SEALED" }]).allowed, false);
+  });
+
+  it("never releases a parcel cancelled on an earlier manifest", () => {
+    const result = deferredParcelEligibility("P02", [{
+      manifestStatus: "DISPATCHED",
+      manifestNumber: "SLC017",
+      expectedParcelNumbers: ["P01", "P02"],
+      scannedParcelNumbers: ["P01"],
+      parcelDispositions: [{ parcelNumber: "P02", disposition: "CANCELLED" }]
+    }]);
+    assert.equal(result.allowed, false);
+    assert.match(result.reason, /cancelled/i);
+  });
+
+  it("does not allow sealing until every omitted parcel is decided and every bag is closed", () => {
+    const manifest = sealedManifest();
+    manifest.status = "READY_TO_SEAL";
+    const issues = sealingIssues(manifest, [{ status: "CLOSED", totalWeightKg: 10, totalPhysicalParcels: 3 }], [{
+      status: "PARTIAL",
+      expectedParcelNumbers: ["P01", "P02", "P03", "P04"],
+      scannedParcelNumbers: ["P01", "P02", "P03"],
+      parcelDispositions: [],
+      parcelWeightSnapshots: [
+        { parcelNumber: "P01", valueMinor: 100 },
+        { parcelNumber: "P02", valueMinor: 100 },
+        { parcelNumber: "P03", valueMinor: 100 }
+      ]
+    }]);
+    assert.equal(issues.some((issue) => /Ready for Dispatch|bag barcode/i.test(issue)), false);
+    assert.ok(issues.some((issue) => /Choose Held, Deferred/i.test(issue)));
+
+    const resolved = sealingIssues(manifest, [{ status: "CLOSED", totalWeightKg: 10, totalPhysicalParcels: 3 }], [{
+      status: "PARTIAL",
+      expectedParcelNumbers: ["P01", "P02", "P03", "P04"],
+      scannedParcelNumbers: ["P01", "P02", "P03"],
+      parcelDispositions: [{ parcelNumber: "P04", disposition: "DEFERRED_TO_NEXT_MANIFEST" }],
+      parcelWeightSnapshots: [
+        { parcelNumber: "P01", valueMinor: 100 },
+        { parcelNumber: "P02", valueMinor: 100 },
+        { parcelNumber: "P03", valueMinor: 100 }
+      ]
+    }]);
+    assert.deepEqual(resolved, []);
+  });
+});
 
 describe("operations manifest dispatch readiness", () => {
   const firstDraftId = new mongoose.Types.ObjectId();
@@ -54,6 +129,19 @@ describe("operations manifest dispatch readiness", () => {
     assert.equal(event.status, "ORIGIN_HUB_DISPATCHED");
     assert.equal(event.location, "");
     assert.equal("gatewayCode" in event, false);
+  });
+
+  it("creates the customer-visible Ready for Dispatch event when sealing", () => {
+    const event = buildManifestReadyTrackingEvent({
+      shipmentDraftId: firstDraftId,
+      dpdShipmentId: new mongoose.Types.ObjectId(),
+      manifestId: new mongoose.Types.ObjectId(),
+      userId: new mongoose.Types.ObjectId(),
+      sealedAt: new Date("2026-08-22T08:00:00.000Z")
+    });
+    assert.equal(event.status, "READY_FOR_EXPORT");
+    assert.equal(event.customerVisible, true);
+    assert.match(event.sourceReference, /:SEALED$/);
   });
 
   it("allows dispatch when every packed shipment has completed the origin steps", () => {
@@ -111,6 +199,27 @@ describe("operations manifest dispatch readiness", () => {
       ]
     });
     assert.match(issues[0]?.reason ?? "", /cancelled/);
+  });
+});
+
+describe("operations manifest sealing readiness", () => {
+  it("allows closed bags and reports only missing shipment prerequisites", () => {
+    const shipmentDraftId = new mongoose.Types.ObjectId();
+    const issues = buildManifestSealReadinessIssues({
+      consignments: [{ shipmentDraftId, consignmentNumber: "SLC-READY-01" }],
+      events: [
+        { shipmentDraftId, status: "SHIPMENT_BOOKED", eventAt: new Date("2026-09-18T08:00:00Z") },
+        { shipmentDraftId, status: "WAREHOUSE_SCAN_IN", eventAt: new Date("2026-09-18T08:10:00Z") },
+        { shipmentDraftId, status: "ORIGIN_HUB_PROCESSED", eventAt: new Date("2026-09-18T08:20:00Z") }
+      ]
+    });
+    assert.deepEqual(issues, []);
+
+    const missing = buildManifestSealReadinessIssues({
+      consignments: [{ shipmentDraftId, consignmentNumber: "SLC-READY-01" }],
+      events: [{ shipmentDraftId, status: "SHIPMENT_BOOKED", eventAt: new Date("2026-09-18T08:00:00Z") }]
+    });
+    assert.deepEqual(missing[0]?.missingStatuses, ["WAREHOUSE_SCAN_IN", "ORIGIN_HUB_PROCESSED"]);
   });
 });
 

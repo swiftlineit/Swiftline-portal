@@ -102,16 +102,16 @@ export type ShipmentDashboardSummary = {
 
 /** Statuses a booked shipment can currently be in, newest stage last. */
 export const shipmentStatusOptions = [
-  { value: "SHIPMENT_BOOKED", label: "Shipment Booked" },
-  { value: "IN_TRANSIT", label: "In Transit" },
+  { value: "SHIPMENT_BOOKED", label: "Booking Confirmed" },
+  { value: "IN_TRANSIT", label: "In International Transit" },
   { value: "ON_HOLD", label: "On Hold" },
   { value: "RELEASED_FROM_HOLD", label: "Released From Hold" },
   { value: "PARCEL_COLLECTED", label: "Shipment Collected" },
-  { value: "WAREHOUSE_SCAN_IN", label: "Received at Delhi Hub" },
-  { value: "ORIGIN_HUB_PROCESSED", label: "Processed at Delhi Hub" },
-  { value: "READY_FOR_EXPORT", label: "Ready for Export" },
-  { value: "ORIGIN_HUB_DISPATCHED", label: "Dispatched from Delhi Hub" },
-  { value: "DESTINATION_ARRIVED", label: "Destination Arrived" },
+  { value: "WAREHOUSE_SCAN_IN", label: "Received at Origin Facility" },
+  { value: "ORIGIN_HUB_PROCESSED", label: "Processing for Export" },
+  { value: "READY_FOR_EXPORT", label: "Ready for Dispatch" },
+  { value: "ORIGIN_HUB_DISPATCHED", label: "Departed from Origin Facility" },
+  { value: "DESTINATION_ARRIVED", label: "Arrived in Destination Country" },
   { value: "IMPORT_CUSTOMS_CLEARANCE", label: "Customs Clearance in Progress" },
   { value: "IMPORT_CUSTOMS_CLEARED", label: "Customs Cleared" },
   { value: "DELIVERY_PARTNER_TRANSFERRED", label: "Transferred to Delivery Partner" },

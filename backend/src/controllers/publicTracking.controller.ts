@@ -36,7 +36,10 @@ import {
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
-import { loadShipmentParcelActivities } from "../services/shipmentParcelActivity.service.js";
+import {
+  loadShipmentParcelActivities,
+  loadShipmentParcelProgress
+} from "../services/shipmentParcelActivity.service.js";
 
 /**
  * What a tracking reference may look like, checked before any query runs.
@@ -138,15 +141,16 @@ function serializePublicTracking(input: {
   origin: { stationCode: string; city: string };
   onHold: boolean;
   parcelActivities: Awaited<ReturnType<typeof loadShipmentParcelActivities>>;
+  parcelProgress: Awaited<ReturnType<typeof loadShipmentParcelProgress>>;
 }) {
   const { draft, events } = input;
-  const newest = events[0] ?? null;
+  const newest = events.find((event) => event.status !== "PARCEL_COLLECTED") ?? null;
   const isParcelLevel = input.trackedNumber.toUpperCase() !== input.trackingNumber.toUpperCase();
 
   const destinationCountryName = input.routeCountryName
     || toTitleCase(draft.consigneeEnteredAddress?.countryName ?? "");
   const currentPosition = buildTrackingPosition({
-    events,
+    events: events.filter((event) => event.status !== "PARCEL_COLLECTED"),
     journey: input.journey,
     destinationCity: toTitleCase(draft.consigneeEnteredAddress?.townOrCity ?? ""),
     audience: "PUBLIC"
@@ -185,6 +189,7 @@ function serializePublicTracking(input: {
     deliveryEstimate: input.deliveryEstimate,
     attention: input.onHold ? PUBLIC_HOLD_NOTICE : null,
     journey: input.journey,
+    parcelProgress: input.parcelProgress,
 
     parcelActivities: input.parcelActivities
       // A parcel-number lookup must not reveal activity for other parcels in
@@ -226,7 +231,7 @@ export async function trackPublicShipment(request: Request, response: Response):
   const draft = await ShipmentDraft.findById(resolved.shipmentDraftId).lean().exec();
   if (!draft) return response.status(404).json({ success: false, message: NOT_FOUND });
 
-  const [dpdShipment, events, branch, parcelActivities] = await Promise.all([
+  const [dpdShipment, events, branch, parcelActivities, parcelProgress] = await Promise.all([
     DpdShipment.findOne({ shipmentDraftId: draft._id }).lean().exec(),
     // `customerVisible` is the whole line between an operator's public note and
     // an internal one. Never relax this filter, and never reach for the staff
@@ -241,7 +246,8 @@ export async function trackPublicShipment(request: Request, response: Response):
     draft.branchId
       ? Branch.findById(draft.branchId).select("code address.city").lean().exec()
       : Promise.resolve(null),
-    loadShipmentParcelActivities(draft._id)
+    loadShipmentParcelActivities(draft._id),
+    loadShipmentParcelProgress(draft._id)
   ]);
 
   // The lane, purely so the header can name the destination country the way
@@ -261,7 +267,7 @@ export async function trackPublicShipment(request: Request, response: Response):
     route,
     originHubFallback: branch?.address?.city ? `${toTitleCase(branch.address.city)} Hub` : ""
   });
-  const publicEvents: PublicEvent[] = events.map((event) => ({
+  const publicEvents: PublicEvent[] = normalizeVisibleTrackingHistory(events, journey).map((event) => ({
     status: event.status,
     statusLabel: formatTrackingEventLabel(event.status, journey),
     holdReason: event.holdReason ?? null,
@@ -293,7 +299,8 @@ export async function trackPublicShipment(request: Request, response: Response):
         city: branch?.address?.city ?? ""
       },
       onHold: publicEvents[0]?.status === "ON_HOLD",
-      parcelActivities
+      parcelActivities,
+      parcelProgress
     })
   });
 }

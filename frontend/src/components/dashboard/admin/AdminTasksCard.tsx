@@ -36,7 +36,7 @@ export default function AdminTasksCard({
         >
           <ul className="divide-y divide-slate-100">
             {overview.tasks.map((task) => (
-              <li key={task.href ?? task.label}>
+              <li key={`${task.href ?? "task"}:${task.label}`}>
                 <Link
                   href={task.href}
                   className="group flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-slate-50/80 sm:px-5"

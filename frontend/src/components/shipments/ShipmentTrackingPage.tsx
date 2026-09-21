@@ -20,6 +20,7 @@ import type { TrackingJourney } from "@/lib/shipmentJourney";
 import type {
   TrackingAttention,
   ParcelActivity,
+  ParcelProgress,
   TrackingPosition,
   TrackingSummary,
 } from "@/lib/shipmentTracking";
@@ -45,6 +46,7 @@ type TrackingRecord = {
   journey: TrackingJourney | null;
   position: TrackingPosition | null;
   parcelActivities: ParcelActivity[];
+  parcelProgress: ParcelProgress | null;
 };
 
 type ShipmentTrackingPageProps = {
@@ -55,6 +57,7 @@ type ShipmentTrackingPageProps = {
 
 function fromAdmin(item: DpdShipmentHistoryItem): TrackingRecord {
   const current = item.currentEvent;
+  const currentIsInternalCollection = current?.status === "PARCEL_COLLECTED";
   return {
     draftId: item.dpdShipment.shipmentDraftId,
     consignee: item.shipmentDraft?.consigneeName || "Shipment consignee",
@@ -65,8 +68,8 @@ function fromAdmin(item: DpdShipmentHistoryItem): TrackingRecord {
       ]
         .filter(Boolean)
         .join(", ") || "Destination not available",
-    status: current?.status || item.dpdShipment.status,
-    statusLabel: current?.statusLabel || labelStatus(item.dpdShipment.status),
+    status: currentIsInternalCollection ? "SHIPMENT_BOOKED" : current?.status || item.dpdShipment.status,
+    statusLabel: currentIsInternalCollection ? "Booking Confirmed" : current?.statusLabel || labelStatus(item.dpdShipment.status),
     carrierShipmentNumber: item.dpdShipment.dpdShipmentId,
     swiftlineTrackingNumber: item.dpdShipment.swiftlineTrackingNumber,
     parcelNumbers: item.dpdShipment.parcelNumbers,
@@ -79,7 +82,7 @@ function fromAdmin(item: DpdShipmentHistoryItem): TrackingRecord {
       item.bookingConfirmation?.parcelCount ||
       item.dpdShipment.parcelNumbers.length,
     createdAt: item.dpdShipment.createdAt,
-    events: item.events,
+    events: item.events.filter((event) => event.status !== "PARCEL_COLLECTED"),
     // Staff tracking asks the history endpoint for an estimate, so Operations
     // sees the same schedule the customer does rather than no schedule at all.
     deliveryEstimate: item.deliveryEstimate ?? null,
@@ -88,11 +91,13 @@ function fromAdmin(item: DpdShipmentHistoryItem): TrackingRecord {
     journey: item.trackingJourney ?? null,
     position: item.trackingPosition ?? null,
     parcelActivities: item.parcelActivities ?? [],
+    parcelProgress: item.parcelProgress ?? null,
   };
 }
 
 function fromClient(shipment: ClientShipmentDetails): TrackingRecord {
   const current = shipment.currentEvent;
+  const currentIsInternalCollection = current?.status === "PARCEL_COLLECTED";
   return {
     draftId: shipment.shipmentDraft.id,
     consignee:
@@ -108,11 +113,11 @@ function fromClient(shipment: ClientShipmentDetails): TrackingRecord {
         .filter(Boolean)
         .join(", ") || "Destination not available",
     status:
-      current?.status ||
+      currentIsInternalCollection ? "SHIPMENT_BOOKED" : current?.status ||
       shipment.dpdShipment?.status ||
       shipment.shipmentDraft.status,
     statusLabel:
-      current?.statusLabel ||
+      currentIsInternalCollection ? "Booking Confirmed" : current?.statusLabel ||
       labelStatus(
         shipment.dpdShipment?.status || shipment.shipmentDraft.status,
       ),
@@ -128,13 +133,14 @@ function fromClient(shipment: ClientShipmentDetails): TrackingRecord {
     parcelCount: shipment.shipmentDraft.parcelCount,
     createdAt:
       shipment.dpdShipment?.createdAt || shipment.shipmentDraft.createdAt,
-    events: shipment.events,
+    events: shipment.events.filter((event) => event.status !== "PARCEL_COLLECTED"),
     deliveryEstimate: shipment.deliveryEstimate ?? null,
     summary: shipment.trackingSummary ?? null,
     attention: shipment.trackingAttention ?? null,
     journey: shipment.trackingJourney ?? null,
     position: shipment.trackingPosition ?? null,
     parcelActivities: shipment.parcelActivities ?? [],
+    parcelProgress: shipment.parcelProgress ?? null,
   };
 }
 

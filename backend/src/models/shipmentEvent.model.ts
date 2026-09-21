@@ -33,17 +33,15 @@ export const shipmentOperationalStatusValues = [
   "ORIGIN_HUB_PROCESSED",
   "READY_FOR_EXPORT",
   "ORIGIN_HUB_DISPATCHED",
+  "IN_TRANSIT",
   "DESTINATION_ARRIVED",
-  "IMPORT_CUSTOMS_CLEARANCE",
-  "IMPORT_CUSTOMS_CLEARED",
-  "DELIVERY_PARTNER_TRANSFERRED",
-  "DELIVERY_HUB_ARRIVED",
   "OUT_FOR_DELIVERY",
   "DELIVERED"
 ] as const;
 
 export const shipmentEventSourceValues = [
   "MANUAL",
+  "SCAN",
   "PICKUP",
   "MANIFEST",
   "DELIVERY",
@@ -80,7 +78,7 @@ export type ShipmentEventSource = (typeof shipmentEventSourceValues)[number];
 export function shipmentMilestoneKey(status?: string | null): string {
   if (!status) return "";
   if (status === "EXPORT_CUSTOMS_CLEARED" || status === "FLIGHT_ASSIGNED") return "READY_FOR_EXPORT";
-  if (status === "FLIGHT_DEPARTED") return "ORIGIN_HUB_DISPATCHED";
+  if (status === "FLIGHT_DEPARTED") return "IN_TRANSIT";
   if (status === "SHIPMENT_BOOKED") return status;
   return (shipmentOperationalStatusValues as readonly string[]).includes(status) ? status : "";
 }

@@ -5,6 +5,7 @@ import {
   serviceTypeOptions,
   shipmentImportFields,
   shipmentImportSheetNames,
+  shipmentImportLimits,
   shipmentImportTemplateVersion,
   shipmentTypeOptions,
   unitTypeOptions
@@ -93,8 +94,8 @@ async function addInstructions(workbook: ExcelJS.Workbook) {
     ["Service Type", "Accepted values: Courier or Cargo."],
     ["Content Type", `Accepted values: ${contentTypeOptions.map((option) => option.label).join(", ")}.`],
     ["Unit Type", `Accepted values: ${unitTypeOptions.join(", ")}.`],
-    ["Add a parcel", "Go to Parcels and insert or type into the next table row. Use sequential parcel numbers: 1, 2, 3... Maximum 10 parcels."],
-    ["Add an item", "Go to Items and insert or type into the next table row. Enter the Parcel No. that owns the item. Maximum 20 items per parcel."],
+    ["Add a parcel", `Go to Parcels and insert or type into the next table row. Use sequential parcel numbers: 1, 2, 3... Maximum ${shipmentImportLimits.parcelsPerShipment} parcels.`],
+    ["Add an item", `Go to Items and insert or type into the next table row. Enter the Parcel No. that owns the item. Maximum ${shipmentImportLimits.itemsPerParcel} items per parcel.`],
     ["Amounts", "Calculated Amount is Quantity x Unit Rate. The portal recalculates it and never trusts a workbook formula."],
     ["Repeated shipments", "The same completed workbook may be uploaded again to create another editable draft."],
     ["Before booking", "Review the imported draft, validate the delivery address, upload KYC documents and confirm pricing in the portal."]
@@ -166,11 +167,13 @@ function addParcelsSheet(workbook: ExcelJS.Workbook) {
     "Reference *"
   ];
   header(sheet.addRow(headings));
-  for (let row = 3; row <= 12; row += 1) {
+  const parcelRowCount = shipmentImportLimits.parcelsPerShipment;
+  const parcelLastRow = parcelRowCount + 2;
+  for (let row = 3; row <= parcelLastRow; row += 1) {
     sheet.addRow(row === 3 ? [1, "", "", "", "", "CHOOSE ONE", ""] : ["", "", "", "", "", "", ""]);
   }
-  styleBody(sheet, 3, 12, 7);
-  for (let row = 3; row <= 12; row += 1) {
+  styleBody(sheet, 3, parcelLastRow, 7);
+  for (let row = 3; row <= parcelLastRow; row += 1) {
     sheet.getCell(row, 6).dataValidation = listValidation(listFormula("C", contentTypeOptions.length), contentTypeOptions.map((option) => option.label).join(", "));
     for (const column of [1, 2, 3, 4, 5]) sheet.getCell(row, column).numFmt = "0.00";
     sheet.getCell(row, 7).numFmt = "@";
@@ -181,7 +184,7 @@ function addParcelsSheet(workbook: ExcelJS.Workbook) {
     headerRow: true,
     style: { theme: "TableStyleMedium2", showRowStripes: true },
     columns: headings.map((name) => ({ name })),
-    rows: Array.from({ length: 10 }, (_, index) => (
+    rows: Array.from({ length: parcelRowCount }, (_, index) => (
       index === 0 ? [1, "", "", "", "", "CHOOSE ONE", ""] : ["", "", "", "", "", "", ""]
     ))
   });
@@ -198,12 +201,14 @@ function addItemsSheet(workbook: ExcelJS.Workbook) {
     "Quantity *", "Unit Rate *", "Calculated Amount"
   ];
   header(sheet.addRow(headings));
-  const rows = Array.from({ length: 20 }, (_, index) => index === 0
+  const itemRowCount = shipmentImportLimits.itemsPerParcel;
+  const itemLastRow = itemRowCount + 2;
+  const rows = Array.from({ length: itemRowCount }, (_, index) => index === 0
     ? [1, "", "", "CHOOSE ONE", "", "", { formula: "E3*F3", result: 0 }]
     : ["", "", "", "", "", "", { formula: `E${index + 3}*F${index + 3}`, result: 0 }]);
   rows.forEach((values) => sheet.addRow(values));
-  styleBody(sheet, 3, 22, 7);
-  for (let row = 3; row <= 22; row += 1) {
+  styleBody(sheet, 3, itemLastRow, 7);
+  for (let row = 3; row <= itemLastRow; row += 1) {
     sheet.getCell(row, 4).dataValidation = listValidation(listFormula("D", unitTypeOptions.length), unitTypeOptions.join(", "));
     sheet.getCell(row, 3).numFmt = "@";
     sheet.getCell(row, 5).numFmt = "0.00";

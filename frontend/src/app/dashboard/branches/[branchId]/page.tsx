@@ -610,10 +610,10 @@ function BranchShipmentsSection({ branchId }: { branchId: string }) {
               <option value="SHIPMENT_BOOKED">Shipment Booked</option>
               <option value="ON_HOLD">On Hold</option>
               <option value="PARCEL_COLLECTED">Shipment Collected</option>
-              <option value="WAREHOUSE_SCAN_IN">Received at Delhi Hub</option>
+              <option value="WAREHOUSE_SCAN_IN">Received at Origin Facility</option>
               <option value="ORIGIN_HUB_PROCESSED">Processed at Delhi Hub</option>
-              <option value="READY_FOR_EXPORT">Ready for Export</option>
-              <option value="ORIGIN_HUB_DISPATCHED">Dispatched from Delhi Hub</option>
+              <option value="READY_FOR_EXPORT">Ready for Dispatch</option>
+              <option value="ORIGIN_HUB_DISPATCHED">Departed from Origin Facility</option>
               <option value="DESTINATION_ARRIVED">Destination Arrived</option>
               <option value="IMPORT_CUSTOMS_CLEARANCE">Customs Clearance in Progress</option>
               <option value="IMPORT_CUSTOMS_CLEARED">Customs Cleared</option>

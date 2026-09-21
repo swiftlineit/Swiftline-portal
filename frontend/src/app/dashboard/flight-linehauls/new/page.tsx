@@ -2,14 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FiArrowLeft } from "react-icons/fi";
 import Link from "next/link";
 import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
 import { OPERATIONS_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
 import { createFlight } from "@/lib/flightLinehaul";
-import { listManifestBranches } from "@/lib/operationsManifests";
+import {
+  listManifestBranches,
+  listOperationsManifests,
+  type OperationsManifest
+} from "@/lib/operationsManifests";
 import { normalizeFlightNumber } from "@/lib/flightNumber";
 
 const inputClass =
@@ -22,6 +25,8 @@ export default function NewFlightPage() {
     Array<{ id: string; name: string; code: string }>
   >([]);
   const [saving, setSaving] = useState(false);
+  const [manifests, setManifests] = useState<OperationsManifest[]>([]);
+  const [manifestId, setManifestId] = useState("");
   const [form, setForm] = useState({
     branchId: "",
     flightNumber: "",
@@ -53,11 +58,33 @@ export default function NewFlightPage() {
           );
       })
       .catch(() => {});
+    listOperationsManifests(1, "DISPATCHED")
+      .then((result) => setManifests(result.items.filter((item) => !item.flightLinehaulId)))
+      .catch(() => setManifests([]));
   }, [user]);
+
+  function selectManifest(id: string) {
+    setManifestId(id);
+    const manifest = manifests.find((item) => item.id === id);
+    if (!manifest) return;
+    setForm((current) => ({
+      ...current,
+      branchId: manifest.branchId,
+      flightNumber: manifest.header.flightNumber,
+      mawbNumber: manifest.header.mawbNumber,
+      originIataCode: manifest.header.originIataCode,
+      destinationIataCode: manifest.header.destinationIataCode,
+      scheduledDepartureAt: manifest.header.departureDate
+        ? `${manifest.header.departureDate}T12:00`
+        : current.scheduledDepartureAt,
+      capacityKg: String(Math.max(Number(current.capacityKg) || 0, manifest.totalWeightKg))
+    }));
+  }
 
   if (loading || !user) return <DashboardLoading />;
 
   async function submit() {
+    if (!manifestId) return toast.error("Select a dispatched operations manifest.");
     if (!form.branchId) return toast.error("Select a branch.");
     if (
       !/^[A-Z0-9]{2,4}-\d{1,4}[A-Z]?$/.test(
@@ -105,6 +132,7 @@ export default function NewFlightPage() {
         capacityKg: cap,
         destinationAgent: form.destinationAgent.trim(),
         finalMileCarrier: form.finalMileCarrier.trim(),
+        manifestId,
         connection: form.transitAirportCode.trim()
           ? {
               transitAirportCode: form.transitAirportCode.trim().toUpperCase(),
@@ -117,7 +145,7 @@ export default function NewFlightPage() {
             }
           : null,
       });
-      toast.success(res.message);
+      toast.success("Flight created; manifest and its packed shipments attached.");
       router.push(`/dashboard/flight-linehauls/${res.flightId}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not create flight.");
@@ -134,12 +162,30 @@ export default function NewFlightPage() {
 
       <div className="rounded-2xl border border-[#EEEDED] bg-white p-6 shadow-sm">
         <p className="text-sm text-slate-600">
-          Flight-first workflow - create flight, allocate shipments, then attach
-          operations manifests. Capacity utilisation and SLA thresholds are
-          calculated server-side.
+          Select the dispatched operations manifest first. Its route, MAWB and packed shipments are attached to the flight automatically; only airline and exact schedule details remain to complete.
         </p>
 
         <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <label className="text-sm font-semibold text-slate-700 sm:col-span-2">
+            Operations manifest *
+            <select
+              value={manifestId}
+              onChange={(event) => selectManifest(event.target.value)}
+              className={inputClass}
+            >
+              <option value="">Select dispatched operations manifest</option>
+              {manifests.map((manifest) => (
+                <option key={manifest.id} value={manifest.id}>
+                  {manifest.manifestNumber} · {manifest.header.flightNumber} · {manifest.header.mawbNumber} · {manifest.totalPhysicalParcels} parcels
+                </option>
+              ))}
+            </select>
+            {manifestId ? (
+              <span className="mt-1.5 block text-xs font-medium text-emerald-700">
+                Route, flight number, MAWB and departure date were copied. Add the airline and exact departure/arrival times before creating.
+              </span>
+            ) : <span className="mt-1.5 block text-xs font-medium text-slate-500">A dispatched manifest is required to create a flight.</span>}
+          </label>
           <label className="text-sm font-semibold text-slate-700">
             Branch *
             <select

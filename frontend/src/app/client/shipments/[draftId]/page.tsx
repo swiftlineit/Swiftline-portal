@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { ReactNode, useEffect, useMemo, useState } from "react";
-import { FiArrowLeft, FiCheckCircle, FiClock, FiFileText, FiMapPin, FiPackage, FiTruck } from "react-icons/fi";
+import { FiCheckCircle, FiClock, FiFileText, FiMapPin, FiPackage, FiTruck } from "react-icons/fi";
 import {
   ClientDashboardLoading,
   ClientShellUser
@@ -130,7 +130,7 @@ function getTrackingEvents(shipment: ClientShipmentDetails) {
   if (shipment.dpdShipment && !eventsByStatus.has("SHIPMENT_BOOKED")) {
     events.push({
       label: "Shipment Booked",
-      value: `${formatDashboardDate(shipment.dpdShipment.createdAt)} â€¢ Shipment booked with Swiftline and awaiting collection.`,
+      value: `${formatDashboardDate(shipment.dpdShipment.createdAt)} · Shipment booked with Swiftline and awaiting collection.`,
       done: true
     });
   }
@@ -481,7 +481,10 @@ export default function ClientShipmentDetailsPage() {
             />
             </div>
 
-            <ParcelActivityPanel activities={shipment.parcelActivities} />
+            <ParcelActivityPanel
+              activities={shipment.parcelActivities}
+              progress={shipment.parcelProgress}
+            />
 
             <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
               <div className="border border-slate-200 bg-white p-5 rounded-2xl">

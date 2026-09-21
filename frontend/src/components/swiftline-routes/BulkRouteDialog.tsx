@@ -331,7 +331,7 @@ export default function BulkRouteDialog({
               className={inputClass}
             />
             <span className="mt-1 block text-[11px] leading-4 text-slate-500">
-              Named on the customer tracking page, as &ldquo;Shipment Received at {originHubName.trim() || "..."}&rdquo;.
+              Named on the customer tracking page as &ldquo;Received at Origin Facility {originHubName.trim() || "..."}&rdquo;.
             </span>
           </label>
         </div>

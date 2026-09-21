@@ -335,6 +335,7 @@ export default function ShipmentAmendmentPanel({
                     <ParcelItemsEditor
                       items={parcel.items}
                       onChange={(items) => updateParcelItems(index, items)}
+                      parcelLabel={`Parcel ${index + 1}`}
                     />
                   </div>
                 </div>

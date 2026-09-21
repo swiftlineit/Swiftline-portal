@@ -10,6 +10,7 @@ import { maskAadhaarNumber, normalizeAadhaarNumber } from "../services/aadhaarVa
 import { csbTypeValues } from "../services/csbType.service.js";
 import {
   defaultParcelItemUnitType,
+  maxParcelsPerShipment,
   maxParcelItems,
   normalizeParcelItems
 } from "../services/parcelItems.service.js";
@@ -140,7 +141,7 @@ const draftPatchSchema = z.object({
   consignorAddress: consignorPatchSchema.optional(),
   consigneeEnteredAddress: addressPatchSchema.optional(),
   kycUseForAllParcels: z.boolean().optional(),
-  parcelList: z.array(parcelPatchSchema).min(1).max(10).optional(),
+  parcelList: z.array(parcelPatchSchema).min(1).max(maxParcelsPerShipment).optional(),
   // Customs route for the shipment; drives the CSB-V clearance charge.
   csbType: z.enum(csbTypeValues).optional(),
   // Optional transit cover; drives the insurance premium on the estimate.
@@ -247,7 +248,14 @@ function getDraftPatchValidationIssues(error: z.ZodError) {
   return error.issues.map((issue) => {
     const path = issue.path.join(".");
 
-    if (path === "parcelList") return "One parcel is required";
+    const itemsPath = path.match(/^parcelList\.(\d+)\.items$/);
+    if (itemsPath && issue.code === "too_big") {
+      return `Parcel ${Number(itemsPath[1]) + 1} can contain at most ${maxParcelItems} items`;
+    }
+    if (path === "parcelList") {
+      if (issue.code === "too_big") return `Number of Parcels (PCS) must be ${maxParcelsPerShipment} or fewer`;
+      return "At least one parcel is required";
+    }
     if (path.endsWith(".sequence")) return "Parcel sequence must be a positive whole number";
     if (path.endsWith(".weightKg")) return "Parcel weight must be zero or greater";
     if (path.endsWith(".contentsDescription")) return "Parcel contents description is required";
@@ -327,7 +335,7 @@ const costEstimateSchema = z.object({
       quantity: z.coerce.number().nonnegative().optional(),
       unitRate: z.coerce.number().nonnegative().optional()
     })).max(maxParcelItems).optional()
-  })).max(10).optional()
+  })).max(maxParcelsPerShipment).optional()
 });
 
 /**

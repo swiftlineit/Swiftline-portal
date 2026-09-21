@@ -96,6 +96,11 @@ describe("consignor draft validation", () => {
     assert.equal(issues.some((issue) => issue.toLowerCase().includes("kyc") || issue.toLowerCase().includes("upload")), false);
   });
 
+  test("requires the consignor state before booking", () => {
+    const issues = validateShipmentDraftFields(draftWith({ consignor: { county: "" } }));
+    assert.ok(issues.includes("Consignor state is required"), issues.join(" | "));
+  });
+
   test("flags a bad shared Aadhaar number", () => {
     const issues = validateShipmentDraftFields(draftWith({ consignor: { aadhaarNumber: "234567890123" } }));
     assert.ok(issues.includes("Enter a valid 12 digit Aadhaar number"));

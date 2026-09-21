@@ -1,4 +1,4 @@
-import { parcelItemUnitTypeValues } from "../parcelItems.service.js";
+import { maxParcelItems, maxParcelsPerShipment, parcelItemUnitTypeValues } from "../parcelItems.service.js";
 import { getPortalCountryNames } from "../reference/portalCountries.js";
 import { shipmentContentTypeValues, shipmentServiceTypeValues } from "../../models/shipmentDraft.model.js";
 
@@ -14,8 +14,8 @@ export const shipmentImportSheetNames = {
 export const shipmentImportLimits = {
   filesPerBatch: 25,
   totalBytesPerBatch: 25 * 1024 * 1024,
-  parcelsPerShipment: 10,
-  itemsPerParcel: 20
+  parcelsPerShipment: maxParcelsPerShipment,
+  itemsPerParcel: maxParcelItems
 } as const;
 
 export const shipmentTypeOptions = ["CSB-IV", "CSB-V"] as const;

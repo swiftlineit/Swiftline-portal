@@ -94,7 +94,10 @@ export default function PublicTrackingResult({
 
         {tracking.isParcelLevel ? <ParcelNotice tracking={tracking} /> : null}
 
-        <ParcelActivityPanel activities={tracking.parcelActivities} />
+        <ParcelActivityPanel
+          activities={tracking.parcelActivities}
+          progress={tracking.parcelProgress}
+        />
 
         <SummaryBand tracking={tracking} />
 
@@ -746,7 +749,9 @@ function FactsGrid({ tracking }: { tracking: PublicTracking }) {
 
 function Timeline({ tracking }: { tracking: PublicTracking }) {
   // Oldest first: the public page reads as a story of where the parcel has been.
-  const events = [...tracking.events].sort(
+  const events = tracking.events
+    .filter((event) => event.status !== "PARCEL_COLLECTED")
+    .sort(
     (left, right) =>
       new Date(left.eventAt).getTime() - new Date(right.eventAt).getTime(),
   );

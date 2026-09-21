@@ -15,12 +15,31 @@ export type FlightStatus =
   | "CLOSED"
   | "CANCELLED";
 
+/** UI wording is intentionally separate from stable backend status values. */
+export const flightStatusLabel: Record<FlightStatus, string> = {
+  PLANNED: "Legacy planned",
+  BOOKING_CONFIRMED: "Booked",
+  CARGO_ALLOCATED: "Cargo allocated",
+  MANIFEST_READY: "Legacy manifest ready",
+  HANDED_TO_AIRLINE: "Legacy airline handover",
+  DEPARTED: "Departed",
+  IN_TRANSIT: "Legacy in transit",
+  CONNECTION: "Legacy connection",
+  ARRIVED_DESTINATION: "Arrived at destination",
+  CUSTOMS: "Legacy customs",
+  HANDED_TO_FINAL_MILE: "Legacy final-mile handover",
+  CLOSED: "Closed",
+  CANCELLED: "Cancelled"
+};
+
+export function formatFlightStatus(status: FlightStatus | string) {
+  return flightStatusLabel[status as FlightStatus] ?? status.replaceAll("_", " ");
+}
+
 export type FlightCardSummary = {
   tonightDepartures: number;
   awaitingFlight: number;
-  readyForHandover: number;
   departed: number;
-  inTransit: number;
   connectionRisk: number;
   offloaded: number;
   delayed: number;
@@ -92,7 +111,7 @@ export type FlightAllocation = {
     chargeableWeightKg: number;
     status: "ALLOCATED" | "OFFLOADED" | "INACTIVE";
   }>;
-  status: "ALLOCATED" | "REMOVED" | "OFFLOADED";
+  status: "ALLOCATED" | "CARRIED" | "REMOVED" | "OFFLOADED";
   allocatedAt: string;
   snapshot?: Record<string, unknown>;
 };
@@ -233,6 +252,7 @@ export function createFlight(input: {
   capacityKg: number;
   destinationAgent?: string;
   finalMileCarrier?: string;
+  manifestId: string;
   connection?: { transitAirportCode?: string; scheduledArrivalAt?: string; scheduledDepartureAt?: string } | null;
 }) {
   return requestJson<{ success: true; message: string; flightId: string; flightLinehaulNumber: string }>(`/api/v1/flight-linehauls`, {
@@ -321,7 +341,7 @@ export function createOffload(flightId: string, input: { reason: string; offload
   });
 }
 
-export function updateHandover(flightId: string, input: { arrivalAt?: string | null; customsStatus?: string; customsClearedAt?: string | null; destinationAgent?: string; finalMileCarrier?: string; handoverAt?: string | null; handoverReference?: string }) {
+export function updateHandover(flightId: string, input: { arrivalAt?: string | null; customsStatus?: string; customsNote?: string; customsClearedAt?: string | null; destinationAgent?: string; finalMileCarrier?: string; handoverAt?: string | null; handoverReference?: string }) {
   return requestJson<{ success: true; message: string; flight: FlightListItem }>(`/api/v1/flight-linehauls/${flightId}/handover`, {
     method: "PATCH",
     body: JSON.stringify(input)
