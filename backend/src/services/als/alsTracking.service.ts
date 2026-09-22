@@ -14,7 +14,11 @@ import { runWithConcurrency } from "../../utils/runWithConcurrency.js";
 import { SYSTEM_ACTOR_ID } from "../../utils/systemActor.js";
 import { readShipmentBookingSnapshot } from "../shipmentBookingSnapshot.service.js";
 import { resolveShipmentEventNote } from "../shipmentEventCopy.service.js";
-import { findMissingPrerequisites } from "../shipmentStatusSequence.service.js";
+import {
+  findMissingPrerequisites,
+  findRecordedLaterMilestones,
+  hasRecordedMilestone
+} from "../shipmentStatusSequence.service.js";
 
 const ALS_TRACKING_CONCURRENCY = 3;
 const ALS_TRACKING_REQUESTS_PER_MINUTE = 30;
@@ -73,6 +77,10 @@ function record(value: unknown): Record<string, unknown> {
 
 function text(value: unknown) {
   return typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
+}
+
+function isDuplicateKeyError(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === 11000;
 }
 
 export function parseAlsIndiaTimestamp(value: string): Date | null {
@@ -140,6 +148,25 @@ function providerEventKey(event: AlsTrackingProviderEvent) {
     .update([event.eventAt, event.eventState, event.description, event.location].join("|"))
     .digest("hex")
     .slice(0, 40);
+}
+
+/** Carrier proof can advance an older shipment without inventing its missing scans. */
+export function assessAlsTrackingMilestone(target: ShipmentEventStatus, statuses: Iterable<string>) {
+  const recorded = [...statuses];
+  const later = findRecordedLaterMilestones(target, recorded);
+  if (later.length) return { missing: [] as string[], later };
+
+  const missing = findMissingPrerequisites(target, recorded);
+  const hasTransit = hasRecordedMilestone("IN_TRANSIT", recorded);
+  const hasDestination = recorded.includes("DESTINATION_ARRIVED");
+  const hasDeliveryProgress = recorded.includes("OUT_FOR_DELIVERY");
+  // An actual ALS destination/delivery scan is evidence of movement, not a
+  // licence to write fictitious earlier ShipmentEvent rows.
+  const carrierProofIsSufficient = target === "DESTINATION_ARRIVED"
+    ? hasTransit
+    : (target === "OUT_FOR_DELIVERY" || target === "DELIVERED")
+      && (hasTransit || hasDestination || hasDeliveryProgress);
+  return { missing: carrierProofIsSufficient ? [] : missing, later };
 }
 
 function indiaDayKey(now: Date) {
@@ -216,7 +243,7 @@ async function requestAlsTracking(carrierAwbNumber: string) {
   }
 }
 
-async function ingestAlsEvents(input: {
+export async function ingestAlsEvents(input: {
   shipmentDraftId: mongoose.Types.ObjectId;
   dpdShipmentId: mongoose.Types.ObjectId;
   carrierAwbNumber: string;
@@ -240,12 +267,37 @@ async function ingestAlsEvents(input: {
   let reviewRequired = 0;
   let newestEventAt: Date | null = null;
 
-  const ordered = [...input.events].sort((left, right) =>
-    (parseAlsIndiaTimestamp(left.eventAt)?.getTime() ?? 0) - (parseAlsIndiaTimestamp(right.eventAt)?.getTime() ?? 0));
-
-  for (const event of ordered) {
+  // A review row may no longer be present in ALS's latest response. Retain its
+  // original provider key and reconsider it whenever this AWB is polled.
+  const held = await CarrierTrackingEvent.find({
+    provider: "ALS", carrierAwbNumber: input.carrierAwbNumber, processingStatus: "REVIEW_REQUIRED"
+  }).lean().exec();
+  const candidates = new Map<string, AlsTrackingProviderEvent>();
+  for (const row of held) {
+    const raw = record(row.rawPayload);
+    candidates.set(row.providerEventKey, {
+      id: row.providerEventId,
+      eventAt: text(raw.event_at),
+      eventState: row.eventState,
+      description: row.description,
+      location: row.location,
+      countryCode: text(raw.add_country_code).toUpperCase(),
+      rawPayload: raw
+    });
+  }
+  // A saved review row is the immutable carrier evidence for that event key.
+  for (const event of input.events) {
     const key = providerEventKey(event);
-    if (await CarrierTrackingEvent.exists({ provider: "ALS", carrierAwbNumber: input.carrierAwbNumber, providerEventKey: key })) continue;
+    if (!candidates.has(key)) candidates.set(key, event);
+  }
+  const ordered = [...candidates].sort((left, right) =>
+    (parseAlsIndiaTimestamp(left[1].eventAt)?.getTime() ?? 0)
+      - (parseAlsIndiaTimestamp(right[1].eventAt)?.getTime() ?? 0));
+
+  for (const [key, event] of ordered) {
+    const identity = { provider: "ALS" as const, carrierAwbNumber: input.carrierAwbNumber, providerEventKey: key };
+    const existing = await CarrierTrackingEvent.findOne(identity).exec();
+    if (existing && existing.processingStatus !== "REVIEW_REQUIRED") continue;
     const eventAt = parseAlsIndiaTimestamp(event.eventAt);
     const mappedStatus = mapAlsTrackingEvent(event, destinationCountryCode);
     let processingStatus: "APPLIED" | "IGNORED" | "REVIEW_REQUIRED" = "IGNORED";
@@ -258,8 +310,10 @@ async function ingestAlsEvents(input: {
       processingStatus = "REVIEW_REQUIRED";
       processingNote = `Unknown ALS event combination: ${event.eventState || "blank state"}.`;
     } else if (mappedStatus && !recorded.has(mappedStatus)) {
-      const missing = findMissingPrerequisites(mappedStatus, recorded);
-      if (missing.length) {
+      const { missing, later } = assessAlsTrackingMilestone(mappedStatus, recorded);
+      if (later.length) {
+        processingNote = `Later milestone already recorded: ${later.join(", ")}.`;
+      } else if (missing.length) {
         processingStatus = "REVIEW_REQUIRED";
         processingNote = `Cannot apply ${mappedStatus}; missing ${missing.join(", ")}.`;
       } else {
@@ -268,32 +322,43 @@ async function ingestAlsEvents(input: {
           ? await ShipmentEvent.exists({ shipmentDraftId: input.shipmentDraftId, milestoneKey })
           : null;
         if (!existingMilestone) {
-          await ShipmentEvent.create({
-            shipmentDraftId: input.shipmentDraftId,
-            dpdShipmentId: input.dpdShipmentId,
-            status: mappedStatus,
-            milestoneKey,
-            note: resolveShipmentEventNote("", mappedStatus),
-            location: event.location.slice(0, 120),
-            source: "CARRIER",
-            sourceReference: `ALS:${input.carrierAwbNumber}:${key}`.slice(0, 120),
-            partnerName: ["OUT_FOR_DELIVERY", "DELIVERED"].includes(mappedStatus) ? "Airport Link Services" : "",
-            partnerCode: ["OUT_FOR_DELIVERY", "DELIVERED"].includes(mappedStatus) ? "ALS" : "",
-            customerVisible: true,
-            createdBy: SYSTEM_ACTOR_ID,
-            eventAt
-          });
+          try {
+            await ShipmentEvent.create({
+              shipmentDraftId: input.shipmentDraftId,
+              dpdShipmentId: input.dpdShipmentId,
+              status: mappedStatus,
+              milestoneKey,
+              note: resolveShipmentEventNote("", mappedStatus),
+              location: event.location.slice(0, 120),
+              source: "CARRIER",
+              sourceReference: `ALS:${input.carrierAwbNumber}:${key}`.slice(0, 120),
+              partnerName: ["OUT_FOR_DELIVERY", "DELIVERED"].includes(mappedStatus) ? "Airport Link Services" : "",
+              partnerCode: ["OUT_FOR_DELIVERY", "DELIVERED"].includes(mappedStatus) ? "ALS" : "",
+              customerVisible: true,
+              createdBy: SYSTEM_ACTOR_ID,
+              eventAt
+            });
+            recorded.add(mappedStatus);
+            processingStatus = "APPLIED";
+            processingNote = `Applied ${mappedStatus}.`;
+            applied += 1;
+          } catch (error) {
+            // Two workers may see the same AWB. The unique milestone index is
+            // authoritative; a competing winner is not a failed carrier poll.
+            if (!milestoneKey || !isDuplicateKeyError(error)
+              || !await ShipmentEvent.exists({ shipmentDraftId: input.shipmentDraftId, milestoneKey })) throw error;
+            recorded.add(mappedStatus);
+            processingNote = "Milestone already recorded by another poll.";
+          }
+        } else {
           recorded.add(mappedStatus);
-          processingStatus = "APPLIED";
-          processingNote = `Applied ${mappedStatus}.`;
-          applied += 1;
         }
       }
     }
     if (processingStatus === "REVIEW_REQUIRED") reviewRequired += 1;
     if (eventAt && (!newestEventAt || eventAt > newestEventAt)) newestEventAt = eventAt;
-    await CarrierTrackingEvent.create({
-      provider: "ALS",
+    const rawEvent = {
+      provider: "ALS" as const,
       shipmentDraftId: input.shipmentDraftId,
       dpdShipmentId: input.dpdShipmentId,
       carrierAwbNumber: input.carrierAwbNumber,
@@ -308,7 +373,18 @@ async function ingestAlsEvents(input: {
       processingNote,
       rawPayload: event.rawPayload,
       receivedAt: new Date()
-    });
+    };
+    if (existing) {
+      if (existing.processingStatus !== processingStatus || existing.processingNote !== processingNote) {
+        await CarrierTrackingEvent.updateOne(
+          { _id: existing._id, processingStatus: "REVIEW_REQUIRED" },
+          { $set: { processingStatus, processingNote, mappedStatus } }
+        ).exec();
+      }
+    } else {
+      try { await CarrierTrackingEvent.create(rawEvent); }
+      catch (error) { if (!isDuplicateKeyError(error)) throw error; }
+    }
   }
   return { applied, reviewRequired, newestEventAt, recorded };
 }
@@ -320,13 +396,14 @@ function nextPollPlan(statuses: Set<string>, now: Date) {
   return { state: "ACTIVE" as const, pollPhase: "PRE_DESTINATION" as const, nextPollAt: new Date(now.getTime() + 2 * 60 * 60 * 1000) };
 }
 
-async function ensureAlsTrackingSync(shipmentDraftId: mongoose.Types.ObjectId) {
+async function ensureAlsTrackingSync(shipmentDraftId: mongoose.Types.ObjectId, allowedAwbs?: Set<string> | null) {
   const [shipment, departed] = await Promise.all([
     DpdShipment.findOne({ shipmentDraftId, "responseSnapshot.provider": "ALS" }).exec(),
     ShipmentEvent.exists({ shipmentDraftId, status: { $in: ["IN_TRANSIT", "DESTINATION_ARRIVED", "OUT_FOR_DELIVERY", "DELIVERED"] } })
   ]);
   const carrierAwbNumber = shipment?.dpdShipmentId?.trim() ?? "";
-  if (!shipment || !departed || !/^\d+$/.test(carrierAwbNumber)) return null;
+  if (!shipment || !departed || !/^\d+$/.test(carrierAwbNumber)
+    || (allowedAwbs && !allowedAwbs.has(carrierAwbNumber))) return null;
   return CarrierTrackingSync.findOneAndUpdate(
     { provider: "ALS", carrierAwbNumber },
     {
@@ -353,7 +430,9 @@ async function pollSync(sync: InstanceType<typeof CarrierTrackingSync>) {
     sync.nextPollAt = plan.nextPollAt;
     sync.lastPolledAt = now;
     sync.lastSuccessAt = now;
-    sync.lastEventAt = result.newestEventAt ?? sync.lastEventAt;
+    if (result.newestEventAt && (!sync.lastEventAt || result.newestEventAt > sync.lastEventAt)) {
+      sync.lastEventAt = result.newestEventAt;
+    }
     sync.failureCount = 0;
     sync.lastError = "";
     sync.completedAt = plan.state === "COMPLETED" ? now : null;
@@ -391,17 +470,23 @@ export async function refreshAlsTrackingForShipment(input: {
 
 export async function runAlsTrackingSweep() {
   if (env.ALS_TRACKING_ENABLED !== true) return { enabled: false, created: 0, attempted: 0, succeeded: 0, failed: 0 };
-  const departedDraftIds = await ShipmentEvent.distinct("shipmentDraftId", {
-    status: { $in: ["IN_TRANSIT", "DESTINATION_ARRIVED", "OUT_FOR_DELIVERY"] }
-  }).exec();
+  const allowedAwbs = new Set((env.ALS_TRACKING_SWEEP_AWB_ALLOWLIST ?? "")
+    .split(",").map((awb) => awb.trim()).filter(Boolean));
+  const allowlist = allowedAwbs.size ? allowedAwbs : null;
   let created = 0;
-  for (const draftId of departedDraftIds) {
-    const before = await CarrierTrackingSync.exists({ shipmentDraftId: draftId, provider: "ALS" });
-    const sync = await ensureAlsTrackingSync(draftId);
-    if (sync && !before) created += 1;
+  if (env.ALS_TRACKING_SWEEP_MAX_NEW_SYNCS > 0) {
+    const departedDraftIds = await ShipmentEvent.distinct("shipmentDraftId", {
+      status: { $in: ["IN_TRANSIT", "DESTINATION_ARRIVED", "OUT_FOR_DELIVERY"] }
+    }).exec();
+    for (const draftId of departedDraftIds) {
+      if (created >= env.ALS_TRACKING_SWEEP_MAX_NEW_SYNCS) break;
+      if (await CarrierTrackingSync.exists({ shipmentDraftId: draftId, provider: "ALS" })) continue;
+      if (await ensureAlsTrackingSync(draftId, allowlist)) created += 1;
+    }
   }
   const due = await CarrierTrackingSync.find({
     provider: "ALS",
+    ...(allowlist ? { carrierAwbNumber: { $in: [...allowlist] } } : {}),
     state: "ACTIVE",
     nextPollAt: { $lte: new Date() }
   }).sort({ nextPollAt: 1 }).limit(ALS_TRACKING_REQUESTS_PER_MINUTE).exec();

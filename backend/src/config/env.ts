@@ -137,6 +137,9 @@ const environmentSchema = z.object({
   ALS_TRACKING_COMPANY_ID: z.coerce.number().int().positive().optional(),
   ALS_TRACKING_CUSTOMER_CODE: z.string().trim().min(1).optional(),
   ALS_TRACKING_TIMEOUT_MS: z.coerce.number().int().positive().max(60000).default(15000),
+  // Opt in to creating automatic sync rows; manual single-AWB refresh remains available.
+  ALS_TRACKING_SWEEP_MAX_NEW_SYNCS: z.coerce.number().int().min(0).max(30).default(0),
+  ALS_TRACKING_SWEEP_AWB_ALLOWLIST: z.string().trim().optional(),
   // Used server-side only. Historical cost sheets persist the fetched rate so
   // their INR totals never move when a later market rate is published.
   EXCHANGE_RATE_API_KEY: z.string().trim().min(1).optional(),
