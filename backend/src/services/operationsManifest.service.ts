@@ -2277,7 +2277,9 @@ export async function buildOperationsManifestExcel(manifest: IOperationsManifest
     actorRole: "admin",
     generatedAt: model.generatedAt
   };
-  return buildShipmentManifestWorkbook(virtualManifest as unknown as IShipmentManifest);
+  return buildShipmentManifestWorkbook(virtualManifest as unknown as IShipmentManifest, {
+    includeChargeableWeight: false
+  });
 }
 
 export async function buildOperationsManifestPdf(manifest: IOperationsManifest) {

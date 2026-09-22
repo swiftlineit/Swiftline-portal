@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { FiDownload, FiEye, FiFileText } from "react-icons/fi";
+import { FiDownload, FiEdit2, FiEye, FiFileText } from "react-icons/fi";
 import {
   downloadShipmentInvoicePdf,
   getShipmentInvoice,
@@ -10,6 +10,12 @@ import {
   ShipmentInvoiceAudience,
   shipmentInvoicePageUrl
 } from "@/lib/shipmentInvoices";
+import {
+  saveRevisedCopy,
+  type ShipmentInvoiceRevisedCopy,
+} from "@/lib/shipmentInvoiceRevisedCopies";
+import ShipmentInvoiceRevisedCopyEditor from "@/components/shipments/ShipmentInvoiceRevisedCopyEditor";
+import ShipmentInvoiceRevisedCopiesSection from "@/components/shipments/ShipmentInvoiceRevisedCopiesSection";
 
 function money(amountMinor: number, currency: string) {
   return new Intl.NumberFormat("en-IN", {
@@ -29,14 +35,22 @@ function date(value: string) {
 
 export default function ShipmentInvoiceHistory({
   draftId,
-  audience
+  audience,
+  canEdit = false,
 }: {
   draftId: string;
   audience: ShipmentInvoiceAudience;
+  /**
+   * Only staff editors (admin / operations) receive the revise control.
+   * Clients and other roles see the real invoice plus any revised documents.
+   */
+  canEdit?: boolean;
 }) {
   const [invoice, setInvoice] = useState<ShipmentInvoice | null>(null);
   const [error, setError] = useState("");
   const [downloadingRevision, setDownloadingRevision] = useState<number | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingCopy, setEditingCopy] = useState<ShipmentInvoiceRevisedCopy | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -76,6 +90,26 @@ export default function ShipmentInvoiceHistory({
     }
   }
 
+  function openEditor(copy: ShipmentInvoiceRevisedCopy | null) {
+    if (!invoice) return;
+    setEditingCopy(copy);
+    setEditorOpen(true);
+  }
+
+  // Saves to browser storage only: the real invoice and the database are
+  // never written. The editor hands back the edited document to store.
+  function handleEditorSave(edited: ShipmentInvoice, copyId?: string) {
+    if (!invoice) return;
+    saveRevisedCopy({
+      shipmentDraftId: draftId,
+      invoice: edited,
+      basedOnRevision: copyId ? (editingCopy?.basedOnRevision ?? invoice.revision) : invoice.revision,
+      copyId,
+    });
+    setEditorOpen(false);
+    setEditingCopy(null);
+  }
+
   return (
     <section className="border border-slate-200 bg-white rounded-2xl">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
@@ -98,6 +132,7 @@ export default function ShipmentInvoiceHistory({
       {!invoice && !error ? (
         <p className="px-5 py-5 text-sm font-medium text-slate-500">Loading shipment invoices...</p>
       ) : invoice ? (
+        <>
         <div className="overflow-x-auto">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -141,6 +176,17 @@ export default function ShipmentInvoiceHistory({
                       >
                         <FiDownload aria-hidden="true" />
                       </button>
+                      {canEdit && version.isLatest ? (
+                        <button
+                          type="button"
+                          onClick={() => openEditor(null)}
+                          title="Edit as a revised copy (document only, real invoice unchanged)"
+                          className="inline-flex h-9 items-center gap-2 rounded-4xl border border-blue-900 px-3 font-semibold text-blue-900 hover:bg-blue-50"
+                        >
+                          <FiEdit2 aria-hidden="true" />
+                          Edit
+                        </button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -148,6 +194,24 @@ export default function ShipmentInvoiceHistory({
             </tbody>
           </table>
         </div>
+        <ShipmentInvoiceRevisedCopiesSection
+          draftId={draftId}
+          audience={audience}
+          canEdit={canEdit && Boolean(invoice)}
+          onEdit={openEditor}
+        />
+        {editorOpen && invoice ? (
+          <ShipmentInvoiceRevisedCopyEditor
+            initial={editingCopy ? editingCopy.invoice : invoice}
+            copyId={editingCopy?.id}
+            onSave={handleEditorSave}
+            onCancel={() => {
+              setEditorOpen(false);
+              setEditingCopy(null);
+            }}
+          />
+        ) : null}
+        </>
       ) : null}
     </section>
   );

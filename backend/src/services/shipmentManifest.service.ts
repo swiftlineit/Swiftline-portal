@@ -414,11 +414,11 @@ function wrappedManifestLineCount(value: unknown, width: number) {
   }, 0);
 }
 
-function manifestBodyRowHeight(values: unknown[], minimum: number) {
+function manifestBodyRowHeight(values: unknown[], minimum: number, columnWidths = manifestColumnWidths) {
   const wrappedLines = values.reduce<number>(
     (tallest, value, index) => Math.max(
       tallest,
-      wrappedManifestLineCount(value, manifestColumnWidths[index] ?? 10),
+      wrappedManifestLineCount(value, columnWidths[index] ?? 10),
     ),
     1,
   );
@@ -508,7 +508,20 @@ function manifestPartyOf(value: unknown): ManifestPartySnapshot | null {
  * handover PDF (see `shipmentManifestPdf.service`); this builder remains because
  * the operations manifest reuses it for its own Excel export.
  */
-export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest): Promise<Buffer> {
+export async function buildShipmentManifestWorkbook(
+  manifest: IShipmentManifest,
+  options: { includeChargeableWeight?: boolean } = {}
+): Promise<Buffer> {
+  const includeChargeableWeight = options.includeChargeableWeight ?? true;
+  const columnWidths = includeChargeableWeight
+    ? manifestColumnWidths
+    : [7, 25, 9, 13, 44, 44, 32, 14, 11, 14, 14];
+  const totalColumns = includeChargeableWeight ? 12 : 11;
+  const fromColumn = includeChargeableWeight ? 6 : 5;
+  const toColumn = fromColumn + 1;
+  const detailsLabelColumn = toColumn + 1;
+  const detailsValueColumn = detailsLabelColumn + 1;
+  const lastColumnLetter = includeChargeableWeight ? "L" : "K";
   const header = manifest.headerSnapshot as Record<string, unknown>;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Swiftline Portal";
@@ -535,7 +548,7 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
     { key: "consignment", width: 25 },
     { key: "pieces", width: 9 },
     { key: "weight", width: 13 },
-    { key: "chargeable", width: 13 },
+    ...(includeChargeableWeight ? [{ key: "chargeable", width: 13 }] : []),
     // Wide enough that a long address line stays on its own row instead of wrapping.
     { key: "consignor", width: 44 },
     { key: "consignee", width: 44 },
@@ -546,18 +559,18 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
     { key: "service", width: 14 }
   ];
 
-  worksheet.mergeCells("A2:L2");
+  worksheet.mergeCells(`A2:${lastColumnLetter}2`);
   worksheet.getCell("A2").value = "Courier Manifest";
   worksheet.getRow(1).height = 10;
   worksheet.getRow(2).height = 24;
-  styleRange(worksheet, 2, 1, 2, 12, {
+  styleRange(worksheet, 2, 1, 2, totalColumns, {
     font: { bold: true, size: 14, color: { argb: manifestColours.text } },
     fill: solidFill(manifestColours.white),
     alignment: { horizontal: "center", vertical: "middle" },
     border: manifestBorder
   });
 
-  styleRange(worksheet, 3, 1, 12, 12, {
+  styleRange(worksheet, 3, 1, 12, totalColumns, {
     font: { size: 10, color: { argb: manifestColours.text } },
     fill: solidFill(manifestColours.white),
     alignment: { vertical: "middle", horizontal: "left", wrapText: true },
@@ -565,12 +578,12 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
   });
   for (let row = 3; row <= 12; row += 1) worksheet.getRow(row).height = 19;
 
-  worksheet.getCell("E3").value = "FROM *";
-  worksheet.getCell("F3").value = "TO *";
+  worksheet.getCell(3, fromColumn).value = "FROM *";
+  worksheet.getCell(3, toColumn).value = "TO *";
   const originLines = splitManifestLines(header.originAddress || header.originBranch).map((line) => line.toUpperCase());
   const destinationLines = splitManifestLines(header.destinationAgent);
-  originLines.forEach((line, index) => { worksheet.getCell(4 + index, 5).value = line; });
-  destinationLines.forEach((line, index) => { worksheet.getCell(4 + index, 6).value = line; });
+  originLines.forEach((line, index) => { worksheet.getCell(4 + index, fromColumn).value = line; });
+  destinationLines.forEach((line, index) => { worksheet.getCell(4 + index, toColumn).value = line; });
 
   const manifestDetails: Array<[string, string | number]> = [
     ["Manifest Number", manifest.manifestNumber],
@@ -585,8 +598,8 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
   ];
   manifestDetails.forEach(([label, value], index) => {
     const row = 3 + index;
-    const labelCell = worksheet.getCell(row, 7);
-    const valueCell = worksheet.getCell(row, 8);
+    const labelCell = worksheet.getCell(row, detailsLabelColumn);
+    const valueCell = worksheet.getCell(row, detailsValueColumn);
     labelCell.value = label;
     valueCell.value = value;
     labelCell.font = { bold: true, size: 10, color: { argb: manifestColours.text } };
@@ -596,26 +609,30 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
   for (let row = 3; row <= 12; row += 1) {
     const wrappedLineCount = Math.max(
       1,
-      Math.ceil(text(worksheet.getCell(row, 5).value).length / 30),
-      Math.ceil(text(worksheet.getCell(row, 6).value).length / 34),
-      Math.ceil(text(worksheet.getCell(row, 7).value).length / 30),
-      Math.ceil(text(worksheet.getCell(row, 8).value).length / 16)
+      Math.ceil(text(worksheet.getCell(row, fromColumn).value).length / 30),
+      Math.ceil(text(worksheet.getCell(row, toColumn).value).length / 34),
+      Math.ceil(text(worksheet.getCell(row, detailsLabelColumn).value).length / 30),
+      Math.ceil(text(worksheet.getCell(row, detailsValueColumn).value).length / 16)
     );
     worksheet.getRow(row).height = Math.max(20, Math.min(48, wrappedLineCount * 15));
   }
-  worksheet.getCell("E3").font = { bold: true, size: 10, color: { argb: manifestColours.text } };
-  worksheet.getCell("F3").font = { bold: true, size: 10, color: { argb: manifestColours.text } };
-  if (originLines.length) worksheet.getCell("E4").font = { bold: true, size: 10, color: { argb: manifestColours.text } };
-  if (destinationLines.length) worksheet.getCell("F4").font = { bold: true, size: 10, color: { argb: manifestColours.text } };
-  worksheet.getCell("H10").numFmt = "0.000";
+  worksheet.getCell(3, fromColumn).font = { bold: true, size: 10, color: { argb: manifestColours.text } };
+  worksheet.getCell(3, toColumn).font = { bold: true, size: 10, color: { argb: manifestColours.text } };
+  if (originLines.length) worksheet.getCell(4, fromColumn).font = { bold: true, size: 10, color: { argb: manifestColours.text } };
+  if (destinationLines.length) worksheet.getCell(4, toColumn).font = { bold: true, size: 10, color: { argb: manifestColours.text } };
+  worksheet.getCell(10, detailsValueColumn).numFmt = "0.000";
 
   worksheet.getRow(13).height = 10;
 
-  const headings = ["S.No *", "Consignment No. *", "Pieces *", "Weight (kg)", "Chargeable Weight (kg)", "Consignor *", "Consignee *", "Description *", "Value *", "Currency *", "Bag No *", "Service Info"];
+  const headings = [
+    "S.No *", "Consignment No. *", "Pieces *", "Weight (kg)",
+    ...(includeChargeableWeight ? ["Chargeable Weight (kg)"] : []),
+    "Consignor *", "Consignee *", "Description *", "Value *", "Currency *", "Bag No *", "Service Info"
+  ];
   const headingRow = worksheet.getRow(14);
   headingRow.values = headings;
   headingRow.height = 32;
-  styleRange(worksheet, 14, 1, 14, 12, {
+  styleRange(worksheet, 14, 1, 14, totalColumns, {
     font: { bold: true, size: 10, color: { argb: manifestColours.text } },
     fill: solidFill(manifestColours.white),
     alignment: { horizontal: "center", vertical: "middle", wrapText: true },
@@ -643,7 +660,9 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
           formatManifestConsignmentNumber(line.consignmentNumber),
           line.pieces,
           line.weightKg,
-          typeof line.chargeableWeightKg === "number" ? line.chargeableWeightKg : line.weightKg,
+          ...(includeChargeableWeight
+            ? [typeof line.chargeableWeightKg === "number" ? line.chargeableWeightKg : line.weightKg]
+            : []),
           consignorLines[0] ?? "",
           consigneeLines[0] ?? "",
           line.description,
@@ -653,14 +672,14 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
           line.serviceInfo
         ];
         row.values = values;
-        row.height = manifestBodyRowHeight(values, 26);
+        row.height = manifestBodyRowHeight(values, 26, columnWidths);
       } else {
-        row.getCell(6).value = consignorLines[offset] ?? "";
-        row.getCell(7).value = consigneeLines[offset] ?? "";
+        row.getCell(fromColumn).value = consignorLines[offset] ?? "";
+        row.getCell(toColumn).value = consigneeLines[offset] ?? "";
         row.height = 18;
       }
 
-      for (let column = 1; column <= 12; column += 1) {
+      for (let column = 1; column <= totalColumns; column += 1) {
         const cell = row.getCell(column);
         cell.font = { size: 10, color: { argb: manifestColours.text } };
         cell.fill = solidFill(manifestColours.white);
@@ -676,12 +695,12 @@ export async function buildShipmentManifestWorkbook(manifest: IShipmentManifest)
 
     worksheet.getCell(firstRowNumber, 2).font = { bold: true, size: 10, color: { argb: manifestColours.text } };
     worksheet.getCell(firstRowNumber, 4).numFmt = "0.000";
-    worksheet.getCell(firstRowNumber, 5).numFmt = "0.000";
-    if (typeof declaredValue === "number") worksheet.getCell(firstRowNumber, 9).numFmt = "#,##0.00";
+    if (includeChargeableWeight) worksheet.getCell(firstRowNumber, 5).numFmt = "0.000";
+    if (typeof declaredValue === "number") worksheet.getCell(firstRowNumber, includeChargeableWeight ? 9 : 8).numFmt = "#,##0.00";
   });
 
   const lastRow = Math.max(14, worksheet.rowCount);
-  worksheet.pageSetup.printArea = `A1:L${lastRow}`;
+  worksheet.pageSetup.printArea = `A1:${lastColumnLetter}${lastRow}`;
   worksheet.headerFooter.oddFooter = "Swiftline Portal | Computer Generated Manifest | Page &P of &N";
 
   const buffer = await workbook.xlsx.writeBuffer();

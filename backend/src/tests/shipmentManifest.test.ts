@@ -209,11 +209,11 @@ describe("shipment manifest workbook", () => {
     const sheet = workbook.getWorksheet("Manifest");
     assert.ok(sheet);
     assert.equal(sheet.getCell("A2").value, "Courier Manifest");
-    assert.equal(sheet.getCell("E3").value, "FROM *");
-    assert.equal(sheet.getCell("F3").value, "TO *");
-    assert.equal(sheet.getCell("H3").value, "SLC-001");
-    assert.equal(sheet.getCell("E4").value, "SWIFTLINE DELHI");
-    assert.equal(sheet.getCell("E5").value, "1 LOGISTICS PARK");
+    assert.equal(sheet.getCell("F3").value, "FROM *");
+    assert.equal(sheet.getCell("G3").value, "TO *");
+    assert.equal(sheet.getCell("I3").value, "SLC-001");
+    assert.equal(sheet.getCell("F4").value, "SWIFTLINE DELHI");
+    assert.equal(sheet.getCell("F5").value, "1 LOGISTICS PARK");
     assert.equal(sheet.getCell("B15").value, "SLDL210720260001");
     assert.equal(sheet.getCell("C15").value, 2);
     assert.equal(sheet.getCell("D15").value, 10);

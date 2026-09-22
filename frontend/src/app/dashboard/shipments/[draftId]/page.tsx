@@ -931,7 +931,7 @@ export default function AdminShipmentDetailsPage() {
 
             {history?.dpdShipment ? (
               <>
-                <ShipmentInvoiceHistory draftId={draft._id} audience="admin" />
+                <ShipmentInvoiceHistory draftId={draft._id} audience="admin" canEdit={user.role === "admin" || user.role === "operations"} />
                 <div className="mt-4"><CustomsInvoiceCard draftId={draft._id} audience="admin" /></div>
                 <ShipmentManifestPanel draftId={draft._id} audience="admin" />
               </>

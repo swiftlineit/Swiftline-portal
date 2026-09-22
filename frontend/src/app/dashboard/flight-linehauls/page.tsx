@@ -27,6 +27,9 @@ import {
   type FlightListItem,
 } from "@/lib/flightLinehaul";
 import { normalizeFlightNumber } from "@/lib/flightNumber";
+import { IoAirplaneSharp } from "react-icons/io5";
+import { BsAirplane } from "react-icons/bs";
+import { MdAirplanemodeInactive } from "react-icons/md";
 
 const statusOptions = [
   "",
@@ -501,8 +504,8 @@ export default function FlightLinehaulDashboardPage() {
                 <tr>
                   <td colSpan={8} className="px-5 py-16 text-center">
                     <div className="mx-auto flex max-w-md flex-col items-center">
-                      <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#F3F5FA] text-[#0D1282]">
-                        <FiTruck className="h-5 w-5" />
+                      <span className="flex h-11 w-11 items-center justify-center rounded-lg  text-[#0D1282]">
+                        <MdAirplanemodeInactive   className="h-7 w-7" />
                       </span>
                       <p className="mt-3 text-sm font-semibold text-slate-800">
                         No flights found

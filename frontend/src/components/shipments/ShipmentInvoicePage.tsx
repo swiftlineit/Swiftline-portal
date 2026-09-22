@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { FiDownload } from "react-icons/fi";
+import { FiDownload, FiEdit2, FiPrinter } from "react-icons/fi";
 import {
   downloadShipmentInvoicePdf,
   getShipmentInvoice,
@@ -12,6 +12,13 @@ import {
   ShipmentInvoiceParcel,
   shipmentInvoiceParcelDescription,
 } from "@/lib/shipmentInvoices";
+import { apiUrl } from "@/lib/api";
+import { getAccessToken } from "@/lib/auth";
+import {
+  getRevisedCopy,
+  saveRevisedCopy,
+} from "@/lib/shipmentInvoiceRevisedCopies";
+import ShipmentInvoiceRevisedCopyEditor from "@/components/shipments/ShipmentInvoiceRevisedCopyEditor";
 
 function money(minor: number, currency: string) {
   return new Intl.NumberFormat("en-IN", {
@@ -54,11 +61,27 @@ export default function ShipmentInvoicePage({
   const [invoice, setInvoice] = useState<ShipmentInvoice | null>(null);
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState(false);
+  // Document-only revised copy id from `?revised=`. When set, the page renders
+  // the browser-stored edited document instead of the real backend invoice.
+  const [revisedId, setRevisedId] = useState<string | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [canEdit, setCanEdit] = useState(false);
 
   useEffect(() => {
     async function load() {
       try {
         const searchParams = new URLSearchParams(window.location.search);
+        const revisedParam = searchParams.get("revised");
+        if (revisedParam) {
+          const copy = getRevisedCopy(draftId, revisedParam);
+          if (!copy) {
+            setError("This revised copy was created on another device or browser and is not available here. The real invoice is unchanged.");
+            return;
+          }
+          setRevisedId(copy.id);
+          setInvoice(copy.invoice);
+          return;
+        }
         const revisionValue = searchParams.get("revision");
         const requestedRevision =
           revisionValue && /^\d+$/.test(revisionValue)
@@ -81,8 +104,35 @@ export default function ShipmentInvoicePage({
     void load();
   }, [audience, draftId]);
 
+  // Only admin / operations may edit, and only into a document-only copy.
+  // Clients and other roles keep a read-only invoice.
+  useEffect(() => {
+    if (audience !== "admin") return;
+    async function checkRole() {
+      try {
+        const token = getAccessToken();
+        if (!token) return;
+        const response = await fetch(apiUrl("/api/v1/auth/me"), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await response.json().catch(() => null);
+        const role = data?.user?.role as string | undefined;
+        if (role === "admin" || role === "operations") setCanEdit(true);
+      } catch {
+        // Read-only fallback: the invoice still renders.
+      }
+    }
+    void checkRole();
+  }, [audience]);
+
   async function downloadPdf() {
     if (!invoice) return;
+    // A revised copy exists only in this browser, so it prints via the
+    // browser instead of the server PDF. The real invoice keeps its download.
+    if (revisedId) {
+      window.print();
+      return;
+    }
     setDownloading(true);
     setError("");
     try {
@@ -134,19 +184,58 @@ export default function ShipmentInvoicePage({
         <p className="text-sm font-semibold text-slate-600">
           {invoice.invoiceNumber} | Invoice {invoice.revision} of{" "}
           {invoice.versions.length}
+          {revisedId ? <span className="ml-2 text-amber-700">· Revised copy</span> : null}
         </p>
         <div className="flex gap-2">
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={() => setEditorOpen(true)}
+              className="inline-flex h-10 items-center gap-2 border border-blue-900 bg-white px-4 text-sm font-semibold text-blue-900 hover:bg-blue-50"
+            >
+              <FiEdit2 aria-hidden="true" />
+              {revisedId ? "Edit revised copy" : "Edit as revised copy"}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => void downloadPdf()}
             disabled={downloading}
             className="inline-flex h-10 items-center gap-2 bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:bg-slate-400"
           >
-            <FiDownload aria-hidden="true" />
-            {downloading ? "Downloading..." : "Download PDF"}
+            {revisedId ? <FiPrinter aria-hidden="true" /> : <FiDownload aria-hidden="true" />}
+            {revisedId ? "Print / Save PDF" : downloading ? "Downloading..." : "Download PDF"}
           </button>
         </div>
       </div>
+
+      {revisedId ? (
+        <div className="no-print mx-auto mb-4 max-w-[210mm] border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+          Revised copy — document only. The real tax invoice and all records are unchanged.
+        </div>
+      ) : null}
+
+      {editorOpen ? (
+        <div className="no-print">
+          <ShipmentInvoiceRevisedCopyEditor
+            initial={invoice}
+            copyId={revisedId ?? undefined}
+            onSave={(edited, copyId) => {
+              // Browser storage only: no request, no database write.
+              const saved = saveRevisedCopy({
+                shipmentDraftId: draftId,
+                invoice: edited,
+                basedOnRevision: invoice.revision,
+                copyId,
+              });
+              setEditorOpen(false);
+              const url = `${window.location.pathname}?revised=${encodeURIComponent(saved.id)}`;
+              window.location.href = url;
+            }}
+            onCancel={() => setEditorOpen(false)}
+          />
+        </div>
+      ) : null}
 
       {error ? (
         <div className="no-print mx-auto mb-4 max-w-[210mm] border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
@@ -186,8 +275,19 @@ export default function ShipmentInvoicePage({
               <strong>AWB / Tracking No.:</strong>{" "}
               {value(invoice.shipment, "shipmentReference")}
             </p>
+            {revisedId ? (
+              <p className="mt-2 inline-block border border-amber-500 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-amber-700">
+                Revised copy — document only
+              </p>
+            ) : null}
           </div>
         </header>
+
+        {revisedId ? (
+          <p className="relative mt-4 border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+            This is an edited document copy for reference. It does not change the real tax invoice or any records.
+          </p>
+        ) : null}
 
         {invoice.validationWarnings.length ? (
           <section className="relative mt-4 border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">

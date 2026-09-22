@@ -407,7 +407,7 @@ describe("operations manifest safeguards", () => {
       if (rowNumber <= 14) return;
       const serial = row.getCell(1).value;
       if (typeof serial === "number") {
-        dataRows.push({ serial, weight: row.getCell(4).value, description: row.getCell(8).value, bag: row.getCell(11).value });
+        dataRows.push({ serial, weight: row.getCell(4).value, description: row.getCell(7).value, bag: row.getCell(10).value });
       }
     });
 
@@ -427,9 +427,18 @@ describe("operations manifest safeguards", () => {
     consignments[0]!.description = "RAKHI, CHOCOLATE, DOODH, DAHI, LASSI, PANEER, KHOYA, CHEENI, CHAIPATTI, TISSUE, DYES, TOOTHPASTE, LEMONS, TEA, LOCKS";
 
     const sheet = await manifestSheetRows(manifest);
-    const descriptionCell = sheet.getCell(15, 8);
+    const descriptionCell = sheet.getCell(15, 7);
 
     assert.equal(descriptionCell.value, consignments[0]!.description);
+    assert.equal(sheet.getCell("E3").value, "FROM *");
+    assert.equal(sheet.getCell("F3").value, "TO *");
+    assert.equal(sheet.getCell("G3").value, "Manifest Number");
+    assert.equal(sheet.getCell("H3").value, "SLCM262700001");
+    assert.equal(sheet.getCell("E14").value, "Consignor *");
+    assert.equal(sheet.getCell("F14").value, "Consignee *");
+    assert.equal(sheet.getCell("G14").value, "Description *");
+    assert.equal(sheet.getCell("H14").value, "Value *");
+    assert.equal(sheet.getCell("L14").value, null);
     assert.ok((sheet.getRow(15).height ?? 0) > 26, "the description row must grow with wrapped content");
   });
 
@@ -451,7 +460,7 @@ describe("operations manifest safeguards", () => {
     }];
 
     const sheet = await manifestSheetRows(manifest);
-    const description = String(sheet.getCell(15, 8).value);
+    const description = String(sheet.getCell(15, 7).value);
 
     assert.match(description, /COTTON PAD/);
     assert.match(description, /DRY DESI GHEE/);

@@ -59,7 +59,7 @@ export default function OperationsScansPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className=" max-w-5xl space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-slate-950">Origin tracking scans</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
@@ -96,7 +96,7 @@ export default function OperationsScansPage() {
               onChange={(event) => setBarcode(event.target.value.toUpperCase())}
               disabled={busy}
               autoComplete="off"
-              placeholder="Scan barcode"
+              placeholder="Scan or type a Swiftline parcel barcode"
               className="mt-2 h-14 w-full rounded-xl border-2 border-[#0D1282] px-4 font-mono text-lg font-semibold uppercase text-slate-950 outline-none focus:ring-2 focus:ring-[#F0DE36] disabled:bg-slate-100"
             />
           </label>

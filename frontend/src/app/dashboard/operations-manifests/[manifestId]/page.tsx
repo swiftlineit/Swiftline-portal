@@ -187,6 +187,12 @@ export default function OperationsManifestWorkspace() {
   const manifest = data.manifest;
   const activeBag = data.bags.find((bag) => bag.id === activeBagId);
   const canEdit = isEditable(manifest.status);
+  const bagNumbersByShipmentReference = new Map(
+    data.consignments.map((consignment) => [
+      consignment.consignmentNumber,
+      [...new Set(consignment.bagNumbers.filter(Boolean))],
+    ]),
+  );
 
   async function refreshAction(
     action: () => Promise<unknown>,
@@ -385,7 +391,7 @@ export default function OperationsManifestWorkspace() {
 
   return (
     <>
-      <div className="mx-auto max-w-375">
+      <div className="mx-auto max-w-8xl">
         <ManifestHeader
           data={data}
           busy={busy}
@@ -408,9 +414,23 @@ export default function OperationsManifestWorkspace() {
                 Complete these before sealing
               </h2> */}
               <ul className="mt-1.5 grid gap-x-6 gap-y-1 text-sm text-slate-700 md:grid-cols-2 xl:grid-cols-3">
-                {data.sealingIssues.map((issue) => (
-                  <li key={issue}><span className="text-red-600 mr-2">!</span>{issue}</li>
-                ))}
+                {data.sealingIssues.map((issue) => {
+                  const shipmentReference = issue.split(": ", 1)[0];
+                  const bagNumbers = bagNumbersByShipmentReference.get(shipmentReference);
+                  return (
+                    <li key={issue} className="flex min-w-0 items-start gap-2">
+                      <span className="shrink-0 text-red-600">!</span>
+                      <span className="min-w-0">
+                        {issue}
+                        {bagNumbers?.length ? (
+                          <span className="ml-2 inline-flex rounded-full bg-[#0D1282]/10 px-2 py-0.5 text-xs font-semibold text-[#0D1282]">
+                            Bag {bagNumbers.join(", ")}
+                          </span>
+                        ) : null}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           </section>

@@ -284,7 +284,7 @@ export function ParcelItemsEditor({
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}
-                className="flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white shadow-2xl sm:max-w-6xl sm:rounded-2xl"
+                className="flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-xl border border-slate-200 bg-white shadow-2xl sm:max-w-6xl sm:rounded"
               >
                 <header className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5">
                   <div className="min-w-0">
@@ -300,6 +300,17 @@ export function ParcelItemsEditor({
                     </h2>
                   </div>
 
+                     <div className="flex items-center gap-6">
+                        <button
+                      type="button"
+                      onClick={addItem}
+                      disabled={items.length >= maxItems}
+                      className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-900 px-3 text-xs font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      <FiPlus aria-hidden="true" className="h-3.5 w-3.5" />
+                      Add item
+                    </button>
+
                   <button
                     ref={closeRef}
                     type="button"
@@ -309,24 +320,11 @@ export function ParcelItemsEditor({
                   >
                     <FiX aria-hidden="true" className="h-4 w-4" />
                   </button>
+                     </div>
                 </header>
 
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 [scrollbar-color:#94a3b8_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400 sm:px-5 sm:py-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-[13px] font-semibold text-slate-900">
-                      Items
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={addItem}
-                      disabled={items.length >= maxItems}
-                      className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-900 px-3 text-xs font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-                    >
-                      <FiPlus aria-hidden="true" className="h-3.5 w-3.5" />
-                      Add item
-                    </button>
-                  </div>
+               
 
                   <div className="mt-3 space-y-2.5">
                     {items.map((item, index) => {
@@ -368,7 +366,7 @@ export function ParcelItemsEditor({
                       return (
                         <div
                           key={index}
-                          className="rounded-xl border border-slate-200 bg-white p-3"
+                          className="rounded border border-slate-200 bg-white p-3"
                         >
                           <div className="mb-2.5 flex items-center justify-between gap-3">
                             <p className="text-xs font-semibold text-slate-500">
@@ -645,14 +643,13 @@ export function ParcelItemsEditor({
                     </span>
                   </span>
 
-                  <button
+                  {/* <button
                     type="button"
                     onClick={closeEditor}
                     className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-900 px-4 text-xs font-semibold text-white transition hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-200"
                   >
-                    <FiCheck aria-hidden="true" className="h-3.5 w-3.5" />
                     Done
-                  </button>
+                  </button> */}
                 </footer>
               </div>
             </div>,

@@ -120,6 +120,7 @@ function manifestDetail(
     latestScan: null,
     sealingIssues: status === "PACKING"
       ? [
+          "SLCDEL180926001: Missing Warehouse scan in, Origin hub processed.",
           ...(!disposition ? ["Choose Held, Deferred to next manifest, or Cancelled for 1 unscanned parcel."] : []),
         ]
       : [],
@@ -165,6 +166,7 @@ test("Operations records an omitted parcel and dispatches from the protected con
   await page.goto(`/dashboard/operations-manifests/${manifestId}`, { waitUntil: "domcontentloaded" });
   await expect(page.getByText("3 of 4 scanned", { exact: true })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText("Decision required", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bag BAG-001", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await page.getByPlaceholder("Explain why this correction is required").fill("Parcel retained for document verification");
