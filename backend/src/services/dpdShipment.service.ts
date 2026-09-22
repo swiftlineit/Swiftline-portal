@@ -1279,7 +1279,7 @@ export async function generateDpdLabelForExistingShipment(
   if (hasDpdLabel || (initialShipment.status === "LABEL_RECEIVED" && !isInternalLabelOnly)) {
     return { dpdShipment: initialShipment, labels: existingLabels, reused: true };
   }
-  if (initialShipment.status !== "DPD_CREATED" && !isInternalLabelOnly) {
+  if (initialShipment.status !== "DPD_CREATED" && initialShipment.status !== "LABEL_RECEIVED") {
     throw new DpdShipmentServiceError(
       initialShipment.status === "DPD_CREATING"
         ? "A DPD label request is already processing for this shipment. Refresh before trying again."
@@ -1318,8 +1318,9 @@ export async function generateDpdLabelForExistingShipment(
 
   // Only one request may move this booking into the carrier-requesting state.
   // A second request re-reads the outcome and never calls ALS concurrently.
+  const previousStatus = initialShipment.status;
   const claimedShipment = await DpdShipment.findOneAndUpdate(
-    { _id: shipmentId, status: { $in: ["DPD_CREATED", "LABEL_RECEIVED"] }, dpdShipmentId: { $in: ["", null] } },
+    { _id: shipmentId, status: previousStatus, dpdShipmentId: { $in: ["", null] } },
     { $set: { status: "DPD_CREATING" } },
     { returnDocument: "after" }
   ).exec();
@@ -1442,14 +1443,17 @@ export async function generateDpdLabelForExistingShipment(
       );
     }
 
-    claimedShipment.status = "DPD_CREATED";
+    // A definite refusal of an optional carrier label does not undo an
+    // already completed Swiftline-only booking. Keep incomplete bookings in
+    // their original review state instead of marking them complete.
+    claimedShipment.status = previousStatus;
     await claimedShipment.save();
     await writeDpdAuditLog(
       "DPD_REQUEST_FAILED",
       shipmentId,
       "DPD_SHIPMENT",
       userId,
-      { stage: "DPD_LABEL_ONLY", status: "DPD_CREATED", reason: error instanceof Error ? error.message : String(error) }
+      { stage: "DPD_LABEL_ONLY", status: previousStatus, reason: error instanceof Error ? error.message : String(error) }
     );
     if (error instanceof AlsRequestError) {
       throw new DpdLabelUnavailableError(error.message, error.statusCode, error.carrierErrors);

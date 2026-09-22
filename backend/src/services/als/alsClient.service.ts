@@ -295,7 +295,7 @@ export function parseAlsCreateDocketResponse(
   const docketId = asString(data.docket_id);
 
   if (!awbNumber && !docketId) {
-    throw new AlsRequestError("DPD accepted the booking but returned no AWB number.", 502, body);
+    throw new AlsUncertainError("DPD accepted the booking but returned no AWB number. Do not submit it again.");
   }
 
   const parcels = Array.isArray(body.parcels) ? body.parcels : [];
@@ -318,7 +318,7 @@ export function parseAlsCreateDocketResponse(
   }
 
   if (!labels.length) {
-    throw new AlsRequestError("DPD accepted the booking but returned no label.", 502, body);
+    throw new AlsUncertainError("DPD accepted the booking but returned no label. Do not submit it again.");
   }
 
   // The carrier response can contain a complete HTML/base64 label for every

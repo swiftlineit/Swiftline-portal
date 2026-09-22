@@ -41,22 +41,24 @@ async function resolveInvoice(request: Request) {
 
   const dpdShipment = await DpdShipment.findOne({ shipmentDraftId }).lean().exec();
   if (!dpdShipment) throw new ShipmentInvoiceServiceError("Invoice is available after the shipment is booked.", 409);
-  // Issuing here consumes the next number in the statutory GST series, so it must
-  // happen only for a shipment that actually completed. Merely opening the
-  // invoice tab on a booking still awaiting its labels previously minted a real
-  // ISSUED invoice for a shipment that did not exist.
-  if (dpdShipment.status !== "LABEL_RECEIVED") {
-    throw new ShipmentInvoiceServiceError(
-      "Invoice is available once the shipment is booked and its labels are issued.",
-      409
-    );
-  }
 
-  const invoice = await ensureShipmentInvoiceForDraft({
-    shipmentDraftId,
-    dpdShipmentId: dpdShipment._id,
-    userId
-  });
+  let invoice = await ShipmentInvoice.findOne({ shipmentDraftId, status: "ISSUED" }).exec();
+  if (!invoice) {
+    // Only new issuance consumes a statutory GST number. A later carrier-label
+    // failure must not hide an invoice that was already issued for this draft.
+    if (dpdShipment.status !== "LABEL_RECEIVED") {
+      throw new ShipmentInvoiceServiceError(
+        "Invoice is available once the shipment is booked and its labels are issued.",
+        409
+      );
+    }
+
+    invoice = await ensureShipmentInvoiceForDraft({
+      shipmentDraftId,
+      dpdShipmentId: dpdShipment._id,
+      userId
+    });
+  }
 
   const selectedInvoice = serializeShipmentInvoice(invoice, getRequestedRevision(request) ?? invoice.revision);
   return { invoice, selectedInvoice, userId };

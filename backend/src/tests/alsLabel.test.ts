@@ -281,13 +281,20 @@ describe("ALS response handling", () => {
     );
   });
 
-  test("treats an accepted booking with no label as a failure", () => {
+  test("treats an accepted booking with no label as uncertain, not retryable", () => {
     assert.throws(
       () => parseAlsCreateDocketResponse(
         { success: true, data: { awb_no: "1017351262" }, labels: [] },
         {}
       ),
-      /returned no label/
+      (error: unknown) => error instanceof AlsUncertainError && /returned no label/.test(error.message)
+    );
+    assert.throws(
+      () => parseAlsCreateDocketResponse(
+        { success: true, data: {}, labels: [] },
+        {}
+      ),
+      (error: unknown) => error instanceof AlsUncertainError && /returned no AWB number/.test(error.message)
     );
   });
 
