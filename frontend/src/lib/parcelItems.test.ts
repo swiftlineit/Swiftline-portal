@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   createEmptyParcelItem,
+  composeShipmentDescription,
+  getShipmentDescriptionLimitMessage,
   isUntouchedParcelItem,
   mergeSavedParcelItemsWithLocalRows,
   maxParcelItems,
@@ -14,6 +16,30 @@ function item(overrides: Partial<ParcelItem> = {}): ParcelItem {
 
 test("supports up to 50 item lines per parcel", () => {
   assert.equal(maxParcelItems, 50);
+});
+
+test("counts all parcel item descriptions with comma separators", () => {
+  const description = composeShipmentDescription([
+    { items: [item({ description: "A" }), item({ description: "B" })] },
+    { items: [item({ description: "C" })] }
+  ]);
+
+  assert.equal(description, "A, B, C");
+  assert.equal(description.length, 7);
+  assert.equal(getShipmentDescriptionLimitMessage([{ items: [item({ description: "A" })] }]), "");
+});
+
+test("reports the exact excess only above the 240-character shipment limit", () => {
+  assert.equal(
+    getShipmentDescriptionLimitMessage([{ items: [item({ description: "x".repeat(240) })] }]),
+    ""
+  );
+
+  const items = [item({ description: "x".repeat(120) }), item({ description: "y".repeat(120) }), item({ description: "z" })];
+  const message = getShipmentDescriptionLimitMessage([{ items }]);
+
+  assert.match(message, /current combined description is 245 characters/);
+  assert.match(message, /exceeds the limit by 5/);
 });
 
 test("recognizes only a completely untouched item row as UI-only", () => {

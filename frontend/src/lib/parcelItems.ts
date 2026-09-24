@@ -10,6 +10,8 @@
 const hsnCodePattern = /^\d{4}(?:\d{2}(?:\d{2}(?:\d{2})?)?)?$/;
 
 export const contentsDescriptionMaxLength = 120;
+/** Maximum combined goods-description length for one shipment booking. */
+export const shipmentDescriptionMaxLength = 240;
 export const maxParcelItems = 50;
 
 // Unit of measure per item line on the customs (shipment) invoice.
@@ -103,6 +105,49 @@ export function composeContentsDescription(items: ParcelItem[]): string {
 
   if (!parts.length) return (descriptions[0] ?? "").slice(0, contentsDescriptionMaxLength);
   return parts.join(", ");
+}
+
+type ShipmentDescriptionParcel = {
+  items?: Array<{ description?: string | null }> | null;
+  contentsDescription?: string | null;
+};
+
+/**
+ * Builds the exact goods-description text used for the shipment-level EDI
+ * limit. Item descriptions and legacy parcel descriptions are separated with
+ * a comma followed by one space. Unlike composeContentsDescription, this does
+ * not truncate at the per-parcel 120-character storage limit.
+ */
+export function composeShipmentDescription(parcels: ShipmentDescriptionParcel[]): string {
+  const descriptions: string[] = [];
+
+  for (const parcel of parcels) {
+    const itemDescriptions = (parcel.items ?? [])
+      .map((item) => (item.description ?? "").trim())
+      .filter(Boolean);
+
+    if (itemDescriptions.length) {
+      descriptions.push(...itemDescriptions);
+      continue;
+    }
+
+    const legacyDescription = (parcel.contentsDescription ?? "").trim();
+    if (legacyDescription) descriptions.push(legacyDescription);
+  }
+
+  return descriptions.join(", ");
+}
+
+export function getShipmentDescriptionCharacterCount(parcels: ShipmentDescriptionParcel[]): number {
+  return composeShipmentDescription(parcels).length;
+}
+
+/** Returns the final-booking warning, or an empty string when it fits. */
+export function getShipmentDescriptionLimitMessage(parcels: ShipmentDescriptionParcel[]): string {
+  const count = getShipmentDescriptionCharacterCount(parcels);
+  if (count <= shipmentDescriptionMaxLength) return "";
+
+  return `Item descriptions can be a maximum of ${shipmentDescriptionMaxLength} characters. The current combined description is ${count} characters, which exceeds the limit by ${count - shipmentDescriptionMaxLength}.`;
 }
 
 /**

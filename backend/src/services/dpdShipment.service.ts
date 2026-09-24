@@ -13,6 +13,7 @@ import {
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import type { PaymentSource } from "../models/financialTypes.js";
 import { validateShipmentDraftFields } from "./shipmentValidation.service.js";
+import { getShipmentDescriptionLimitMessage } from "./parcelItems.service.js";
 import {
   buildShipmentPayload,
   sanitizeShipmentRequestSnapshot,
@@ -518,6 +519,16 @@ async function createLabelForShipmentDraftInternal(
         409
       );
     }
+  }
+
+  // This is a booking-only rule. Draft PATCH/autosave and exports remain able
+  // to preserve longer descriptions for staff review, but no financial or
+  // carrier side-effect may start until the combined EDI description fits.
+  const descriptionLimitMessage = getShipmentDescriptionLimitMessage(draft.parcelList);
+  if (descriptionLimitMessage) {
+    throw new DpdShipmentServiceError(descriptionLimitMessage, 400, {
+      validationIssues: [descriptionLimitMessage]
+    });
   }
 
   const validationIssues = validateShipmentDraftFields(draft, { requireValidatedAddress: true });

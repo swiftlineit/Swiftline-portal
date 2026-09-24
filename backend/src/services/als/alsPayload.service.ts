@@ -5,8 +5,10 @@ import type {
 } from "../../models/shipmentDraft.model.js";
 import { normalizeCsbType } from "../csbType.service.js";
 import {
+  composeShipmentDescription,
   getDeclaredGoodsValue,
   getParcelItemAmount,
+  getShipmentDescriptionLimitMessage,
   normalizeParcelItems
 } from "../parcelItems.service.js";
 
@@ -323,9 +325,9 @@ export function buildAlsCreateDocketPayload(input: {
   const consignee = consigneeAddress(draft);
   const booking = indiaDateParts(bookedAt);
   const totalWeight = draft.parcelList.reduce((sum, parcel) => sum + parcel.weightKg, 0);
-  const descriptions = [...new Set(
-    draft.parcelList.map((parcel) => parcel.contentsDescription.trim()).filter(Boolean)
-  )];
+  const shipmentContent = composeShipmentDescription(draft.parcelList);
+  const descriptionLimitMessage = getShipmentDescriptionLimitMessage(draft.parcelList);
+  if (descriptionLimitMessage) throw new AlsPayloadError(descriptionLimitMessage);
 
   return {
     tracking_no: required(trackingNumber, "Swiftline tracking number"),
@@ -344,7 +346,11 @@ export function buildAlsCreateDocketPayload(input: {
     // request to a document that does not exist yet.
     shipment_invoice_no: truncate(required(trackingNumber, "Shipment invoice reference"), 80),
     shipment_invoice_date: booking.date,
-    shipment_content: truncate(required(descriptions.join(", "), "Shipment contents"), 250),
+    // ALS accepts the full shipment-level description above the old 120
+    // character per-parcel summary. Keep every item in normal order and rely
+    // on the booking-wide 240-character validation rather than silently
+    // dropping the tail of the declaration.
+    shipment_content: required(shipmentContent, "Shipment contents"),
     remark: truncate(consignee.deliveryInstructions || "", 250),
     entry_type: 2,
     api_service_code: serviceCode,

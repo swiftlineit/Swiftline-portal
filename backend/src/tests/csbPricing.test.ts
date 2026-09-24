@@ -11,8 +11,10 @@ import {
   splitGstInclusiveAmountMinor
 } from "../services/shipmentPricing.service.js";
 import {
+  composeShipmentDescription,
   composeContentsDescription,
   contentsDescriptionMaxLength,
+  getShipmentDescriptionLimitMessage,
   isValidHsnCode,
   normalizeParcelItems
 } from "../services/parcelItems.service.js";
@@ -137,6 +139,30 @@ describe("parcel items", () => {
   test("composes the derived contents description from item descriptions", () => {
     const items = [{ description: "Cookies", hsnCode: "1905" }, { description: "Clothes", hsnCode: "6203" }];
     assert.equal(composeContentsDescription(items), "Cookies, Clothes");
+  });
+
+  test("composes the shipment description with comma separators across parcels", () => {
+    assert.equal(
+      composeShipmentDescription([
+        { items: [{ description: "Cookies" }, { description: "Clothes" }] },
+        { items: [{ description: "Books" }] }
+      ]),
+      "Cookies, Clothes, Books"
+    );
+  });
+
+  test("reports the exact excess above 240 characters", () => {
+    assert.equal(
+      getShipmentDescriptionLimitMessage([{ items: [{ description: "x".repeat(240) }] }]),
+      ""
+    );
+
+    const message = getShipmentDescriptionLimitMessage([
+      { items: [{ description: "x".repeat(120) }, { description: "y".repeat(120) }, { description: "z" }] }
+    ]);
+
+    assert.match(message, /current combined description is 245 characters/);
+    assert.match(message, /exceeds the limit by 5/);
   });
 
   test("never exceeds the contentsDescription column length", () => {

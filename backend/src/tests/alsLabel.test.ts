@@ -161,6 +161,60 @@ describe("ALS create_docket payload", () => {
     }
   });
 
+  test("sends the complete item list in shipment_content up to 240 characters", () => {
+    const firstDescription = "A".repeat(120);
+    const secondDescription = "B".repeat(118);
+    const draft = draftFixture() as unknown as {
+      parcelList: Array<{
+        items: Array<{
+          description: string;
+          hsnCode: string;
+          unitType: string;
+          quantity: number;
+          unitRate: number;
+        }>;
+      }>;
+    };
+    draft.parcelList[0]!.items = [
+      { description: firstDescription, hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 },
+      { description: secondDescription, hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 }
+    ];
+
+    const payload = buildAlsCreateDocketPayload({ draft: draft as never, ...payloadInput });
+
+    assert.equal(payload.shipment_content, `${firstDescription}, ${secondDescription}`);
+    assert.equal(payload.shipment_content.length, 240);
+    assert.deepEqual(
+      payload.free_form_line_items.map((item) => item.description),
+      [firstDescription, secondDescription]
+    );
+  });
+
+  test("refuses an ALS shipment description over 240 characters before sending", () => {
+    const firstDescription = "A".repeat(120);
+    const secondDescription = "B".repeat(119);
+    const draft = draftFixture() as unknown as {
+      parcelList: Array<{
+        items: Array<{
+          description: string;
+          hsnCode: string;
+          unitType: string;
+          quantity: number;
+          unitRate: number;
+        }>;
+      }>;
+    };
+    draft.parcelList[0]!.items = [
+      { description: firstDescription, hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 },
+      { description: secondDescription, hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 }
+    ];
+
+    assert.throws(
+      () => buildAlsCreateDocketPayload({ draft: draft as never, ...payloadInput }),
+      /exceeds the limit by 1/
+    );
+  });
+
   test("refuses to build without an exchange rate rather than declaring INR as GBP", () => {
     assert.throws(
       () => buildAlsCreateDocketPayload({ draft: draftFixture(), ...payloadInput, inrPerGbp: 0 }),

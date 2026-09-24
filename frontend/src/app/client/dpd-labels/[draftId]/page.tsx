@@ -50,6 +50,7 @@ import {
   createEmptyParcelItem,
   getHsnCodeError,
   getPositiveNumberError,
+  getShipmentDescriptionLimitMessage,
   isUntouchedParcelItem,
   mergeSavedParcelItemsWithLocalRows,
   normalizeParcelItems,
@@ -69,6 +70,7 @@ import {
   type ShipmentDraftPatch,
   ShipmentKycDocuments,
   ShipmentServiceType,
+  isDpdLabelDestination,
   shipmentContentTypeOptions,
   type ShipmentImportSummary
 } from "@/lib/dpdLabels";
@@ -433,13 +435,6 @@ export default function ClientDpdDraftReviewPage() {
   // locks while any of them runs- booking is irreversible, so a second click
   // anywhere must not land- but only the one that was clicked shows progress.
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
-  /**
-   * The DPD label failure currently being offered a way past.
-   *
-   * Set only when the server confirmed nothing was booked, which is what makes
-   * it safe to show a button that books without the carrier label.
-   */
-  const [dpdLabelError, setDpdLabelError] = useState("");
   const busy = pendingAction !== null;
   const [addressBusy, setAddressBusy] = useState(false);
   const [error, setError] = useState("");
@@ -449,6 +444,16 @@ export default function ClientDpdDraftReviewPage() {
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [manualAddressConfirmationRequired, setManualAddressConfirmationRequired] = useState(false);
   const [addressBookPicker, setAddressBookPicker] = useState<AddressBookEntryType | null>(null);
+  const manualAddressConfirmationRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!manualAddressConfirmationRequired) return;
+
+    manualAddressConfirmationRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  }, [manualAddressConfirmationRequired]);
 
   const applySavedAddress = useCallback((entry: AddressBookSelection, confirmReplacement: boolean) => {
     const targetHasValues = entry.type === "SENDER"
@@ -1064,11 +1069,12 @@ export default function ClientDpdDraftReviewPage() {
 
   const currentCountryCode = draft?.consigneeEnteredAddress?.countryCode || addressForm.countryCode || "";
   const isCurrentCountryPaused = isCountryPaused(currentCountryCode, bookingPauses);
+  const dpdLabelDestination = isDpdLabelDestination(addressForm.countryCode);
 
   async function handleCreateLabel(
     // Supplied when re-booking after the customer accepted a changed price.
     acceptedPricingHash = costEstimate?.pricingHash,
-    // Set by the fallback button only, after DPD has already refused once.
+    // Set by the explicit "without DPD label" action.
     skipDpdLabel = false
   ) {
     if (!draft) return;
@@ -1098,6 +1104,14 @@ export default function ClientDpdDraftReviewPage() {
       toast.error(issues[0]);
       return;
     }
+
+    const descriptionLimitMessage = getShipmentDescriptionLimitMessage(parcelForms);
+    if (descriptionLimitMessage) {
+      setError(descriptionLimitMessage);
+      toast.error(descriptionLimitMessage);
+      return;
+    }
+
     // The server refuses these outright; catching it here names the box and
     // avoids a round trip that would only fail.
     const overweight = (costEstimate?.pricing.parcels ?? [])
@@ -1129,9 +1143,6 @@ export default function ClientDpdDraftReviewPage() {
     }
 
     setPendingAction(skipDpdLabel ? "BOOKING_NO_DPD" : "BOOKING");
-    // A new attempt supersedes the previous failure, so the fallback hides
-    // until this one has also been refused.
-    setDpdLabelError("");
     setError("");
     setNotice("");
     setReviewIssues([]);
@@ -1167,13 +1178,12 @@ export default function ClientDpdDraftReviewPage() {
       }
 
       // Nothing was booked: no charge, no invoice, no tracking number consumed.
-      // Surfacing it here is what reveals the option to go ahead without the
-      // carrier label, which is safe precisely because nothing exists yet.
+      // The no-DPD option is always available for DPD destinations, so this
+      // error only reports the failed labelled-booking attempt.
       if (caughtError instanceof DpdLabelUnavailableError) {
         const detail = caughtError.carrierErrors.length
           ? `${caughtError.message} ${caughtError.carrierErrors.join(" ")}`
           : caughtError.message;
-        setDpdLabelError(detail);
         setError(detail);
         toast.error(detail);
         return;
@@ -1389,7 +1399,7 @@ export default function ClientDpdDraftReviewPage() {
                   ) : null}
 
                   {manualAddressConfirmationRequired ? (
-                    <div className="flex flex-wrap items-center justify-between gap-3 border border-amber-300 bg-amber-50 px-4 py-3">
+                    <div ref={manualAddressConfirmationRef} className="flex scroll-mt-8 flex-wrap items-center justify-between gap-3 border border-amber-300 bg-amber-50 px-4 py-3">
                       <div>
                         <p className="text-sm font-semibold text-amber-950">No automatic address match was found.</p>
                         <p className="mt-1 text-sm text-amber-800">Review the delivery address below before confirming it as entered.</p>
@@ -1560,10 +1570,8 @@ export default function ClientDpdDraftReviewPage() {
                   <FiTruck aria-hidden="true" className="h-4 w-4" />
                   {pendingAction === "BOOKING" ? "Processing..." : "Create Shipment"}
                 </button>
-                {/* Offered only after DPD has refused, because only then is it certain
-                    nothing was booked. Booking without the carrier label is a decision
-                    someone has to take deliberately. */}
-                {dpdLabelError ? (
+                {/* Available as an explicit alternative for destinations where DPD labels apply. */}
+                {dpdLabelDestination ? (
                   <button
                     type="button"
                     onClick={() => void handleCreateLabel(undefined, true)}

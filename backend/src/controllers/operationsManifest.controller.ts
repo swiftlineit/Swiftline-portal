@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Branch } from "../models/branch.model.js";
 import { OperationsManifest } from "../models/operationsManifest.model.js";
 import { buildOperationsManifestEdi } from "../services/edi/ediExport.service.js";
+import { buildOperationsManifestOpsEdi } from "../services/opsEdi/opsEdiExport.service.js";
 import {
   buildOperationsManifestExcel,
   buildOperationsManifestPdf,
@@ -335,3 +336,35 @@ export const exportExcel = (request: Request, response: Response) => download(re
 export const exportPdf = (request: Request, response: Response) => download(request, response, "pdf");
 export const exportEdi = (request: Request, response: Response) => download(request, response, "edi");
 export const exportUk = (request: Request, response: Response) => download(request, response, "uk");
+
+export async function exportOpsEdi(request: Request, response: Response) {
+  try {
+    const manifest = await OperationsManifest.findById(String(request.params.manifestId)).exec();
+    if (!manifest) throw new OperationsManifestServiceError("Operations manifest was not found.", 404);
+    if (!(manifest.status === "SEALED" || manifest.status === "DISPATCHED")) {
+      throw new OperationsManifestServiceError("Exports are available after the manifest is sealed.", 409);
+    }
+
+    const result = await buildOperationsManifestOpsEdi(manifest);
+    const warningList = result.warnings.length > 50
+      ? [
+          ...result.warnings.slice(0, 49),
+          { row: 0, column: "", message: `${result.warnings.length - 49} additional OPS EDI warnings were omitted from the download notice.` }
+        ]
+      : result.warnings;
+    let warningPayload = Buffer.from(JSON.stringify(warningList), "utf8").toString("base64");
+    if (warningPayload.length > 7800) {
+      const compactWarnings = warningList.length > 3
+        ? [...warningList.slice(0, 2), warningList[warningList.length - 1]]
+        : warningList;
+      warningPayload = Buffer.from(JSON.stringify(compactWarnings), "utf8").toString("base64");
+    }
+    response.setHeader("Content-Type", "application/vnd.ms-excel");
+    response.setHeader("Content-Disposition", `${request.query.view === "1" ? "inline" : "attachment"}; filename="ops-edi-${manifest.manifestNumber}.xls"`);
+    response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, X-OPS-EDI-Warnings");
+    if (result.warnings.length) response.setHeader("X-OPS-EDI-Warnings", warningPayload.slice(0, 7800));
+    return response.send(result.buffer);
+  } catch (error) {
+    return sendError(response, error);
+  }
+}

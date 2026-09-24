@@ -5,11 +5,9 @@
 // items live in `parcel.items`.
 //
 // `parcel.contentsDescription` is kept as the DERIVED single-line summary of those
-// items. Every downstream consumer- the customs EDI export, the operations
-// manifest, the DPD carrier payload, shipment labels and the existing GST invoice
-//- keeps reading `contentsDescription` exactly as before, so none of those
-// formats change. The per-item HSN codes are stored for the shipment (customs)
-// invoice that will be built on top of them later.
+// items for legacy payloads and documents that still expose one parcel-level
+// description. Item-aware exports and the ALS shipment payload read `items`
+// directly so they do not lose later item descriptions.
 
 // HS codes are declared at 4, 6, 8 or 10 digit precision. Ten digits appear on
 // the customs invoice for tariff lines that need the fuller classification.
@@ -23,6 +21,8 @@ export const defaultParcelItemUnitType: ParcelItemUnitType = "Pcs";
 // Must stay <= the `contentsDescription` maxlength in shipmentDraft.model.ts and
 // the length the DPD payload validator enforces.
 export const contentsDescriptionMaxLength = 120;
+/** Maximum combined goods-description length allowed when booking a shipment. */
+export const shipmentDescriptionMaxLength = 240;
 export const maxParcelsPerShipment = 100;
 export const maxParcelItems = 50;
 
@@ -88,6 +88,51 @@ export function composeContentsDescription(items: ParcelItemInput[]): string {
   // is hard-cut rather than dropped entirely.
   if (!parts.length) return (descriptions[0] ?? "").slice(0, contentsDescriptionMaxLength);
   return parts.join(", ");
+}
+
+type ShipmentDescriptionParcel = {
+  items?: ParcelItemInput[] | null;
+  contentsDescription?: unknown;
+};
+
+/**
+ * Builds the full goods-description text that the EDI row exporter produces.
+ * Descriptions from every item and parcel are separated with ", ". This is
+ * deliberately separate from composeContentsDescription, which protects the
+ * legacy 120-character per-parcel storage column.
+ */
+export function composeShipmentDescription(parcels: ShipmentDescriptionParcel[]): string {
+  const descriptions: string[] = [];
+
+  for (const parcel of parcels) {
+    const itemDescriptions = (parcel.items ?? [])
+      .map((item) => (typeof item.description === "string" ? item.description.trim() : ""))
+      .filter(Boolean);
+
+    if (itemDescriptions.length) {
+      descriptions.push(...itemDescriptions);
+      continue;
+    }
+
+    const legacyDescription = typeof parcel.contentsDescription === "string"
+      ? parcel.contentsDescription.trim()
+      : "";
+    if (legacyDescription) descriptions.push(legacyDescription);
+  }
+
+  return descriptions.join(", ");
+}
+
+export function getShipmentDescriptionCharacterCount(parcels: ShipmentDescriptionParcel[]): number {
+  return composeShipmentDescription(parcels).length;
+}
+
+/** Returns the final-booking validation message, or an empty string when valid. */
+export function getShipmentDescriptionLimitMessage(parcels: ShipmentDescriptionParcel[]): string {
+  const count = getShipmentDescriptionCharacterCount(parcels);
+  if (count <= shipmentDescriptionMaxLength) return "";
+
+  return `Item descriptions can be a maximum of ${shipmentDescriptionMaxLength} characters. The current combined description is ${count} characters, which exceeds the limit by ${count - shipmentDescriptionMaxLength}.`;
 }
 
 /**

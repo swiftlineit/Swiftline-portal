@@ -128,6 +128,15 @@ export default function OperationsManifestWorkspace() {
   }, [load, user]);
 
   useEffect(() => {
+    const onWarnings = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail) toast.warning(`OPS EDI downloaded with warnings. ${detail}`);
+    };
+    window.addEventListener("swiftline:ops-edi-warnings", onWarnings);
+    return () => window.removeEventListener("swiftline:ops-edi-warnings", onWarnings);
+  }, []);
+
+  useEffect(() => {
     if (!user) return;
     let active = true;
     void getActiveOperationsScanSession(manifestId)
@@ -282,7 +291,7 @@ export default function OperationsManifestWorkspace() {
     }
   }
 
-  async function exportFile(format: "xlsx" | "pdf" | "edi" | "uk", view = false) {
+  async function exportFile(format: "xlsx" | "pdf" | "edi" | "opsEdi" | "uk", view = false) {
     try {
       await downloadOperationsManifest(
         manifestId,
@@ -760,7 +769,7 @@ function ManifestHeader({
 }: {
   data: ManifestDetail;
   busy: boolean;
-  onExport: (format: "xlsx" | "pdf" | "edi" | "uk", view?: boolean) => void;
+  onExport: (format: "xlsx" | "pdf" | "edi" | "opsEdi" | "uk", view?: boolean) => void;
   onSeal: () => void;
   onDispatch: () => void;
   sealBlocked: boolean;
@@ -809,6 +818,11 @@ function ManifestHeader({
               onClick={() => onExport("edi")}
               icon={<FiDownload />}
               label="EDI"
+            />
+            <ActionButton
+              onClick={() => onExport("opsEdi")}
+              icon={<FiDownload />}
+              label="OPS EDI"
             />
             {manifest.header.destinationCountryCode === "GB" ? (
               <ActionButton

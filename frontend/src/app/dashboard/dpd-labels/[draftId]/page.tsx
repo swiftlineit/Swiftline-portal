@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ChangeEvent, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { FiArrowLeft, FiCheckCircle, FiChevronDown, FiExternalLink, FiMapPin, FiPackage, FiSave, FiSearch, FiTruck } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { exceedsStandardParcelSize, standardParcelDimensionsLabel } from "@/lib/shipmentPricing";
@@ -46,6 +46,7 @@ import {
   createEmptyParcelItem,
   getHsnCodeError,
   getPositiveNumberError,
+  getShipmentDescriptionLimitMessage,
   isUntouchedParcelItem,
   mergeSavedParcelItemsWithLocalRows,
   normalizeParcelItems,
@@ -472,6 +473,16 @@ export default function DpdLabelDraftPage() {
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [manualAddressConfirmationRequired, setManualAddressConfirmationRequired] = useState(false);
   const [bookingPauses, setBookingPauses] = useState<BookingPause[]>([]);
+  const manualAddressConfirmationRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!manualAddressConfirmationRequired) return;
+
+    manualAddressConfirmationRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  }, [manualAddressConfirmationRequired]);
 
   const correctionChanged = useMemo(() => {
     if (!draft) return false;
@@ -1119,6 +1130,13 @@ export default function DpdLabelDraftPage() {
       return;
     }
 
+    const descriptionLimitMessage = getShipmentDescriptionLimitMessage(parcelForms);
+    if (descriptionLimitMessage) {
+      setError(descriptionLimitMessage);
+      toast.error(descriptionLimitMessage);
+      return;
+    }
+
     // The server refuses these outright; catching it here names the box and
     // avoids a round trip that would only fail.
     const overweight = (costEstimate?.pricing.parcels ?? [])
@@ -1493,7 +1511,7 @@ export default function DpdLabelDraftPage() {
                 ) : null}
 
                 {manualAddressConfirmationRequired ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+                  <div ref={manualAddressConfirmationRef} className="flex scroll-mt-8 flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
                     <div>
                       <p className="text-sm font-semibold text-amber-950">No automatic address match was found.</p>
                       <p className="mt-1 text-sm text-amber-800">Review the delivery address below before confirming it as entered.</p>

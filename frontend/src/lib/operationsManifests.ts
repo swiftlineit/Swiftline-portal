@@ -389,10 +389,10 @@ export const setOperationsParcelDisposition = (
     },
   );
 
-// The EDI export lives at its own path; xlsx and pdf share the export.<format> route.
+// EDI and OPS EDI exports live at their own paths; xlsx and pdf share the export.<format> route.
 // `fileName` builds the download name from the manifest number.
 const manifestExportPaths: Record<
-  "xlsx" | "pdf" | "edi" | "uk",
+  "xlsx" | "pdf" | "edi" | "opsEdi" | "uk",
   { path: string; fileName: (manifestNumber: string) => string }
 > = {
   xlsx: {
@@ -404,6 +404,7 @@ const manifestExportPaths: Record<
     fileName: (number) => `ops-manifest-${number}.pdf`,
   },
   edi: { path: "export-edi.xlsx", fileName: (number) => `edi-${number}.xlsx` },
+  opsEdi: { path: "export-ops-edi.xls", fileName: (number) => `ops-edi-${number}.xls` },
   uk: {
     path: "export-uk.xlsx",
     fileName: (number) => `${number.toUpperCase()}UKmanifest.xlsx`,
@@ -412,7 +413,7 @@ const manifestExportPaths: Record<
 
 export async function downloadOperationsManifest(
   id: string,
-  format: "xlsx" | "pdf" | "edi" | "uk",
+  format: "xlsx" | "pdf" | "edi" | "opsEdi" | "uk",
   view = false,
   manifestNumber = "",
 ) {
@@ -427,6 +428,21 @@ export async function downloadOperationsManifest(
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     throw new Error(data.message || "Manifest export could not be opened.");
+  }
+  if (format === "opsEdi") {
+    const encodedWarnings = response.headers.get("X-OPS-EDI-Warnings");
+    if (encodedWarnings) {
+      try {
+        const warnings = JSON.parse(atob(encodedWarnings)) as Array<{ message?: string }>;
+        if (warnings.length) {
+          const visible = warnings.slice(0, 3).map((warning) => warning.message).filter(Boolean).join(" ");
+          const remaining = warnings.length > 3 ? ` ${warnings.length - 3} more warning${warnings.length - 3 === 1 ? "" : "s"}.` : "";
+          window.dispatchEvent(new CustomEvent("swiftline:ops-edi-warnings", { detail: `${visible}${remaining}` }));
+        }
+      } catch {
+        // A malformed optional warning header must never block the workbook download.
+      }
+    }
   }
   const url = URL.createObjectURL(await response.blob());
   if (view) window.open(url, "_blank", "noopener,noreferrer");
