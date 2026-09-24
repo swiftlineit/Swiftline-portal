@@ -18,6 +18,7 @@ import {
   allocateShipmentManifestNumber,
   buildHandoverManifestLine,
   formatManifestOrigin,
+  hydrateMissingManifestParcelChargeableWeights,
   manifestBusinessAccountName,
   serializeShipmentManifest,
   ShipmentManifestServiceError
@@ -107,6 +108,39 @@ async function assertClientAccess(userId: mongoose.Types.ObjectId, draft: IShipm
     requireEditPermission: requireCreate
   });
   if (!allowed) throw new ShipmentManifestServiceError("You do not have access to create this shipment manifest.", 403);
+}
+
+async function manifestForPdf(manifest: IShipmentManifest) {
+  const linesNeedingHydration = manifest.lineSnapshots.filter((line) => (
+    Array.isArray(line.parcels)
+    && line.parcels.length > 0
+    && line.parcels.some((parcel) => typeof parcel.chargeableWeightKg !== "number")
+  ));
+  if (!linesNeedingHydration.length) return manifest;
+
+  const shipmentIds = [...new Set(linesNeedingHydration
+    .map((line) => String(line.dpdShipmentId))
+    .filter((value) => mongoose.Types.ObjectId.isValid(value)))]
+    .map((value) => new mongoose.Types.ObjectId(value));
+  const draftIds = [...new Set(linesNeedingHydration
+    .map((line) => String(line.shipmentDraftId))
+    .filter((value) => mongoose.Types.ObjectId.isValid(value)))]
+    .map((value) => new mongoose.Types.ObjectId(value));
+  const conditions = [
+    ...(shipmentIds.length ? [{ _id: { $in: shipmentIds } }] : []),
+    ...(draftIds.length ? [{ shipmentDraftId: { $in: draftIds } }] : [])
+  ];
+  if (!conditions.length) return manifest;
+
+  const sources = await DpdShipment.find({ $or: conditions })
+    .select("_id shipmentDraftId currentShipmentSnapshot bookingSnapshot")
+    .lean()
+    .exec();
+  const lineSnapshots = hydrateMissingManifestParcelChargeableWeights(manifest.lineSnapshots, sources);
+  if (lineSnapshots === manifest.lineSnapshots) return manifest;
+
+  const plainManifest = typeof manifest.toObject === "function" ? manifest.toObject() : manifest;
+  return { ...plainManifest, lineSnapshots } as unknown as IShipmentManifest;
 }
 
 function serializeEligibleShipment(draft: IShipmentDraft, dpdShipment: IDpdShipment) {
@@ -372,7 +406,7 @@ async function downloadManifest(request: Request, response: Response, actorRole:
   const disposition = request.query.view === "1" ? "inline" : "attachment";
   response.setHeader("Content-Type", "application/pdf");
   response.setHeader("Content-Disposition", `${disposition}; filename="MANIFEST-${manifest.manifestNumber}.pdf"`);
-  return response.status(200).send(await buildShipmentManifestPdf(manifest));
+  return response.status(200).send(await buildShipmentManifestPdf(await manifestForPdf(manifest)));
 }
 
 export async function getAdminShipmentManifestContext(request: Request, response: Response) {
@@ -528,7 +562,7 @@ async function downloadManifestPdf(request: Request, response: Response, actorRo
     const disposition = request.query.view === "1" ? "inline" : "attachment";
     response.setHeader("Content-Type", "application/pdf");
     response.setHeader("Content-Disposition", `${disposition}; filename="MANIFEST-${manifest.manifestNumber}.pdf"`);
-    return response.status(200).send(await buildShipmentManifestPdf(manifest));
+    return response.status(200).send(await buildShipmentManifestPdf(await manifestForPdf(manifest)));
   } catch (error) {
     return sendManifestError(response, error);
   }

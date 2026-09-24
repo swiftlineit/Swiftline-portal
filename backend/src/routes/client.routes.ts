@@ -24,7 +24,9 @@ import {
   trackClientShipment,
   getClientShipmentInvoice,
   getClientShipmentDraft,
-  getClientShipmentDraftRateCardContext,
+  downloadClientShipmentInvoiceRevisedDocumentPdf,
+  getClientShipmentInvoiceRevisedDocument,
+  listClientShipmentInvoiceRevisedDocuments,  getClientShipmentDraftRateCardContext,
   getClientShipmentDraftCostEstimate,
   previewClientShipmentAmendment,
   createClientShipmentImportBatch,
@@ -261,6 +263,10 @@ clientRouter.post("/shipments/:id/amendments/preview", previewClientShipmentAmen
 clientRouter.post("/shipments/:id/amendments", createClientShipmentAmendment);
 clientRouter.get("/shipments/:draftId/invoice", getClientShipmentInvoice);
 clientRouter.get("/shipments/:draftId/invoice/pdf", downloadClientShipmentInvoicePdf);
+// Document-only revised copies of the GST invoice, read-only for clients.
+clientRouter.get("/shipments/:draftId/invoice/revised", listClientShipmentInvoiceRevisedDocuments);
+clientRouter.get("/shipments/:draftId/invoice/revised/:copyId", getClientShipmentInvoiceRevisedDocument);
+clientRouter.get("/shipments/:draftId/invoice/revised/:copyId/pdf", downloadClientShipmentInvoiceRevisedDocumentPdf);
 // Customs ("shipment") invoice: the goods declaration, separate from the GST invoice above.
 clientRouter.get("/shipments/:draftId/shipment-invoice", getClientCustomsInvoice);
 clientRouter.get("/shipments/:draftId/shipment-invoice/pdf", downloadClientCustomsInvoicePdf);

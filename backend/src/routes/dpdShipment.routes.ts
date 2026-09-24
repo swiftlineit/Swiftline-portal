@@ -21,6 +21,14 @@ import {
 import { attachUser, requireRole } from "../middleware/auth.middleware.js";
 import { downloadShipmentInvoicePdf, getShipmentInvoice } from "../controllers/shipmentInvoice.controller.js";
 import {
+  createShipmentInvoiceRevisedDocument,
+  deleteShipmentInvoiceRevisedDocument,
+  downloadShipmentInvoiceRevisedDocumentPdf,
+  getShipmentInvoiceRevisedDocument,
+  listShipmentInvoiceRevisedDocuments,
+  updateShipmentInvoiceRevisedDocument
+} from "../controllers/shipmentInvoiceRevisedDocument.controller.js";
+import {
   downloadCustomsInvoicePdf,
   downloadCustomsInvoiceWorkbook,
   getCustomsInvoice
@@ -55,6 +63,15 @@ dpdShipmentRouter.post("/bulk-status", requireOperations, bulkUpdateDpdShipmentO
 dpdShipmentRouter.post("/operations-scan", requireOperations, scanShipmentOperationsMilestone);
 dpdShipmentRouter.get("/drafts/:draftId/invoice", requireBilling, getShipmentInvoice);
 dpdShipmentRouter.get("/drafts/:draftId/invoice/pdf", requireBilling, downloadShipmentInvoicePdf);
+// Document-only revised copies of the GST invoice. Reads stay on the billing
+// guard; creating, editing and deleting need admin or operations. None of
+// these touch the real invoice or any money record.
+dpdShipmentRouter.get("/drafts/:draftId/invoice/revised", requireBilling, listShipmentInvoiceRevisedDocuments);
+dpdShipmentRouter.post("/drafts/:draftId/invoice/revised", requireOperations, createShipmentInvoiceRevisedDocument);
+dpdShipmentRouter.get("/drafts/:draftId/invoice/revised/:copyId", requireBilling, getShipmentInvoiceRevisedDocument);
+dpdShipmentRouter.patch("/drafts/:draftId/invoice/revised/:copyId", requireOperations, updateShipmentInvoiceRevisedDocument);
+dpdShipmentRouter.delete("/drafts/:draftId/invoice/revised/:copyId", requireOperations, deleteShipmentInvoiceRevisedDocument);
+dpdShipmentRouter.get("/drafts/:draftId/invoice/revised/:copyId/pdf", requireBilling, downloadShipmentInvoiceRevisedDocumentPdf);
 // Customs ("shipment") invoice: the goods declaration, separate from the GST invoice above.
 dpdShipmentRouter.get("/drafts/:draftId/shipment-invoice", getCustomsInvoice);
 dpdShipmentRouter.get("/drafts/:draftId/shipment-invoice/pdf", downloadCustomsInvoicePdf);

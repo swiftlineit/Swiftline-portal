@@ -8,6 +8,7 @@ import {
   buildManifestLine,
   buildShipmentManifestWorkbook,
   formatManifestOrigin,
+  hydrateMissingManifestParcelChargeableWeights,
   manifestBusinessAccountName,
   type ManifestPartySnapshot
 } from "../services/shipmentManifest.service.js";
@@ -372,6 +373,36 @@ describe("handover manifest", () => {
     const rows = manifestRows([line]);
     assert.deepEqual(rows.map((row) => row[9]), ["4.50", "5.50"]);
     assert.deepEqual(rows.map((row) => row[10]), ["6.00", "7.00"]);
+  });
+
+  it("restores missing parcel chargeable weights for legacy PDF downloads", () => {
+    const snapshot = bookingSnapshot();
+    snapshot.parcels[0]!.actualWeightKg = 10.2;
+    snapshot.parcels[1]!.actualWeightKg = 11.5;
+    snapshot.pricing = {
+      parcels: [
+        { sequence: 1, chargeableWeightKg: 11 },
+        { sequence: 2, chargeableWeightKg: 12 }
+      ]
+    } as unknown as ShipmentBookingSnapshot["pricing"];
+    const line = buildHandoverManifestLine({
+      shipmentDraftId: new mongoose.Types.ObjectId(),
+      dpdShipmentId: new mongoose.Types.ObjectId(),
+      snapshot,
+      declaredValueMinor: 0,
+      bagNumber: "1"
+    });
+    line.parcels?.forEach((parcel) => { delete parcel.chargeableWeightKg; });
+
+    const [hydratedLine] = hydrateMissingManifestParcelChargeableWeights(
+      [line],
+      [{ _id: line.dpdShipmentId, currentShipmentSnapshot: snapshot }]
+    );
+
+    assert.deepEqual(hydratedLine?.parcels?.map((parcel) => parcel.chargeableWeightKg), [11, 12]);
+    assert.deepEqual(manifestRows([hydratedLine!]).map((row) => row[10]), ["11.00", "12.00"]);
+    // The historical line is only hydrated for rendering; it is not mutated.
+    assert.deepEqual(line.parcels?.map((parcel) => parcel.chargeableWeightKg), [undefined, undefined]);
   });
 
   it("keeps a legacy line without per-parcel data as a single summary row", () => {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { FiDownload, FiEdit2, FiEye, FiFileText } from "react-icons/fi";
+import { FiDownload, FiEye, FiFileText } from "react-icons/fi";
 import {
   downloadShipmentInvoicePdf,
   getShipmentInvoice,
@@ -96,18 +96,28 @@ export default function ShipmentInvoiceHistory({
     setEditorOpen(true);
   }
 
-  // Saves to browser storage only: the real invoice and the database are
-  // never written. The editor hands back the edited document to store.
-  function handleEditorSave(edited: ShipmentInvoice, copyId?: string) {
+  // Saves the edited document into its own server collection. The real
+  // invoice and every money record are never written.
+  const [savingCopy, setSavingCopy] = useState(false);
+
+  async function handleEditorSave(edited: ShipmentInvoice, copyId: string | undefined, changeReason: string) {
     if (!invoice) return;
-    saveRevisedCopy({
-      shipmentDraftId: draftId,
-      invoice: edited,
-      basedOnRevision: copyId ? (editingCopy?.basedOnRevision ?? invoice.revision) : invoice.revision,
-      copyId,
-    });
-    setEditorOpen(false);
-    setEditingCopy(null);
+    setSavingCopy(true);
+    setError("");
+    try {
+      await saveRevisedCopy({
+        shipmentDraftId: draftId,
+        audience,
+        invoice: edited,
+        basedOnRevision: copyId ? (editingCopy?.basedOnRevision ?? invoice.revision) : invoice.revision,
+        changeReason,
+        copyId,
+      });
+      setEditorOpen(false);
+      setEditingCopy(null);
+    } finally {
+      setSavingCopy(false);
+    }
   }
 
   return (
@@ -176,17 +186,6 @@ export default function ShipmentInvoiceHistory({
                       >
                         <FiDownload aria-hidden="true" />
                       </button>
-                      {canEdit && version.isLatest ? (
-                        <button
-                          type="button"
-                          onClick={() => openEditor(null)}
-                          title="Edit as a revised copy (document only, real invoice unchanged)"
-                          className="inline-flex h-9 items-center gap-2 rounded-4xl border border-blue-900 px-3 font-semibold text-blue-900 hover:bg-blue-50"
-                        >
-                          <FiEdit2 aria-hidden="true" />
-                          Edit
-                        </button>
-                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -204,6 +203,7 @@ export default function ShipmentInvoiceHistory({
           <ShipmentInvoiceRevisedCopyEditor
             initial={editingCopy ? editingCopy.invoice : invoice}
             copyId={editingCopy?.id}
+            saving={savingCopy}
             onSave={handleEditorSave}
             onCancel={() => {
               setEditorOpen(false);

@@ -2,13 +2,15 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { FiEdit2, FiEye, FiPrinter, FiTrash2 } from "react-icons/fi";
+import { FiDownload, FiEdit2, FiEye, FiPrinter, FiTrash2 } from "react-icons/fi";
 import {
   deleteRevisedCopy,
+  downloadRevisedCopyPdf,
   listRevisedCopies,
   revisedCopyPageUrl,
   type ShipmentInvoiceRevisedCopy,
 } from "@/lib/shipmentInvoiceRevisedCopies";
+import type { ShipmentInvoiceAudience } from "@/lib/shipmentInvoices";
 
 function date(value: string) {
   return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
@@ -23,8 +25,9 @@ function money(minor: number, currency: string) {
 /**
  * Document-only revised copies of the tax invoice.
  *
- * These live in the browser only and never change the real invoice or the
- * database. Each row opens the edited document with a "Revised copy" banner.
+ * These are stored permanently on the server in their own collection and never
+ * change the real invoice or the database records behind it, so staff can
+ * revisit them from any device and clients can read them too.
  */
 export default function ShipmentInvoiceRevisedCopiesSection({
   draftId,
@@ -33,33 +36,80 @@ export default function ShipmentInvoiceRevisedCopiesSection({
   onEdit,
 }: {
   draftId: string;
-  audience: "admin" | "client";
+  audience: ShipmentInvoiceAudience;
   canEdit: boolean;
   onEdit: (copy: ShipmentInvoiceRevisedCopy | null) => void;
 }) {
-  const [tick, setTick] = useState(0);
-  // Re-read on every render; `tick` re-renders after any save/delete event.
-  void tick;
-  const copies = listRevisedCopies(draftId);
+  const [copies, setCopies] = useState<ShipmentInvoiceRevisedCopy[] | null>(null);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
 
-  const refresh = useCallback(() => {
-    setTick((value) => value + 1);
-  }, []);
+  const refresh = useCallback(async () => {
+    setError("");
+    try {
+      setCopies(await listRevisedCopies(draftId, audience));
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to load revised copies.");
+      setCopies([]);
+    }
+  }, [audience, draftId]);
 
   useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      try {
+        const result = await listRevisedCopies(draftId, audience);
+        if (mounted) setCopies(result);
+      } catch (caughtError) {
+        if (mounted) {
+          setError(caughtError instanceof Error ? caughtError.message : "Unable to load revised copies.");
+          setCopies([]);
+        }
+      }
+    }
+
+    void load();
     const handler = (event: Event) => {
       const detail = (event as CustomEvent).detail as { shipmentDraftId?: string } | undefined;
-      if (!detail || detail.shipmentDraftId === draftId) refresh();
+      if (!detail || detail.shipmentDraftId === draftId) void refresh();
     };
     window.addEventListener("swiftline:revised-copies-changed", handler);
-    window.addEventListener("storage", refresh);
     return () => {
+      mounted = false;
       window.removeEventListener("swiftline:revised-copies-changed", handler);
-      window.removeEventListener("storage", refresh);
     };
-  }, [draftId, refresh]);
+  }, [audience, draftId, refresh]);
 
-  if (!copies.length && !canEdit) return null;
+  async function handleDownload(copy: ShipmentInvoiceRevisedCopy) {
+    setBusyId(copy.id);
+    setError("");
+    try {
+      await downloadRevisedCopyPdf(draftId, audience, copy.id, copy.invoiceNumber);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to download the revised copy.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(copy: ShipmentInvoiceRevisedCopy) {
+    if (!window.confirm("Delete this revised copy? The real invoice is not affected.")) return;
+    setBusyId(copy.id);
+    setError("");
+    try {
+      await deleteRevisedCopy(draftId, audience, copy.id);
+      await refresh();
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to delete the revised copy.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Staff without copies yet still need the single entry point; everyone else
+  // sees nothing until a copy exists.
+  if (copies !== null && !copies.length && !canEdit) return null;
 
   return (
     <div className="border-t border-slate-200">
@@ -82,7 +132,13 @@ export default function ShipmentInvoiceRevisedCopiesSection({
         ) : null}
       </div>
 
-      {copies.length ? (
+      {error ? (
+        <p className="mx-5 mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">{error}</p>
+      ) : null}
+
+      {copies === null ? (
+        <p className="px-5 pb-5 text-sm font-medium text-slate-500">Loading revised copies...</p>
+      ) : copies.length ? (
         <ul className="divide-y divide-slate-100">
           {copies.map((copy, index) => (
             <li key={copy.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
@@ -94,7 +150,7 @@ export default function ShipmentInvoiceRevisedCopiesSection({
                   </span>
                 </p>
                 <p className="mt-1 text-xs font-medium text-slate-500">
-                  Based on Invoice {copy.invoice.revision} · {money(copy.invoice.totalAmountMinor, copy.invoice.currency)} · Updated {date(copy.updatedAt)}
+                  Based on Invoice {copy.basedOnRevision} · {money(copy.invoice.totalAmountMinor, copy.invoice.currency)} · Updated {date(copy.updatedAt)}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -113,6 +169,15 @@ export default function ShipmentInvoiceRevisedCopiesSection({
                 >
                   <FiPrinter aria-hidden="true" />
                 </button>
+                <button
+                  type="button"
+                  title={`Download Revised copy ${copies.length - index} PDF`}
+                  onClick={() => void handleDownload(copy)}
+                  disabled={busyId !== null}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded border border-slate-300 text-slate-700 hover:border-blue-900 hover:text-blue-900 disabled:cursor-not-allowed disabled:text-slate-300"
+                >
+                  <FiDownload aria-hidden="true" />
+                </button>
                 {canEdit ? (
                   <>
                     <button
@@ -126,12 +191,9 @@ export default function ShipmentInvoiceRevisedCopiesSection({
                     <button
                       type="button"
                       title="Delete this revised copy"
-                      onClick={() => {
-                        if (!window.confirm("Delete this revised copy? The real invoice is not affected.")) return;
-                        deleteRevisedCopy(draftId, copy.id);
-                        refresh();
-                      }}
-                      className="inline-flex h-9 w-9 items-center justify-center rounded border border-slate-300 text-slate-700 hover:border-red-500 hover:text-red-700"
+                      onClick={() => void handleDelete(copy)}
+                      disabled={busyId !== null}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded border border-slate-300 text-slate-700 hover:border-red-500 hover:text-red-700 disabled:cursor-not-allowed disabled:text-slate-300"
                     >
                       <FiTrash2 aria-hidden="true" />
                     </button>
@@ -141,9 +203,9 @@ export default function ShipmentInvoiceRevisedCopiesSection({
             </li>
           ))}
         </ul>
-      ) : (
+      ) : canEdit ? (
         <p className="px-5 pb-5 text-sm font-medium text-slate-500">No revised copies yet. Use “New revised copy” to create an edited document.</p>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -52,6 +52,11 @@ export type AuditAction =
   | "SHIPMENT_AMENDMENT_APPLIED"
   | "SHIPMENT_INVOICE_GENERATED"
   | "SHIPMENT_INVOICE_DOWNLOADED"
+  // Document-only edited copies of the tax invoice. They live in their own
+  // collection and never alter the real invoice, so they audit separately.
+  | "SHIPMENT_INVOICE_REVISED_SAVED"
+  | "SHIPMENT_INVOICE_REVISED_DELETED"
+  | "SHIPMENT_INVOICE_REVISED_DOWNLOADED"
   // Customs ("shipment") invoice: the goods declaration, PDF or Excel.
   | "CUSTOMS_INVOICE_DOWNLOADED"
   | "SHIPMENT_CHARGE_VERIFIED"

@@ -59,6 +59,11 @@ import {
 } from "./shipmentKyc.controller.js";
 import { serializeKycDocuments } from "./shipmentKyc.controller.js";
 import { downloadShipmentInvoicePdf, getShipmentInvoice } from "./shipmentInvoice.controller.js";
+import {
+  downloadShipmentInvoiceRevisedDocumentPdf,
+  getShipmentInvoiceRevisedDocument,
+  listShipmentInvoiceRevisedDocuments
+} from "./shipmentInvoiceRevisedDocument.controller.js";
 import { buildStoredLabelAccess } from "./dpdShipment.controller.js";
 import {
   DpdLabelUnavailableError,
@@ -1326,6 +1331,36 @@ export async function downloadClientShipmentInvoicePdf(request: Request, respons
     return response.status(404).json({ success: false, message: "Shipment invoice not found" });
   }
   return downloadShipmentInvoicePdf(request, response);
+}
+
+// Document-only revised copies. Each wrapper re-checks that the caller's
+// account owns the shipment before delegating to the shared handler. Clients
+// can only read; creating, editing and deleting stay on the staff routes.
+export async function listClientShipmentInvoiceRevisedDocuments(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  const draftId = typeof request.params.draftId === "string" ? request.params.draftId : "";
+  if (!userId || !await clientCanAccessDraft(userId, draftId)) {
+    return response.status(404).json({ success: false, message: "Shipment invoice not found" });
+  }
+  return listShipmentInvoiceRevisedDocuments(request, response);
+}
+
+export async function getClientShipmentInvoiceRevisedDocument(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  const draftId = typeof request.params.draftId === "string" ? request.params.draftId : "";
+  if (!userId || !await clientCanAccessDraft(userId, draftId)) {
+    return response.status(404).json({ success: false, message: "Shipment invoice not found" });
+  }
+  return getShipmentInvoiceRevisedDocument(request, response);
+}
+
+export async function downloadClientShipmentInvoiceRevisedDocumentPdf(request: Request, response: Response): Promise<Response | void> {
+  const userId = getAuthenticatedUserId(request);
+  const draftId = typeof request.params.draftId === "string" ? request.params.draftId : "";
+  if (!userId || !await clientCanAccessDraft(userId, draftId)) {
+    return response.status(404).json({ success: false, message: "Shipment invoice not found" });
+  }
+  return downloadShipmentInvoiceRevisedDocumentPdf(request, response);
 }
 
 // Customs ("shipment") invoice. Each wrapper re-checks that the caller's account

@@ -1,12 +1,15 @@
-import type { ShipmentInvoice } from "@/lib/shipmentInvoices";
+import { apiUrl } from "@/lib/api";
+import { getAccessToken, refreshAccessToken } from "@/lib/auth";
+import type { ShipmentInvoice, ShipmentInvoiceAudience } from "@/lib/shipmentInvoices";
 
 /**
- * Document-only revised copy of a tax invoice.
+ * Document-only revised copy of a tax invoice, stored permanently on the
+ * server in its own collection.
  *
- * This never touches the backend or the database. It is a local edited
- * document cloned from the real invoice, kept in the browser so Operations /
- * Admin can re-issue a corrected-looking paper without mutating the legal
- * invoice stored on the server.
+ * Reading or writing one of these never touches the real `ShipmentInvoice`:
+ * the legal invoice, its number, its revisions and every money record stay
+ * exactly as they were. Because the copy lives server-side, staff can revisit
+ * it from any device and clients can see it in their own invoice section.
  */
 export type ShipmentInvoiceRevisedCopy = {
   id: string;
@@ -21,25 +24,53 @@ export type ShipmentInvoiceRevisedCopy = {
   invoice: ShipmentInvoice;
 };
 
-function storageKey(shipmentDraftId: string) {
-  return `swiftline:invoice-revised-copies:${shipmentDraftId}`;
+type StoredCopy = {
+  id: string;
+  shipmentDraftId: string;
+  invoiceNumber: string;
+  basedOnRevision: number;
+  createdAt: string;
+  updatedAt: string;
+  document: ShipmentInvoice;
+};
+
+function basePath(draftId: string, audience: ShipmentInvoiceAudience) {
+  return audience === "client"
+    ? `/api/v1/client/shipments/${draftId}/invoice/revised`
+    : `/api/v1/dpd-shipments/drafts/${draftId}/invoice/revised`;
 }
 
-function readAll(shipmentDraftId: string): ShipmentInvoiceRevisedCopy[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(storageKey(shipmentDraftId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as ShipmentInvoiceRevisedCopy[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+async function fetchWithAuth(input: string, init: RequestInit = {}) {
+  const token = getAccessToken() ?? await refreshAccessToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(input, { ...init, headers });
+  if (response.status !== 401) return response;
+
+  const refreshed = await refreshAccessToken();
+  if (!refreshed) return response;
+  headers.set("Authorization", `Bearer ${refreshed}`);
+  return fetch(input, { ...init, headers });
 }
 
-function writeAll(shipmentDraftId: string, copies: ShipmentInvoiceRevisedCopy[]) {
-  window.localStorage.setItem(storageKey(shipmentDraftId), JSON.stringify(copies));
-  // Notify other mounted components on the same page (history + invoice page).
+async function readJson(response: Response) {
+  return response.json().catch(() => ({})) as Promise<Record<string, unknown>>;
+}
+
+function toCopy(stored: StoredCopy): ShipmentInvoiceRevisedCopy {
+  return {
+    id: stored.id,
+    shipmentDraftId: stored.shipmentDraftId,
+    invoiceNumber: stored.invoiceNumber,
+    basedOnRevision: stored.basedOnRevision,
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt,
+    invoice: stored.document,
+  };
+}
+
+export function notifyRevisedCopiesChanged(shipmentDraftId: string) {
+  if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent("swiftline:revised-copies-changed", { detail: { shipmentDraftId } }));
 }
 
@@ -47,59 +78,100 @@ export function cloneInvoice(invoice: ShipmentInvoice): ShipmentInvoice {
   return JSON.parse(JSON.stringify(invoice)) as ShipmentInvoice;
 }
 
-function newId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
-  return `rev-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+export async function listRevisedCopies(
+  shipmentDraftId: string,
+  audience: ShipmentInvoiceAudience,
+): Promise<ShipmentInvoiceRevisedCopy[]> {
+  const response = await fetchWithAuth(apiUrl(basePath(shipmentDraftId, audience)));
+  const data = await readJson(response);
+  if (!response.ok || !data.success) throw new Error(typeof data.message === "string" ? data.message : "Unable to load revised copies.");
+  const copies = Array.isArray(data.copies) ? (data.copies as StoredCopy[]) : [];
+  return copies.map(toCopy);
 }
 
-export function listRevisedCopies(shipmentDraftId: string): ShipmentInvoiceRevisedCopy[] {
-  return [...readAll(shipmentDraftId)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+export async function getRevisedCopy(
+  shipmentDraftId: string,
+  audience: ShipmentInvoiceAudience,
+  copyId: string,
+): Promise<ShipmentInvoiceRevisedCopy> {
+  const response = await fetchWithAuth(apiUrl(`${basePath(shipmentDraftId, audience)}/${encodeURIComponent(copyId)}`));
+  const data = await readJson(response);
+  if (!response.ok || !data.success || !data.copy) {
+    throw new Error(typeof data.message === "string" ? data.message : "Revised copy not found.");
+  }
+  return toCopy(data.copy as StoredCopy);
 }
 
-export function getRevisedCopy(shipmentDraftId: string, copyId: string) {
-  return readAll(shipmentDraftId).find((copy) => copy.id === copyId) ?? null;
-}
-
-export function saveRevisedCopy(input: {
+export async function saveRevisedCopy(input: {
   shipmentDraftId: string;
+  audience: ShipmentInvoiceAudience;
   invoice: ShipmentInvoice;
   basedOnRevision: number;
+  changeReason: string;
   copyId?: string;
-}): ShipmentInvoiceRevisedCopy {
-  const copies = readAll(input.shipmentDraftId);
-  const now = new Date().toISOString();
-  if (input.copyId) {
-    const existing = copies.find((copy) => copy.id === input.copyId);
-    if (existing) {
-      existing.invoice = cloneInvoice(input.invoice);
-      existing.updatedAt = now;
-      existing.basedOnRevision = input.basedOnRevision;
-      writeAll(input.shipmentDraftId, copies);
-      return existing;
-    }
+}): Promise<ShipmentInvoiceRevisedCopy> {
+  const path = input.copyId
+    ? `${basePath(input.shipmentDraftId, input.audience)}/${encodeURIComponent(input.copyId)}`
+    : basePath(input.shipmentDraftId, input.audience);
+  const response = await fetchWithAuth(apiUrl(path), {
+    method: input.copyId ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      document: input.invoice,
+      basedOnRevision: input.basedOnRevision,
+      changeReason: input.changeReason,
+    }),
+  });
+  const data = await readJson(response);
+  if (!response.ok || !data.success || !data.copy) {
+    throw new Error(typeof data.message === "string" ? data.message : "Unable to save the revised copy.");
   }
-  const created: ShipmentInvoiceRevisedCopy = {
-    id: newId(),
-    shipmentDraftId: input.shipmentDraftId,
-    invoiceNumber: input.invoice.invoiceNumber,
-    basedOnRevision: input.basedOnRevision,
-    createdAt: now,
-    updatedAt: now,
-    invoice: cloneInvoice(input.invoice),
-  };
-  writeAll(input.shipmentDraftId, [...copies, created]);
-  return created;
+  notifyRevisedCopiesChanged(input.shipmentDraftId);
+  return toCopy(data.copy as StoredCopy);
 }
 
-export function deleteRevisedCopy(shipmentDraftId: string, copyId: string) {
-  writeAll(
-    shipmentDraftId,
-    readAll(shipmentDraftId).filter((copy) => copy.id !== copyId),
+export async function deleteRevisedCopy(
+  shipmentDraftId: string,
+  audience: ShipmentInvoiceAudience,
+  copyId: string,
+): Promise<void> {
+  const response = await fetchWithAuth(
+    apiUrl(`${basePath(shipmentDraftId, audience)}/${encodeURIComponent(copyId)}`),
+    { method: "DELETE" },
   );
+  const data = await readJson(response);
+  if (!response.ok || !data.success) {
+    throw new Error(typeof data.message === "string" ? data.message : "Unable to delete the revised copy.");
+  }
+  notifyRevisedCopiesChanged(shipmentDraftId);
+}
+
+export async function downloadRevisedCopyPdf(
+  shipmentDraftId: string,
+  audience: ShipmentInvoiceAudience,
+  copyId: string,
+  invoiceNumber: string,
+): Promise<void> {
+  const response = await fetchWithAuth(
+    apiUrl(`${basePath(shipmentDraftId, audience)}/${encodeURIComponent(copyId)}/pdf`),
+  );
+  if (!response.ok) {
+    const data = await readJson(response);
+    throw new Error(typeof data.message === "string" ? data.message : "Unable to download the revised copy PDF.");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${invoiceNumber.replaceAll("/", "-")}-Revised.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 /** Page URL for viewing a revised copy as a document. */
-export function revisedCopyPageUrl(draftId: string, audience: "admin" | "client", copyId: string) {
+export function revisedCopyPageUrl(draftId: string, audience: ShipmentInvoiceAudience, copyId: string) {
   const base = audience === "client"
     ? `/client/shipments/${draftId}/invoice`
     : `/dashboard/shipments/${draftId}/invoice`;

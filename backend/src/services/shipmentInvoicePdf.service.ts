@@ -7,6 +7,14 @@ import { getShipmentLevelInvoiceLines } from "./shipmentPricing.service.js";
 
 type ShipmentInvoiceDocument = ReturnType<typeof serializeShipmentInvoice>;
 
+export type ShipmentInvoicePdfOptions = {
+  /**
+   * A document-only corrected copy. It must never render as an unqualified
+   * tax invoice, even when it is downloaded outside the portal.
+   */
+  revisedCopy?: boolean;
+};
+
 // The built-in Helvetica face is WinAnsi encoded and has no rupee glyph, so a
 // symbol-style format renders as a stray superscript. The currency code is
 // printed instead, matching the credit billing statement PDF.
@@ -144,7 +152,7 @@ function drawTaxRow(doc: PDFKit.PDFDocument, label: string, amountMinor: number 
   doc.text(amountMinor === null ? "-" : money(amountMinor, currency), 459, y, { width: 86, align: "right" });
 }
 
-export function createShipmentInvoicePdf(invoice: ShipmentInvoiceDocument) {
+export function createShipmentInvoicePdf(invoice: ShipmentInvoiceDocument, options: ShipmentInvoicePdfOptions = {}) {
   const doc = new PDFDocument({ size: "A4", margin: 42, bufferPages: true });
   const supplier = invoice.supplier as Record<string, unknown>;
   const customer = invoice.customer as Record<string, unknown>;
@@ -157,10 +165,12 @@ export function createShipmentInvoicePdf(invoice: ShipmentInvoiceDocument) {
   if (fs.existsSync(logoPath)) doc.image(logoPath, 42, 25, { fit: [185, 100] });
   else doc.font("Helvetica-Bold").fontSize(22).fillColor("#0f2f5f").text("SWIFTLINE", 42, 48);
   const noGst = invoice.taxTreatment === "NO_GST" || invoice.gstRatePercent === 0;
-  const invoiceTitle = noGst
-    ? (invoice.status === "ISSUED" ? "INVOICE" : "DRAFT INVOICE")
-    : (invoice.status === "ISSUED" ? "TAX INVOICE" : "DRAFT TAX INVOICE");
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#0f172a").text(invoiceTitle, 310, 40, { width: 239, align: "right" });
+  const invoiceTitle = options.revisedCopy
+    ? "REVISED DOCUMENT"
+    : noGst
+      ? (invoice.status === "ISSUED" ? "INVOICE" : "DRAFT INVOICE")
+      : (invoice.status === "ISSUED" ? "TAX INVOICE" : "DRAFT TAX INVOICE");
+  doc.font("Helvetica-Bold").fontSize(options.revisedCopy ? 10 : 18).fillColor(options.revisedCopy ? "#92400e" : "#0f172a").text(invoiceTitle, 310, 40, { width: 239, align: "right" });
   doc.font("Helvetica-Bold").fontSize(8).text(`Invoice No: ${invoice.invoiceNumber}`, 310, 72, { width: 239, align: "right" });
   doc.font("Helvetica").text(`Date: ${date(invoice.issuedAt)}`, 310, 87, { width: 239, align: "right" });
   doc.text(`AWB / Tracking No.: ${textValue(shipment, "shipmentReference")}`, 310, 102, { width: 239, align: "right" });

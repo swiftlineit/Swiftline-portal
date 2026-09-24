@@ -44,6 +44,7 @@
     "audit:flight-linehaul-indexes": "tsx src/scripts/migrateFlightLinehaulIndexes.ts",
     "migrate:flight-linehaul-indexes": "tsx src/scripts/migrateFlightLinehaulIndexes.ts --apply",
     "migrate:carrier-tracking-indexes": "tsx src/scripts/migrateCarrierTrackingIndexes.ts",
+    "migrate:shipment-invoice-revised-document-indexes": "tsx src/scripts/migrateShipmentInvoiceRevisedDocumentIndexes.ts",
     "migrate:shipment-operations-scan-indexes": "tsx src/scripts/migrateShipmentOperationsScanIndexes.ts --apply",
     "credit:migration:dry-run": "tsx src/scripts/creditMigrationDryRun.ts",
     "job:credit:close-billing": "tsx src/scripts/closeBillingCycles.ts",

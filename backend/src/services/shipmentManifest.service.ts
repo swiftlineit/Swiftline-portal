@@ -2,7 +2,10 @@ import mongoose from "mongoose";
 import ExcelJS from "exceljs";
 import { ShipmentManifestCounter } from "../models/shipmentManifestCounter.model.js";
 import type { IShipmentManifest, ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
-import type { ShipmentBookingSnapshot } from "./shipmentBookingSnapshot.service.js";
+import {
+  readShipmentBookingSnapshot,
+  type ShipmentBookingSnapshot
+} from "./shipmentBookingSnapshot.service.js";
 
 export class ShipmentManifestServiceError extends Error {
   constructor(message: string, public readonly statusCode = 400) {
@@ -271,6 +274,70 @@ export function manifestParcelChargeableWeightKg(
     ?? priced[index]?.chargeableWeightKg;
   const value = Number(raw);
   return Number.isFinite(value) && value >= 0 ? Number(value.toFixed(3)) : fallbackKg;
+}
+
+export type ShipmentManifestChargeableSource = {
+  _id?: unknown;
+  shipmentDraftId?: unknown;
+  currentShipmentSnapshot?: unknown;
+  bookingSnapshot?: unknown;
+};
+
+function hasChargeableWeight(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/**
+ * Supplies parcel chargeable weights for manifests sealed before those values
+ * were copied into the manifest snapshot. The returned lines are new objects;
+ * this never mutates or persists the historical manifest.
+ */
+export function hydrateMissingManifestParcelChargeableWeights(
+  lines: ShipmentManifestLineSnapshot[],
+  sources: ShipmentManifestChargeableSource[]
+) {
+  const sourceById = new Map<string, ShipmentManifestChargeableSource>();
+  const sourceByDraftId = new Map<string, ShipmentManifestChargeableSource>();
+  sources.forEach((source) => {
+    if (source._id) sourceById.set(String(source._id), source);
+    if (source.shipmentDraftId) sourceByDraftId.set(String(source.shipmentDraftId), source);
+  });
+
+  return lines.map((line) => {
+    const parcels = Array.isArray(line.parcels) ? line.parcels : [];
+    if (!parcels.length || parcels.every((parcel) => hasChargeableWeight(parcel.chargeableWeightKg))) {
+      return line;
+    }
+
+    const source = sourceById.get(String(line.dpdShipmentId))
+      ?? sourceByDraftId.get(String(line.shipmentDraftId));
+    const snapshot = source
+      ? readShipmentBookingSnapshot(source.currentShipmentSnapshot)
+        ?? readShipmentBookingSnapshot(source.bookingSnapshot)
+      : null;
+    if (!snapshot) return line;
+
+    const indexByAwb = new Map(
+      snapshot.parcels.map((parcel, index) => [String(parcel.swiftlineParcelNumber), index])
+    );
+    const hydratedParcels = parcels.map((parcel, index) => {
+      if (hasChargeableWeight(parcel.chargeableWeightKg)) return parcel;
+
+      const matchedIndex = indexByAwb.get(String(parcel.awbNumber)) ?? index;
+      const matched = snapshot.parcels[matchedIndex];
+      return {
+        ...parcel,
+        chargeableWeightKg: manifestParcelChargeableWeightKg(
+          snapshot,
+          matched?.sequence,
+          matchedIndex,
+          parcel.weightKg
+        )
+      };
+    });
+
+    return { ...line, parcels: hydratedParcels };
+  });
 }
 
 export function buildManifestLine(input: ManifestLineInput): ShipmentManifestLineSnapshot {
