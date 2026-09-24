@@ -94,6 +94,15 @@ function formatStatus(value?: string | null) {
   return value ? value.replace(/_/g, " ") : "Not set";
 }
 
+function clientDpdLabelFailureMessage(error: Pick<DpdLabelUnavailableError, "message" | "carrierErrors">) {
+  const providerMessage = [error.message, ...error.carrierErrors].join(" ");
+  const isCarrierBalanceFailure = /(?:credit\s+limit.*(?:reach|exceed|insufficient|not\s+enough|low)|(?:insufficient|not\s+enough|low|no).*(?:credit|balance|funds)|(?:credit|balance|funds).*(?:insufficient|not\s+enough|low|unavailable))/i.test(providerMessage);
+
+  return isCarrierBalanceFailure
+    ? "The DPD label could not be created because the carrier account has insufficient balance. This is a carrier-side issue, not your Swiftline credit limit. You can still create the shipment without a DPD label."
+    : error.message;
+}
+
 type ClientBranchSnapshot = {
   _id?: unknown;
   name?: string;
@@ -1470,7 +1479,7 @@ export async function createClientShipment(
       return response.status(error.statusCode).json({
         success: false,
         code: error.code,
-        message: error.message
+        message: clientDpdLabelFailureMessage(error)
       });
     }
 
