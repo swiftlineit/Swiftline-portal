@@ -70,3 +70,7 @@ MAILTO=""
 #
 # and only schedule it once the output has been reviewed and the retention
 # policy signed off.
+
+# Poll active ALS tracking syncs. Production rollout is controlled by the
+# allowlist and per-run new-sync limit in backend/.env.
+*/15 * * * *  ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:als:tracking
