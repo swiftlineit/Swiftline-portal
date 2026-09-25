@@ -99,7 +99,7 @@ function clientDpdLabelFailureMessage(error: Pick<DpdLabelUnavailableError, "mes
   const isCarrierBalanceFailure = /(?:credit\s+limit.*(?:reach|exceed|insufficient|not\s+enough|low)|(?:insufficient|not\s+enough|low|no).*(?:credit|balance|funds)|(?:credit|balance|funds).*(?:insufficient|not\s+enough|low|unavailable))/i.test(providerMessage);
 
   return isCarrierBalanceFailure
-    ? "The DPD label could not be created because the carrier account has insufficient balance. This is a carrier-side issue, not your Swiftline credit limit. You can still create the shipment without a DPD label."
+    ? "DPD label creation is temporarily unavailable. You can still create the shipment without a DPD label."
     : error.message;
 }
 
