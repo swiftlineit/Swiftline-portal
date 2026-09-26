@@ -3,10 +3,12 @@ import { test } from "node:test";
 import {
   createEmptyParcelItem,
   composeShipmentDescription,
+  getParcelItemAmountError,
   getShipmentDescriptionLimitMessage,
   isUntouchedParcelItem,
   mergeSavedParcelItemsWithLocalRows,
   maxParcelItems,
+  maxParcelItemAmountExclusive,
   type ParcelItem
 } from "./parcelItems";
 
@@ -16,6 +18,14 @@ function item(overrides: Partial<ParcelItem> = {}): ParcelItem {
 
 test("supports up to 50 item lines per parcel", () => {
   assert.equal(maxParcelItems, 50);
+});
+
+test("allows item amounts below 5001 and rejects 5001 or more", () => {
+  assert.equal(maxParcelItemAmountExclusive, 5001);
+  assert.equal(getParcelItemAmountError(item({ quantity: "1", unitRate: "5000" })), "");
+  assert.equal(getParcelItemAmountError(item({ quantity: "1", unitRate: "5000.99" })), "");
+  assert.equal(getParcelItemAmountError(item({ quantity: "2", unitRate: "2500" })), "");
+  assert.equal(getParcelItemAmountError(item({ quantity: "1", unitRate: "5001" })), "Item amount must be below 5001.");
 });
 
 test("counts all parcel item descriptions with comma separators", () => {

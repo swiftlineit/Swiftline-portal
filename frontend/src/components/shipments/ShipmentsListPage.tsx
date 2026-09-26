@@ -443,6 +443,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const [rebookingId, setRebookingId] = useState<string | null>(null);
   const [restoringView, setRestoringView] = useState(true);
   const restoredView = useRef(false);
+  // List requests can overlap when a user pages, filters, or finishes a bulk
+  // update on a slow connection. Only the newest response may replace the
+  // table; otherwise an older page can visibly win the race after a newer one.
+  const latestShipmentLoadRequest = useRef(0);
+  const latestNormalShipmentLoadRequest = useRef(0);
   // Exact-viewport return: the offset (and shipment row) left behind when a
   // detail/invoice page opens. Restored once the rows reload; see the effects
   // below. Kept in a ref so reading it never re-renders the table.
@@ -503,6 +508,10 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   // into a new EDITABLE draft preserving its businessAccountId + branchId
   // (individual shipments keep their original branch). Delivery/finance see no button.
   const canRebook = audience === "admin" && (role === "admin" || role === "operations");
+  // `page` changes immediately, but `pagination` reflects the last completed
+  // response. Treat that gap as a pending transition so one click cannot queue
+  // another page request before the current one has settled.
+  const pageTransitionPending = loading || page !== pagination.page;
 
   /**
    * Columns a customer may hide. AWB and Actions are locked: one identifies the
@@ -537,7 +546,9 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   }
 
   const load = useCallback(async (options: { background?: boolean } = {}) => {
+    const requestId = ++latestShipmentLoadRequest.current;
     if (!options.background) {
+      latestNormalShipmentLoadRequest.current = requestId;
       setLoading(true);
       setError("");
     }
@@ -557,6 +568,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         sort,
         attention: attentionOnly
       });
+      if (requestId !== latestShipmentLoadRequest.current) return;
       setShipments(data.shipments);
       setPagination(data.pagination);
       // The API clamps a page that no longer exists after data changes. Keep
@@ -579,11 +591,13 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     } catch (caught) {
       // A background reconciliation must not replace a successful optimistic
       // update with a full-page error. The next normal load will try again.
-      if (!options.background) {
+      if (!options.background && requestId === latestShipmentLoadRequest.current) {
         setError(caught instanceof Error ? caught.message : "Unable to load shipments.");
       }
     } finally {
-      if (!options.background) setLoading(false);
+      if (!options.background && requestId === latestNormalShipmentLoadRequest.current) {
+        setLoading(false);
+      }
     }
   }, [attentionOnly, audience, bookedDate, businessAccountId, creationSource, dateRange, destinationRegions, operationsManifestId, limit, page, rebookedOnly, search, sort, status]);
 
@@ -1974,13 +1988,15 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       </div>
 
       <div className="mt-4 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <span className="text-sm text-slate-600">
-          Page {pagination.page} of {pagination.totalPages} · {pagination.total} total
+        <span aria-live="polite" className="text-sm text-slate-600">
+          {pageTransitionPending
+            ? `Loading page ${page} of ${pagination.totalPages}...`
+            : `Page ${pagination.page} of ${pagination.totalPages} · ${pagination.total} total`}
         </span>
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={pagination.page <= 1}
+            disabled={pageTransitionPending || page <= 1}
             onClick={() => setPage((value) => Math.max(1, value - 1))}
             className="h-9 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-[#0D1282] transition hover:border-[#0D1282]/40 hover:bg-[#0D1282]/5 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -1988,7 +2004,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
           </button>
           <button
             type="button"
-            disabled={pagination.page >= pagination.totalPages}
+            disabled={pageTransitionPending || page >= pagination.totalPages}
             onClick={() => setPage((value) => value + 1)}
             className="h-9 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-[#0D1282] transition hover:border-[#0D1282]/40 hover:bg-[#0D1282]/5 disabled:cursor-not-allowed disabled:opacity-40"
           >

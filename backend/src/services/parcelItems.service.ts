@@ -25,6 +25,8 @@ export const contentsDescriptionMaxLength = 120;
 export const shipmentDescriptionMaxLength = 240;
 export const maxParcelsPerShipment = 100;
 export const maxParcelItems = 50;
+/** Exclusive upper bound for one item's derived value (quantity x unit rate). */
+export const maxParcelItemAmountExclusive = 5001;
 
 export type ParcelItemInput = {
   description?: unknown;
@@ -53,6 +55,17 @@ export function roundMoney(value: number): number {
  */
 export function getParcelItemAmount(item: { quantity?: unknown; unitRate?: unknown }): number {
   return roundMoney(numeric(item.quantity) * numeric(item.unitRate));
+}
+
+/** Validation message for one item's derived value, or "" when it is acceptable. */
+export function getParcelItemAmountError(item: { quantity?: unknown; unitRate?: unknown }): string {
+  const quantity = Number(item.quantity);
+  const unitRate = Number(item.unitRate);
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitRate) || unitRate <= 0) return "";
+
+  return getParcelItemAmount(item) >= maxParcelItemAmountExclusive
+    ? `Item amount must be below ${maxParcelItemAmountExclusive}.`
+    : "";
 }
 
 /** Declared goods value for the whole shipment: every item line summed. */

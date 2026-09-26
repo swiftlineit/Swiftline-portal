@@ -44,6 +44,7 @@ import { defaultDeclarationNote } from "@/lib/customsInvoice";
 import {
   composeContentsDescription,
   createEmptyParcelItem,
+  getParcelItemAmountError,
   getHsnCodeError,
   getPositiveNumberError,
   getShipmentDescriptionLimitMessage,
@@ -309,6 +310,8 @@ function getReviewFormIssueDetail(
       if (unitRateError) {
         (item.unitRate.trim() ? invalid : missing).push(`${itemLabel}: ${unitRateError.replace(/\.$/, "").toLowerCase()}`);
       }
+      const amountError = getParcelItemAmountError(item);
+      if (amountError) invalid.push(`${itemLabel}: ${amountError.replace(/\.$/, "").toLowerCase()}`);
     });
   });
 
@@ -1351,12 +1354,12 @@ export default function DpdLabelDraftPage() {
 
   return (
     <div className="xl:flex xl:h-full xl:min-h-0 xl:flex-col">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      {/* <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-950">Review Shipment</h1>
           <p className="mt-1 text-sm text-slate-500">Confirm consignee, destination, parcel, and charge details before booking.</p>
         </div>
-        </div>
+        </div> */}
 
       {error ? (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
@@ -1480,7 +1483,7 @@ export default function DpdLabelDraftPage() {
                     type="button"
                     onClick={handleAddressSearch}
                     disabled={addressBusy}
-                    className="mt-7 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                    className="mt-7 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                   >
                     <FiSearch aria-hidden="true" className="h-4 w-4" />
                     Search

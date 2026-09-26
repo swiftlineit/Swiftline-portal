@@ -19,6 +19,7 @@ import type {
 } from "@/lib/publicTracking";
 import PublicTrackingForm from "@/components/tracking/PublicTrackingForm";
 import ParcelActivityPanel from "@/components/shipments/ParcelActivityPanel";
+import { orderTrackingEvents } from "@/lib/trackingEventOrder";
 
 /**
  * The public tracking result page, top to bottom.
@@ -749,11 +750,8 @@ function FactsGrid({ tracking }: { tracking: PublicTracking }) {
 
 function Timeline({ tracking }: { tracking: PublicTracking }) {
   // Oldest first: the public page reads as a story of where the parcel has been.
-  const events = tracking.events
-    .filter((event) => event.status !== "PARCEL_COLLECTED")
-    .sort(
-    (left, right) =>
-      new Date(left.eventAt).getTime() - new Date(right.eventAt).getTime(),
+  const events = orderTrackingEvents(
+    tracking.events.filter((event) => event.status !== "PARCEL_COLLECTED")
   );
 
   return (

@@ -20,6 +20,7 @@ import {
   createEmptyParcelItem,
   getHsnCodeError,
   getParcelItemAmount,
+  getParcelItemAmountError,
   getPositiveNumberError,
   maxParcelItems,
   sanitizeParcelItemDescription,
@@ -347,6 +348,8 @@ export function ParcelItemsEditor({
                         "Unit rate",
                       );
 
+                      const amountError = getParcelItemAmountError(item);
+
                       const showDescriptionError = restricted.length > 0;
 
                       const showHsnError =
@@ -359,9 +362,11 @@ export function ParcelItemsEditor({
                           )} is a restricted item and cannot be shipped.`
                         : showHsnError
                           ? hsnError
-                          : revealError
-                            ? quantityError || unitRateError
-                            : "";
+                            : amountError
+                              ? amountError
+                              : revealError
+                                ? quantityError || unitRateError
+                                : "";
 
                       return (
                         <div
@@ -568,6 +573,13 @@ export function ParcelItemsEditor({
                                     event.target.value,
                                   )
                                 }
+                                onBlur={() => {
+                                  if (amountError) {
+                                    toast.error(`${parcelLabel} item ${index + 1}: ${amountError}`, {
+                                      toastId: `item-amount-${parcelLabel}-${index}`,
+                                    });
+                                  }
+                                }}
                                 placeholder="Qty"
                                 aria-invalid={Boolean(
                                   revealError && quantityError,
@@ -596,6 +608,13 @@ export function ParcelItemsEditor({
                                     event.target.value,
                                   )
                                 }
+                                onBlur={() => {
+                                  if (amountError) {
+                                    toast.error(`${parcelLabel} item ${index + 1}: ${amountError}`, {
+                                      toastId: `item-amount-${parcelLabel}-${index}`,
+                                    });
+                                  }
+                                }}
                                 placeholder="Rate"
                                 aria-invalid={Boolean(
                                   revealError && unitRateError,
@@ -615,7 +634,12 @@ export function ParcelItemsEditor({
 
                               <div
                                 aria-label={`Item ${index + 1} amount`}
-                                className="mt-1 flex h-10 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700"
+                                aria-invalid={Boolean(amountError)}
+                                className={`mt-1 flex h-10 items-center rounded-lg border px-3 text-[13px] font-semibold transition ${
+                                  amountError
+                                    ? "border-red-400 bg-red-50 text-red-700"
+                                    : "border-slate-200 bg-slate-50 text-slate-700"
+                                }`}
                               >
                                 {getParcelItemAmount(item).toFixed(2)}
                               </div>

@@ -61,6 +61,9 @@ async function mockShipmentListApis(page: Page, role: "operations" | "client") {
     if (path.endsWith("/client/dashboard")) {
       return route.fulfill({ json: { success: true, accounts: [] } });
     }
+    if (path.endsWith("/client/rate-card-shares")) {
+      return route.fulfill({ json: { success: true, shares: [], unreadCount: 0 } });
+    }
     if (path.endsWith("/service-disruptions") || path.endsWith("/client/service-disruptions")) {
       return route.fulfill({ json: { success: true, disruptions: [] } });
     }
@@ -75,6 +78,9 @@ async function mockShipmentListApis(page: Page, role: "operations" | "client") {
           pagination: { page: 1, limit: 20, total: 0, totalPages: 1 }
         }
       });
+    }
+    if (path.endsWith("/shipments/operations-manifests/options")) {
+      return route.fulfill({ json: { success: true, manifests: [] } });
     }
     if (path.endsWith("/shipments") || path.endsWith("/client/booked-shipments")) {
       const shipments = role === "operations"
@@ -110,4 +116,53 @@ test("never renders internal DPD label status in the client shipment table", asy
 
   await expect(page.getByText("SLCDEL090926004", { exact: true })).toBeVisible();
   await expect(page.getByText(/DPD label/i)).toHaveCount(0);
+});
+
+test("keeps the latest shipment query when a delayed page response arrives", async ({ page }) => {
+  await mockShipmentListApis(page, "operations");
+  let releasePageTwo!: () => void;
+  const pageTwoResponse = new Promise<void>((resolve) => { releasePageTwo = resolve; });
+
+  await page.route("http://localhost:5000/api/v1/shipments**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/shipments/operations-manifests/options")) {
+      return route.fallback();
+    }
+
+    const requestedPage = url.searchParams.get("page") ?? "1";
+    const filtered = url.searchParams.get("status") === "SHIPMENT_BOOKED";
+
+    if (requestedPage === "2" && !filtered) {
+      await pageTwoResponse;
+      return route.fulfill({
+        json: {
+          success: true,
+          shipments: [shipment("PAGE-TWO", "AVAILABLE")],
+          pagination: { page: 2, limit: 20, total: 80, totalPages: 4 }
+        }
+      });
+    }
+
+    return route.fulfill({
+      json: {
+        success: true,
+        shipments: [shipment(filtered ? "FILTERED" : "PAGE-ONE", "AVAILABLE")],
+        pagination: { page: 1, limit: 20, total: 80, totalPages: 4 }
+      }
+    });
+  });
+
+  await page.goto("/dashboard/shipments");
+  await expect(page.getByText("SLCDEL090926PAGE-ONE", { exact: true })).toBeVisible();
+
+  const next = page.getByRole("button", { name: "Next", exact: true });
+  await next.click();
+  await expect(next).toBeDisabled();
+
+  await page.locator("label").filter({ hasText: "Status" }).locator("select").selectOption("SHIPMENT_BOOKED");
+  await expect(page.getByText("SLCDEL090926FILTERED", { exact: true })).toBeVisible();
+
+  releasePageTwo();
+  await expect(page.getByText("SLCDEL090926PAGE-TWO", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("SLCDEL090926FILTERED", { exact: true })).toBeVisible();
 });

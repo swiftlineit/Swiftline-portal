@@ -4,6 +4,7 @@ import {
   buildTrackingJourney,
   formatTrackingEventLabel,
   normalizeVisibleTrackingHistory,
+  resolveCurrentTrackingEvent,
   resolveTrackingProfile
 } from "../services/shipmentJourney.service.js";
 
@@ -271,5 +272,36 @@ describe("visible tracking history", () => {
     assert.equal(history.length, 1);
     assert.equal(history[0]?.statusLabel, "Ready for Dispatch");
     assert.equal(history[0]?.note, "Shipment is ready for dispatch.");
+  });
+});
+
+describe("current tracking milestone", () => {
+  it("keeps a late-written transit event from moving a shipment back from delivery", () => {
+    const current = resolveCurrentTrackingEvent([
+      { status: "OUT_FOR_DELIVERY", eventAt: "2026-09-19T09:00:00.000Z" },
+      { status: "IN_TRANSIT", eventAt: "2026-09-25T09:00:00.000Z" }
+    ]);
+
+    assert.equal(current?.status, "OUT_FOR_DELIVERY");
+  });
+
+  it("keeps the latest active hold current even when a later milestone exists in history", () => {
+    const current = resolveCurrentTrackingEvent([
+      { status: "OUT_FOR_DELIVERY", eventAt: "2026-09-19T09:00:00.000Z" },
+      { status: "ON_HOLD", eventAt: "2026-09-25T09:00:00.000Z" }
+    ]);
+
+    assert.equal(current?.status, "ON_HOLD");
+  });
+
+  it("resumes the furthest movement milestone after a hold is released", () => {
+    const current = resolveCurrentTrackingEvent([
+      { status: "OUT_FOR_DELIVERY", eventAt: "2026-09-19T09:00:00.000Z" },
+      { status: "ON_HOLD", eventAt: "2026-09-20T09:00:00.000Z" },
+      { status: "RELEASED_FROM_HOLD", eventAt: "2026-09-21T09:00:00.000Z" },
+      { status: "IN_TRANSIT", eventAt: "2026-09-25T09:00:00.000Z" }
+    ]);
+
+    assert.equal(current?.status, "OUT_FOR_DELIVERY");
   });
 });

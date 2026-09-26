@@ -13,6 +13,7 @@ import {
 } from "@/components/shipments/ShipmentJourney";
 import ParcelActivityPanel from "@/components/shipments/ParcelActivityPanel";
 import type { ParcelActivity, ParcelProgress } from "@/lib/shipmentTracking";
+import { orderTrackingEvents } from "@/lib/trackingEventOrder";
 
 /**
  * A tracked shipment, as the two signed-in portals draw it.
@@ -137,9 +138,7 @@ export default function TrackingResult({
   /** Omitted where the reader has no shipment page to open. */
   detailsHref?: string;
 }) {
-  const timeline = [...record.events].sort(
-    (left, right) => new Date(left.eventAt).getTime() - new Date(right.eventAt).getTime(),
-  );
+  const timeline = orderTrackingEvents(record.events);
   const facts = shipmentFacts(record);
   const parcelNumbers = record.parcelNumbers ?? [];
   // A parcel-level search is one whose number belongs to a piece rather than the

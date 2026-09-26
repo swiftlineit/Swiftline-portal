@@ -309,6 +309,50 @@ function eventTime(value: Date | string) {
   return Number.isNaN(time) ? 0 : time;
 }
 
+const activeTrackingExceptionStatuses = new Set([
+  "SHIPMENT_CANCELLED",
+  "ON_HOLD",
+  "RETURNED",
+  "LOST",
+  "DAMAGED"
+]);
+
+/** The furthest journey step proved by a stored status. */
+export function trackingMilestoneOrder(status: string): number {
+  let order = -1;
+  milestoneDefinitions.forEach((definition, index) => {
+    if (definition.statuses.includes(status)) order = index;
+  });
+  return order;
+}
+
+/**
+ * Resolves current progress by logical milestone precedence, not timestamp.
+ * Active exceptions remain time-sensitive; a release resumes the furthest
+ * confirmed movement milestone. Raw events and timestamps are never changed.
+ */
+export function resolveCurrentTrackingEvent<T extends { status: string; eventAt: Date | string }>(
+  events: readonly T[]
+): T | null {
+  if (!events.length) return null;
+
+  const chronological = [...events].sort((left, right) => eventTime(right.eventAt) - eventTime(left.eventAt));
+  const latest = chronological[0];
+  if (latest && activeTrackingExceptionStatuses.has(latest.status)) return latest;
+
+  let resolved: T | null = null;
+  let resolvedOrder = -1;
+  for (const event of chronological) {
+    const order = trackingMilestoneOrder(event.status);
+    if (order > resolvedOrder) {
+      resolved = event;
+      resolvedOrder = order;
+    }
+  }
+
+  return resolved ?? latest ?? null;
+}
+
 /**
  * Turns raw operational events into the concise history shown in tracking.
  *

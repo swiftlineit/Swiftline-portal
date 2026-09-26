@@ -21,6 +21,7 @@ import {
   formatTrackingEventLabel,
   loadShipmentJourney,
   normalizeVisibleTrackingHistory,
+  resolveCurrentTrackingEvent,
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
@@ -165,6 +166,7 @@ type ClientShipmentEventSnapshot = {
   shipmentDraftId: unknown;
   status: string;
   holdReason?: string | null;
+  eventAt: Date;
 };
 
 function bumpShipmentSummary(
@@ -238,11 +240,10 @@ async function buildClientShipmentDashboard(accountId: string, branchIds: string
         .select("shipmentDraftId invoiceNumber currency totalAmountMinor status revision")
         .lean()
         .exec(),
-      ShipmentEvent.aggregate<{ _id: mongoose.Types.ObjectId; event: ClientShipmentEventSnapshot }>([
+      ShipmentEvent.aggregate<ClientShipmentEventSnapshot>([
         { $match: { shipmentDraftId: { $in: recentDraftIds }, customerVisible: true } },
         { $sort: { shipmentDraftId: 1, eventAt: -1, createdAt: -1 } },
-        { $group: { _id: "$shipmentDraftId", event: { $first: "$$ROOT" } } },
-        { $project: { "event.shipmentDraftId": 1, "event.status": 1, "event.holdReason": 1 } }
+        { $project: { shipmentDraftId: 1, status: 1, holdReason: 1, eventAt: 1 } }
       ]).exec()
     ])
     : [[], [], []] as [ClientDpdShipmentSnapshot[], Array<{
@@ -252,10 +253,21 @@ async function buildClientShipmentDashboard(accountId: string, branchIds: string
       totalAmountMinor: number;
       status: string;
       revision: number;
-    }>, Array<{ _id: mongoose.Types.ObjectId; event: ClientShipmentEventSnapshot }>];
+    }>, ClientShipmentEventSnapshot[]];
   const dpdByDraftId = new Map(dpdShipments.map((shipment) => [String(shipment.shipmentDraftId), shipment]));
   const shipmentInvoiceByDraftId = new Map(shipmentInvoices.map((invoice) => [String(invoice.shipmentDraftId), invoice]));
-  const currentEventByDraftId = new Map(latestEvents.map((item) => [String(item._id), item.event]));
+  const eventsByDraftId = new Map<string, ClientShipmentEventSnapshot[]>();
+  for (const event of latestEvents) {
+    const key = String(event.shipmentDraftId);
+    const draftEvents = eventsByDraftId.get(key);
+    if (draftEvents) draftEvents.push(event);
+    else eventsByDraftId.set(key, [event]);
+  }
+  const currentEventByDraftId = new Map<string, ClientShipmentEventSnapshot>();
+  for (const [draftId, draftEvents] of eventsByDraftId) {
+    const current = resolveCurrentTrackingEvent(draftEvents);
+    if (current) currentEventByDraftId.set(draftId, current);
+  }
   const branchSummaryMap = new Map(branchIds.map((branchId) => [branchId, makeEmptyShipmentSummary(branchId)]));
   const summary = makeEmptyShipmentSummary();
 
@@ -627,10 +639,17 @@ export async function listClientShipments(request: Request, response: Response):
   const dpdByDraftId = new Map(dpdShipments.map((item) => [String(item.shipmentDraftId), item]));
   const invoiceByDraftId = new Map(shipmentInvoices.map((item) => [String(item.shipmentDraftId), item]));
   const branchById = new Map(branches.map((item) => [String(item._id), item]));
-  const currentEventByDraftId = new Map<string, (typeof events)[number]>();
+  const eventsByDraftId = new Map<string, Array<(typeof events)[number]>>();
   for (const event of events) {
     const key = String(event.shipmentDraftId);
-    if (!currentEventByDraftId.has(key)) currentEventByDraftId.set(key, event);
+    const draftEvents = eventsByDraftId.get(key);
+    if (draftEvents) draftEvents.push(event);
+    else eventsByDraftId.set(key, [event]);
+  }
+  const currentEventByDraftId = new Map<string, (typeof events)[number]>();
+  for (const [draftId, draftEvents] of eventsByDraftId) {
+    const current = resolveCurrentTrackingEvent(draftEvents);
+    if (current) currentEventByDraftId.set(draftId, current);
   }
 
   const shipments = drafts.map((draft) => {
@@ -1116,7 +1135,9 @@ function serializeClientShipmentDetails(params: {
   journey?: TrackingJourney;
 }) {
   const { draft, dpdShipment, labels, events, currentInvoiceRevision, currentInvoiceNumber, journey } = params;
-  const currentEvent = events.find((event) => event.status !== "PARCEL_COLLECTED") ?? null;
+  const currentEvent = resolveCurrentTrackingEvent(
+    events.filter((event) => event.status !== "PARCEL_COLLECTED")
+  );
   const originalBookingSnapshot = readShipmentBookingSnapshot(dpdShipment?.bookingSnapshot);
   const snapshotIsCurrent = (currentInvoiceRevision ?? 1) <= (dpdShipment?.snapshotRevision ?? 1);
   const currentShipmentSnapshot = snapshotIsCurrent

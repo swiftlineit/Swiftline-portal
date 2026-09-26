@@ -24,6 +24,7 @@ import {
   canonicalShipmentStatus,
   equivalentCurrentStatusValues
 } from "./shipmentStatusSequence.service.js";
+import { resolveCurrentTrackingEvent } from "./shipmentJourney.service.js";
 
 export type ShipmentListingFilter = {
   businessAccountIds?: mongoose.Types.ObjectId[];
@@ -532,11 +533,6 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   const branchById = new Map(branches.map((branch) => [String(branch._id), branch]));
   const accountById = new Map(accounts.map((account) => [String(account._id), account]));
   const invoiceByDraft = new Map(invoices.map((invoice) => [String(invoice.shipmentDraftId), invoice]));
-  const currentEventByDraft = new Map<string, (typeof events)[number]>();
-  for (const event of events) {
-    const key = String(event.shipmentDraftId);
-    if (!currentEventByDraft.has(key)) currentEventByDraft.set(key, event);
-  }
   const manifestByDraft = new Map<string, (typeof manifests)[number]>();
   for (const manifest of manifests) {
     for (const draftId of manifest.shipmentDraftIds) manifestByDraft.set(String(draftId), manifest);
@@ -550,6 +546,11 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     const draftEvents = eventsByDraft.get(key);
     if (draftEvents) draftEvents.push(event);
     else eventsByDraft.set(key, [event]);
+  }
+  const currentEventByDraft = new Map<string, (typeof events)[number]>();
+  for (const [draftId, draftEvents] of eventsByDraft) {
+    const current = resolveCurrentTrackingEvent(draftEvents);
+    if (current) currentEventByDraft.set(draftId, current);
   }
   /**
    * One estimate per row, in a handful of queries rather than two per row.

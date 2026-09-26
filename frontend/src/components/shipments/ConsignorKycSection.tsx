@@ -1,7 +1,7 @@
 "use client";
 
-import { ChangeEvent, type ReactNode, useRef, useState } from "react";
-import { FiCheck, FiFileText, FiMapPin, FiSearch, FiTrash2, FiUploadCloud } from "react-icons/fi";
+import { ChangeEvent, type KeyboardEvent, type ReactNode, useId, useMemo, useRef, useState } from "react";
+import { FiCheck, FiChevronDown, FiFileText, FiMapPin, FiSearch, FiTrash2, FiUploadCloud } from "react-icons/fi";
 import { toast } from "react-toastify";
 import {
   ShipmentFieldLabel,
@@ -21,6 +21,7 @@ import {
   shipmentKycDocumentSlots
 } from "@/lib/dpdLabels";
 import type { CsbType } from "@/lib/csbType";
+import { indiaStates, normalizeIndiaState } from "@/lib/indiaStates";
 import type { ConsignorForm, ParcelKycState } from "@/lib/shipmentConsignor";
 import { nextContactNameOnCompanyChange } from "@/lib/shipmentConsignor";
 
@@ -148,12 +149,16 @@ export function ConsignorKycSection({
     setAddressBusy(true);
     try {
       const data = await api.getConsignorPlaceAddress(prediction.placeId, shipmentDraftId);
+      const resolvedState = normalizeIndiaState(data.place.address.county || form.county);
       onFormChange({
         ...form,
         addressLine1: (data.place.address.addressLine1 || form.addressLine1).toUpperCase(),
         addressLine2: (data.place.address.addressLine2 || form.addressLine2).toUpperCase(),
         townOrCity: (data.place.address.townOrCity || form.townOrCity).toUpperCase(),
-        county: (data.place.address.county || form.county).toUpperCase(),
+        // The provider returns this as `county`, while the form stores the
+        // Indian state. Resolve it to the same option used by the combobox so
+        // selecting a searched address also selects its state.
+        county: resolvedState.toUpperCase(),
         postcode: data.place.address.postcode || form.postcode
       });
       setPredictions([]);
@@ -196,7 +201,7 @@ export function ConsignorKycSection({
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <section className="relative z-20 overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 bg-slate-50/60 px-4 py-2.5">
           <h2 className="text-[13px] font-semibold uppercase tracking-wide text-slate-600">Consignor Pickup Address</h2>
           <p className="mt-0.5 text-[11px] text-slate-500">Search an Indian address, then adjust the fields as needed.</p>
@@ -255,7 +260,13 @@ export function ConsignorKycSection({
             <ShipmentTextField label="Pickup Address Line 1" required value={form.addressLine1} onChange={setField("addressLine1")} error={fieldIssues.addressLine1} revealError={submitAttempted} readOnly={readOnly} />
             <ShipmentTextField label="Pickup Address Line 2" value={form.addressLine2} onChange={setField("addressLine2")} readOnly={readOnly} />
             <ShipmentTextField label="Town / City" required value={form.townOrCity} onChange={setField("townOrCity")} error={fieldIssues.townOrCity} revealError={submitAttempted} readOnly={readOnly} />
-            <ShipmentTextField label="State" required value={form.county} onChange={setField("county")} error={fieldIssues.county} revealError={submitAttempted} readOnly={readOnly} />
+            <IndianStateAutocompleteField
+              value={form.county}
+              onChange={(value) => onFormChange({ ...form, county: value })}
+              error={fieldIssues.county}
+              revealError={submitAttempted}
+              readOnly={readOnly}
+            />
             <ShipmentTextField label="PIN Code" required inputMode="numeric" value={form.postcode} onChange={(event) => onFormChange({ ...form, postcode: event.target.value.replace(/\D/g, "").slice(0, 6) })} error={fieldIssues.postcode} revealError={submitAttempted} readOnly={readOnly} />
             <label className="block md:col-span-2">
               <ShipmentFieldLabel>Pickup Instructions</ShipmentFieldLabel>
@@ -392,6 +403,160 @@ export function ConsignorKycSection({
         </div>
       </section>
     </>
+  );
+}
+
+function IndianStateAutocompleteField({
+  value,
+  onChange,
+  error,
+  revealError,
+  readOnly
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+  revealError: boolean;
+  readOnly: boolean;
+}) {
+  const inputId = useId();
+  const listboxId = useId();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [highlighted, setHighlighted] = useState(0);
+  const [touched, setTouched] = useState(false);
+
+  const suggestions = useMemo(() => {
+    const search = query.trim().toLocaleLowerCase("en-IN");
+    if (!search) return [...indiaStates];
+    return indiaStates.filter((state) => state.toLocaleLowerCase("en-IN").includes(search));
+  }, [query]);
+  const activeIndex = Math.min(highlighted, Math.max(suggestions.length - 1, 0));
+  const selectedState = normalizeIndiaState(value);
+  const showError = touched || revealError;
+
+  function openPicker() {
+    if (readOnly) return;
+    // Opening the field starts with the full list; typing then narrows it.
+    // This keeps an existing selected state from hiding every other option.
+    setQuery("");
+    setHighlighted(0);
+    setOpen(true);
+  }
+
+  function selectState(state: string) {
+    // Consignor text fields are stored in uppercase throughout the booking
+    // form. Keep that existing payload convention while showing readable
+    // canonical names in the options.
+    onChange(state.toUpperCase());
+    setQuery("");
+    setHighlighted(0);
+    setOpen(false);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      setOpen(false);
+      setQuery("");
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setOpen(true);
+      setHighlighted(Math.min(activeIndex + 1, Math.max(suggestions.length - 1, 0)));
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setOpen(true);
+      setHighlighted(Math.max(activeIndex - 1, 0));
+      return;
+    }
+
+    if (event.key === "Enter" && open && suggestions[activeIndex]) {
+      event.preventDefault();
+      selectState(suggestions[activeIndex]);
+    }
+  }
+
+  return (
+    <div className="relative block min-w-0">
+      <label htmlFor={inputId} className="block">
+        <ShipmentFieldLabel required>State / Union Territory</ShipmentFieldLabel>
+      </label>
+      <div className="relative mt-1.5">
+        <input
+          id={inputId}
+          type="text"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-autocomplete="list"
+          aria-activedescendant={open && suggestions[activeIndex] ? `${listboxId}-${activeIndex}` : undefined}
+          aria-invalid={Boolean(error && showError)}
+          autoComplete="off"
+          value={open ? query : value}
+          disabled={readOnly}
+          placeholder="Search state or union territory"
+          onFocus={openPicker}
+          onClick={() => { if (!open) openPicker(); }}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setHighlighted(0);
+            setOpen(true);
+          }}
+          onKeyDown={handleKeyDown}
+          onBlur={() => {
+            setTouched(true);
+            setOpen(false);
+            setQuery("");
+            if (error && value.trim()) toast.error(error, { toastId: error });
+          }}
+          className={`h-10 w-full rounded-xl border bg-white px-3 pr-10 text-[13px] outline-none transition focus:ring-2 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-500 ${
+            error && showError
+              ? "border-red-400 focus:border-red-500 focus:ring-red-100"
+              : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"
+          }`}
+        />
+        <FiChevronDown
+          aria-hidden="true"
+          className={`pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 transition ${open ? "rotate-180" : ""}`}
+        />
+      </div>
+
+      {open ? (
+        <div
+          id={listboxId}
+          role="listbox"
+          className="absolute left-0 right-0 z-30 mt-1 max-h-64 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white p-1 shadow-lg [scrollbar-width:thin]"
+        >
+          {suggestions.length ? suggestions.map((state, index) => (
+            <button
+              key={state}
+              id={`${listboxId}-${index}`}
+              type="button"
+              role="option"
+              aria-selected={selectedState === state}
+              onMouseDown={(event) => {
+                // Keep the input focused long enough for the option to be
+                // selected before the blur handler closes the list.
+                event.preventDefault();
+                selectState(state);
+              }}
+              onMouseEnter={() => setHighlighted(index)}
+              className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-[13px] ${
+                index === activeIndex ? "bg-blue-50 text-blue-950" : "text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <span className="truncate">{state}</span>
+              {selectedState === state ? <FiCheck aria-hidden="true" className="h-4 w-4 shrink-0 text-blue-800" /> : null}
+            </button>
+          )) : <p className="px-3 py-3 text-[13px] text-slate-500">No Indian state or union territory found.</p>}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

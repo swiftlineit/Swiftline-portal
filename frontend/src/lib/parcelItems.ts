@@ -13,6 +13,8 @@ export const contentsDescriptionMaxLength = 120;
 /** Maximum combined goods-description length for one shipment booking. */
 export const shipmentDescriptionMaxLength = 240;
 export const maxParcelItems = 50;
+/** Exclusive upper bound for one item's derived value (quantity x unit rate). */
+export const maxParcelItemAmountExclusive = 5001;
 
 // Unit of measure per item line on the customs (shipment) invoice.
 export const parcelItemUnitTypeValues = ["Pkt", "Pcs", "Set", "Box", "Kg", "Pair"] as const;
@@ -40,6 +42,17 @@ export function roundMoney(value: number): number {
 /** Line amount for an item row: quantity x unit rate. Always derived. */
 export function getParcelItemAmount(item: { quantity: string; unitRate: string }): number {
   return roundMoney(numeric(item.quantity) * numeric(item.unitRate));
+}
+
+/** Validation message for one item's derived value, or "" when it is acceptable. */
+export function getParcelItemAmountError(item: { quantity: string; unitRate: string }): string {
+  if (getPositiveNumberError(item.quantity, "Quantity") || getPositiveNumberError(item.unitRate, "Unit rate")) {
+    return "";
+  }
+
+  return getParcelItemAmount(item) >= maxParcelItemAmountExclusive
+    ? `Item amount must be below ${maxParcelItemAmountExclusive}.`
+    : "";
 }
 
 /** Declared goods value across every parcel, shown as the invoice total. */

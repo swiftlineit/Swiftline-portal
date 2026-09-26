@@ -70,6 +70,7 @@ import {
   formatTrackingEventLabel,
   loadShipmentJourney,
   normalizeVisibleTrackingHistory,
+  resolveCurrentTrackingEvent,
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
@@ -395,7 +396,7 @@ function serializeShipmentEvent(event: {
 }
 
 function getCurrentShipmentEvent<T extends { eventAt: Date; status: string }>(events: T[]) {
-  return events.length ? events[0] : null;
+  return resolveCurrentTrackingEvent(events);
 }
 
 async function ensureShipmentBookedEvent(params: {

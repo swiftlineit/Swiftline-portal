@@ -33,6 +33,7 @@ import {
   formatTrackingEventLabel,
   loadShipmentJourney,
   normalizeVisibleTrackingHistory,
+  resolveCurrentTrackingEvent,
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
@@ -144,7 +145,9 @@ function serializePublicTracking(input: {
   parcelProgress: Awaited<ReturnType<typeof loadShipmentParcelProgress>>;
 }) {
   const { draft, events } = input;
-  const newest = events.find((event) => event.status !== "PARCEL_COLLECTED") ?? null;
+  const newest = resolveCurrentTrackingEvent(
+    events.filter((event) => event.status !== "PARCEL_COLLECTED")
+  );
   const isParcelLevel = input.trackedNumber.toUpperCase() !== input.trackingNumber.toUpperCase();
 
   const destinationCountryName = input.routeCountryName
@@ -298,7 +301,7 @@ export async function trackPublicShipment(request: Request, response: Response):
         stationCode: originStationCode(trackingNumber, branch?.code ?? ""),
         city: branch?.address?.city ?? ""
       },
-      onHold: publicEvents[0]?.status === "ON_HOLD",
+      onHold: resolveCurrentTrackingEvent(publicEvents)?.status === "ON_HOLD",
       parcelActivities,
       parcelProgress
     })

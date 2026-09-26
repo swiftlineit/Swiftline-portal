@@ -8,7 +8,7 @@ import {
 } from "../models/shipmentDraft.model.js";
 import { isValidAadhaarNumber } from "./aadhaarValidation.service.js";
 import { normalizeCsbType } from "./csbType.service.js";
-import { isValidHsnCode, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "./parcelItems.service.js";
+import { getParcelItemAmountError, isValidHsnCode, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "./parcelItems.service.js";
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
 
@@ -245,6 +245,8 @@ function validateParcel(
       if (!(item.quantity > 0)) issues.push(`${itemLabel}: quantity must be greater than zero`);
       if (!(item.unitRate > 0)) issues.push(`${itemLabel}: unit rate must be greater than zero`);
       if (!hasText(item.unitType)) issues.push(`${itemLabel}: unit type is required`);
+      const amountError = getParcelItemAmountError(item);
+      if (amountError) issues.push(`${itemLabel}: ${amountError.replace(/\.$/, "").toLowerCase()}`);
     }
   });
 

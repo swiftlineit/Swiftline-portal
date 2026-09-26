@@ -1,5 +1,8 @@
 import type { ShipmentHoldReason } from "../models/shipmentEvent.model.js";
-import type { TrackingJourney } from "./shipmentJourney.service.js";
+import {
+  resolveCurrentTrackingEvent,
+  type TrackingJourney
+} from "./shipmentJourney.service.js";
 
 export type TrackingPositionSource = "RECORDED" | "INFERRED" | "PENDING";
 
@@ -136,7 +139,9 @@ export function buildTrackingPosition(input: {
   }
 
   if (nonMovementStatuses.has(latest.status)) {
-    const previousMovement = events.find((event) => !nonMovementStatuses.has(event.status));
+    const previousMovement = resolveCurrentTrackingEvent(
+      events.filter((event) => !nonMovementStatuses.has(event.status))
+    );
     const base = previousMovement
       ? positionForEvent(previousMovement, input.journey, input.destinationCity ?? "")
       : { label: "Position not recorded", source: "INFERRED" as const, basisStatus: latest.status, holdReasonLabel: "" };
@@ -149,7 +154,8 @@ export function buildTrackingPosition(input: {
     return base;
   }
 
-  return positionForEvent(latest, input.journey, input.destinationCity ?? "");
+  const currentMovement = resolveCurrentTrackingEvent(events) ?? latest;
+  return positionForEvent(currentMovement, input.journey, input.destinationCity ?? "");
 }
 
 /** A reliable event-place default. Movement states deliberately stay blank. */

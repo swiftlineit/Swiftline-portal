@@ -48,6 +48,7 @@ import { defaultDeclarationNote } from "@/lib/customsInvoice";
 import {
   composeContentsDescription,
   createEmptyParcelItem,
+  getParcelItemAmountError,
   getHsnCodeError,
   getPositiveNumberError,
   getShipmentDescriptionLimitMessage,
@@ -348,6 +349,8 @@ function getReviewIssueDetail(
       if (unitRateError) {
         (item.unitRate.trim() ? invalid : missing).push(`${itemLabel}: ${unitRateError.replace(/\.$/, "").toLowerCase()}`);
       }
+      const amountError = getParcelItemAmountError(item);
+      if (amountError) invalid.push(`${itemLabel}: ${amountError.replace(/\.$/, "").toLowerCase()}`);
     });
   });
 
@@ -1235,12 +1238,12 @@ export default function ClientDpdDraftReviewPage() {
 
   return (
       <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
-        <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        {/* <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-slate-950">Review Shipment Draft</h1>
             <p className="mt-1 text-sm text-slate-500">Review consignee, address, and parcel details before shipment creation is enabled.</p>
           </div>
-          </div>
+          </div> */}
 
         {error ? (
           <div className="mb-5 border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div>
