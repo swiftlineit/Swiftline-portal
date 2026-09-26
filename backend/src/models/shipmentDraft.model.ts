@@ -95,6 +95,7 @@ export interface ShipmentAddressSnapshot {
   addressLine2?: string;
   townOrCity: string;
   county?: string;
+  stateCode?: string;
   deliveryInstructions?: string;
 }
 
@@ -194,6 +195,11 @@ export interface IShipmentDraft extends mongoose.Document {
   // Customs route for the whole shipment. CSB-V attracts a flat clearance charge
   // once per shipment (see csbType.service.ts).
   csbType: CsbType;
+  // CSB-V customs data. These are separate from the internal Swiftline
+  // invoice/reference fields used by carrier booking.
+  csbVGstin: string;
+  csbVAccountNumber: string;
+  csbVInvoiceNumber: string;
   /**
    * Whether the customer bought optional transit cover. The premium is priced from
    * the route configuration against the declared goods value- see
@@ -269,6 +275,7 @@ const addressSnapshotSchema = new mongoose.Schema<ShipmentAddressSnapshot>(
     addressLine2: { type: String, uppercase: true, trim: true, maxlength: 120, default: "" },
     townOrCity: { type: String, uppercase: true, trim: true, maxlength: 80, default: "" },
     county: { type: String, uppercase: true, trim: true, maxlength: 80, default: "" },
+    stateCode: { type: String, uppercase: true, trim: true, maxlength: 20, default: "" },
     deliveryInstructions: {
       type: String,
       uppercase: true,
@@ -510,6 +517,9 @@ const shipmentDraftSchema = new mongoose.Schema<IShipmentDraft>(
       required: true,
       index: true,
     },
+    csbVGstin: { type: String, uppercase: true, trim: true, maxlength: 20, default: "" },
+    csbVAccountNumber: { type: String, trim: true, maxlength: 40, default: "" },
+    csbVInvoiceNumber: { type: String, trim: true, maxlength: 80, default: "" },
     // Drafts created before insurance existed read as false, so repricing one
     // never introduces a premium it was not booked with.
     insuranceOptIn: { type: Boolean, default: false, required: true },

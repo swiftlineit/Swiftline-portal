@@ -11,6 +11,8 @@ import { normalizeCsbType } from "./csbType.service.js";
 import { getParcelItemAmountError, isValidHsnCode, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "./parcelItems.service.js";
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
+import { getGstinError } from "./gstin.js";
+import { getStates, normalizePlaceName } from "./reference/geography.service.js";
 
 const ukPostcodePattern = /^[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}$/;
 const indianPostcodePattern = /^[1-9]\d{5}$/;
@@ -105,7 +107,6 @@ const csbVKycDocuments: readonly ShipmentKycDocumentType[] = [
   "salePurchaseAdCode",
   "lut",
   "declarationOfGoods",
-  "otherCertificates",
   "hsnCode"
 ];
 const kycDocumentNames: Record<ShipmentKycDocumentType, string> = {
@@ -263,6 +264,48 @@ function validateParcel(
   return issues;
 }
 
+function validateCsbVFields(draft: IShipmentDraft): string[] {
+  if (normalizeCsbType(draft.csbType) !== "CSB_V") return [];
+
+  const issues: string[] = [];
+  const address = draft.consigneeEnteredAddress;
+  const gstin = draft.csbVGstin?.trim() ?? "";
+
+  if (!gstin) {
+    issues.push("GSTIN number is required");
+  } else {
+    const gstinError = getGstinError(gstin);
+    if (gstinError) issues.push(gstinError);
+  }
+
+  if (!hasText(draft.csbVAccountNumber)) issues.push("Account number is required");
+  if (!hasText(draft.csbVInvoiceNumber)) issues.push("Commercial invoice number is required");
+  if (!hasText(address.stateCode)) issues.push("Consignee state code is required");
+
+  if (hasText(address.stateCode) && hasText(address.countryCode) && hasText(address.county)) {
+    try {
+      const states = getStates(address.countryCode);
+      if (states.length) {
+        // The state code is intentionally editable: CSB-V uses the customs
+        // code supplied for the destination, which may differ from the
+        // reference dataset's ISO subdivision code.
+        const state = states.find((candidate) => (
+          normalizePlaceName(candidate.name) === normalizePlaceName(address.county ?? "")
+          || candidate.code.trim().toUpperCase() === address.county?.trim().toUpperCase()
+        ));
+        if (!state) {
+          issues.push("Consignee state is not valid for the selected country");
+        }
+      }
+    } catch {
+      // Required values are still enforced if the reference artifact is
+      // temporarily unavailable; the form already falls back to free text.
+    }
+  }
+
+  return issues;
+}
+
 export function validateShipmentDraftFields(
   draft: IShipmentDraft,
   options: {
@@ -305,6 +348,8 @@ export function validateShipmentDraftFields(
   }
   if (!hasText(address.addressLine1)) issues.push("Address line 1 is required");
   if (!hasText(address.townOrCity)) issues.push("Town or city is required");
+  if (!hasText(address.county)) issues.push("Consignee state is required");
+  issues.push(...validateCsbVFields(draft));
 
   const phoneNumber = parsePhoneNumberFromString(`${address.mobileCountryCode}${address.mobileNumber}`);
   if (hasText(address.mobileCountryCode) && hasText(address.mobileNumber) && !phoneNumber?.isValid()) {

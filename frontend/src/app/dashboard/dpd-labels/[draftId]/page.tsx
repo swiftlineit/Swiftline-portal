@@ -17,6 +17,8 @@ import {
 import { ParcelItemsEditor } from "@/components/shipments/ParcelItemsEditor";
 import ShipmentImportBanner from "@/components/shipments/ShipmentImportBanner";
 import { ConsignorKycSection } from "@/components/shipments/ConsignorKycSection";
+import { CsbVBookingFields } from "@/components/shipments/CsbVBookingFields";
+import { ShipmentConsigneeStateFields } from "@/components/shipments/ShipmentConsigneeStateFields";
 import { ShipmentLabelsPanel } from "@/components/shipments/ShipmentLabelsPanel";
 import {
   ConsignorForm,
@@ -39,6 +41,7 @@ import { useShipmentDraftAutosave } from "@/lib/useShipmentDraftAutosave";
 import { getDraftRateCardContext, type ClientCountryRateCard } from "@/lib/countryRateCards";
 import { findRestrictedCategories } from "@/lib/restrictedGoods";
 import { normalizeCsbType, type CsbType } from "@/lib/csbType";
+import { getCsbVBookingIssues, type CsbVBookingDetails } from "@/lib/csbVBooking";
 import { maxParcelsPerShipment } from "@/lib/shipmentLimits";
 import { defaultDeclarationNote } from "@/lib/customsInvoice";
 import {
@@ -121,6 +124,7 @@ type AddressForm = {
   addressLine2: string;
   townOrCity: string;
   county: string;
+  stateCode: string;
   postcode: string;
 };
 type DraftCorrectionForm = {
@@ -226,7 +230,8 @@ function getReviewFormIssueDetail(
   addressForm: AddressForm,
   draftCorrectionForm: DraftCorrectionForm,
   parcelForms: ParcelForm[],
-  csbType: CsbType
+  csbType: CsbType,
+  csbVDetails: CsbVBookingDetails = { gstin: "", accountNumber: "", invoiceNumber: "" }
 ): ShipmentFormIssues {
   const missing: string[] = [];
   const invalid: string[] = [];
@@ -252,6 +257,10 @@ function getReviewFormIssueDetail(
   if (!addressForm.countryCode.trim()) missing.push("Country is required");
   if (!addressForm.addressLine1.trim()) missing.push("Address line 1 is required");
   if (!addressForm.townOrCity.trim()) missing.push("Town or city is required");
+  if (!addressForm.county.trim()) missing.push("Consignee state is required");
+  if (csbType === "CSB_V" && !addressForm.stateCode.trim()) missing.push("Consignee state code is required");
+  const csbVIssues = getCsbVBookingIssues(csbVDetails, csbType);
+  Object.values(csbVIssues).forEach((issue) => { if (issue) (issue.includes("required") ? missing : invalid).push(issue); });
   if (!addressForm.postcode.trim()) {
     missing.push("Postcode is required");
   } else {
@@ -323,10 +332,11 @@ function getReviewFormIssues(
   addressForm: AddressForm,
   draftCorrectionForm: DraftCorrectionForm,
   parcelForms: ParcelForm[],
-  csbType: CsbType
+  csbType: CsbType,
+  csbVDetails: CsbVBookingDetails
 ) {
   return allShipmentFormIssues(
-    getReviewFormIssueDetail(addressForm, draftCorrectionForm, parcelForms, csbType)
+    getReviewFormIssueDetail(addressForm, draftCorrectionForm, parcelForms, csbType, csbVDetails)
   );
 }
 
@@ -419,6 +429,7 @@ export default function DpdLabelDraftPage() {
     addressLine2: "",
     townOrCity: "",
     county: "",
+    stateCode: "",
     postcode: ""
   });
   const [draftCorrectionForm, setDraftCorrectionForm] = useState<DraftCorrectionForm>({
@@ -443,6 +454,7 @@ export default function DpdLabelDraftPage() {
   // Customs route for the shipment. Drafts saved before CSB selection existed
   // read as CSB-IV, matching how the backend prices them.
   const [csbType, setCsbType] = useState<CsbType>("CSB_IV");
+  const [csbVDetails, setCsbVDetails] = useState<CsbVBookingDetails>({ gstin: "", accountNumber: "", invoiceNumber: "" });
   // Optional transit cover. Off unless the customer asks for it.
   const [insuranceOptIn, setInsuranceOptIn] = useState(false);
   const [forceGst, setForceGst] = useState(false);
@@ -501,10 +513,13 @@ export default function DpdLabelDraftPage() {
         !== JSON.stringify(comparableParcelForms(normalizeParcelForms(draft.parcelList))) ||
       draftCorrectionForm.serviceType !== (draft.serviceType ?? "COURIER") ||
       draftCorrectionForm.serviceCode !== (draft.serviceCode ?? "") ||
+      csbVDetails.gstin !== (draft.csbVGstin ?? "") ||
+      csbVDetails.accountNumber !== (draft.csbVAccountNumber ?? "") ||
+      csbVDetails.invoiceNumber !== (draft.csbVInvoiceNumber ?? "") ||
       insuranceOptIn !== (draft.insuranceOptIn ?? false) ||
       forceGst !== (draft.forceGst ?? false)
     );
-  }, [draft, draftCorrectionForm, forceGst, insuranceOptIn, parcelForms]);
+  }, [csbVDetails, draft, draftCorrectionForm, forceGst, insuranceOptIn, parcelForms]);
 
   const addressChanged = useMemo(() => {
     if (!draft) return false;
@@ -516,6 +531,7 @@ export default function DpdLabelDraftPage() {
       addressForm.addressLine2 !== (address.addressLine2 ?? "") ||
       addressForm.townOrCity !== (address.townOrCity ?? "") ||
       addressForm.county !== (address.county ?? "") ||
+      addressForm.stateCode !== (address.stateCode ?? "") ||
       addressForm.countryCode !== (address.countryCode ?? "GB") ||
       addressForm.postcode !== (address.postcode ?? "")
     );
@@ -577,6 +593,7 @@ export default function DpdLabelDraftPage() {
       addressLine2: addressForm.addressLine2,
       townOrCity: addressForm.townOrCity,
       county: addressForm.county,
+      stateCode: addressForm.stateCode,
       postcode: addressForm.postcode,
       deliveryInstructions: draftCorrectionForm.deliveryInstructions
     },
@@ -603,12 +620,15 @@ export default function DpdLabelDraftPage() {
       aadhaarNumber: parcel.aadhaarNumber
     })),
     csbType,
+    csbVGstin: csbVDetails.gstin,
+    csbVAccountNumber: csbVDetails.accountNumber,
+    csbVInvoiceNumber: csbVDetails.invoiceNumber,
     insuranceOptIn,
     forceGst,
     declarationNote,
     serviceType: draftCorrectionForm.serviceType,
     serviceCode: draftCorrectionForm.serviceCode
-  }), [addressForm, consignorForm, csbType, declarationNote, draftCorrectionForm, forceGst, insuranceOptIn, kycUseForAll, parcelForms]);
+  }), [addressForm, consignorForm, csbType, csbVDetails, declarationNote, draftCorrectionForm, forceGst, insuranceOptIn, kycUseForAll, parcelForms]);
 
   const draftPatchKey = useMemo(
     () => `${draft?._id ?? "unloaded"}:${JSON.stringify(draftPatch)}`,
@@ -684,8 +704,8 @@ export default function DpdLabelDraftPage() {
   });
 
   const currentReviewIssues = useMemo(
-    () => getReviewFormIssues(addressForm, draftCorrectionForm, parcelForms, csbType),
-    [addressForm, csbType, draftCorrectionForm, parcelForms]
+    () => getReviewFormIssues(addressForm, draftCorrectionForm, parcelForms, csbType, csbVDetails),
+    [addressForm, csbType, csbVDetails, draftCorrectionForm, parcelForms]
   );
 
   const consigneeContact = useMemo(
@@ -767,6 +787,7 @@ export default function DpdLabelDraftPage() {
       : nextParcels);
     setParcelCountInput(String(nextParcels.length));
     setCsbType(normalizeCsbType(nextDraft.csbType));
+    setCsbVDetails({ gstin: nextDraft.csbVGstin ?? "", accountNumber: nextDraft.csbVAccountNumber ?? "", invoiceNumber: nextDraft.csbVInvoiceNumber ?? "" });
     setInsuranceOptIn(nextDraft.insuranceOptIn ?? false);
     setForceGst(nextDraft.forceGst ?? false);
     setDeclarationNote(nextDraft.declarationNote ?? defaultDeclarationNote);
@@ -792,6 +813,7 @@ export default function DpdLabelDraftPage() {
       addressLine2: address.addressLine2 ?? "",
       townOrCity: address.townOrCity ?? "",
       county: address.county ?? "",
+      stateCode: address.stateCode ?? "",
       postcode: address.postcode ?? ""
     });
     setAddressQuery(address.postcode ?? "");
@@ -863,7 +885,8 @@ export default function DpdLabelDraftPage() {
     setAddressForm((current) => ({
       ...current,
       countryCode,
-      countryName
+      countryName,
+      stateCode: ""
     }));
     // Keep the consignee dial code on the destination's code (a UK destination
     // gets +44): a code from another country is invalid for this lane anyway.
@@ -1012,7 +1035,7 @@ export default function DpdLabelDraftPage() {
 
     try {
       const { invalid } = mergeShipmentFormIssues(
-        getReviewFormIssueDetail(addressForm, draftCorrectionForm, parcelForms, csbType),
+        getReviewFormIssueDetail(addressForm, draftCorrectionForm, parcelForms, csbType, csbVDetails),
         getConsignorFormIssueDetail(consignorForm, consigneeContactFrom(draftCorrectionForm))
       );
       if (invalid.length) {
@@ -1112,7 +1135,7 @@ export default function DpdLabelDraftPage() {
 
   try {
     const preflightIssues = [
-      ...getReviewFormIssues(addressForm, draftCorrectionForm, parcelForms, csbType),
+      ...getReviewFormIssues(addressForm, draftCorrectionForm, parcelForms, csbType, csbVDetails),
       ...getConsignorFormIssues(
         consignorForm,
         consigneeContactFrom(draftCorrectionForm)
@@ -1388,6 +1411,16 @@ export default function DpdLabelDraftPage() {
                   value={csbType}
                   onChange={(next: CsbType) => { setCsbType(next); setReviewIssues([]); }}
                 />
+                {csbType === "CSB_V" ? (
+                  <div className="mt-4">
+                    <CsbVBookingFields
+                      value={csbVDetails}
+                      onChange={(next) => { setCsbVDetails(next); setReviewIssues([]); }}
+                      issues={getCsbVBookingIssues(csbVDetails, csbType)}
+                      revealError={submitAttempted}
+                    />
+                  </div>
+                ) : null}
                 {/* Printed as the NOTE block on the shipment (customs) invoice. */}
                 <div className="mt-4">
                   <ShipmentTextField
@@ -1537,7 +1570,17 @@ export default function DpdLabelDraftPage() {
                   <ShipmentTextField label="Delivery Address Line 1" required value={addressForm.addressLine1} onChange={handleAddressFieldChange("addressLine1")} error={fieldIssues.addressLine1} revealError={submitAttempted} />
                   <ShipmentTextField label="Delivery Address Line 2" value={addressForm.addressLine2} onChange={handleAddressFieldChange("addressLine2")} />
                   <ShipmentTextField label="Delivery Town / City" required value={addressForm.townOrCity} onChange={handleAddressFieldChange("townOrCity")} error={fieldIssues.townOrCity} revealError={submitAttempted} />
-                  <ShipmentTextField label="Delivery State / County" value={addressForm.county} onChange={handleAddressFieldChange("county")} />
+                  <ShipmentConsigneeStateFields
+                    countryName={addressForm.countryName}
+                    state={addressForm.county}
+                    stateCode={addressForm.stateCode}
+                    onStateChange={(value) => setAddressForm((current) => ({ ...current, county: value }))}
+                    onStateCodeChange={(value) => setAddressForm((current) => ({ ...current, stateCode: value }))}
+                    requiredStateCode={csbType === "CSB_V"}
+                    stateError={getFieldIssue(currentReviewIssues, ["consignee state is"])}
+                    stateCodeError={getFieldIssue(currentReviewIssues, ["state code"])}
+                    revealError={submitAttempted}
+                  />
                   <ShipmentTextField label="Delivery Postcode" required value={addressForm.postcode} onChange={handleAddressFieldChange("postcode")} error={fieldIssues.postcode} revealError={submitAttempted} />
                 </div>
               </div>

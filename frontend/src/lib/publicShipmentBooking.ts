@@ -15,6 +15,7 @@ export type PublicAddress = {
   addressLine2: string;
   townOrCity: string;
   county: string;
+  stateCode: string;
   deliveryInstructions: string;
 };
 export type PublicSender = PublicAddress & { aadhaarNumber: string };
@@ -34,6 +35,9 @@ export type PublicShipmentFormData = {
   consignee: PublicAddress;
   serviceType: "COURIER" | "CARGO";
   csbType: "CSB_IV" | "CSB_V";
+  csbVGstin: string;
+  csbVAccountNumber: string;
+  csbVInvoiceNumber: string;
   kycUseForAllParcels: boolean;
   parcels: PublicParcel[];
 };

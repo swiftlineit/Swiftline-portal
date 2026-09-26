@@ -44,6 +44,8 @@ const COMPANY_NAME = "SWIFTLINE CARGO";
 
 export interface ShipmentLabelData {
   parcelNumber: string;
+  /** Human-readable number; the barcode continues to use the unique parcel number. */
+  displayParcelNumber?: string;
   parcelIndex: number;
   parcelCount: number;
   weightKg: number;
@@ -188,6 +190,7 @@ function drawSwiftlineLabel(
   top: number
 ) {
   document.save().translate(left, top);
+  const displayParcelNumber = text(data.displayParcelNumber) || data.parcelNumber;
 
   document
     .rect(CONTENT_LEFT, CONTENT_LEFT, CONTENT_WIDTH, LABEL_BOTTOM - CONTENT_LEFT)
@@ -225,8 +228,8 @@ function drawSwiftlineLabel(
   document
     .fillColor(INK)
     .font("Helvetica-Bold")
-    .fontSize(fitOneLine(document, data.parcelNumber, TEXT_WIDTH, 14, 7))
-    .text(data.parcelNumber, TEXT_LEFT, barcodeTop + barcodeHeight + 9, {
+    .fontSize(fitOneLine(document, displayParcelNumber, TEXT_WIDTH, 14, 7))
+    .text(displayParcelNumber, TEXT_LEFT, barcodeTop + barcodeHeight + 9, {
       width: TEXT_WIDTH,
       align: "center",
       lineBreak: false

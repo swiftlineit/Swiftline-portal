@@ -195,6 +195,18 @@ describe("shipment label PDFs", () => {
     assert.ok(!drawn.some((line) => /DPD/i.test(line)), `carrier wording leaked: ${shown}`);
   });
 
+  test("shows the CSB-V shipment number while keeping the internal parcel value separate", async () => {
+    const internalParcelNumber = "SLCDEL200726001-02";
+    const shipmentNumber = "SLCDEL200726001";
+    const drawn = drawnText(await renderSwiftlineLabelPdf({
+      ...labelData(internalParcelNumber),
+      displayParcelNumber: shipmentNumber
+    }));
+
+    assert.ok(drawn.includes(shipmentNumber));
+    assert.ok(!drawn.includes(internalParcelNumber));
+  });
+
   test("writes the address as plain lines and sets the postcode in bold", async () => {
     const runs = drawnRuns(await renderSwiftlineLabelPdf(labelData("SLCDEL200726001-01")));
     const find = (value: string) => runs.find((run) => run.text === value);
@@ -233,6 +245,7 @@ describe("immutable multi-parcel booking snapshot", () => {
   test("keeps charges, references, weights and one label identity per parcel aligned", () => {
     const draft = {
       serviceType: "COURIER",
+      csbType: "CSB_IV",
       consigneeEnteredAddress: {
         companyName: "Example Retail Ltd",
         contactName: "Asha Patel",
@@ -304,6 +317,7 @@ describe("immutable multi-parcel booking snapshot", () => {
       "SLCDEL200726001-01",
       "SLCDEL200726001-02"
     ]);
+    assert.equal(snapshot.csbType, "CSB_IV");
     assert.deepEqual(snapshot.parcels.map((parcel) => parcel.items?.[0]?.unitType), ["Pkt", "Pair"]);
     assert.deepEqual(snapshot.parcels.map((parcel) => parcel.declaredGoodsValueMinor), [30_000, 60_000]);
     assert.equal(snapshotDeclaredGoodsValueMinor(snapshot), 90_000);
@@ -318,6 +332,10 @@ describe("immutable multi-parcel booking snapshot", () => {
     assert.equal(firstLabel.destination.city, "London");
     assert.equal(secondLabel.parcelNumber, "SLCDEL200726001-02");
     assert.equal(secondLabel.weightKg, 11);
+
+    const csbVSecondLabel = bookingSnapshotToLabelData({ ...snapshot, csbType: "CSB_V" }, 1);
+    assert.equal(csbVSecondLabel.parcelNumber, "SLCDEL200726001-02");
+    assert.equal(csbVSecondLabel.displayParcelNumber, "SLCDEL200726001");
 
     assert.deepEqual(serializeShipmentBookingConfirmation(snapshot), {
       swiftlineTrackingNumber: "SLCDEL200726001",

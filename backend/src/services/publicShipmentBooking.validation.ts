@@ -5,6 +5,7 @@ import { findRestrictedCategories } from "./restrictedGoods.service.js";
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { maxParcelItems, maxParcelsPerShipment, parcelItemUnitTypeValues } from "./parcelItems.service.js";
 import { shipmentContentTypeValues } from "../models/shipmentDraft.model.js";
+import { getGstinError } from "./gstin.js";
 
 const cleanText = (max: number) => z.string().trim().max(max);
 const requiredText = (label: string, max = 120) => cleanText(max).min(1, `${label} is required.`);
@@ -23,6 +24,7 @@ const addressSchema = z.object({
   addressLine2: cleanText(160).default(""),
   townOrCity: requiredText("Town or city", 100),
   county: requiredText("State or county", 100),
+  stateCode: cleanText(20).default(""),
   deliveryInstructions: cleanText(300).default(""),
 }).superRefine((value, context) => {
   if (value.entityType === "COMPANY" && !value.companyName) {
@@ -74,6 +76,9 @@ export const publicShipmentDraftPayloadSchema = z.object({
   consignee: addressSchema,
   serviceType: z.enum(["COURIER", "CARGO"]),
   csbType: z.enum(["CSB_IV", "CSB_V"]),
+  csbVGstin: cleanText(20).default(""),
+  csbVAccountNumber: cleanText(40).default(""),
+  csbVInvoiceNumber: cleanText(80).default(""),
   kycUseForAllParcels: z.boolean().default(true),
   parcels: z.array(parcelSchema).min(1, "Add at least one parcel.").max(maxParcelsPerShipment, `A booking can contain up to ${maxParcelsPerShipment} parcels.`),
 }).superRefine((value, context) => {
@@ -85,6 +90,21 @@ export const publicShipmentDraftPayloadSchema = z.object({
     });
   }
   if (value.csbType === "CSB_V") {
+    if (!value.csbVGstin) {
+      context.addIssue({ code: "custom", path: ["csbVGstin"], message: "GSTIN number is required." });
+    } else {
+      const gstinError = getGstinError(value.csbVGstin);
+      if (gstinError) context.addIssue({ code: "custom", path: ["csbVGstin"], message: gstinError });
+    }
+    if (!value.csbVAccountNumber) {
+      context.addIssue({ code: "custom", path: ["csbVAccountNumber"], message: "Account number is required." });
+    }
+    if (!value.csbVInvoiceNumber) {
+      context.addIssue({ code: "custom", path: ["csbVInvoiceNumber"], message: "Commercial invoice number is required." });
+    }
+    if (!value.consignee.stateCode) {
+      context.addIssue({ code: "custom", path: ["consignee", "stateCode"], message: "Consignee state code is required." });
+    }
     value.parcels.forEach((parcel, parcelIndex) => parcel.items.forEach((item, itemIndex) => {
       if (!item.hsnCode) context.addIssue({
         code: "custom",

@@ -5,12 +5,15 @@ import type { ShipmentPricingEstimate } from "./shipmentPricing.service.js";
 import type { ShipmentLabelData } from "./shipmentLabelPdf.service.js";
 import { maskAadhaarNumber } from "./aadhaarValidation.service.js";
 import { getParcelItemAmount, normalizeParcelItems } from "./parcelItems.service.js";
+import { normalizeCsbType, type CsbType } from "./csbType.service.js";
 import { formatSwiftlineParcelNumber } from "./swiftlineTracking.service.js";
 import { publicShipmentSourceIdentity } from "./shipmentSourceIdentity.service.js";
 
 export type ShipmentBookingSnapshot = {
   version: 1;
   bookedAt: string;
+  /** Optional for compatibility with snapshots created before CSB selection was stored. */
+  csbType?: CsbType;
   source: {
     invoiceNumber: string;
     shipmentReference: string;
@@ -201,6 +204,7 @@ export function buildShipmentBookingSnapshot(input: {
   return plain({
     version: 1,
     bookedAt: input.bookedAt.toISOString(),
+    csbType: normalizeCsbType(input.draft.csbType),
     source: {
       invoiceNumber: sourceIdentity.invoiceNumber,
       shipmentReference: sourceIdentity.shipmentReference
@@ -268,6 +272,7 @@ export function buildRevisedShipmentSnapshot(input: {
   const consignee = input.draft.consigneeValidatedAddress ?? input.draft.consigneeEnteredAddress;
   return plain({
     ...input.previousSnapshot,
+    csbType: normalizeCsbType(input.draft.csbType ?? input.previousSnapshot.csbType),
     consignee,
     service: {
       ...input.previousSnapshot.service,
@@ -317,9 +322,16 @@ export function bookingSnapshotToLabelData(
   };
   const consignee = snapshot.consignee;
   const senderAddress = sender.address ?? {};
+  const parcelNumber = parcel?.swiftlineParcelNumber ?? "";
 
   return {
-    parcelNumber: parcel?.swiftlineParcelNumber ?? "",
+    // Keep the unique suffixed value for the barcode and all internal scans.
+    parcelNumber,
+    // CSB-V labels show the shipment HAWB as the human-readable number on each
+    // piece. CSB-IV and legacy snapshots retain the existing parcel display.
+    displayParcelNumber: snapshot.csbType === "CSB_V"
+      ? snapshot.tracking.swiftlineTrackingNumber
+      : parcelNumber,
     parcelIndex,
     parcelCount: snapshot.parcels.length,
     weightKg: parcel?.actualWeightKg ?? 0,

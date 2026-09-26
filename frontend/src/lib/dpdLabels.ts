@@ -36,6 +36,7 @@ export type ShipmentAddress = {
   addressLine2?: string;
   townOrCity: string;
   county?: string;
+  stateCode?: string;
   deliveryInstructions?: string;
 };
 
@@ -93,7 +94,6 @@ export const csbVKycDocumentTypes = [
   "salePurchaseAdCode",
   "lut",
   "declarationOfGoods",
-  "otherCertificates",
   "hsnCode"
 ] as const;
 
@@ -186,6 +186,9 @@ export type ShipmentDraft = {
   }>;
   // Customs route. Absent on drafts created before CSB selection existed.
   csbType?: CsbType;
+  csbVGstin?: string;
+  csbVAccountNumber?: string;
+  csbVInvoiceNumber?: string;
   // Optional transit cover. Absent on drafts created before insurance existed,
   // which price as uninsured.
   insuranceOptIn?: boolean;
@@ -227,6 +230,9 @@ export type ShipmentDraftPatch = {
     aadhaarNumber?: string;
   }>;
   csbType?: CsbType;
+  csbVGstin?: string;
+  csbVAccountNumber?: string;
+  csbVInvoiceNumber?: string;
   insuranceOptIn?: boolean;
   forceGst?: boolean;
   declarationNote?: string;

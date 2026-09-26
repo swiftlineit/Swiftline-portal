@@ -128,12 +128,20 @@ export default function OperationsManifestWorkspace() {
   }, [load, user]);
 
   useEffect(() => {
-    const onWarnings = (event: Event) => {
+    const onOpsWarnings = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
       if (detail) toast.warning(`OPS EDI downloaded with warnings. ${detail}`);
     };
-    window.addEventListener("swiftline:ops-edi-warnings", onWarnings);
-    return () => window.removeEventListener("swiftline:ops-edi-warnings", onWarnings);
+    const onMhbsWarnings = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail) toast.warning(`MHBS downloaded with warnings. ${detail}`);
+    };
+    window.addEventListener("swiftline:ops-edi-warnings", onOpsWarnings);
+    window.addEventListener("swiftline:mhbs-warnings", onMhbsWarnings);
+    return () => {
+      window.removeEventListener("swiftline:ops-edi-warnings", onOpsWarnings);
+      window.removeEventListener("swiftline:mhbs-warnings", onMhbsWarnings);
+    };
   }, []);
 
   useEffect(() => {
@@ -291,7 +299,7 @@ export default function OperationsManifestWorkspace() {
     }
   }
 
-  async function exportFile(format: "xlsx" | "pdf" | "edi" | "opsEdi" | "uk", view = false) {
+  async function exportFile(format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "uk", view = false) {
     try {
       await downloadOperationsManifest(
         manifestId,
@@ -769,12 +777,16 @@ function ManifestHeader({
 }: {
   data: ManifestDetail;
   busy: boolean;
-  onExport: (format: "xlsx" | "pdf" | "edi" | "opsEdi" | "uk", view?: boolean) => void;
+  onExport: (format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "uk", view?: boolean) => void;
   onSeal: () => void;
   onDispatch: () => void;
   sealBlocked: boolean;
 }) {
   const { manifest } = data;
+  const csbVEligible = data.consignments.length > 0 && data.consignments.every((consignment) => consignment.csbType === "CSB_V");
+  const csbVTooltip = csbVEligible
+    ? undefined
+    : "Only CSB-V shipments should be in this manifest.";
   return (
     <div className="mb-5 flex flex-wrap items-start justify-between gap-4 rounded-lg border border-[#EEEDED] bg-white p-5 shadow-sm">
       <div>
@@ -824,6 +836,18 @@ function ManifestHeader({
               icon={<FiDownload />}
               label="OPS EDI"
             />
+            <ActionButton
+              onClick={() => onExport("mhbs")}
+              icon={<FiDownload />}
+              label="MHBS"
+            />
+            <ActionButton
+              onClick={() => onExport("csbVEdi")}
+              icon={<FiDownload />}
+              label="CSB-V EDI"
+              disabled={!csbVEligible}
+              title={csbVTooltip}
+            />
             {manifest.header.destinationCountryCode === "GB" ? (
               <ActionButton
                 onClick={() => onExport("uk")}
@@ -864,19 +888,27 @@ function ActionButton({
   onClick,
   icon,
   label,
+  disabled = false,
+  title,
 }: {
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className="inline-flex h-10 items-center gap-2 rounded-4xl border border-[#0D1282]/20 bg-white px-4 text-sm font-semibold text-[#0D1282] hover:bg-[#EEEDED]"
-    >
-      {icon}
-      {label}
-    </button>
+    <span title={disabled ? title : undefined}>
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        title={disabled ? undefined : title}
+        className="inline-flex h-10 items-center gap-2 rounded-4xl border border-[#0D1282]/20 bg-white px-4 text-sm font-semibold text-[#0D1282] hover:bg-[#EEEDED] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+      >
+        {icon}
+        {label}
+      </button>
+    </span>
   );
 }
 function Metric({ label, value }: { label: string; value: string | number }) {

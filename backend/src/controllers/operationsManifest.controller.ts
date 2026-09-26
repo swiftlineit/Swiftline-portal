@@ -4,7 +4,9 @@ import { z } from "zod";
 import { Branch } from "../models/branch.model.js";
 import { OperationsManifest } from "../models/operationsManifest.model.js";
 import { buildOperationsManifestEdi } from "../services/edi/ediExport.service.js";
+import { buildOperationsManifestMhbsEdi } from "../services/mhbsEdi/mhbsEdiExport.service.js";
 import { buildOperationsManifestOpsEdi } from "../services/opsEdi/opsEdiExport.service.js";
+import { buildOperationsManifestCsbVEdi } from "../services/csbVEdi/csbVEdiExport.service.js";
 import {
   buildOperationsManifestExcel,
   buildOperationsManifestPdf,
@@ -364,6 +366,55 @@ export async function exportOpsEdi(request: Request, response: Response) {
     response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, X-OPS-EDI-Warnings");
     if (result.warnings.length) response.setHeader("X-OPS-EDI-Warnings", warningPayload.slice(0, 7800));
     return response.send(result.buffer);
+  } catch (error) {
+    return sendError(response, error);
+  }
+}
+
+export async function exportMhbsEdi(request: Request, response: Response) {
+  try {
+    const manifest = await OperationsManifest.findById(String(request.params.manifestId)).exec();
+    if (!manifest) throw new OperationsManifestServiceError("Operations manifest was not found.", 404);
+    if (!(manifest.status === "SEALED" || manifest.status === "DISPATCHED")) {
+      throw new OperationsManifestServiceError("Exports are available after the manifest is sealed.", 409);
+    }
+
+    const result = await buildOperationsManifestMhbsEdi(manifest);
+    const warningList = result.warnings.length > 50
+      ? [
+          ...result.warnings.slice(0, 49),
+          { row: 0, column: "", message: `${result.warnings.length - 49} additional MHBS EDI warnings were omitted from the download notice.` }
+        ]
+      : result.warnings;
+    let warningPayload = Buffer.from(JSON.stringify(warningList), "utf8").toString("base64");
+    if (warningPayload.length > 7800) {
+      const compactWarnings = warningList.length > 3
+        ? [...warningList.slice(0, 2), warningList[warningList.length - 1]]
+        : warningList;
+      warningPayload = Buffer.from(JSON.stringify(compactWarnings), "utf8").toString("base64");
+    }
+    response.setHeader("Content-Type", "application/vnd.ms-excel");
+    response.setHeader("Content-Disposition", `${request.query.view === "1" ? "inline" : "attachment"}; filename="mhbs-${manifest.manifestNumber}.xls"`);
+    response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, X-MHBS-Warnings");
+    if (result.warnings.length) response.setHeader("X-MHBS-Warnings", warningPayload.slice(0, 7800));
+    return response.send(result.buffer);
+  } catch (error) {
+    return sendError(response, error);
+  }
+}
+
+export async function exportCsbVEdi(request: Request, response: Response) {
+  try {
+    const manifest = await OperationsManifest.findById(String(request.params.manifestId)).exec();
+    if (!manifest) throw new OperationsManifestServiceError("Operations manifest was not found.", 404);
+    if (!(manifest.status === "SEALED" || manifest.status === "DISPATCHED")) {
+      throw new OperationsManifestServiceError("Exports are available after the manifest is sealed.", 409);
+    }
+
+    const buffer = await buildOperationsManifestCsbVEdi(manifest);
+    response.setHeader("Content-Type", "application/vnd.ms-excel");
+    response.setHeader("Content-Disposition", `${request.query.view === "1" ? "inline" : "attachment"}; filename="csb-v-${manifest.manifestNumber}.xls"`);
+    return response.send(buffer);
   } catch (error) {
     return sendError(response, error);
   }

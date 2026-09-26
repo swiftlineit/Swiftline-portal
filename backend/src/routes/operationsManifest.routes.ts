@@ -41,5 +41,7 @@ operationsManifestRouter.get("/:manifestId/export.xlsx", controller.exportExcel)
 operationsManifestRouter.get("/:manifestId/export.pdf", controller.exportPdf);
 operationsManifestRouter.get("/:manifestId/export-edi.xlsx", controller.exportEdi);
 operationsManifestRouter.get("/:manifestId/export-ops-edi.xls", controller.exportOpsEdi);
+operationsManifestRouter.get("/:manifestId/export-mhbs.xls", controller.exportMhbsEdi);
+operationsManifestRouter.get("/:manifestId/export-csb-v.xls", controller.exportCsbVEdi);
 operationsManifestRouter.get("/:manifestId/export-uk.xlsx", controller.exportUk);
 operationsManifestRouter.delete("/:manifestId", controller.deleteManifest);

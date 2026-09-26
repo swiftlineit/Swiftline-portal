@@ -7,6 +7,8 @@ import { ParcelItemsEditor } from "@/components/shipments/ParcelItemsEditor";
 import type { ParcelItem } from "@/lib/parcelItems";
 import { maxParcelItems } from "@/lib/parcelItems";
 import { maxParcelsPerShipment } from "@/lib/shipmentLimits";
+import { CsbVBookingFields } from "@/components/shipments/CsbVBookingFields";
+import { getCsbVBookingIssues } from "@/lib/csbVBooking";
 
 export const KYC_DOCUMENTS = [
   ["iec", "IEC"],
@@ -16,7 +18,6 @@ export const KYC_DOCUMENTS = [
   ["salePurchaseAdCode", "Sale / Purchase / AD Code"],
   ["lut", "LUT"],
   ["declarationOfGoods", "Declaration of goods"],
-  ["otherCertificates", "Other certificates"],
   ["hsnCode", "HSN code document"],
   ["other", "Other document"],
 ] as const;
@@ -353,6 +354,16 @@ export default function ShipmentDetailsStep({
           for every declared item. Insurance is not offered in this online
           booking release.
         </p>
+        {data.csbType === "CSB_V" ? (
+          <div className="mt-4">
+            <CsbVBookingFields
+              value={{ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, invoiceNumber: data.csbVInvoiceNumber }}
+              onChange={(next) => onChange({ ...data, csbVGstin: next.gstin, csbVAccountNumber: next.accountNumber, csbVInvoiceNumber: next.invoiceNumber })}
+              issues={getCsbVBookingIssues({ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, invoiceNumber: data.csbVInvoiceNumber }, data.csbType)}
+              revealError={revealErrors}
+            />
+          </div>
+        ) : null}
       </section>
       {data.parcels.map((parcel, index) => (
         <ParcelEditor

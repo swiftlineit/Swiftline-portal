@@ -31,6 +31,7 @@ type Props = {
   onConsignee: (next: PublicAddress) => void;
   errors: Record<string, string>;
   revealErrors?: boolean;
+  csbType: "CSB_IV" | "CSB_V";
 };
 
 function EntityChoice({
@@ -77,6 +78,7 @@ function AddressPanel<T extends PublicAddress>({
   errors,
   revealErrors = false,
   prefix,
+  csbType,
 }: {
   title: string;
   eyebrow: string;
@@ -86,6 +88,7 @@ function AddressPanel<T extends PublicAddress>({
   errors: Record<string, string>;
   revealErrors?: boolean;
   prefix: string;
+  csbType: "CSB_IV" | "CSB_V";
 }) {
   const [states, setStates] = useState<GeographyState[]>([]);
   const [cities, setCities] = useState<string[]>([]);
@@ -238,6 +241,7 @@ function AddressPanel<T extends PublicAddress>({
                 countryCode,
                 countryName: country?.name ?? "",
                 county: "",
+                stateCode: "",
                 townOrCity: "",
                 postcode: "",
                 ...(dialCode ? { mobileCountryCode: dialCode } : null),
@@ -281,6 +285,7 @@ function AddressPanel<T extends PublicAddress>({
                 addressLine2: address.addressLine2,
                 townOrCity: address.city,
                 county: matchedState,
+                stateCode: findStateCode(states, matchedState),
                 postcode: address.postalCode.toUpperCase(),
                 countryCode: address.countryCode || value.countryCode,
                 countryName: address.countryName || value.countryName,
@@ -315,6 +320,7 @@ function AddressPanel<T extends PublicAddress>({
               onChange({
                 ...value,
                 county: next,
+                stateCode: findStateCode(states, next),
                 // Preserve a city entered before the first state selection or
                 // filled by address lookup. Clear it only when the user changes
                 // from one established state to another.
@@ -358,6 +364,17 @@ function AddressPanel<T extends PublicAddress>({
             autoComplete="address-level2"
           />
         )}
+        {!sender && csbType === "CSB_V" ? (
+          <BookingField
+            label="Consignee State Code"
+            required
+            value={value.stateCode}
+            readOnly={Boolean(states.length)}
+            onChange={(event) => update("stateCode", event.target.value.toUpperCase())}
+            error={errors[`${prefix}.stateCode`]}
+            revealError={revealErrors}
+          />
+        ) : null}
         {sender ? (
           <div className="sm:col-span-2">
             <BookingField
@@ -406,6 +423,7 @@ export default function AddressStep(props: Props) {
         errors={props.errors}
         revealErrors={props.revealErrors}
         prefix="sender"
+        csbType={props.csbType}
       />
       <AddressPanel
         title="Receiver Details"
@@ -415,6 +433,7 @@ export default function AddressStep(props: Props) {
         errors={props.errors}
         revealErrors={props.revealErrors}
         prefix="consignee"
+        csbType={props.csbType}
       />
     </div>
   );

@@ -14,6 +14,64 @@ import { apiUrl } from "@/lib/api";
 
 export type GeographyState = { name: string; code: string };
 
+// CSB-V EDI uses the numeric FIPS state code for U.S. destinations. The
+// reference dataset exposes the ISO subdivision code (for example, OH), so
+// keep this small translation at the booking boundary rather than changing
+// the shared geography code used for city lookups.
+const usNumericStateCodes: Record<string, string> = {
+  alabama: "01",
+  alaska: "02",
+  arizona: "04",
+  arkansas: "05",
+  california: "06",
+  colorado: "08",
+  connecticut: "09",
+  delaware: "10",
+  "district of columbia": "11",
+  florida: "12",
+  georgia: "13",
+  hawaii: "15",
+  idaho: "16",
+  illinois: "17",
+  indiana: "18",
+  iowa: "19",
+  kansas: "20",
+  kentucky: "21",
+  louisiana: "22",
+  maine: "23",
+  maryland: "24",
+  massachusetts: "25",
+  michigan: "26",
+  minnesota: "27",
+  mississippi: "28",
+  missouri: "29",
+  montana: "30",
+  nebraska: "31",
+  nevada: "32",
+  "new hampshire": "33",
+  "new jersey": "34",
+  "new mexico": "35",
+  "new york": "36",
+  "north carolina": "37",
+  "north dakota": "38",
+  ohio: "39",
+  oklahoma: "40",
+  oregon: "41",
+  pennsylvania: "42",
+  "rhode island": "44",
+  "south carolina": "45",
+  "south dakota": "46",
+  tennessee: "47",
+  texas: "48",
+  utah: "49",
+  vermont: "50",
+  virginia: "51",
+  washington: "53",
+  "west virginia": "54",
+  wisconsin: "55",
+  wyoming: "56"
+};
+
 const statesCache = new Map<string, GeographyState[]>();
 const citiesCache = new Map<string, string[]>();
 const inFlight = new Map<string, Promise<unknown>>();
@@ -118,6 +176,20 @@ export function findStateCode(states: GeographyState[], stateName: string) {
   return (
     states.find((state) => state.name.toLowerCase() === target)?.code ?? ""
   );
+}
+
+export function findShipmentStateCode(
+  countryName: string,
+  states: GeographyState[],
+  stateName: string,
+) {
+  const countryCode = getCountryCode(countryName);
+  if (countryCode === "US") {
+    const numericCode = usNumericStateCodes[stateName.trim().toLowerCase()];
+    if (numericCode) return numericCode;
+  }
+
+  return findStateCode(states, stateName);
 }
 
 function normalizePlaceName(value: string) {

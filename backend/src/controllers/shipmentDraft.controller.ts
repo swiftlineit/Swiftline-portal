@@ -92,6 +92,7 @@ const addressPatchSchema = z.object({
   addressLine2: z.string().trim().toUpperCase().max(120).optional(),
   townOrCity: z.string().trim().toUpperCase().max(80).optional(),
   county: z.string().trim().toUpperCase().max(80).optional(),
+  stateCode: z.string().trim().toUpperCase().max(20).optional(),
   deliveryInstructions: z.string().trim().toUpperCase().max(500).optional()
 });
 
@@ -144,6 +145,9 @@ const draftPatchSchema = z.object({
   parcelList: z.array(parcelPatchSchema).min(1).max(maxParcelsPerShipment).optional(),
   // Customs route for the shipment; drives the CSB-V clearance charge.
   csbType: z.enum(csbTypeValues).optional(),
+  csbVGstin: z.string().trim().toUpperCase().max(20).optional(),
+  csbVAccountNumber: z.string().trim().max(40).optional(),
+  csbVInvoiceNumber: z.string().trim().max(80).optional(),
   // Optional transit cover; drives the insurance premium on the estimate.
   insuranceOptIn: z.boolean().optional(),
   forceGst: z.boolean().optional(),
@@ -620,6 +624,7 @@ export async function updateShipmentDraft(request: Request, response: Response):
       "addressLine2",
       "townOrCity",
       "county",
+      "stateCode",
       "postcode"
     ]);
     const postalAddressChanged = changedFields.some((field) =>
@@ -733,6 +738,21 @@ export async function updateShipmentDraft(request: Request, response: Response):
       changedAt
     );
     shipmentDraft.csbType = parsed.data.csbType;
+  }
+
+  for (const fieldName of ["csbVGstin", "csbVAccountNumber", "csbVInvoiceNumber"] as const) {
+    const nextValue = parsed.data[fieldName];
+    if (typeof nextValue !== "string") continue;
+
+    recordFieldChange(
+      changedFields,
+      fieldName,
+      shipmentDraft[fieldName],
+      nextValue,
+      userId,
+      changedAt
+    );
+    shipmentDraft[fieldName] = nextValue;
   }
 
   // Audited for the same reason as csbType: opting in or out moves the price.

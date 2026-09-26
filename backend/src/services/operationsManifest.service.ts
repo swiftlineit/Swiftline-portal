@@ -19,6 +19,7 @@ import {
 import { OperationsManifestScanSession } from "../models/operationsManifestScanSession.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import { ShipmentCancellation } from "../models/shipmentCancellation.model.js";
+import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentManifest, type IShipmentManifest } from "../models/shipmentManifest.model.js";
 import {
   buildManifestLine,
@@ -2137,6 +2138,10 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
         }).select("shipmentDraftId status").lean().exec()
       ])
     : [[], []];
+  const shipmentDrafts = sealShipmentIds.length
+    ? await ShipmentDraft.find({ _id: { $in: sealShipmentIds } }).select("csbType").lean().exec()
+    : [];
+  const csbTypeByDraftId = new Map(shipmentDrafts.map((draft) => [String(draft._id), draft.csbType ?? "CSB_IV"]));
   const dispatchIssues = manifest.status === "SEALED"
     ? await loadManifestDispatchIssues(consignments)
     : [];
@@ -2161,6 +2166,7 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
         bagNumbers: packedIn.map((id) => bagNumberById.get(id) ?? "").filter(Boolean),
         shipmentDraftId: String(item.shipmentDraftId),
         dpdShipmentId: String(item.dpdShipmentId),
+        csbType: csbTypeByDraftId.get(String(item.shipmentDraftId)) === "CSB_V" ? "CSB_V" : "CSB_IV",
         businessAccountId: String(item.businessAccountId),
         displayConsignmentNumber: formatManifestConsignmentNumber(item.consignmentNumber),
         // Goods value is entered per parcel; the consignment value is their sum.

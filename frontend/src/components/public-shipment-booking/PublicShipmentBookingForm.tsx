@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "react-toastify";
 import { FiCheck, FiCreditCard, FiMapPin, FiPackage } from "react-icons/fi";
 import { isValidAadhaarNumber } from "@/lib/aadhaar";
+import { getCsbVBookingIssues } from "@/lib/csbVBooking";
 import {
   getPostcodeError,
   getShipmentMobileCountryMismatchError,
@@ -54,6 +55,7 @@ const emptyAddress = {
   addressLine2: "",
   townOrCity: "",
   county: "",
+  stateCode: "",
   deliveryInstructions: "",
 };
 const initialData: PublicShipmentFormData = {
@@ -67,6 +69,9 @@ const initialData: PublicShipmentFormData = {
   consignee: { ...emptyAddress },
   serviceType: "COURIER",
   csbType: "CSB_IV",
+  csbVGstin: "",
+  csbVAccountNumber: "",
+  csbVInvoiceNumber: "",
   kycUseForAllParcels: true,
   parcels: [emptyParcel("WEB-1")],
 };
@@ -125,6 +130,8 @@ function validateAddressStep(data: PublicShipmentFormData) {
       errors[`${prefix}.townOrCity`] = "Town or city is required.";
     if (!address.county.trim())
       errors[`${prefix}.county`] = "State or county is required.";
+    if (prefix === "consignee" && data.csbType === "CSB_V" && !address.stateCode.trim())
+      errors["consignee.stateCode"] = "State code is required for CSB-V.";
     if (
       prefix === "consignee" &&
       (!address.countryCode || address.countryCode === "IN")
@@ -205,6 +212,14 @@ function validateShipmentStep(
       errors[key] = "Enter a name for each other KYC document.";
   }
   if (data.csbType === "CSB_V") {
+    const csbVIssues = getCsbVBookingIssues({
+      gstin: data.csbVGstin,
+      accountNumber: data.csbVAccountNumber,
+      invoiceNumber: data.csbVInvoiceNumber
+    }, data.csbType);
+    Object.entries(csbVIssues).forEach(([field, message]) => {
+      if (message) errors[`csbV${field[0]?.toUpperCase() ?? ""}${field.slice(1)}`] = message;
+    });
     const scopes = data.kycUseForAllParcels
       ? ["shared"]
       : data.parcels.map((_, index) => `parcel-${index + 1}`);
@@ -534,6 +549,7 @@ export default function PublicShipmentBookingForm() {
             }
             errors={addressErrors}
             revealErrors={revealAddressErrors}
+            csbType={data.csbType}
           />
         ) : null}
         {step === 2 ? (

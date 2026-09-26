@@ -114,9 +114,12 @@ describe("public shipment booking index migration", () => {
 function validPayload() {
   return {
     sender: { entityType: "INDIVIDUAL", companyName: "", contactName: "Ravi Kumar", email: "ravi@example.com", mobileCountryCode: "+91", mobileNumber: "9876543210", countryCode: "IN", countryName: "India", postcode: "110001", addressLine1: "10 Market Road", addressLine2: "", townOrCity: "Delhi", county: "Delhi", deliveryInstructions: "", aadhaarNumber: "234567890124" },
-    consignee: { entityType: "INDIVIDUAL", companyName: "", contactName: "Alex Smith", email: "alex@example.com", mobileCountryCode: "+44", mobileNumber: "7400123456", countryCode: "GB", countryName: "United Kingdom", postcode: "SW1A 1AA", addressLine1: "10 Downing Street", addressLine2: "", townOrCity: "London", county: "Greater London", deliveryInstructions: "" },
+    consignee: { entityType: "INDIVIDUAL", companyName: "", contactName: "Alex Smith", email: "alex@example.com", mobileCountryCode: "+44", mobileNumber: "7400123456", countryCode: "GB", countryName: "United Kingdom", postcode: "SW1A 1AA", addressLine1: "10 Downing Street", addressLine2: "", townOrCity: "London", county: "Greater London", stateCode: "", deliveryInstructions: "" },
     serviceType: "COURIER",
     csbType: "CSB_IV",
+    csbVGstin: "",
+    csbVAccountNumber: "",
+    csbVInvoiceNumber: "",
     kycUseForAllParcels: true,
     parcels: [{ weightKg: 2, lengthCm: 20, widthCm: 15, heightCm: 10, shipmentContentType: "PARCEL", shipmentReference1: "WEB-1", shipmentReference2: "", items: [{ description: "Cotton shirts", hsnCode: "", unitType: "Pcs", quantity: 2, unitRate: 500 }] }],
   };
@@ -198,6 +201,41 @@ describe("public shipment booking validation", () => {
     const result = publicShipmentDraftPayloadSchema.safeParse(payload);
     assert.equal(result.success, false);
     if (!result.success) assert.ok(result.error.issues.some((issue) => issue.path.join(".") === "parcels.0.items.0.hsnCode"));
+  });
+
+  it("requires the complete CSB-V customs field set at the public boundary", () => {
+    const payload = validPayload();
+    payload.csbType = "CSB_V";
+    payload.consignee.stateCode = "39";
+    payload.parcels[0]!.items[0]!.hsnCode = "19053100";
+
+    const missing = publicShipmentDraftPayloadSchema.safeParse(payload);
+    assert.equal(missing.success, false);
+    if (!missing.success) {
+      const paths = missing.error.issues.map((issue) => issue.path.join("."));
+      assert.ok(paths.includes("csbVGstin"));
+      assert.ok(paths.includes("csbVAccountNumber"));
+      assert.ok(paths.includes("csbVInvoiceNumber"));
+    }
+
+    const complete = { ...payload, csbVGstin: "08ABCDE1234F1Z5", csbVAccountNumber: "001234", csbVInvoiceNumber: "INV-100" };
+    assert.equal(publicShipmentDraftPayloadSchema.safeParse(complete).success, true);
+  });
+
+  it("rejects an invalid CSB-V GSTIN and missing consignee state code", () => {
+    const payload = validPayload();
+    payload.csbType = "CSB_V";
+    payload.csbVGstin = "NOT-A-GSTIN";
+    payload.csbVAccountNumber = "001234";
+    payload.csbVInvoiceNumber = "INV-100";
+    payload.parcels[0]!.items[0]!.hsnCode = "19053100";
+
+    const result = publicShipmentDraftPayloadSchema.safeParse(payload);
+    assert.equal(result.success, false);
+    if (!result.success) {
+      assert.ok(result.error.issues.some((issue) => issue.path.join(".") === "csbVGstin"));
+      assert.ok(result.error.issues.some((issue) => issue.path.join(".") === "consignee.stateCode"));
+    }
   });
 
   it("blocks restricted goods before a draft is saved", () => {

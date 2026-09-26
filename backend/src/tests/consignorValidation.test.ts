@@ -125,6 +125,14 @@ describe("consignor draft validation", () => {
     assert.ok(issues.includes("Aadhaar number is required"), issues.join(" | "));
   });
 
+  test("requires CSB-V customs fields and consignee state code", () => {
+    const issues = validateShipmentDraftFields(draftWith({ csbType: "CSB_V" }));
+    assert.ok(issues.includes("GSTIN number is required"));
+    assert.ok(issues.includes("Account number is required"));
+    assert.ok(issues.includes("Commercial invoice number is required"));
+    assert.ok(issues.includes("Consignee state code is required"));
+  });
+
   test("requires the complete customs document set for CSB-V", () => {
     const issues = validateShipmentDraftFields(draftWith({ csbType: "CSB_V", kyc: {} }));
     for (const documentName of [
@@ -135,11 +143,11 @@ describe("consignor draft validation", () => {
       "Sale / Purchase / AD Code",
       "LUT",
       "Declaration of Goods",
-      "Other Certificates",
       "HSN Code"
     ]) {
       assert.ok(issues.includes(`Upload ${documentName}`));
     }
+    assert.equal(issues.includes("Upload Other Certificates"), false);
   });
 
   test("requires per-parcel Aadhaar + card when KYC is not shared on CSB-V", () => {

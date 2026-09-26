@@ -21,6 +21,8 @@ import {
 import { ParcelItemsEditor } from "@/components/shipments/ParcelItemsEditor";
 import ShipmentImportBanner from "@/components/shipments/ShipmentImportBanner";
 import { ConsignorKycSection } from "@/components/shipments/ConsignorKycSection";
+import { CsbVBookingFields } from "@/components/shipments/CsbVBookingFields";
+import { ShipmentConsigneeStateFields } from "@/components/shipments/ShipmentConsigneeStateFields";
 import { apiUrl } from "@/lib/api";
 import { getAccessToken, logout, refreshAccessToken } from "@/lib/auth";
 import {
@@ -43,6 +45,7 @@ import {
 import { getDraftRateCardContext, type ClientCountryRateCard } from "@/lib/countryRateCards";
 import { findRestrictedCategories } from "@/lib/restrictedGoods";
 import { normalizeCsbType, type CsbType } from "@/lib/csbType";
+import { getCsbVBookingIssues, type CsbVBookingDetails } from "@/lib/csbVBooking";
 import { maxParcelsPerShipment } from "@/lib/shipmentLimits";
 import { defaultDeclarationNote } from "@/lib/customsInvoice";
 import {
@@ -118,6 +121,7 @@ type AddressForm = {
   addressLine2: string;
   townOrCity: string;
   county: string;
+  stateCode: string;
   postcode: string;
 };
 
@@ -268,7 +272,8 @@ function getReviewIssueDetail(
   addressForm: AddressForm,
   contactForm: ContactForm,
   parcelForms: ParcelForm[],
-  csbType: CsbType
+  csbType: CsbType,
+  csbVDetails: CsbVBookingDetails = { gstin: "", accountNumber: "", invoiceNumber: "" }
 ): ShipmentFormIssues {
   const missing: string[] = [];
   const invalid: string[] = [];
@@ -294,6 +299,10 @@ function getReviewIssueDetail(
   if (!addressForm.countryCode.trim()) missing.push("Country is required");
   if (!addressForm.addressLine1.trim()) missing.push("Address line 1 is required");
   if (!addressForm.townOrCity.trim()) missing.push("Town or city is required");
+  if (!addressForm.county.trim()) missing.push("Consignee state is required");
+  if (csbType === "CSB_V" && !addressForm.stateCode.trim()) missing.push("Consignee state code is required");
+  const csbVIssues = getCsbVBookingIssues(csbVDetails, csbType);
+  Object.values(csbVIssues).forEach((issue) => { if (issue) (issue.includes("required") ? missing : invalid).push(issue); });
   if (!addressForm.postcode.trim()) {
     missing.push("Postcode is required");
   } else {
@@ -362,9 +371,10 @@ function getReviewIssues(
   addressForm: AddressForm,
   contactForm: ContactForm,
   parcelForms: ParcelForm[],
-  csbType: CsbType
+  csbType: CsbType,
+  csbVDetails: CsbVBookingDetails
 ) {
-  return allShipmentFormIssues(getReviewIssueDetail(addressForm, contactForm, parcelForms, csbType));
+  return allShipmentFormIssues(getReviewIssueDetail(addressForm, contactForm, parcelForms, csbType, csbVDetails));
 }
 
 function patternMatches(normalizedIssue: string, pattern: string) {
@@ -397,6 +407,7 @@ export default function ClientDpdDraftReviewPage() {
     addressLine2: "",
     townOrCity: "",
     county: "",
+    stateCode: "",
     postcode: ""
   });
   const [contactForm, setContactForm] = useState<ContactForm>({
@@ -420,6 +431,7 @@ export default function ClientDpdDraftReviewPage() {
   // Customs route for the shipment. Drafts saved before CSB selection existed
   // read as CSB-IV, matching how the backend prices them.
   const [csbType, setCsbType] = useState<CsbType>("CSB_IV");
+  const [csbVDetails, setCsbVDetails] = useState<CsbVBookingDetails>({ gstin: "", accountNumber: "", invoiceNumber: "" });
   // Optional transit cover. Off unless the customer asks for it.
   const [insuranceOptIn, setInsuranceOptIn] = useState(false);
   const [forceGst, setForceGst] = useState(false);
@@ -498,6 +510,7 @@ export default function ClientDpdDraftReviewPage() {
         addressLine2: entry.addressLine2,
         townOrCity: entry.townOrCity,
         county: entry.county,
+        stateCode: "",
         postcode: entry.postcode
       });
       setAddressQuery(entry.postcode);
@@ -511,8 +524,8 @@ export default function ClientDpdDraftReviewPage() {
   }, [addressForm.addressLine1, addressForm.postcode, consignorForm.addressLine1, consignorForm.contactName, consignorForm.postcode, contactForm.contactName]);
 
   const currentReviewIssues = useMemo(
-    () => getReviewIssues(addressForm, contactForm, parcelForms, csbType),
-    [addressForm, contactForm, csbType, parcelForms]
+    () => getReviewIssues(addressForm, contactForm, parcelForms, csbType, csbVDetails),
+    [addressForm, contactForm, csbType, csbVDetails, parcelForms]
   );
 
   const consignorChanged = useMemo(
@@ -617,6 +630,7 @@ export default function ClientDpdDraftReviewPage() {
       addressLine2: addressForm.addressLine2,
       townOrCity: addressForm.townOrCity,
       county: addressForm.county,
+      stateCode: addressForm.stateCode,
       postcode: addressForm.postcode,
       deliveryInstructions: contactForm.deliveryInstructions
     },
@@ -643,12 +657,15 @@ export default function ClientDpdDraftReviewPage() {
       aadhaarNumber: parcel.aadhaarNumber
     })),
     csbType,
+    csbVGstin: csbVDetails.gstin,
+    csbVAccountNumber: csbVDetails.accountNumber,
+    csbVInvoiceNumber: csbVDetails.invoiceNumber,
     insuranceOptIn,
     forceGst,
     declarationNote,
     serviceType: contactForm.serviceType,
     serviceCode: contactForm.serviceCode
-  }), [addressForm, consignorForm, contactForm, csbType, declarationNote, forceGst, insuranceOptIn, kycUseForAll, parcelForms]);
+  }), [addressForm, consignorForm, contactForm, csbType, csbVDetails, declarationNote, forceGst, insuranceOptIn, kycUseForAll, parcelForms]);
 
   const draftPatchKey = useMemo(
     () => `${draft?._id ?? "unloaded"}:${JSON.stringify(draftPatch)}`,
@@ -661,6 +678,9 @@ export default function ClientDpdDraftReviewPage() {
       || insuranceOptIn !== (draft.insuranceOptIn ?? false)
       || forceGst !== (draft.forceGst ?? false)
       || csbType !== normalizeCsbType(draft.csbType)
+      || csbVDetails.gstin !== (draft.csbVGstin ?? "")
+      || csbVDetails.accountNumber !== (draft.csbVAccountNumber ?? "")
+      || csbVDetails.invoiceNumber !== (draft.csbVInvoiceNumber ?? "")
       || declarationNote !== (draft.declarationNote ?? defaultDeclarationNote)
       || JSON.stringify(comparableParcelForms(parcelForms))
         !== JSON.stringify(comparableParcelForms(normalizeParcels(draft)))
@@ -677,8 +697,9 @@ export default function ClientDpdDraftReviewPage() {
       || addressForm.addressLine2 !== (draft.consigneeEnteredAddress.addressLine2 ?? "")
       || addressForm.townOrCity !== (draft.consigneeEnteredAddress.townOrCity ?? "")
       || addressForm.county !== (draft.consigneeEnteredAddress.county ?? "")
+      || addressForm.stateCode !== (draft.consigneeEnteredAddress.stateCode ?? "")
       || addressForm.postcode !== (draft.consigneeEnteredAddress.postcode ?? "");
-  }, [addressForm, consignorChanged, contactForm, csbType, declarationNote, draft, forceGst, insuranceOptIn, parcelForms]);
+  }, [addressForm, consignorChanged, contactForm, csbType, csbVDetails, declarationNote, draft, forceGst, insuranceOptIn, parcelForms]);
 
   const {
     status: draftAutosaveStatus,
@@ -723,6 +744,7 @@ export default function ClientDpdDraftReviewPage() {
       addressLine2: address.addressLine2 ?? "",
       townOrCity: address.townOrCity ?? "",
       county: address.county ?? "",
+      stateCode: address.stateCode ?? "",
       postcode: address.postcode ?? ""
     });
     setAddressQuery(address.postcode ?? "");
@@ -737,6 +759,7 @@ export default function ClientDpdDraftReviewPage() {
       serviceCode: nextDraft.serviceCode ?? ""
     });
     setCsbType(normalizeCsbType(nextDraft.csbType));
+    setCsbVDetails({ gstin: nextDraft.csbVGstin ?? "", accountNumber: nextDraft.csbVAccountNumber ?? "", invoiceNumber: nextDraft.csbVInvoiceNumber ?? "" });
     setInsuranceOptIn(nextDraft.insuranceOptIn ?? false);
     setForceGst(nextDraft.forceGst ?? false);
     setDeclarationNote(nextDraft.declarationNote ?? defaultDeclarationNote);
@@ -854,7 +877,8 @@ export default function ClientDpdDraftReviewPage() {
     setAddressForm((current) => ({
       ...current,
       countryCode,
-      countryName
+      countryName,
+      stateCode: ""
     }));
     // Keep the consignee dial code on the destination's code (a UK destination
     // gets +44): a code from another country is invalid for this lane anyway.
@@ -916,6 +940,7 @@ export default function ClientDpdDraftReviewPage() {
         addressLine2: (data.place.address.addressLine2 || current.addressLine2).toUpperCase(),
         townOrCity: (data.place.address.townOrCity || current.townOrCity).toUpperCase(),
         county: (data.place.address.county || current.county).toUpperCase(),
+        stateCode: current.stateCode,
         postcode: (data.place.address.postcode || current.postcode).toUpperCase()
       }));
       setAddressQuery((data.place.address.postcode || prediction.mainText || prediction.text).toUpperCase());
@@ -1041,7 +1066,7 @@ export default function ClientDpdDraftReviewPage() {
     }
 
     const { invalid } = mergeShipmentFormIssues(
-      getReviewIssueDetail(addressForm, contactForm, parcelForms, csbType),
+      getReviewIssueDetail(addressForm, contactForm, parcelForms, csbType, csbVDetails),
       getConsignorFormIssueDetail(consignorForm, consigneeContactFrom(contactForm))
     );
     if (invalid.length) {
@@ -1090,7 +1115,7 @@ export default function ClientDpdDraftReviewPage() {
     }
 
     const issues = [
-      ...getReviewIssues(addressForm, contactForm, parcelForms, csbType),
+      ...getReviewIssues(addressForm, contactForm, parcelForms, csbType, csbVDetails),
       ...getConsignorFormIssues(consignorForm, consigneeContactFrom(contactForm)),
       ...getKycIssues({
         csbType,
@@ -1272,6 +1297,16 @@ export default function ClientDpdDraftReviewPage() {
                     value={csbType}
                     onChange={(next: CsbType) => { setCsbType(next); setReviewIssues([]); }}
                   />
+                  {csbType === "CSB_V" ? (
+                    <div className="mt-4">
+                      <CsbVBookingFields
+                        value={csbVDetails}
+                        onChange={(next) => { setCsbVDetails(next); setReviewIssues([]); }}
+                        issues={getCsbVBookingIssues(csbVDetails, csbType)}
+                        revealError={submitAttempted}
+                      />
+                    </div>
+                  ) : null}
                   {/* Printed as the NOTE block on the shipment (customs) invoice. */}
                   <div className="mt-4">
                     <ShipmentTextField
@@ -1425,7 +1460,17 @@ export default function ClientDpdDraftReviewPage() {
                     <ShipmentTextField label="Delivery Address Line 1" required value={addressForm.addressLine1} onChange={handleAddressChange("addressLine1")} error={findIssue(currentReviewIssues, ["address line 1"])} revealError={submitAttempted} />
                     <ShipmentTextField label="Delivery Address Line 2" value={addressForm.addressLine2} onChange={handleAddressChange("addressLine2")} />
                     <ShipmentTextField label="Delivery Town / City" required value={addressForm.townOrCity} onChange={handleAddressChange("townOrCity")} error={findIssue(currentReviewIssues, ["town or city"])} revealError={submitAttempted} />
-                    <ShipmentTextField label="Delivery State / County" value={addressForm.county} onChange={handleAddressChange("county")} />
+                    <ShipmentConsigneeStateFields
+                      countryName={addressForm.countryName}
+                      state={addressForm.county}
+                      stateCode={addressForm.stateCode}
+                      onStateChange={(value) => setAddressForm((current) => ({ ...current, county: value }))}
+                      onStateCodeChange={(value) => setAddressForm((current) => ({ ...current, stateCode: value }))}
+                      requiredStateCode={csbType === "CSB_V"}
+                      stateError={findIssue(currentReviewIssues, ["consignee state is"])}
+                      stateCodeError={findIssue(currentReviewIssues, ["state code"])}
+                      revealError={submitAttempted}
+                    />
                     <ShipmentTextField label="Delivery Postcode" required value={addressForm.postcode} onChange={handleAddressChange("postcode")} error={findIssue(currentReviewIssues, ["postcode"])} revealError={submitAttempted} />
                   </div>
                 </div>

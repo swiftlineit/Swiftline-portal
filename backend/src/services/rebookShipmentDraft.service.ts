@@ -180,6 +180,7 @@ export async function rebookShipmentDraft(input: {
         addressLine2: source.consigneeEnteredAddress.addressLine2 ?? "",
         townOrCity: source.consigneeEnteredAddress.townOrCity ?? "",
         county: source.consigneeEnteredAddress.county ?? "",
+        stateCode: source.consigneeEnteredAddress.stateCode ?? "",
         deliveryInstructions: source.consigneeEnteredAddress.deliveryInstructions ?? ""
       }
     : {
@@ -195,6 +196,7 @@ export async function rebookShipmentDraft(input: {
         addressLine2: "",
         townOrCity: "",
         county: "",
+        stateCode: "",
         deliveryInstructions: ""
       };
 
@@ -248,6 +250,9 @@ export async function rebookShipmentDraft(input: {
               }
             ],
         csbType: source.csbType ?? "CSB_IV",
+        csbVGstin: source.csbVGstin ?? "",
+        csbVAccountNumber: source.csbVAccountNumber ?? "",
+        csbVInvoiceNumber: source.csbVInvoiceNumber ?? "",
         insuranceOptIn: source.insuranceOptIn ?? false,
         forceGst: source.forceGst ?? false,
         declarationNote: source.declarationNote ?? "",
