@@ -460,6 +460,7 @@ export default function ClientShipmentDetailsPage() {
               address={shipment.shipmentDraft.consignee}
               parcelList={shipment.shipmentDraft.parcelList}
               serviceType={shipment.shipmentDraft.serviceType ?? "COURIER"}
+              csbType={shipment.shipmentDraft.csbType}
               canAmend={
                 Boolean(shipment.dpdShipment)
                 && !hasMovedPastParcelCollected(shipment)

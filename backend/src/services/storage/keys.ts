@@ -36,7 +36,8 @@ const allowedExtensions = new Set([
   "gif",
   // Shipping labels in printer control code, and customs invoice workbooks.
   "zpl",
-  "xlsx"
+  "xlsx",
+  "xls"
 ]);
 
 /**
@@ -87,7 +88,8 @@ export const storageModules = {
   shipmentImport: "shipment-imports",
   claim: "claims",
   dashboardBanner: "dashboard-banners",
-  flightLinehaul: "flight-linehauls"
+  flightLinehaul: "flight-linehauls",
+  operationsManifestArchive: "operations-manifest-archives"
 } as const;
 
 export const claimDocumentTypeValues = ["evidence", "payment-proof", "beneficiary"] as const;
@@ -161,6 +163,10 @@ export function staffDocumentKey(userId: string, originalName: string) {
 
 export function profileImageKey(userId: string, originalName: string) {
   return joinKey(storageModules.profileImage, userId, generatedFilename(originalName));
+}
+
+export function operationsManifestArchiveKey(manifestId: string, originalName: string) {
+  return joinKey(storageModules.operationsManifestArchive, manifestId, "exports", generatedFilename(originalName));
 }
 
 export function dashboardBannerKey(originalName: string) {

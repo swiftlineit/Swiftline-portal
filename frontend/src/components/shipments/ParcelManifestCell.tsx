@@ -86,27 +86,57 @@ function ParcelStatusList({ rows }: { rows: ParcelRow[] }) {
 /**
  * Hover replacement for native `title` tooltips: a rounded dark chatbox card
  * with an arrow pointing back at the cell. Fixed-positioned so the table's
- * horizontal scroll never clips it; dismissed on any scroll, resize, or
+ * horizontal scroll never clips it; dismissed on page scroll, resize, or
  * pointer leave. Tap toggles it for touch screens.
  */
 function HoverCard({ label, card, children }: { label: string; card: ReactNode; children: ReactNode }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
+  const cardRef = useRef<HTMLSpanElement>(null);
+  const hideTimeoutRef = useRef<number | null>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const open = rect !== null;
 
   useEffect(() => {
     if (!open) return;
-    const dismiss = () => setRect(null);
+    const dismiss = (event: Event) => {
+      // Scrolling the parcel list should not dismiss the card that owns it.
+      const target = event.target;
+      if (target instanceof Node && cardRef.current?.contains(target)) return;
+      setRect(null);
+    };
     window.addEventListener("scroll", dismiss, true);
     window.addEventListener("resize", dismiss);
     return () => {
       window.removeEventListener("scroll", dismiss, true);
       window.removeEventListener("resize", dismiss);
     };
-  }, [open ]);
+  }, [open]);
 
-  const show = () => setRect(anchorRef.current?.getBoundingClientRect() ?? null);
-  const hide = () => setRect(null);
+  const cancelHide = () => {
+    if (hideTimeoutRef.current !== null) {
+      window.clearTimeout(hideTimeoutRef.current);
+      hideTimeoutRef.current = null;
+    }
+  };
+
+  const show = () => {
+    cancelHide();
+    setRect(anchorRef.current?.getBoundingClientRect() ?? null);
+  };
+
+  const scheduleHide = () => {
+    cancelHide();
+    hideTimeoutRef.current = window.setTimeout(() => {
+      setRect(null);
+      hideTimeoutRef.current = null;
+    }, 150);
+  };
+
+  useEffect(() => () => {
+    if (hideTimeoutRef.current !== null) {
+      window.clearTimeout(hideTimeoutRef.current);
+    }
+  }, []);
 
   const cardWidth = 300;
   const left = rect ? Math.max(8, Math.min(rect.left, window.innerWidth - cardWidth - 8)) : 0;
@@ -120,10 +150,10 @@ function HoverCard({ label, card, children }: { label: string; card: ReactNode; 
       aria-label={label}
       tabIndex={0}
       onMouseEnter={show}
-      onMouseLeave={hide}
+      onMouseLeave={scheduleHide}
       onFocus={show}
-      onBlur={hide}
-      onClick={() => (open ? hide() : show())}
+      onBlur={scheduleHide}
+      onClick={() => (open ? scheduleHide() : show())}
       className="inline-flex min-w-0 cursor-default outline-none"
     >
       {children}
@@ -145,7 +175,12 @@ function HoverCard({ label, card, children }: { label: string; card: ReactNode; 
               above ? "-bottom-[5px] border-b border-r" : "-top-[5px] border-l border-t"
             }`}
           />
-          <span className="block max-h-72 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-3 text-left text-[11px] leading-relaxed text-slate-100 shadow-xl">
+          <span
+            ref={cardRef}
+            onMouseEnter={cancelHide}
+            onMouseLeave={scheduleHide}
+            className="block max-h-72 overscroll-contain overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-3 text-left text-[11px] leading-relaxed text-slate-100 shadow-xl [scrollbar-width:thin] [scrollbar-color:#64748b_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-500"
+          >
             {card}
           </span>
         </span>

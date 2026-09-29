@@ -56,6 +56,8 @@ import {
   getPositiveNumberError,
   getShipmentDescriptionLimitMessage,
   isUntouchedParcelItem,
+  maxShipmentItemQuantity,
+  maxShipmentItemUnitRate,
   mergeSavedParcelItemsWithLocalRows,
   normalizeParcelItems,
   type ParcelItem
@@ -273,7 +275,7 @@ function getReviewIssueDetail(
   contactForm: ContactForm,
   parcelForms: ParcelForm[],
   csbType: CsbType,
-  csbVDetails: CsbVBookingDetails = { gstin: "", accountNumber: "", invoiceNumber: "" }
+  csbVDetails: CsbVBookingDetails = { gstin: "", accountNumber: "", iecCode: "", invoiceNumber: "" }
 ): ShipmentFormIssues {
   const missing: string[] = [];
   const invalid: string[] = [];
@@ -350,15 +352,15 @@ function getReviewIssueDetail(
         (item.hsnCode.trim() ? invalid : missing).push(`${itemLabel}: ${hsnError.replace(/\.$/, "").toLowerCase()}`);
       }
       // Quantity and unit rate print on the customs invoice, so both are required.
-      const quantityError = getPositiveNumberError(item.quantity, "Quantity");
+      const quantityError = getPositiveNumberError(item.quantity, "Quantity", maxShipmentItemQuantity);
       if (quantityError) {
         (item.quantity.trim() ? invalid : missing).push(`${itemLabel}: ${quantityError.replace(/\.$/, "").toLowerCase()}`);
       }
-      const unitRateError = getPositiveNumberError(item.unitRate, "Unit rate");
+      const unitRateError = getPositiveNumberError(item.unitRate, "Unit rate", maxShipmentItemUnitRate);
       if (unitRateError) {
         (item.unitRate.trim() ? invalid : missing).push(`${itemLabel}: ${unitRateError.replace(/\.$/, "").toLowerCase()}`);
       }
-      const amountError = getParcelItemAmountError(item);
+      const amountError = getParcelItemAmountError(item, csbType !== "CSB_V");
       if (amountError) invalid.push(`${itemLabel}: ${amountError.replace(/\.$/, "").toLowerCase()}`);
     });
   });
@@ -431,7 +433,7 @@ export default function ClientDpdDraftReviewPage() {
   // Customs route for the shipment. Drafts saved before CSB selection existed
   // read as CSB-IV, matching how the backend prices them.
   const [csbType, setCsbType] = useState<CsbType>("CSB_IV");
-  const [csbVDetails, setCsbVDetails] = useState<CsbVBookingDetails>({ gstin: "", accountNumber: "", invoiceNumber: "" });
+  const [csbVDetails, setCsbVDetails] = useState<CsbVBookingDetails>({ gstin: "", accountNumber: "", iecCode: "", invoiceNumber: "" });
   // Optional transit cover. Off unless the customer asks for it.
   const [insuranceOptIn, setInsuranceOptIn] = useState(false);
   const [forceGst, setForceGst] = useState(false);
@@ -659,6 +661,7 @@ export default function ClientDpdDraftReviewPage() {
     csbType,
     csbVGstin: csbVDetails.gstin,
     csbVAccountNumber: csbVDetails.accountNumber,
+    csbVIecCode: csbVDetails.iecCode,
     csbVInvoiceNumber: csbVDetails.invoiceNumber,
     insuranceOptIn,
     forceGst,
@@ -680,6 +683,7 @@ export default function ClientDpdDraftReviewPage() {
       || csbType !== normalizeCsbType(draft.csbType)
       || csbVDetails.gstin !== (draft.csbVGstin ?? "")
       || csbVDetails.accountNumber !== (draft.csbVAccountNumber ?? "")
+      || csbVDetails.iecCode !== (draft.csbVIecCode ?? "")
       || csbVDetails.invoiceNumber !== (draft.csbVInvoiceNumber ?? "")
       || declarationNote !== (draft.declarationNote ?? defaultDeclarationNote)
       || JSON.stringify(comparableParcelForms(parcelForms))
@@ -759,7 +763,7 @@ export default function ClientDpdDraftReviewPage() {
       serviceCode: nextDraft.serviceCode ?? ""
     });
     setCsbType(normalizeCsbType(nextDraft.csbType));
-    setCsbVDetails({ gstin: nextDraft.csbVGstin ?? "", accountNumber: nextDraft.csbVAccountNumber ?? "", invoiceNumber: nextDraft.csbVInvoiceNumber ?? "" });
+    setCsbVDetails({ gstin: nextDraft.csbVGstin ?? "", accountNumber: nextDraft.csbVAccountNumber ?? "", iecCode: nextDraft.csbVIecCode ?? "", invoiceNumber: nextDraft.csbVInvoiceNumber ?? "" });
     setInsuranceOptIn(nextDraft.insuranceOptIn ?? false);
     setForceGst(nextDraft.forceGst ?? false);
     setDeclarationNote(nextDraft.declarationNote ?? defaultDeclarationNote);
@@ -1133,7 +1137,7 @@ export default function ClientDpdDraftReviewPage() {
       return;
     }
 
-    const descriptionLimitMessage = getShipmentDescriptionLimitMessage(parcelForms);
+    const descriptionLimitMessage = getShipmentDescriptionLimitMessage(parcelForms, csbType !== "CSB_V");
     if (descriptionLimitMessage) {
       setError(descriptionLimitMessage);
       toast.error(descriptionLimitMessage);
@@ -1461,6 +1465,7 @@ export default function ClientDpdDraftReviewPage() {
                     <ShipmentTextField label="Delivery Address Line 2" value={addressForm.addressLine2} onChange={handleAddressChange("addressLine2")} />
                     <ShipmentTextField label="Delivery Town / City" required value={addressForm.townOrCity} onChange={handleAddressChange("townOrCity")} error={findIssue(currentReviewIssues, ["town or city"])} revealError={submitAttempted} />
                     <ShipmentConsigneeStateFields
+                      countryCode={addressForm.countryCode}
                       countryName={addressForm.countryName}
                       state={addressForm.county}
                       stateCode={addressForm.stateCode}
@@ -1581,6 +1586,7 @@ export default function ClientDpdDraftReviewPage() {
                             parcelLabel={`Parcel ${index + 1}`}
                             revealError={submitAttempted}
                             requireHsnCode={csbType === "CSB_V"}
+                            enforceItemValueLimit={csbType !== "CSB_V"}
                           />
                         </div>
                       </div>

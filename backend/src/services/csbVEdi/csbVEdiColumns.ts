@@ -16,6 +16,7 @@ export type CsbVEdiDraftContext = {
   csbType?: string;
   csbVGstin?: string;
   csbVAccountNumber?: string;
+  csbVIecCode?: string;
   csbVInvoiceNumber?: string;
   consigneeEnteredAddress?: { stateCode?: string };
 };
@@ -65,7 +66,7 @@ export function buildCsbVEdiRow(context: CsbVEdiRowContext): Array<string | numb
     hawb,
     Math.max(consignment.parcels.length, 1),
     shipmentWeight,
-    "1305023269",
+    ediText(draft.csbVIecCode),
     "FOB",
     bagList,
     "Y",

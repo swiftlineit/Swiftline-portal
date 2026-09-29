@@ -119,6 +119,7 @@ function validPayload() {
     csbType: "CSB_IV",
     csbVGstin: "",
     csbVAccountNumber: "",
+    csbVIecCode: "",
     csbVInvoiceNumber: "",
     kycUseForAllParcels: true,
     parcels: [{ weightKg: 2, lengthCm: 20, widthCm: 15, heightCm: 10, shipmentContentType: "PARCEL", shipmentReference1: "WEB-1", shipmentReference2: "", items: [{ description: "Cotton shirts", hsnCode: "", unitType: "Pcs", quantity: 2, unitRate: 500 }] }],
@@ -215,10 +216,11 @@ describe("public shipment booking validation", () => {
       const paths = missing.error.issues.map((issue) => issue.path.join("."));
       assert.ok(paths.includes("csbVGstin"));
       assert.ok(paths.includes("csbVAccountNumber"));
+      assert.ok(paths.includes("csbVIecCode"));
       assert.ok(paths.includes("csbVInvoiceNumber"));
     }
 
-    const complete = { ...payload, csbVGstin: "08ABCDE1234F1Z5", csbVAccountNumber: "001234", csbVInvoiceNumber: "INV-100" };
+    const complete = { ...payload, csbVGstin: "08ABCDE1234F1Z5", csbVAccountNumber: "001234", csbVIecCode: "CUSTOMIEC1", csbVInvoiceNumber: "INV-100" };
     assert.equal(publicShipmentDraftPayloadSchema.safeParse(complete).success, true);
   });
 

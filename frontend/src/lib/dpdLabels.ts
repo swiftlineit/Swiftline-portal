@@ -188,6 +188,7 @@ export type ShipmentDraft = {
   csbType?: CsbType;
   csbVGstin?: string;
   csbVAccountNumber?: string;
+  csbVIecCode?: string;
   csbVInvoiceNumber?: string;
   // Optional transit cover. Absent on drafts created before insurance existed,
   // which price as uninsured.
@@ -232,6 +233,7 @@ export type ShipmentDraftPatch = {
   csbType?: CsbType;
   csbVGstin?: string;
   csbVAccountNumber?: string;
+  csbVIecCode?: string;
   csbVInvoiceNumber?: string;
   insuranceOptIn?: boolean;
   forceGst?: boolean;

@@ -12,6 +12,7 @@ import {
   type OperationsParcelDisposition
 } from "../models/operationsManifestConsignment.model.js";
 import { OperationsManifestCounter } from "../models/operationsManifestCounter.model.js";
+import { OperationsManifestArchive, type ArchivedManifestDocument } from "../models/operationsManifestArchive.model.js";
 import {
   OperationsManifestScan,
   type OperationsScanSource
@@ -139,10 +140,8 @@ export function formatOperationsManifestNumber(sequence: number) {
   return `SLC${String(sequence).padStart(3, "0")}`;
 }
 
-const reusableNumberStatuses = new Set(["DRAFT", "PACKING", "READY_TO_SEAL"]);
-
 export function isOperationsManifestNumberReusable(status: string) {
-  return reusableNumberStatuses.has(status);
+  return ["DRAFT", "PACKING", "READY_TO_SEAL", "SEALED", "DISPATCHED", "CANCELLED"].includes(status);
 }
 
 function operationsManifestSequence(manifestNumber: string) {
@@ -1969,8 +1968,20 @@ export async function deleteOperationsManifest(input: {
   manifestId: string;
   confirmationManifestNumber: string;
   userId: mongoose.Types.ObjectId;
+}, archiveOverride?: {
+  stageOperationsManifestArchive: (manifest: IOperationsManifest) => Promise<ArchivedManifestDocument[]>;
+  removeStagedArchiveDocuments: (documents: ArchivedManifestDocument[]) => Promise<void>;
 }) {
   const manifestId = asObjectId(input.manifestId, "Operations manifest");
+  const source = await OperationsManifest.findById(manifestId).exec();
+  if (!source) throw new OperationsManifestServiceError("Operations manifest was not found.", 404);
+  if (input.confirmationManifestNumber.trim().toUpperCase() !== source.manifestNumber) {
+    throw new OperationsManifestServiceError("Manifest deletion confirmation did not match.", 409);
+  }
+  // A cancelled manifest may also have been sealed before cancellation.
+  const issued = Boolean(parseSealedSnapshot(source.sealedSnapshot));
+  const { stageOperationsManifestArchive, removeStagedArchiveDocuments } = archiveOverride ?? await import("./operationsManifestArchive.service.js");
+  const documents = issued ? await stageOperationsManifestArchive(source) : [];
   const session = await mongoose.startSession();
 
   try {
@@ -1980,13 +1991,29 @@ export async function deleteOperationsManifest(input: {
       if (input.confirmationManifestNumber.trim().toUpperCase() !== manifest.manifestNumber) {
         throw new OperationsManifestServiceError("Manifest deletion confirmation did not match.", 409);
       }
+      if (manifest.status !== source.status || manifest.updatedAt?.getTime() !== source.updatedAt?.getTime()) {
+        throw new OperationsManifestServiceError("This manifest changed while its archive was prepared. Refresh and try again.", 409);
+      }
 
       const sequence = operationsManifestSequence(manifest.manifestNumber);
       const numberWillBeReused = isOperationsManifestNumberReusable(manifest.status) && sequence !== null;
 
+      if (issued) {
+        await OperationsManifestArchive.create([{
+          _id: manifestId,
+          manifestNumber: manifest.manifestNumber,
+          branchId: manifest.branchId,
+          status: manifest.status,
+          manifest: manifest.toObject() as unknown as Record<string, unknown>,
+          documents,
+          archivedAt: new Date(),
+          archivedBy: input.userId
+        }], { session });
+      }
+
       // Existing tracking milestones remain as shipment history, but the
       // manifest workspace and all of its packing/scanner children are removed.
-      // The audit row is intentionally retained after the parent is gone.
+      // Issued documents live in a separate read-only archive keyed by this ID.
       await audit("OPERATIONS_MANIFEST_DELETED", manifestId, input.userId, {
         manifestNumber: manifest.manifestNumber,
         status: manifest.status,
@@ -2027,6 +2054,9 @@ export async function deleteOperationsManifest(input: {
     });
     if (!deleted) throw new OperationsManifestServiceError("Operations manifest could not be deleted.", 500);
     return deleted;
+  } catch (error) {
+    await removeStagedArchiveDocuments(documents);
+    throw error;
   } finally {
     await session.endSession();
   }

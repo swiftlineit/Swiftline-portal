@@ -78,6 +78,7 @@ export const publicShipmentDraftPayloadSchema = z.object({
   csbType: z.enum(["CSB_IV", "CSB_V"]),
   csbVGstin: cleanText(20).default(""),
   csbVAccountNumber: cleanText(40).default(""),
+  csbVIecCode: cleanText(20).default("").transform((value) => value.toUpperCase()),
   csbVInvoiceNumber: cleanText(80).default(""),
   kycUseForAllParcels: z.boolean().default(true),
   parcels: z.array(parcelSchema).min(1, "Add at least one parcel.").max(maxParcelsPerShipment, `A booking can contain up to ${maxParcelsPerShipment} parcels.`),
@@ -97,7 +98,10 @@ export const publicShipmentDraftPayloadSchema = z.object({
       if (gstinError) context.addIssue({ code: "custom", path: ["csbVGstin"], message: gstinError });
     }
     if (!value.csbVAccountNumber) {
-      context.addIssue({ code: "custom", path: ["csbVAccountNumber"], message: "Account number is required." });
+      context.addIssue({ code: "custom", path: ["csbVAccountNumber"], message: "Bank account number is required." });
+    }
+    if (!value.csbVIecCode) {
+      context.addIssue({ code: "custom", path: ["csbVIecCode"], message: "IEC code is required." });
     }
     if (!value.csbVInvoiceNumber) {
       context.addIssue({ code: "custom", path: ["csbVInvoiceNumber"], message: "Commercial invoice number is required." });

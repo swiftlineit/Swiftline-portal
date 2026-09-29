@@ -4,11 +4,14 @@ import {
   createEmptyParcelItem,
   composeShipmentDescription,
   getParcelItemAmountError,
+  getPositiveNumberError,
   getShipmentDescriptionLimitMessage,
   isUntouchedParcelItem,
   mergeSavedParcelItemsWithLocalRows,
   maxParcelItems,
   maxParcelItemAmountExclusive,
+  maxShipmentItemQuantity,
+  maxShipmentItemUnitRate,
   type ParcelItem
 } from "./parcelItems";
 
@@ -26,6 +29,17 @@ test("allows item amounts below 5001 and rejects 5001 or more", () => {
   assert.equal(getParcelItemAmountError(item({ quantity: "1", unitRate: "5000.99" })), "");
   assert.equal(getParcelItemAmountError(item({ quantity: "2", unitRate: "2500" })), "");
   assert.equal(getParcelItemAmountError(item({ quantity: "1", unitRate: "5001" })), "Item amount must be below 5001.");
+  assert.equal(getParcelItemAmountError(item({ quantity: "2", unitRate: "2500.5" }), false), "");
+});
+
+test("names the field and limit before an item exceeds the draft API bounds", () => {
+  assert.equal(getPositiveNumberError("1000000", "Quantity", maxShipmentItemQuantity), "");
+  assert.equal(getPositiveNumberError("1000001", "Quantity", maxShipmentItemQuantity), "Quantity must be 1,000,000 or less.");
+  assert.equal(getPositiveNumberError("10000000", "Unit rate", maxShipmentItemUnitRate), "");
+  assert.equal(getPositiveNumberError("10000000.01", "Unit rate", maxShipmentItemUnitRate), "Unit rate must be 10,000,000 or less.");
+  assert.equal(getPositiveNumberError("0", "Quantity", maxShipmentItemQuantity), "Quantity must be greater than zero.");
+  assert.equal(getPositiveNumberError("", "Unit rate", maxShipmentItemUnitRate), "Unit rate is required.");
+  assert.equal(getPositiveNumberError("10000000.01", "Unit rate", 100_000_000), "");
 });
 
 test("counts all parcel item descriptions with comma separators", () => {
@@ -50,6 +64,7 @@ test("reports the exact excess only above the 240-character shipment limit", () 
 
   assert.match(message, /current combined description is 245 characters/);
   assert.match(message, /exceeds the limit by 5/);
+  assert.equal(getShipmentDescriptionLimitMessage([{ items }], false), "");
 });
 
 test("recognizes only a completely untouched item row as UI-only", () => {

@@ -12,6 +12,7 @@ import { countryCodeOptions } from "@/lib/countries";
 import {
   fetchCities,
   fetchStates,
+  findShipmentStateCode,
   findStateCode,
   matchStateName,
   type GeographyState,
@@ -94,7 +95,20 @@ function AddressPanel<T extends PublicAddress>({
   const [cities, setCities] = useState<string[]>([]);
   const update = (key: keyof PublicSender, next: string) =>
     onChange({ ...value, [key]: next } as T);
-  const stateCode = findStateCode(states, value.county);
+  const selectedStateName = states.length
+    ? matchStateName(states, value.county) || value.county
+    : value.county;
+  const referenceStateCode = findStateCode(states, selectedStateName);
+  const usesNumericStateCode = !sender && csbType === "CSB_V";
+  const stateCode = usesNumericStateCode
+    ? findShipmentStateCode(value.countryName, states, selectedStateName)
+    : referenceStateCode;
+  const numericStateCode = value.countryCode.toUpperCase() === "US" && /^\d+$/.test(stateCode);
+
+  const getFormStateCode = (stateName: string) =>
+    usesNumericStateCode
+      ? findShipmentStateCode(value.countryName, states, stateName)
+      : findStateCode(states, stateName);
 
   useEffect(() => {
     let current = true;
@@ -107,11 +121,11 @@ function AddressPanel<T extends PublicAddress>({
   }, [value.countryName]);
   useEffect(() => {
     let current = true;
-    if (!stateCode)
+    if (!referenceStateCode)
       return () => {
         current = false;
       };
-    void fetchCities(value.countryName, stateCode, PUBLIC_REFERENCE_ROOT).then(
+    void fetchCities(value.countryName, referenceStateCode, PUBLIC_REFERENCE_ROOT).then(
       (items) => {
         if (current) setCities(items);
       },
@@ -119,7 +133,16 @@ function AddressPanel<T extends PublicAddress>({
     return () => {
       current = false;
     };
-  }, [stateCode, value.countryName]);
+  }, [referenceStateCode, selectedStateName, value.countryName]);
+
+  useEffect(() => {
+    if (!usesNumericStateCode || !states.length || !selectedStateName) return;
+
+    const nextCode = findShipmentStateCode(value.countryName, states, selectedStateName);
+    if (nextCode && nextCode !== value.stateCode && value.stateCode === referenceStateCode) {
+      onChange({ ...value, stateCode: nextCode } as T);
+    }
+  }, [onChange, referenceStateCode, selectedStateName, states, usesNumericStateCode, value]);
 
   const countryOptions = useMemo(
     () =>
@@ -285,7 +308,7 @@ function AddressPanel<T extends PublicAddress>({
                 addressLine2: address.addressLine2,
                 townOrCity: address.city,
                 county: matchedState,
-                stateCode: findStateCode(states, matchedState),
+                stateCode: getFormStateCode(matchedState),
                 postcode: address.postalCode.toUpperCase(),
                 countryCode: address.countryCode || value.countryCode,
                 countryName: address.countryName || value.countryName,
@@ -308,7 +331,7 @@ function AddressPanel<T extends PublicAddress>({
           <PublicSearchableSelect
             label="State / County"
             required
-            value={value.county}
+            value={selectedStateName}
             options={states.map((state) => ({
               value: state.name,
               label: state.name,
@@ -320,7 +343,7 @@ function AddressPanel<T extends PublicAddress>({
               onChange({
                 ...value,
                 county: next,
-                stateCode: findStateCode(states, next),
+                stateCode: getFormStateCode(next),
                 // Preserve a city entered before the first state selection or
                 // filled by address lookup. Clear it only when the user changes
                 // from one established state to another.
@@ -369,8 +392,16 @@ function AddressPanel<T extends PublicAddress>({
             label="Consignee State Code"
             required
             value={value.stateCode}
-            readOnly={Boolean(states.length)}
-            onChange={(event) => update("stateCode", event.target.value.toUpperCase())}
+            inputMode={numericStateCode ? "numeric" : "text"}
+            maxLength={20}
+            onChange={(event) =>
+              update(
+                "stateCode",
+                numericStateCode
+                  ? event.target.value.replace(/\D/g, "")
+                  : event.target.value.toUpperCase(),
+              )
+            }
             error={errors[`${prefix}.stateCode`]}
             revealError={revealErrors}
           />

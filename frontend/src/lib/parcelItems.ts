@@ -13,6 +13,9 @@ export const contentsDescriptionMaxLength = 120;
 /** Maximum combined goods-description length for one shipment booking. */
 export const shipmentDescriptionMaxLength = 240;
 export const maxParcelItems = 50;
+/** Draft and amendment API bounds for one item row. */
+export const maxShipmentItemQuantity = 1_000_000;
+export const maxShipmentItemUnitRate = 10_000_000;
 /** Exclusive upper bound for one item's derived value (quantity x unit rate). */
 export const maxParcelItemAmountExclusive = 5001;
 
@@ -45,10 +48,14 @@ export function getParcelItemAmount(item: { quantity: string; unitRate: string }
 }
 
 /** Validation message for one item's derived value, or "" when it is acceptable. */
-export function getParcelItemAmountError(item: { quantity: string; unitRate: string }): string {
+export function getParcelItemAmountError(
+  item: { quantity: string; unitRate: string },
+  enforceLimit = true
+): string {
   if (getPositiveNumberError(item.quantity, "Quantity") || getPositiveNumberError(item.unitRate, "Unit rate")) {
     return "";
   }
+  if (!enforceLimit) return "";
 
   return getParcelItemAmount(item) >= maxParcelItemAmountExclusive
     ? `Item amount must be below ${maxParcelItemAmountExclusive}.`
@@ -93,11 +100,12 @@ export function getHsnCodeError(value: string, required = true): string {
 }
 
 /** Validation message for a quantity or unit rate, or "" when acceptable. */
-export function getPositiveNumberError(value: string, label: string): string {
+export function getPositiveNumberError(value: string, label: string, maximum?: number): string {
   const trimmed = value.trim();
   if (!trimmed) return `${label} is required.`;
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed) || parsed <= 0) return `${label} must be greater than zero.`;
+  if (maximum !== undefined && parsed > maximum) return `${label} must be ${maximum.toLocaleString("en-US")} or less.`;
   return "";
 }
 
@@ -156,7 +164,11 @@ export function getShipmentDescriptionCharacterCount(parcels: ShipmentDescriptio
 }
 
 /** Returns the final-booking warning, or an empty string when it fits. */
-export function getShipmentDescriptionLimitMessage(parcels: ShipmentDescriptionParcel[]): string {
+export function getShipmentDescriptionLimitMessage(
+  parcels: ShipmentDescriptionParcel[],
+  enforceLimit = true
+): string {
+  if (!enforceLimit) return "";
   const count = getShipmentDescriptionCharacterCount(parcels);
   if (count <= shipmentDescriptionMaxLength) return "";
 

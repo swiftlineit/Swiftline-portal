@@ -19,7 +19,7 @@ export type OpsEdiCellValue = string | number;
 
 export type OpsEdiColumn = {
   header: string;
-  type: "text" | "number";
+  type: "text" | "number" | ((row: ManifestDocumentParcelRow) => "text" | "number");
   value: (row: ManifestDocumentParcelRow, context: OpsEdiContext) => OpsEdiCellValue;
   formula?: (excelRow: number) => string;
   warnWhenBlank?: boolean;
@@ -40,7 +40,7 @@ const emptyParty: ManifestPartySnapshot = {
 
 const consignor = (row: ManifestDocumentParcelRow) => row.consignor.party ?? emptyParty;
 const consignee = (row: ManifestDocumentParcelRow) => row.consignee.party ?? emptyParty;
-const hawb = (row: ManifestDocumentParcelRow) => ediText(row.parcelNumber).toUpperCase();
+const hawb = (row: ManifestDocumentParcelRow) => ediText(row.exportHawbNumber ?? row.parcelNumber).toUpperCase();
 const description = (row: ManifestDocumentParcelRow) => ediText(fullManifestParcelDescription(row.items, row.description));
 const value = (row: ManifestDocumentParcelRow) => ediValue(row.declaredValueMinor);
 const bagNumber = (row: ManifestDocumentParcelRow) => ediText(row.bagNumber);
@@ -58,7 +58,7 @@ export const OPS_EDI_COLUMNS: readonly OpsEdiColumn[] = [
   { header: "Unit_Price", type: "number", value: () => 0, warnWhenBlank: true },
   { header: "DOX_SPX", type: "text", value: () => "SPX", warnWhenBlank: true },
   { header: "Weight", type: "number", value: (row) => row.weightKg, warnWhenBlank: true },
-  { header: "IEC_CODE", type: "text", value: () => "" },
+  { header: "IEC_CODE", type: "text", value: (row) => row.exportIecCode ?? "" },
   { header: "IEC_BR_CODE", type: "text", value: () => "" },
   { header: "Consignor_Name", type: "text", value: (row) => ediText(consignor(row).contactName || consignor(row).companyName), warnWhenBlank: true },
   { header: "CnrAddress_1", type: "text", value: (row) => ediAddressLine(consignor(row).addressLine1), warnWhenBlank: true },
@@ -74,7 +74,7 @@ export const OPS_EDI_COLUMNS: readonly OpsEdiColumn[] = [
   { header: "CneePostal_Code", type: "text", value: (row) => ediText(consignee(row).postcode), warnWhenBlank: true },
   { header: "CneeState", type: "text", value: (row) => titleCaseState(consignee(row).state) },
   { header: "CneeCountry", type: "text", value: (row) => ediCountryName(consignee(row).countryCode || consignee(row).countryName), warnWhenBlank: true },
-  { header: "Export_Invoice_no", type: "text", value: (row) => hawb(row), warnWhenBlank: true },
+  { header: "Export_Invoice_no", type: "text", value: (row) => row.exportInvoiceNumber ?? hawb(row), warnWhenBlank: true },
   { header: "Date_of_EXPORT_Invoice", type: "text", value: (_row, context) => ediDate(context.departureDate), warnWhenBlank: true },
   { header: "Total_Item_value", type: "number", value: (row) => value(row), warnWhenBlank: true },
   { header: "Total_Taxable_Value", type: "number", value: () => 0, warnWhenBlank: true },
@@ -100,7 +100,7 @@ export const OPS_EDI_COLUMNS: readonly OpsEdiColumn[] = [
     value: (_row, context) => `KYC-${ediAadhaarNumber(context.aadhaarFor(_row)) || ""}`,
     formula: (excelRow) => `CONCATENATE("KYC-",AJ${excelRow})`
   },
-  { header: "ACCOUNT_NO", type: "number", value: () => 0, warnWhenBlank: true },
+  { header: "ACCOUNT_NO", type: (row) => row.exportAccountNumber === undefined ? "number" : "text", value: (row) => row.exportAccountNumber ?? 0, warnWhenBlank: true },
   { header: "GOV_NONGOV_TYPE", type: "text", value: () => "N", warnWhenBlank: true },
   { header: "NFEI_FLAG", type: "text", value: () => "N", warnWhenBlank: true }
 ];

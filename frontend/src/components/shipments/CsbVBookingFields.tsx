@@ -15,7 +15,7 @@ export function CsbVBookingFields({
   revealError: boolean;
 }) {
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className="grid gap-4 md:grid-cols-2">
       <ShipmentTextField
         label="GSTIN Number"
         value={value.gstin}
@@ -27,13 +27,22 @@ export function CsbVBookingFields({
         placeholder="15-character GSTIN"
       />
       <ShipmentTextField
-        label="Account Number"
+        label="Bank Account Number"
         value={value.accountNumber}
         onChange={(event) => onChange({ ...value, accountNumber: event.target.value })}
         error={issues.accountNumber}
         revealError={revealError}
         required
         maxLength={40}
+      />
+      <ShipmentTextField
+        label="IEC Code"
+        value={value.iecCode}
+        onChange={(event) => onChange({ ...value, iecCode: event.target.value.toUpperCase() })}
+        error={issues.iecCode}
+        revealError={revealError}
+        required
+        maxLength={20}
       />
       <ShipmentTextField
         label="Commercial Invoice Number"

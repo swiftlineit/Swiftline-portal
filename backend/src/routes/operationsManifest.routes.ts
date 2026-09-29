@@ -14,6 +14,9 @@ operationsManifestRouter.post("/scan-sessions/pair", scannerPairingLimiter, scan
 operationsManifestRouter.get("/scan-sessions/:sessionId/status", scannerFeedLimiter, scanSessionController.getSessionStatus);
 operationsManifestRouter.get("/branches/options", controller.listBranchOptions);
 operationsManifestRouter.get("/", controller.listManifests);
+operationsManifestRouter.get("/archives", controller.listArchivedManifests);
+operationsManifestRouter.get("/archives/:manifestId", controller.getArchivedManifest);
+operationsManifestRouter.get("/archives/:manifestId/exports/:format", controller.downloadArchivedManifest);
 operationsManifestRouter.post("/", requireRequestedOperationsBranch, controller.createManifest);
 operationsManifestRouter.use("/:manifestId", requireOperationsManifestBranch);
 operationsManifestRouter.get("/:manifestId/scan-sessions/active", scannerFeedLimiter, scanSessionController.getActiveSession);

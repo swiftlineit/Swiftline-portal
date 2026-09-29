@@ -147,6 +147,7 @@ const draftPatchSchema = z.object({
   csbType: z.enum(csbTypeValues).optional(),
   csbVGstin: z.string().trim().toUpperCase().max(20).optional(),
   csbVAccountNumber: z.string().trim().max(40).optional(),
+  csbVIecCode: z.string().trim().toUpperCase().max(20).optional(),
   csbVInvoiceNumber: z.string().trim().max(80).optional(),
   // Optional transit cover; drives the insurance premium on the estimate.
   insuranceOptIn: z.boolean().optional(),
@@ -255,6 +256,24 @@ function getDraftPatchValidationIssues(error: z.ZodError) {
     const itemsPath = path.match(/^parcelList\.(\d+)\.items$/);
     if (itemsPath && issue.code === "too_big") {
       return `Parcel ${Number(itemsPath[1]) + 1} can contain at most ${maxParcelItems} items`;
+    }
+    const itemFieldPath = path.match(/^parcelList\.(\d+)\.items\.(\d+)\.(description|hsnCode|unitType|quantity|unitRate)$/);
+    if (itemFieldPath) {
+      const itemLabel = `Parcel ${Number(itemFieldPath[1]) + 1} item ${Number(itemFieldPath[2]) + 1}`;
+      const field = itemFieldPath[3] ?? "";
+      const fieldLabel = {
+        description: "Description",
+        hsnCode: "HS code",
+        unitType: "Unit type",
+        quantity: "Quantity",
+        unitRate: "Unit rate"
+      }[field] ?? "Item field";
+      if (issue.code === "too_big") {
+        const maximum = Number(issue.maximum).toLocaleString("en-US");
+        return `${itemLabel}: ${fieldLabel} must be ${maximum} ${field === "quantity" || field === "unitRate" ? "or less" : "characters or fewer"}`;
+      }
+      if (issue.code === "too_small") return `${itemLabel}: ${fieldLabel} must be zero or greater`;
+      return `${itemLabel}: ${issue.message}`;
     }
     if (path === "parcelList") {
       if (issue.code === "too_big") return `Number of Parcels (PCS) must be ${maxParcelsPerShipment} or fewer`;
@@ -740,7 +759,7 @@ export async function updateShipmentDraft(request: Request, response: Response):
     shipmentDraft.csbType = parsed.data.csbType;
   }
 
-  for (const fieldName of ["csbVGstin", "csbVAccountNumber", "csbVInvoiceNumber"] as const) {
+  for (const fieldName of ["csbVGstin", "csbVAccountNumber", "csbVIecCode", "csbVInvoiceNumber"] as const) {
     const nextValue = parsed.data[fieldName];
     if (typeof nextValue !== "string") continue;
 

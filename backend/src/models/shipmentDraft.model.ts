@@ -199,6 +199,7 @@ export interface IShipmentDraft extends mongoose.Document {
   // invoice/reference fields used by carrier booking.
   csbVGstin: string;
   csbVAccountNumber: string;
+  csbVIecCode: string;
   csbVInvoiceNumber: string;
   /**
    * Whether the customer bought optional transit cover. The premium is priced from
@@ -519,6 +520,7 @@ const shipmentDraftSchema = new mongoose.Schema<IShipmentDraft>(
     },
     csbVGstin: { type: String, uppercase: true, trim: true, maxlength: 20, default: "" },
     csbVAccountNumber: { type: String, trim: true, maxlength: 40, default: "" },
+    csbVIecCode: { type: String, trim: true, uppercase: true, maxlength: 20, default: "" },
     csbVInvoiceNumber: { type: String, trim: true, maxlength: 80, default: "" },
     // Drafts created before insurance existed read as false, so repricing one
     // never introduces a premium it was not booked with.

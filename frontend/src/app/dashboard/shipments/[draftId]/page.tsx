@@ -963,6 +963,7 @@ export default function AdminShipmentDetailsPage() {
               address={draft.consigneeEnteredAddress}
               parcelList={draft.parcelList}
               serviceType={draft.serviceType ?? "COURIER"}
+              csbType={draft.csbType}
               canAmend={Boolean(history?.dpdShipment) && !hasMovedPastParcelCollected(history) && !chargeVerified && !cancellationLocked}
               blockedReason={
                 cancellation?.status === "REQUESTED"

@@ -300,7 +300,7 @@ function buildDataRecords(
       const xf = styles[columnIndex]![value === "" ? "blank" : "value"];
       if (value === "") {
         records.push(blankRecord(zeroBasedRow, columnIndex, xf));
-      } else if (column.type === "number") {
+      } else if ((typeof column.type === "function" ? column.type(row) : column.type) === "number") {
         records.push(numberRecord(zeroBasedRow, columnIndex, xf, Number(value)));
       } else {
         records.push(labelRecord(zeroBasedRow, columnIndex, xf, String(value)));

@@ -5,6 +5,7 @@ import { buildManifestDocumentModel, parseSealedSnapshot } from "../manifestDocu
 import { OperationsManifestServiceError } from "../operationsManifest.service.js";
 import { buildOpsEdiWorkbookBuffer } from "./opsEdiWorkbook.service.js";
 import { collectOpsEdiWarnings, type OpsEdiContext } from "./opsEdiColumns.js";
+import { withCsbVExportHawb } from "../edi/csbVExportHawb.js";
 
 function parcelSequenceFromBarcode(parcelNumber: string): number | null {
   const match = /-(\d{1,3})$/.exec(parcelNumber.trim());
@@ -24,7 +25,7 @@ export async function buildOperationsManifestOpsEdi(manifest: IOperationsManifes
 
   const draftIds = [...new Set(model.consignments.map((consignment) => consignment.shipmentDraftId))];
   const drafts = await ShipmentDraft.find({ _id: { $in: draftIds } })
-    .select("consignorAddress kycUseForAllParcels parcelList")
+    .select("csbType csbVIecCode csbVAccountNumber csbVInvoiceNumber consignorAddress kycUseForAllParcels parcelList")
     .lean()
     .exec();
   const draftById = new Map(drafts.map((draft) => [String(draft._id), draft]));
@@ -44,9 +45,10 @@ export async function buildOperationsManifestOpsEdi(manifest: IOperationsManifes
     departureDate: String(model.header.departureDate ?? ""),
     aadhaarFor
   };
-  const warnings = collectOpsEdiWarnings(model.parcelRows, context);
+  const rows = withCsbVExportHawb(model.parcelRows, drafts);
+  const warnings = collectOpsEdiWarnings(rows, context);
   try {
-    return buildOpsEdiWorkbookBuffer(model.parcelRows, context, warnings);
+    return buildOpsEdiWorkbookBuffer(rows, context, warnings);
   } catch (error) {
     console.error("Unable to build the OPS EDI workbook.", error);
     throw new OperationsManifestServiceError("The OPS EDI template could not be loaded or populated.", 500);

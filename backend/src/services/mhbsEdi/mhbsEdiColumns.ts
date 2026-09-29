@@ -15,7 +15,7 @@ export type MhbsEdiWarning = {
 };
 
 function hawb(row: ManifestDocumentParcelRow): string {
-  return ediText(row.parcelNumber).toUpperCase();
+  return ediText(row.exportHawbNumber ?? row.parcelNumber).toUpperCase();
 }
 
 function mhbs(row: ManifestDocumentParcelRow): string {

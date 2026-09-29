@@ -9,6 +9,7 @@ import {
   ShipmentServiceType,
   shipmentContentTypeOptions
 } from "@/lib/dpdLabels";
+import type { CsbType } from "@/lib/csbType";
 import { ParcelItemsEditor } from "@/components/shipments/ParcelItemsEditor";
 import {
   composeContentsDescription,
@@ -21,6 +22,7 @@ type Props = {
   address: ShipmentAddress;
   parcelList: ShipmentDraft["parcelList"];
   serviceType: ShipmentServiceType;
+  csbType?: CsbType;
   canAmend: boolean;
   blockedReason: string;
   busy: boolean;
@@ -78,6 +80,7 @@ export default function ShipmentAmendmentPanel({
   address,
   parcelList,
   serviceType,
+  csbType,
   canAmend,
   blockedReason,
   busy,
@@ -336,6 +339,7 @@ export default function ShipmentAmendmentPanel({
                       items={parcel.items}
                       onChange={(items) => updateParcelItems(index, items)}
                       parcelLabel={`Parcel ${index + 1}`}
+                      enforceItemValueLimit={csbType !== "CSB_V"}
                     />
                   </div>
                 </div>

@@ -280,6 +280,8 @@ function ParcelEditor({
           revealError={revealErrors}
           requireHsnCode={csbType === "CSB_V"}
           maxItems={maxParcelItems}
+          maxQuantity={100_000}
+          maxUnitRate={100_000_000}
         />
       </div>
     </section>
@@ -357,9 +359,9 @@ export default function ShipmentDetailsStep({
         {data.csbType === "CSB_V" ? (
           <div className="mt-4">
             <CsbVBookingFields
-              value={{ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, invoiceNumber: data.csbVInvoiceNumber }}
-              onChange={(next) => onChange({ ...data, csbVGstin: next.gstin, csbVAccountNumber: next.accountNumber, csbVInvoiceNumber: next.invoiceNumber })}
-              issues={getCsbVBookingIssues({ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, invoiceNumber: data.csbVInvoiceNumber }, data.csbType)}
+              value={{ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, iecCode: data.csbVIecCode, invoiceNumber: data.csbVInvoiceNumber }}
+              onChange={(next) => onChange({ ...data, csbVGstin: next.gstin, csbVAccountNumber: next.accountNumber, csbVIecCode: next.iecCode, csbVInvoiceNumber: next.invoiceNumber })}
+              issues={getCsbVBookingIssues({ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, iecCode: data.csbVIecCode, invoiceNumber: data.csbVInvoiceNumber }, data.csbType)}
               revealError={revealErrors}
             />
           </div>

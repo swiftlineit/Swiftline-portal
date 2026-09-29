@@ -33,20 +33,27 @@ test("uses a 50-item per-parcel limit", () => {
   assert.equal(maxParcelItems, 50);
 });
 
-test("enforces the per-item derived amount limit while allowing 5000", () => {
+test("enforces the per-item derived amount limit for CSB-IV while allowing higher CSB-V values", () => {
   assert.equal(maxParcelItemAmountExclusive, 5001);
 
-  const makeDraft = (quantity: number, unitRate: number) => ({
-    csbType: "CSB_IV",
+  const makeDraft = (csbType: "CSB_IV" | "CSB_V", quantity: number, unitRate: number) => ({
+    csbType,
+    csbVGstin: csbType === "CSB_V" ? "08ABCDE1234F1Z5" : "",
+    csbVAccountNumber: csbType === "CSB_V" ? "001234" : "",
+    csbVIecCode: csbType === "CSB_V" ? "1305023269" : "",
+    csbVInvoiceNumber: csbType === "CSB_V" ? "INV-100" : "",
     consigneeEnteredAddress: {
       contactName: "Consignee",
       mobileCountryCode: "+44",
       mobileNumber: "7123456789",
       email: "consignee@example.com",
-      countryCode: "GB",
+      countryCode: csbType === "CSB_V" ? "US" : "GB",
+      countryName: csbType === "CSB_V" ? "United States" : "United Kingdom",
       postcode: "SW1A 1AA",
       addressLine1: "1 Test Street",
-      townOrCity: "London"
+      townOrCity: "London",
+      county: csbType === "CSB_V" ? "Ohio" : "",
+      stateCode: csbType === "CSB_V" ? "39" : ""
     },
     parcelCount: 1,
     parcelList: [{
@@ -57,21 +64,27 @@ test("enforces the per-item derived amount limit while allowing 5000", () => {
       heightCm: 10,
       shipmentContentType: "PARCEL",
       contentsDescription: "BOOKS",
-      items: [{ description: "BOOKS", hsnCode: "", unitType: "Pcs", quantity, unitRate }]
+      items: [{ description: "BOOKS", hsnCode: csbType === "CSB_V" ? "49019900" : "", unitType: "Pcs", quantity, unitRate }]
     }]
   });
 
   const allowedIssues = validateShipmentDraftFields(
-    makeDraft(1, 5000) as unknown as IShipmentDraft,
+    makeDraft("CSB_IV", 1, 5000) as unknown as IShipmentDraft,
     { requireConsignorDetails: false }
   );
   assert.equal(allowedIssues.some((issue) => issue.includes("item amount")), false);
 
   const rejectedIssues = validateShipmentDraftFields(
-    makeDraft(2, 2500.5) as unknown as IShipmentDraft,
+    makeDraft("CSB_IV", 2, 2500.5) as unknown as IShipmentDraft,
     { requireConsignorDetails: false }
   );
   assert.ok(rejectedIssues.includes("Parcel 1 item 1: item amount must be below 5001"));
+
+  const csbVIssues = validateShipmentDraftFields(
+    makeDraft("CSB_V", 2, 2500.5) as unknown as IShipmentDraft,
+    { requireConsignorDetails: false }
+  );
+  assert.equal(csbVIssues.some((issue) => issue.includes("item amount")), false);
 });
 
 test("rejects more than 50 normalized item lines during booking validation", () => {

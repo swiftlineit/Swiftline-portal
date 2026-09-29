@@ -46,6 +46,25 @@ const row: ManifestDocumentParcelRow = {
 
 const context = { departureDate: "2026-09-23", aadhaarFor: () => "234567890124" };
 
+test("OPS EDI preserves a CSB-V bank account's leading zeros as text", () => {
+  const csbV = {
+    ...row,
+    exportHawbNumber: row.consignmentNumber,
+    exportIecCode: "CUSTOMIEC1",
+    exportAccountNumber: "001234",
+    exportInvoiceNumber: "INV-100"
+  };
+  const workbook = XLSX.read(buildOpsEdiWorkbookBuffer([csbV], context).buffer, { type: "buffer" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]!];
+  assert.ok(sheet);
+  const cell = (header: string) => sheet[XLSX.utils.encode_cell({ r: 1, c: OPS_EDI_HEADERS.indexOf(header) })];
+  assert.equal(cell("HAWB_Number")?.v, "SLC123");
+  assert.equal(cell("IEC_CODE")?.v, "CUSTOMIEC1");
+  assert.equal(cell("Export_Invoice_no")?.v, "INV-100");
+  assert.equal(cell("ACCOUNT_NO")?.v, "001234");
+  assert.equal(cell("ACCOUNT_NO")?.t, "s");
+});
+
 function workbookStream(buffer: Buffer): Buffer {
   const container = CFB.read(buffer, { type: "buffer" });
   const workbook = container.FileIndex.find((entry) => entry.name === "Workbook");

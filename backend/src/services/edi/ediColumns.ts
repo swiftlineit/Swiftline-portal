@@ -49,7 +49,7 @@ const consignee = (row: ManifestDocumentParcelRow) => row.consignee.party ?? emp
 
 // Identity rules from §4.9, defined once so a change propagates to every column that
 // mirrors them.
-const hawbOf = (row: ManifestDocumentParcelRow) => ediText(row.parcelNumber).toUpperCase();
+const hawbOf = (row: ManifestDocumentParcelRow) => ediText(row.exportHawbNumber ?? row.parcelNumber).toUpperCase();
 const mhbsOf = (row: ManifestDocumentParcelRow) => ediText(row.bagNumber);
 const valueOf = (row: ManifestDocumentParcelRow) => ediValue(row.declaredValueMinor);
 
@@ -79,8 +79,8 @@ export const EDI_COLUMNS: readonly EdiColumn[] = [
   { header: "Weight", source: "SNAP", type: "number", value: (row) => row.weightKg },
   { header: "DescriptionofGoods", source: "SNAP", type: "text", value: (row) => ediText(fullManifestParcelDescription(row.items, row.description)) },
   { header: "Value", source: "SNAP", type: "number", value: (row) => valueOf(row) },
-  { header: "ExportInvoiceNo", source: "CALC", type: "text", value: (row) => hawbOf(row) },
-  { header: "GSTInvoiceNo", source: "CALC", type: "text", value: (row) => hawbOf(row) },
+  { header: "ExportInvoiceNo", source: "CALC", type: "text", value: (row) => row.exportInvoiceNumber ?? hawbOf(row) },
+  { header: "GSTInvoiceNo", source: "CALC", type: "text", value: (row) => row.exportInvoiceNumber ?? hawbOf(row) },
   { header: "InvoiceValue", source: "CALC", type: "number", value: (row) => valueOf(row) },
   { header: "CurrencyType", source: "CONST", type: "text", value: () => EDI_CURRENCY },
   { header: "PayType", source: "CONST", type: "text", value: () => EDI_PAY_TYPE },

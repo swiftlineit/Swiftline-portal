@@ -3,7 +3,7 @@ import { test } from "node:test";
 import * as CFB from "cfb";
 import XLSX from "xlsx";
 import type { ManifestDocumentConsignment, ManifestDocumentParcelRow } from "../types/manifestDocument.js";
-import { assertCsbVOnlyDrafts, CSB_V_ONLY_MANIFEST_MESSAGE } from "../services/csbVEdi/csbVEdiExport.service.js";
+import { assertCsbVCustomsFields, assertCsbVOnlyDrafts, CSB_V_ONLY_MANIFEST_MESSAGE } from "../services/csbVEdi/csbVEdiExport.service.js";
 import { buildCsbVEdiRows, CSB_V_EDI_HEADERS } from "../services/csbVEdi/csbVEdiColumns.js";
 import { buildCsbVEdiWorkbookBuffer } from "../services/csbVEdi/csbVEdiWorkbook.service.js";
 
@@ -98,6 +98,7 @@ test("CSB-V EDI repeats shipment-level values and joins multi-item values", () =
         csbType: "CSB_V",
         csbVGstin: "08ABCDE1234F1Z5",
         csbVAccountNumber: "001234",
+        csbVIecCode: "CUSTOMIEC1",
         csbVInvoiceNumber: "INV-100",
         consigneeEnteredAddress: { stateCode: "39" }
       }
@@ -113,6 +114,7 @@ test("CSB-V EDI repeats shipment-level values and joins multi-item values", () =
   assert.equal(rows[0]?.[1], 2);
   assert.equal(rows[0]?.[2], 4);
   assert.equal(rows[0]?.[5], "SLC00701|SLC00702");
+  assert.equal(rows[0]?.[3], "CUSTOMIEC1");
   assert.equal(rows[0]?.[9], "SLCAMD260926001|SLCAMD260926001");
   assert.equal(rows[0]?.[24], "UNITED STATES");
   assert.equal(rows[0]?.[25], "INV-100");
@@ -130,6 +132,15 @@ test("CSB-V EDI repeats shipment-level values and joins multi-item values", () =
   assert.equal(matrix.length, 3);
   assert.equal(matrix[1]?.[0], "SLCAMD260926001");
   assert.equal(matrix[1]?.[25], "INV-100");
+});
+
+test("CSB-V EDI refuses a missing customer IEC instead of using a default", () => {
+  assert.throws(() => assertCsbVCustomsFields([{
+    csbVAccountNumber: "001234", csbVIecCode: "", csbVInvoiceNumber: "INV-100"
+  }]), /IEC code/);
+  assert.doesNotThrow(() => assertCsbVCustomsFields([{
+    csbVAccountNumber: "001234", csbVIecCode: "CUSTOMIEC1", csbVInvoiceNumber: "INV-100"
+  }]));
 });
 
 test("CSB-V EDI uses the legacy 11-point workbook font", () => {

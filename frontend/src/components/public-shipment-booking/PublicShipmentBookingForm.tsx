@@ -6,6 +6,7 @@ import { toast } from "react-toastify";
 import { FiCheck, FiCreditCard, FiMapPin, FiPackage } from "react-icons/fi";
 import { isValidAadhaarNumber } from "@/lib/aadhaar";
 import { getCsbVBookingIssues } from "@/lib/csbVBooking";
+import { getPositiveNumberError } from "@/lib/parcelItems";
 import {
   getPostcodeError,
   getShipmentMobileCountryMismatchError,
@@ -71,6 +72,7 @@ const initialData: PublicShipmentFormData = {
   csbType: "CSB_IV",
   csbVGstin: "",
   csbVAccountNumber: "",
+  csbVIecCode: "",
   csbVInvoiceNumber: "",
   kycUseForAllParcels: true,
   parcels: [emptyParcel("WEB-1")],
@@ -192,10 +194,10 @@ function validateShipmentStep(
       if (!item.description.trim())
         errors[`${path}.description`] =
           `Enter a description for item ${itemIndex + 1} in parcel ${index + 1}.`;
-      if (!(item.quantity > 0) || item.quantity > 100000)
-        errors[`${path}.quantity`] = "Quantity must be greater than zero.";
-      if (!(item.unitRate > 0) || item.unitRate > 100000000)
-        errors[`${path}.unitRate`] = "Unit value must be greater than zero.";
+      const quantityError = getPositiveNumberError(String(item.quantity), "Quantity", 100_000);
+      if (quantityError) errors[`${path}.quantity`] = quantityError;
+      const unitRateError = getPositiveNumberError(String(item.unitRate), "Unit value", 100_000_000);
+      if (unitRateError) errors[`${path}.unitRate`] = unitRateError;
       if (
         (data.csbType === "CSB_V" || item.hsnCode) &&
         !/^\d{4}(?:\d{2}(?:\d{2}(?:\d{2})?)?)?$/.test(item.hsnCode)
@@ -215,6 +217,7 @@ function validateShipmentStep(
     const csbVIssues = getCsbVBookingIssues({
       gstin: data.csbVGstin,
       accountNumber: data.csbVAccountNumber,
+      iecCode: data.csbVIecCode,
       invoiceNumber: data.csbVInvoiceNumber
     }, data.csbType);
     Object.entries(csbVIssues).forEach(([field, message]) => {

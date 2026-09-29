@@ -19,6 +19,14 @@ export function assertCsbVOnlyDrafts(
   }
 }
 
+export function assertCsbVCustomsFields(drafts: CsbVEdiDraftContext[]) {
+  for (const draft of drafts) {
+    if (!draft.csbVAccountNumber?.trim() || !draft.csbVIecCode?.trim() || !draft.csbVInvoiceNumber?.trim()) {
+      throw new OperationsManifestServiceError("A CSB-V shipment is missing its bank account number, IEC code, or commercial invoice number. Complete the booking details before downloading EDI.", 409);
+    }
+  }
+}
+
 export async function buildOperationsManifestCsbVEdi(manifest: IOperationsManifest) {
   const snapshot = parseSealedSnapshot(manifest.sealedSnapshot);
   if (!snapshot) throw new OperationsManifestServiceError("The sealed manifest snapshot is unavailable.", 409);
@@ -27,10 +35,11 @@ export async function buildOperationsManifestCsbVEdi(manifest: IOperationsManife
 
   const draftIds = [...new Set(model.consignments.map((consignment) => consignment.shipmentDraftId))];
   const drafts = await ShipmentDraft.find({ _id: { $in: draftIds } })
-    .select("csbType csbVGstin csbVAccountNumber csbVInvoiceNumber consigneeEnteredAddress.stateCode")
+    .select("csbType csbVGstin csbVAccountNumber csbVIecCode csbVInvoiceNumber consigneeEnteredAddress.stateCode")
     .lean()
     .exec();
   assertCsbVOnlyDrafts(draftIds, drafts);
+  assertCsbVCustomsFields(drafts);
 
   const draftById = new Map<string, CsbVEdiDraftContext>(drafts.map((draft) => [String(draft._id), draft]));
   const rows = buildCsbVEdiRows(model.consignments, draftById, String(model.header.departureDate ?? ""));

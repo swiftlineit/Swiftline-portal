@@ -3,6 +3,9 @@ import mongoose from "mongoose";
 import { z } from "zod";
 import { Branch } from "../models/branch.model.js";
 import { OperationsManifest } from "../models/operationsManifest.model.js";
+import { buildManifestDocumentModel, parseSealedSnapshot } from "../services/manifestDocument.service.js";
+import { getOperationsManifestArchive, listOperationsManifestArchives } from "../services/operationsManifestArchive.service.js";
+import { streamObjectToResponse } from "../services/storage/storage.service.js";
 import { buildOperationsManifestEdi } from "../services/edi/ediExport.service.js";
 import { buildOperationsManifestMhbsEdi } from "../services/mhbsEdi/mhbsEdiExport.service.js";
 import { buildOperationsManifestOpsEdi } from "../services/opsEdi/opsEdiExport.service.js";
@@ -100,6 +103,41 @@ export async function listManifests(request: Request, response: Response) {
     success: true,
     ...(await listOperationsManifests({ ...query.data, allowedBranchIds: allowedBranches }))
   });
+}
+
+export async function listArchivedManifests(request: Request, response: Response) {
+  const query = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(50).default(15) }).safeParse(request.query);
+  if (!query.success) return response.status(400).json({ success: false, message: "Archive filters are invalid." });
+  return response.json({ success: true, ...(await listOperationsManifestArchives(operationsBranchIds(request), query.data.page, query.data.limit)) });
+}
+
+export async function getArchivedManifest(request: Request, response: Response) {
+  try {
+    const archive = await getOperationsManifestArchive(String(request.params.manifestId), operationsBranchIds(request));
+    const manifest = archive.manifest as Record<string, unknown>;
+    const snapshot = parseSealedSnapshot(manifest.sealedSnapshot);
+    return response.json({
+      success: true,
+      archive: {
+        id: String(archive._id), manifestNumber: archive.manifestNumber, status: archive.status,
+        archivedAt: archive.archivedAt, header: manifest.header,
+        documents: archive.documents.map(({ format, filename }) => ({ format, filename })),
+        document: snapshot ? buildManifestDocumentModel(snapshot) : null
+      }
+    });
+  } catch (error) { return sendError(response, error); }
+}
+
+export async function downloadArchivedManifest(request: Request, response: Response) {
+  try {
+    const archive = await getOperationsManifestArchive(String(request.params.manifestId), operationsBranchIds(request));
+    const document = archive.documents.find((item) => item.format === request.params.format);
+    if (!document) throw new OperationsManifestServiceError("This archived export is unavailable.", 404);
+    await streamObjectToResponse({
+      response, key: document.key, contentType: document.contentType, filename: document.filename,
+      disposition: request.query.view === "1" ? "inline" : "attachment"
+    });
+  } catch (error) { return sendError(response, error); }
 }
 
 export async function createManifest(request: Request, response: Response) {
@@ -306,7 +344,7 @@ export async function deleteManifest(request: Request, response: Response) {
     return response.json({
       success: true,
       message: deleted.numberWillBeReused
-        ? `${deleted.manifestNumber} deleted. Its number will be used by the next new manifest.`
+        ? `${deleted.manifestNumber} deleted. Its number is available for a new manifest.`
         : `${deleted.manifestNumber} deleted. Its number remains permanently reserved.`,
       deleted
     });

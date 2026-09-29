@@ -23,6 +23,8 @@ import {
   getParcelItemAmountError,
   getPositiveNumberError,
   maxParcelItems,
+  maxShipmentItemQuantity,
+  maxShipmentItemUnitRate,
   sanitizeParcelItemDescription,
   parcelItemUnitTypeValues,
   type ParcelItem,
@@ -42,20 +44,28 @@ import { findRestrictedCategories } from "@/lib/restrictedGoods";
  * `requireHsnCode` follows the shipment's CSB type: CSB-V clears on the full
  * customs checklist and needs a code on every line, CSB-IV does not. A code that
  * IS entered is format-checked either way.
+ * `enforceItemValueLimit` follows the CSB route's per-item value rule: CSB-IV
+ * keeps the existing limit while CSB-V allows higher item values.
  */
 export function ParcelItemsEditor({
   items,
   onChange,
   revealError = false,
   requireHsnCode = true,
+  enforceItemValueLimit = true,
   maxItems = maxParcelItems,
+  maxQuantity = maxShipmentItemQuantity,
+  maxUnitRate = maxShipmentItemUnitRate,
   parcelLabel = "Parcel",
 }: {
   items: ParcelItem[];
   onChange: (items: ParcelItem[]) => void;
   revealError?: boolean;
   requireHsnCode?: boolean;
+  enforceItemValueLimit?: boolean;
   maxItems?: number;
+  maxQuantity?: number;
+  maxUnitRate?: number;
   parcelLabel?: string;
 }) {
   // The description being typed drives the HS code suggestions below it. Only
@@ -197,6 +207,15 @@ export function ParcelItemsEditor({
     (item) => item.description.trim() || item.hsnCode.trim(),
   );
 
+  const hasItemError = enteredItems.some((item) =>
+    !item.description.trim() ||
+    findRestrictedCategories(item.description).length > 0 ||
+    Boolean(getHsnCodeError(item.hsnCode, requireHsnCode)) ||
+    Boolean(getPositiveNumberError(item.quantity, "Quantity", maxQuantity)) ||
+    Boolean(getPositiveNumberError(item.unitRate, "Unit rate", maxUnitRate)) ||
+    Boolean(getParcelItemAmountError(item, enforceItemValueLimit))
+  );
+
   const itemSummary = enteredItems.length
     ? enteredItems
         .slice(0, 3)
@@ -208,7 +227,7 @@ export function ParcelItemsEditor({
     <>
       <div
         className={`min-w-0 rounded-xl border p-3 ${
-          revealError && !enteredItems.length
+          revealError && (!enteredItems.length || hasItemError)
             ? "border-red-300 bg-red-50/50"
             : "border-slate-200 bg-slate-50/70"
         }`}
@@ -231,7 +250,7 @@ export function ParcelItemsEditor({
 
             <p
               className={`mt-1 text-xs ${
-                revealError && !enteredItems.length
+                revealError && (!enteredItems.length || hasItemError)
                   ? "font-semibold text-red-700"
                   : "text-slate-500"
               }`}
@@ -244,13 +263,16 @@ export function ParcelItemsEditor({
 
               {enteredItems.length > 3 ? " · More items inside" : ""}
             </p>
+            {revealError && hasItemError ? (
+              <p className="mt-1 text-xs font-semibold text-red-700">Review the highlighted item fields.</p>
+            ) : null}
           </div>
 
           <button
             ref={triggerRef}
             type="button"
             onClick={() => setIsOpen(true)}
-            className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border border-blue-900 bg-white px-3.5 text-xs font-semibold text-blue-900 transition hover:bg-blue-900 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+            className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-blue-900 bg-white px-2.5 text-xs font-semibold text-blue-900 transition hover:bg-blue-900 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-200"
             aria-haspopup="dialog"
           >
             <FiPlus aria-hidden="true" />
@@ -341,20 +363,26 @@ export function ParcelItemsEditor({
                       const quantityError = getPositiveNumberError(
                         item.quantity,
                         "Quantity",
+                        maxQuantity,
                       );
 
                       const unitRateError = getPositiveNumberError(
                         item.unitRate,
                         "Unit rate",
+                        maxUnitRate,
                       );
 
-                      const amountError = getParcelItemAmountError(item);
+                      const amountError = getParcelItemAmountError(item, enforceItemValueLimit);
 
                       const showDescriptionError = restricted.length > 0;
 
                       const showHsnError =
                         Boolean(hsnError) &&
                         (revealError || item.hsnCode.trim().length > 0);
+                      const showQuantityError = Boolean(quantityError) &&
+                        (revealError || item.quantity.trim().length > 0);
+                      const showUnitRateError = Boolean(unitRateError) &&
+                        (revealError || item.unitRate.trim().length > 0);
 
                       const rowError = showDescriptionError
                         ? `${restricted.join(
@@ -362,11 +390,11 @@ export function ParcelItemsEditor({
                           )} is a restricted item and cannot be shipped.`
                         : showHsnError
                           ? hsnError
-                            : amountError
-                              ? amountError
-                              : revealError
-                                ? quantityError || unitRateError
-                                : "";
+                            : showQuantityError
+                              ? quantityError
+                              : showUnitRateError
+                                ? unitRateError
+                                : amountError;
 
                       return (
                         <div
@@ -441,7 +469,7 @@ export function ParcelItemsEditor({
                                 placeholder={`Item ${index + 1} description`}
                                 title="Letters only - record quantities in the Qty and Unit Rate fields."
                                 maxLength={120}
-                                aria-invalid={showDescriptionError}
+                                aria-invalid={showDescriptionError || (revealError && !item.description.trim())}
                                 className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
                                   showDescriptionError ||
                                   (revealError && !item.description.trim())
@@ -564,6 +592,7 @@ export function ParcelItemsEditor({
                                 type="number"
                                 inputMode="numeric"
                                 min="0"
+                                max={maxQuantity}
                                 step="1"
                                 value={item.quantity}
                                 onChange={(event) =>
@@ -574,18 +603,17 @@ export function ParcelItemsEditor({
                                   )
                                 }
                                 onBlur={() => {
-                                  if (amountError) {
-                                    toast.error(`${parcelLabel} item ${index + 1}: ${amountError}`, {
-                                      toastId: `item-amount-${parcelLabel}-${index}`,
+                                  const message = item.quantity.trim() ? quantityError || amountError : amountError;
+                                  if (message) {
+                                    toast.error(`${parcelLabel} item ${index + 1}: ${message}`, {
+                                      toastId: `item-${parcelLabel}-${index}-${message}`,
                                     });
                                   }
                                 }}
                                 placeholder="Qty"
-                                aria-invalid={Boolean(
-                                  revealError && quantityError,
-                                )}
+                                aria-invalid={showQuantityError}
                                 className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
-                                  revealError && quantityError
+                                  showQuantityError
                                     ? "border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
                                     : "border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
                                 }`}
@@ -599,6 +627,7 @@ export function ParcelItemsEditor({
                                 type="number"
                                 inputMode="decimal"
                                 min="0"
+                                max={maxUnitRate}
                                 step="0.01"
                                 value={item.unitRate}
                                 onChange={(event) =>
@@ -609,18 +638,17 @@ export function ParcelItemsEditor({
                                   )
                                 }
                                 onBlur={() => {
-                                  if (amountError) {
-                                    toast.error(`${parcelLabel} item ${index + 1}: ${amountError}`, {
-                                      toastId: `item-amount-${parcelLabel}-${index}`,
+                                  const message = item.unitRate.trim() ? unitRateError || amountError : amountError;
+                                  if (message) {
+                                    toast.error(`${parcelLabel} item ${index + 1}: ${message}`, {
+                                      toastId: `item-${parcelLabel}-${index}-${message}`,
                                     });
                                   }
                                 }}
                                 placeholder="Rate"
-                                aria-invalid={Boolean(
-                                  revealError && unitRateError,
-                                )}
+                                aria-invalid={showUnitRateError}
                                 className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
-                                  revealError && unitRateError
+                                  showUnitRateError
                                     ? "border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
                                     : "border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
                                 }`}

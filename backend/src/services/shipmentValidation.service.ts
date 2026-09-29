@@ -180,7 +180,8 @@ function validateParcel(
   parcel: ShipmentParcel,
   index: number,
   requireItemDetails: boolean,
-  requireHsnCode: boolean
+  requireHsnCode: boolean,
+  enforceItemValueLimit: boolean
 ): string[] {
   const label = `Parcel ${index + 1}`;
   const issues: string[] = [];
@@ -246,7 +247,7 @@ function validateParcel(
       if (!(item.quantity > 0)) issues.push(`${itemLabel}: quantity must be greater than zero`);
       if (!(item.unitRate > 0)) issues.push(`${itemLabel}: unit rate must be greater than zero`);
       if (!hasText(item.unitType)) issues.push(`${itemLabel}: unit type is required`);
-      const amountError = getParcelItemAmountError(item);
+      const amountError = enforceItemValueLimit ? getParcelItemAmountError(item) : "";
       if (amountError) issues.push(`${itemLabel}: ${amountError.replace(/\.$/, "").toLowerCase()}`);
     }
   });
@@ -278,7 +279,8 @@ function validateCsbVFields(draft: IShipmentDraft): string[] {
     if (gstinError) issues.push(gstinError);
   }
 
-  if (!hasText(draft.csbVAccountNumber)) issues.push("Account number is required");
+  if (!hasText(draft.csbVAccountNumber)) issues.push("Bank account number is required");
+  if (!hasText(draft.csbVIecCode)) issues.push("IEC code is required");
   if (!hasText(draft.csbVInvoiceNumber)) issues.push("Commercial invoice number is required");
   if (!hasText(address.stateCode)) issues.push("Consignee state code is required");
 
@@ -398,10 +400,11 @@ export function validateShipmentDraftFields(
   // value route and does not demand one, so the field is captured when the sender
   // knows it and left blank when they do not.
   const requireItemDetails = options.requireItemHsnCodes !== false;
-  const requireHsnCode = requireItemDetails && normalizeCsbType(draft.csbType) === "CSB_V";
+  const isCsbV = normalizeCsbType(draft.csbType) === "CSB_V";
+  const requireHsnCode = requireItemDetails && isCsbV;
 
   draft.parcelList.forEach((parcel, index) => {
-    issues.push(...validateParcel(parcel, index, requireItemDetails, requireHsnCode));
+    issues.push(...validateParcel(parcel, index, requireItemDetails, requireHsnCode, !isCsbV));
   });
 
   if (options.requireValidatedAddress && draft.addressValidationStatus !== "VALIDATED") {

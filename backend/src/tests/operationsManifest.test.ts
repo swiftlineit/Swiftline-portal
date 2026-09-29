@@ -5,6 +5,7 @@ import ExcelJS from "exceljs";
 import mongoose from "mongoose";
 import { AuditLog } from "../models/auditLog.model.js";
 import { OperationsManifest } from "../models/operationsManifest.model.js";
+import { OperationsManifestArchive } from "../models/operationsManifestArchive.model.js";
 import { OperationsManifestBag } from "../models/operationsManifestBag.model.js";
 import { OperationsManifestConsignment } from "../models/operationsManifestConsignment.model.js";
 import { OperationsManifestCounter } from "../models/operationsManifestCounter.model.js";
@@ -282,11 +283,15 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
     totalBags: 1,
     totalConsignments: status === "DRAFT" ? 0 : 2,
     totalPhysicalParcels: status === "DRAFT" ? 0 : 3,
-    totalWeightKg: status === "DRAFT" ? 0 : 12
+    totalWeightKg: status === "DRAFT" ? 0 : 12,
+    sealedSnapshot: status === "SEALED" ? { header: {}, branch: {}, totals: {}, bags: [], consignments: [] } : {},
+    updatedAt: new Date("2026-09-28T00:00:00.000Z"),
+    toObject() { return { ...this }; }
   };
   const deletedChildren: string[] = [];
   let counterUpdate: unknown;
   let auditEntry: Record<string, unknown> | undefined;
+  let archived: Record<string, unknown> | undefined;
 
   const originals = {
     startSession: mongoose.startSession,
@@ -297,7 +302,8 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
     scanDeleteMany: OperationsManifestScan.deleteMany,
     sessionDeleteMany: OperationsManifestScanSession.deleteMany,
     counterUpdateOne: OperationsManifestCounter.updateOne,
-    auditCreate: AuditLog.create
+    auditCreate: AuditLog.create,
+    archiveCreate: OperationsManifestArchive.create
   };
 
   const deletionQuery = (label: string) => ({
@@ -328,14 +334,21 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
     auditEntry = entries[0];
     return entries;
   };
+  (OperationsManifestArchive as any).create = async (entries: Array<Record<string, unknown>>) => {
+    archived = entries[0];
+    return entries;
+  };
 
   try {
     const result = await deleteOperationsManifest({
       manifestId: String(manifestId),
       confirmationManifestNumber: manifestNumber,
       userId: new mongoose.Types.ObjectId()
+    }, {
+      stageOperationsManifestArchive: async () => [{ format: "pdf", key: "archive/test.pdf", filename: "test.pdf", contentType: "application/pdf", checksumSha256: "abc" }],
+      removeStagedArchiveDocuments: async () => undefined
     });
-    return { result, deletedChildren, counterUpdate, auditEntry };
+    return { result, deletedChildren, counterUpdate, auditEntry, archived };
   } finally {
     (mongoose as any).startSession = originals.startSession;
     (OperationsManifest as any).findById = originals.findById;
@@ -346,6 +359,7 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
     (OperationsManifestScanSession as any).deleteMany = originals.sessionDeleteMany;
     (OperationsManifestCounter as any).updateOne = originals.counterUpdateOne;
     (AuditLog as any).create = originals.auditCreate;
+    (OperationsManifestArchive as any).create = originals.archiveCreate;
   }
 }
 
@@ -622,13 +636,13 @@ describe("operations manifest safeguards", () => {
     }
   });
 
-  it("reuses only numbers from unfinalized manifest statuses", () => {
+  it("reuses deleted manifest numbers at every status", () => {
     assert.equal(isOperationsManifestNumberReusable("DRAFT"), true);
     assert.equal(isOperationsManifestNumberReusable("PACKING"), true);
     assert.equal(isOperationsManifestNumberReusable("READY_TO_SEAL"), true);
-    assert.equal(isOperationsManifestNumberReusable("SEALED"), false);
-    assert.equal(isOperationsManifestNumberReusable("DISPATCHED"), false);
-    assert.equal(isOperationsManifestNumberReusable("CANCELLED"), false);
+    assert.equal(isOperationsManifestNumberReusable("SEALED"), true);
+    assert.equal(isOperationsManifestNumberReusable("DISPATCHED"), true);
+    assert.equal(isOperationsManifestNumberReusable("CANCELLED"), true);
   });
 
   it("deletes every manifest workspace child and queues a draft number for reuse", async () => {
@@ -640,11 +654,13 @@ describe("operations manifest safeguards", () => {
     assert.equal(deleted.auditEntry?.action, "OPERATIONS_MANIFEST_DELETED");
   });
 
-  it("deletes a sealed manifest while permanently reserving its number", async () => {
+  it("archives an issued manifest before releasing its number", async () => {
     const deleted = await exerciseManifestDeletion("SEALED");
     assert.equal(deleted.result.manifestNumber, "SLC018");
-    assert.equal(deleted.result.numberWillBeReused, false);
-    assert.equal(deleted.counterUpdate, undefined);
+    assert.equal(deleted.result.numberWillBeReused, true);
+    assert.equal(deleted.archived?.manifestNumber, "SLC018");
+    assert.equal((deleted.archived?.documents as unknown[])?.length, 1);
+    assert.match(JSON.stringify(deleted.counterUpdate), /reusableSequences/);
     assert.deepEqual(deleted.deletedChildren, ["scanSessions", "scans", "consignments", "bags", "manifest"]);
   });
 

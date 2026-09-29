@@ -5,6 +5,7 @@ import { buildManifestDocumentModel, parseSealedSnapshot } from "../manifestDocu
 import { OperationsManifestServiceError } from "../operationsManifest.service.js";
 import type { EdiContext } from "./ediColumns.js";
 import { buildEdiWorkbookBuffer } from "./ediWorkbook.service.js";
+import { withCsbVExportHawb } from "./csbVExportHawb.js";
 
 // A Swiftline parcel barcode ends in "-NN", the 1-based sequence of the parcel on its
 // shipment draft. That links a manifest row back to its parcel's own KYC.
@@ -37,7 +38,7 @@ export async function buildOperationsManifestEdi(manifest: IOperationsManifest):
 
   const draftIds = [...new Set(model.consignments.map((consignment) => consignment.shipmentDraftId))];
   const drafts = await ShipmentDraft.find({ _id: { $in: draftIds } })
-    .select("consignorAddress kycUseForAllParcels parcelList")
+    .select("csbType csbVInvoiceNumber consignorAddress kycUseForAllParcels parcelList")
     .lean()
     .exec();
   const draftById = new Map(drafts.map((draft) => [String(draft._id), draft]));
@@ -63,5 +64,5 @@ export async function buildOperationsManifestEdi(manifest: IOperationsManifest):
     aadhaarFor
   };
 
-  return buildEdiWorkbookBuffer(model.parcelRows, context);
+  return buildEdiWorkbookBuffer(withCsbVExportHawb(model.parcelRows, drafts), context);
 }

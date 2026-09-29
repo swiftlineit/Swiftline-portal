@@ -86,9 +86,7 @@ function OperationsManifestListPageContent() {
 
   if (loading || !user) return <DashboardLoading />;
 
-  const deletedNumberWillBeReused = pendingDelete
-    ? ["DRAFT", "PACKING", "READY_TO_SEAL"].includes(pendingDelete.status)
-    : false;
+  const issuedManifest = Boolean(pendingDelete?.sealedAt);
 
   return (
       <div className="mx-auto max-w-8xl">
@@ -103,6 +101,7 @@ function OperationsManifestListPageContent() {
             </p>
           </div>
           <div className="flex gap-2">
+           <Link href="/dashboard/operations-manifests/archived" className="inline-flex h-10 items-center rounded-lg border border-[#0D1282]/20 px-3 text-sm font-semibold text-[#0D1282]">Archived manifests</Link>
            <DateRangeFilter
              value={dateRange}
              onChange={(value) => {
@@ -249,13 +248,13 @@ function OperationsManifestListPageContent() {
         {pendingDelete ? (
           <ConfirmDialog
             title={`Delete manifest ${pendingDelete.manifestNumber}?`}
-            description={deletedNumberWillBeReused ? (
+            description={issuedManifest ? (
               <>
-                This permanently removes the manifest and its packing/scanner records. Its number will be released, so the next new operations manifest will use <span className="font-semibold text-slate-950">{pendingDelete.manifestNumber}</span>. This action cannot be undone.
+                The issued manifest and its exports will remain in the read-only archive. Its number will be released for a new, separate manifest. This active record cannot be restored.
               </>
             ) : (
               <>
-                This permanently removes this <span className="font-semibold text-slate-950">{pendingDelete.status.replaceAll("_", " ")}</span> manifest and its downloadable manifest records. Shipment tracking history remains, and <span className="font-semibold text-slate-950">{pendingDelete.manifestNumber}</span> stays permanently reserved. This action cannot be undone.
+                This removes the unissued manifest and its packing/scanner records. Shipment tracking history remains; its number becomes available for a new manifest. This action cannot be undone.
               </>
             )}
             confirmLabel="Permanently Delete"

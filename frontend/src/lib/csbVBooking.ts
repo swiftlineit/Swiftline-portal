@@ -4,6 +4,7 @@ import type { CsbType } from "@/lib/csbType";
 export type CsbVBookingDetails = {
   gstin: string;
   accountNumber: string;
+  iecCode: string;
   invoiceNumber: string;
 };
 
@@ -24,7 +25,8 @@ export function getCsbVBookingIssues(
     if (gstinError) issues.gstin = gstinError;
   }
 
-  if (!details.accountNumber.trim()) issues.accountNumber = "Account number is required";
+  if (!details.accountNumber.trim()) issues.accountNumber = "Bank account number is required";
+  if (!details.iecCode.trim()) issues.iecCode = "IEC code is required";
   if (!details.invoiceNumber.trim()) issues.invoiceNumber = "Commercial invoice number is required";
 
   return issues;

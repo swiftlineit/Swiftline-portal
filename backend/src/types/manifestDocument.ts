@@ -39,6 +39,10 @@ export type ManifestDocumentParcelRow = {
   consignmentNumber: string; // raw Swiftline tracking number
   formattedConsignmentNumber: string; // display form
   parcelNumber: string; // Swiftline parcel barcode (EDI HAWB); "" on legacy summary rows
+  exportHawbNumber?: string; // CSB-V-only document HAWB; never replaces the physical barcode
+  exportIecCode?: string;
+  exportAccountNumber?: string;
+  exportInvoiceNumber?: string;
   weightKg: number;
   description: string;
   items?: ManifestDocumentItem[];

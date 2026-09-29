@@ -14,13 +14,13 @@ import { apiUrl } from "@/lib/api";
 
 export type GeographyState = { name: string; code: string };
 
-// CSB-V EDI uses the numeric FIPS state code for U.S. destinations. The
-// reference dataset exposes the ISO subdivision code (for example, OH), so
-// keep this small translation at the booking boundary rather than changing
-// the shared geography code used for city lookups.
+// Keep shipment state codes separate from the reference codes used for city
+// lookups. Numeric codes below come from the US Census, Statistics Canada,
+// Destatis, Spain's INE, Italy's Istat, and France's Insee respectively.
 const usNumericStateCodes: Record<string, string> = {
   alabama: "01",
   alaska: "02",
+  "american samoa": "60",
   arizona: "04",
   arkansas: "05",
   california: "06",
@@ -30,6 +30,7 @@ const usNumericStateCodes: Record<string, string> = {
   "district of columbia": "11",
   florida: "12",
   georgia: "13",
+  guam: "66",
   hawaii: "15",
   idaho: "16",
   illinois: "17",
@@ -54,15 +55,19 @@ const usNumericStateCodes: Record<string, string> = {
   "new york": "36",
   "north carolina": "37",
   "north dakota": "38",
+  "northern mariana islands": "69",
   ohio: "39",
   oklahoma: "40",
   oregon: "41",
   pennsylvania: "42",
+  "puerto rico": "72",
   "rhode island": "44",
   "south carolina": "45",
   "south dakota": "46",
   tennessee: "47",
   texas: "48",
+  "united states minor outlying islands": "74",
+  "united states virgin islands": "78",
   utah: "49",
   vermont: "50",
   virginia: "51",
@@ -70,6 +75,38 @@ const usNumericStateCodes: Record<string, string> = {
   "west virginia": "54",
   wisconsin: "55",
   wyoming: "56"
+};
+
+// Keys are the reference dataset's subdivision codes. Only map entries at the
+// same administrative level as the official numeric code; provinces, counties,
+// and cities not listed here retain their reference code (for example, WLV).
+const numericStateCodesByCountry: Record<string, Record<string, string>> = {
+  CA: {
+    NL: "10", PE: "11", NS: "12", NB: "13", QC: "24", ON: "35",
+    MB: "46", SK: "47", AB: "48", BC: "59", YT: "60", NT: "61", NU: "62"
+  },
+  DE: {
+    SH: "01", HH: "02", NI: "03", HB: "04", NW: "05", HE: "06",
+    RP: "07", BW: "08", BY: "09", SL: "10", BE: "11", BB: "12",
+    MV: "13", SN: "14", ST: "15", TH: "16"
+  },
+  ES: {
+    AN: "01", AR: "02", AS: "03", IB: "04", CN: "05", CB: "06", S: "06",
+    CL: "07", CM: "08", CT: "09", VC: "10", EX: "11", GA: "12",
+    MD: "13", MC: "14", NC: "15", PV: "16", RI: "17", CE: "18", ML: "19"
+  },
+  IT: {
+    "21": "01", "23": "02", "25": "03", "32": "04", "34": "05",
+    "36": "06", "42": "07", "45": "08", "52": "09", "55": "10",
+    "57": "11", "62": "12", "65": "13", "67": "14", "72": "15",
+    "75": "16", "77": "17", "78": "18", "82": "19", "88": "20"
+  },
+  FR: {
+    "971": "01", "972": "02", "973": "03", "974": "04", "976": "06",
+    IDF: "11", CVL: "24", BFC: "27", NOR: "28", HDF: "32",
+    GES: "44", PDL: "52", BRE: "53", NAQ: "75", OCC: "76",
+    ARA: "84", PAC: "93", "20R": "94"
+  }
 };
 
 const statesCache = new Map<string, GeographyState[]>();
@@ -189,7 +226,8 @@ export function findShipmentStateCode(
     if (numericCode) return numericCode;
   }
 
-  return findStateCode(states, stateName);
+  const referenceCode = findStateCode(states, stateName);
+  return numericStateCodesByCountry[countryCode]?.[referenceCode] ?? referenceCode;
 }
 
 function normalizePlaceName(value: string) {

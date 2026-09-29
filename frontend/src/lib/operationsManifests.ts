@@ -32,8 +32,22 @@ export type OperationsManifest = {
   totalConsignments: number;
   totalPhysicalParcels: number;
   totalWeightKg: number;
+  sealedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+};
+export type ArchivedOperationsManifest = {
+  id: string;
+  manifestNumber: string;
+  status: ManifestStatus;
+  branchId?: string;
+  archivedAt: string;
+  header: ManifestHeader;
+  documents: Array<{ format: keyof typeof manifestExportPaths; filename: string }>;
+  document?: {
+    totals: { totalBags: number; totalConsignments: number; totalPhysicalParcels: number; totalWeightKg: number };
+    consignments: Array<{ consignmentNumber: string; parcels: Array<{ parcelNumber: string; bagNumber: string }> }>;
+  } | null;
 };
 export type OperationsBag = {
   id: string;
@@ -235,6 +249,31 @@ export const getOperationsManifest = (id: string) =>
   request<{ success: true } & ManifestDetail>(
     `/api/v1/operations-manifests/${id}`,
   );
+export const listArchivedOperationsManifests = (page = 1) =>
+  request<{ success: true; items: ArchivedOperationsManifest[]; pagination: { pages: number } }>(
+    `/api/v1/operations-manifests/archives?page=${page}`,
+  );
+export const getArchivedOperationsManifest = (id: string) =>
+  request<{ success: true; archive: ArchivedOperationsManifest }>(
+    `/api/v1/operations-manifests/archives/${id}`,
+  );
+
+export async function downloadArchivedOperationsManifest(id: string, format: keyof typeof manifestExportPaths, filename: string) {
+  const token = getAccessToken() ?? (await refreshAccessToken());
+  const response = await fetch(apiUrl(`/api/v1/operations-manifests/archives/${id}/exports/${format}`), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.message || "Archived export could not be downloaded.");
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
 export const deleteOperationsManifest = (id: string, confirmationManifestNumber: string) =>
   request<{
     success: true;
