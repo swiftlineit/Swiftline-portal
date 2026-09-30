@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
 import mongoose from "mongoose";
 import { env } from "../config/env.js";
+import { CarrierApiRateBucket } from "../models/carrierApiRateBucket.model.js";
 import { CarrierTrackingEvent } from "../models/carrierTrackingEvent.model.js";
 import { CarrierTrackingSync } from "../models/carrierTrackingSync.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
@@ -13,6 +14,7 @@ import {
   mapAlsTrackingEvent,
   parseAlsIndiaTimestamp,
   parseAlsTrackingResponse,
+  reserveRateBucket,
   type AlsTrackingProviderEvent
 } from "../services/als/alsTracking.service.js";
 
@@ -66,6 +68,43 @@ describe("ALS tracking response", () => {
     assert.equal(mapAlsTrackingEvent(event({ eventState: "delivered", description: "Delivered" }), "GB"), "DELIVERED");
     assert.equal(mapAlsTrackingEvent(event({ eventState: "redrs", description: "Unknown redirect" }), "GB"), null);
     assert.equal(mapAlsTrackingEvent(event({ eventState: "entry", description: "SHIPMENT HAS BEEN BOOKED" }), "GB"), null);
+  });
+});
+
+describe("ALS rate-bucket failure classification", () => {
+  it("continues reserving when another worker wins the bucket creation race", async () => {
+    const duplicateKeyError = new mongoose.mongo.MongoServerError({
+      message: "duplicate key",
+      code: 11000
+    } as never);
+    try {
+      mock.method(CarrierApiRateBucket, "updateOne", () => ({
+        exec: async () => { throw duplicateKeyError; }
+      }) as never);
+      mock.method(CarrierApiRateBucket, "findOneAndUpdate", () => ({
+        lean: () => ({ exec: async () => ({ count: 2 }) })
+      }) as never);
+
+      await reserveRateBucket("ALS:TEST:DUPLICATE", 30, new Date(Date.now() + 60_000));
+    } finally {
+      mock.restoreAll();
+    }
+  });
+
+  it("does not disguise an unexpected database failure as rate exhaustion", async () => {
+    const databaseError = new Error("database unavailable");
+    try {
+      mock.method(CarrierApiRateBucket, "updateOne", () => ({
+        exec: async () => { throw databaseError; }
+      }) as never);
+
+      await assert.rejects(
+        reserveRateBucket("ALS:TEST:DB_ERROR", 30, new Date(Date.now() + 60_000)),
+        (error) => error === databaseError
+      );
+    } finally {
+      mock.restoreAll();
+    }
   });
 });
 

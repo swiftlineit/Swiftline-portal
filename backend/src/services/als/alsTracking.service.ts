@@ -178,19 +178,27 @@ function indiaDayKey(now: Date) {
   }).format(now);
 }
 
-async function reserveRateBucket(key: string, limit: number, expiresAt: Date) {
+export async function reserveRateBucket(key: string, limit: number, expiresAt: Date) {
   try {
-    const reserved = await CarrierApiRateBucket.findOneAndUpdate(
-      { key, count: { $lt: limit } },
-      { $inc: { count: 1 }, $setOnInsert: { expiresAt } },
-      { upsert: true, returnDocument: "after" }
-    ).lean().exec();
-    if (!reserved) throw new AlsTrackingServiceError("ALS tracking request limit reached. Try again later.", 429);
+    await CarrierApiRateBucket.updateOne(
+      { key },
+      { $setOnInsert: { key, count: 0, expiresAt } },
+      { upsert: true }
+    ).exec();
   } catch (error) {
-    if (error instanceof mongoose.mongo.MongoServerError && error.code === 11000) {
-      throw new AlsTrackingServiceError("ALS tracking request limit reached. Try again later.", 429);
+    if (!(error instanceof mongoose.mongo.MongoServerError) || error.code !== 11000) {
+      throw error;
     }
-    throw error;
+  }
+
+  const reserved = await CarrierApiRateBucket.findOneAndUpdate(
+    { key, count: { $lt: limit } },
+    { $inc: { count: 1 } },
+    { returnDocument: "after" }
+  ).lean().exec();
+
+  if (!reserved) {
+    throw new AlsTrackingServiceError("ALS tracking request limit reached. Try again later.", 429);
   }
 }
 

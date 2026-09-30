@@ -59,6 +59,7 @@
     "job:claims:sweep-deadlines": "tsx src/scripts/sweepClaimDeadlines.ts",
     "job:tickets:sla-escalation": "tsx src/scripts/escalateTicketSlaBreaches.ts",
     "job:flight:exceptions": "tsx src/scripts/sweepFlightExceptions.ts",
+    "job:flight:auto-depart": "tsx src/scripts/autoDepartFlights.ts",
     "job:als:tracking": "tsx src/scripts/pollAlsTracking.ts",
     "job:email:drain": "tsx src/scripts/drainEmailOutbox.ts",
     "job:public-bookings:purge-expired": "tsx src/scripts/purgeExpiredPublicShipmentBookings.ts",
@@ -137,6 +138,7 @@
     "test:claims": "tsx --test src/tests/claimStateMachine.test.ts src/tests/claimPermissions.test.ts src/tests/claimModels.test.ts src/tests/claimSnapshot.test.ts src/tests/claimChecklist.test.ts src/tests/claimNotifications.test.ts src/tests/claimWorkflowReachability.test.ts",
     "test:shipment:als-label": "tsx --test src/tests/alsLabel.test.ts",
     "test:shipment:als-tracking": "tsx --test src/tests/alsTracking.test.ts",
+    "test:shipment:als-tracking-rate-limit-integration": "tsx --test src/tests/alsTrackingRateLimit.integration.test.ts",
     "test:async-concurrency": "tsx --test src/tests/runWithConcurrency.test.ts"
   },
   "keywords": [],
