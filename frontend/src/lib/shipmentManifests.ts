@@ -154,11 +154,13 @@ export async function listShipmentManifests(audience: ShipmentManifestAudience, 
   limit?: number;
   businessAccountId?: string;
   dateRange?: DateRange;
+  search?: string;
 } = {}) {
   const params = new URLSearchParams();
   params.set("page", String(input.page ?? 1));
   params.set("limit", String(input.limit ?? 15));
   if (input.businessAccountId) params.set("businessAccountId", input.businessAccountId);
+  if (input.search?.trim()) params.set("search", input.search.trim().slice(0, 80));
   setDateRangeParams(params, input.dateRange);
   const response = await fetchWithAuth(apiUrl(`${manifestRoot(audience)}?${params.toString()}`));
   return readJson<{
@@ -166,6 +168,26 @@ export async function listShipmentManifests(audience: ShipmentManifestAudience, 
     manifests: ShipmentManifestListItem[];
     pagination: { page: number; limit: number; total: number; totalPages: number };
   }>(response);
+}
+
+/** Downloads the existing courier-manifest workbook without changing its layout. */
+export async function downloadShipmentManifestExcel(
+  manifest: Pick<ShipmentManifestSummary, "id" | "manifestNumber">,
+  audience: ShipmentManifestAudience
+) {
+  const response = await fetchWithAuth(apiUrl(`${manifestRoot(audience)}/${manifest.id}/xlsx`));
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { message?: string };
+    throw new Error(payload.message || "Manifest Excel file could not be downloaded.");
+  }
+  const objectUrl = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = `MANIFEST-${manifest.manifestNumber}.xlsx`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
 }
 
 /** Downloads (or opens) the handover manifest PDF. */

@@ -1,14 +1,16 @@
 "use client";
 
 import Image from "next/image";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import ParcelScanner from "@/components/driver/ParcelScanner";
 import {
   FiAlertTriangle,
   FiArchive,
+  FiCamera,
   FiCheck,
   FiDownload,
+  FiEdit2,
   FiPlus,
   FiPrinter,
   FiSmartphone,
@@ -21,6 +23,7 @@ import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
 import {
   createOperationsBag,
+  createDirectOperationsScanSession,
   createOperationsScanSession,
   closeAllOperationsBags,
   disconnectOperationsScanSession,
@@ -33,7 +36,9 @@ import {
   runManifestAction,
   scanOperationsParcel,
   setOperationsParcelDisposition,
+  updateOperationsManifest,
   type ManifestDetail,
+  type ManifestHeader,
   type OperationsBag,
   type OperationsConsignment,
   type OperationsParcelDisposition,
@@ -41,6 +46,7 @@ import {
 } from "@/lib/operationsManifests";
 import { OPERATIONS_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
+import { useDialog } from "@/lib/useDialog";
 import { IoMdSend } from "react-icons/io";
 
 const isEditable = (status?: string) =>
@@ -54,6 +60,10 @@ const formatMoney = (minor?: number | null) =>
         currency: "INR",
       }).format(minor / 100)
     : "Required";
+const formatParcelWeight = (weight?: number | null) =>
+  typeof weight === "number" && Number.isFinite(weight)
+    ? `${weight.toFixed(3)} kg`
+    : "Weight unavailable";
 
 type PendingReason = {
   title: string;
@@ -62,8 +72,13 @@ type PendingReason = {
 
 export default function OperationsManifestWorkspace() {
   const { manifestId } = useParams<{ manifestId: string }>();
+  const router = useRouter();
   const { user, loading } = useAdminUser(OPERATIONS_AREA);
   const [data, setData] = useState<ManifestDetail | null>(null);
+  const [editDetailsOpen, setEditDetailsOpen] = useState(false);
+  const [editHeader, setEditHeader] = useState<ManifestHeader | null>(null);
+  const [editReason, setEditReason] = useState("");
+  const [savingDetails, setSavingDetails] = useState(false);
   const [busy, setBusy] = useState(true);
   const [activeBagId, setActiveBagId] = useState("");
   const [barcode, setBarcode] = useState("");
@@ -75,10 +90,14 @@ export default function OperationsManifestWorkspace() {
     useState<OperationsScanSession | null>(null);
   const [pairingQr, setPairingQr] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
+  const [directPhoneBusy, setDirectPhoneBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const lastPhoneScanRef = useRef<string | null>(null);
   const phoneSessionId = phoneSession?.id ?? "";
   const phoneSessionStatus = phoneSession?.status ?? "";
+  const editDetailsDialogRef = useDialog<HTMLFormElement>(editDetailsOpen, () => {
+    if (!savingDetails) setEditDetailsOpen(false);
+  });
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -277,6 +296,27 @@ export default function OperationsManifestWorkspace() {
     }
   }
 
+  async function openScannerOnThisPhone() {
+    setDirectPhoneBusy(true);
+    try {
+      const result = await createDirectOperationsScanSession(manifestId);
+      setPhoneSession(result.session);
+      setPairingQr("");
+      lastPhoneScanRef.current = result.session.lastScanAt;
+      router.push(
+        `/manifest-scanner/${result.session.id}?returnTo=${encodeURIComponent(`/dashboard/operations-manifests/${manifestId}`)}`,
+      );
+    } catch (caughtError) {
+      toast.error(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "This phone could not open the manifest scanner.",
+      );
+    } finally {
+      setDirectPhoneBusy(false);
+    }
+  }
+
   async function disconnectPhone() {
     if (!phoneSession) return;
     setPhoneBusy(true);
@@ -406,12 +446,37 @@ export default function OperationsManifestWorkspace() {
     );
   }
 
+  function beginEditDetails() {
+    if (!data) return;
+    setEditHeader({ ...data.manifest.header });
+    setEditReason("");
+    setEditDetailsOpen(true);
+  }
+
+  async function saveManifestDetails(event: FormEvent) {
+    event.preventDefault();
+    if (!editHeader) return;
+    if (editReason.trim().length < 5) return toast.error("Enter a clear correction reason of at least 5 characters.");
+    setSavingDetails(true);
+    try {
+      await updateOperationsManifest(manifestId, { header: editHeader, reason: editReason.trim() });
+      setEditDetailsOpen(false);
+      toast.success("Manifest and linked flight details updated.");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Manifest details could not be updated.");
+    } finally {
+      setSavingDetails(false);
+    }
+  }
+
   return (
     <>
       <div className="mx-auto max-w-8xl">
         <ManifestHeader
           data={data}
           busy={busy}
+          onEditDetails={beginEditDetails}
           onExport={(format, view) => void exportFile(format, view)}
           onSeal={() => void handleSeal()}
           sealBlocked={data.sealingIssues.length > 0}
@@ -434,11 +499,20 @@ export default function OperationsManifestWorkspace() {
                 {data.sealingIssues.map((issue) => {
                   const shipmentReference = issue.split(": ", 1)[0];
                   const bagNumbers = bagNumbersByShipmentReference.get(shipmentReference);
+                  const unscannedIssueMatch = issue.match(
+                    /^(.+?: )?Choose Held, Deferred to next manifest, or Cancelled for (\d+) unscanned parcels?\.$/,
+                  );
+                  const displayIssue = unscannedIssueMatch
+                    ? `${unscannedIssueMatch[1] ?? ""}${unscannedIssueMatch[2]} unscanned parcel${unscannedIssueMatch[2] === "1" ? "" : "s"}: Held, Deferred, or Cancelled.`
+                    : issue;
                   return (
-                    <li key={issue} className="flex min-w-0 items-start gap-2">
+                    <li
+                      key={issue}
+                      className="flex min-w-0 items-start gap-2 text-sm leading-5"
+                    >
                       <span className="shrink-0 text-red-600">!</span>
                       <span className="min-w-0">
-                        {issue}
+                        {displayIssue}
                         {bagNumbers?.length ? (
                           <span className="ml-2 inline-flex rounded-full bg-[#0D1282]/10 px-2 py-0.5 text-xs font-semibold text-[#0D1282]">
                             Bag {bagNumbers.join(", ")}
@@ -615,7 +689,9 @@ export default function OperationsManifestWorkspace() {
                 session={phoneSession}
                 qrDataUri={pairingQr}
                 busy={phoneBusy}
+                directBusy={directPhoneBusy}
                 onConnect={() => void connectPhone()}
+                onDirectScan={() => void openScannerOnThisPhone()}
                 onDisconnect={() => void disconnectPhone()}
               />
 
@@ -670,7 +746,60 @@ export default function OperationsManifestWorkspace() {
           }}
         />
       ) : null}
+      {editDetailsOpen && editHeader ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-3 sm:p-5">
+          <form
+            ref={editDetailsDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-manifest-details-title"
+            tabIndex={-1}
+            onSubmit={(event) => void saveManifestDetails(event)}
+            className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl outline-none"
+          >
+            <div className="sticky top-0 z-10 border-b border-slate-200 bg-white px-5 py-4 sm:px-6">
+              <h2 id="edit-manifest-details-title" className="text-lg font-semibold text-slate-950">Edit manifest details</h2>
+              <p className="mt-1 text-sm leading-5 text-slate-600">Corrections are audited. Shared flight details update on the linked flight and future manifest downloads.</p>
+            </div>
+            <div className="grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
+              <label className="block text-sm font-medium text-slate-700 sm:col-span-2">
+                Destination agent details
+                <textarea maxLength={1000} rows={4} value={editHeader.destinationAgent} onChange={(event) => setEditHeader({ ...editHeader, destinationAgent: event.target.value })} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15" />
+              </label>
+              <EditManifestField label="Destination country" value={editHeader.destinationCountryName} maxLength={100} onChange={(value) => setEditHeader({ ...editHeader, destinationCountryName: value })} />
+              <EditManifestField label="Destination country code" value={editHeader.destinationCountryCode} maxLength={2} onChange={(value) => setEditHeader({ ...editHeader, destinationCountryCode: value.toUpperCase() })} />
+              <EditManifestField label="Flight number" value={editHeader.flightNumber} maxLength={20} onChange={(value) => setEditHeader({ ...editHeader, flightNumber: value.toUpperCase() })} />
+              <label className="block text-sm font-medium text-slate-700">
+                Departure date (IST)
+                <input required type="date" value={editHeader.departureDate} onChange={(event) => setEditHeader({ ...editHeader, departureDate: event.target.value })} className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15" />
+              </label>
+              <EditManifestField label="MAWB number" value={editHeader.mawbNumber} maxLength={40} onChange={(value) => setEditHeader({ ...editHeader, mawbNumber: value.toUpperCase() })} />
+              <EditManifestField label="Origin IATA" value={editHeader.originIataCode} maxLength={3} onChange={(value) => setEditHeader({ ...editHeader, originIataCode: value.toUpperCase() })} />
+              <EditManifestField label="Destination IATA" value={editHeader.destinationIataCode} maxLength={3} onChange={(value) => setEditHeader({ ...editHeader, destinationIataCode: value.toUpperCase() })} />
+              <EditManifestField label="Value type" value={editHeader.valueType} maxLength={20} onChange={(value) => setEditHeader({ ...editHeader, valueType: value.toUpperCase() })} />
+              <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs leading-5 text-slate-600 sm:col-span-2">Changing the date keeps the linked flight&apos;s existing scheduled IST time. It does not alter recorded shipment events or actual flight times.</p>
+              <label className="block text-sm font-medium text-slate-700 sm:col-span-2">
+                Correction reason
+                <textarea required minLength={5} maxLength={500} rows={3} value={editReason} onChange={(event) => setEditReason(event.target.value)} placeholder="Explain why these details need correction" className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15" />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4 sm:px-6">
+              <button type="button" disabled={savingDetails} onClick={() => setEditDetailsOpen(false)} className="h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">Cancel</button>
+              <button type="submit" disabled={savingDetails} className="h-10 rounded-lg bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0A0F6D] disabled:cursor-not-allowed disabled:opacity-60">{savingDetails ? "Saving..." : "Save details"}</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </>
+  );
+}
+
+function EditManifestField({ label, value, maxLength, onChange }: { label: string; value: string; maxLength: number; onChange: (value: string) => void }) {
+  return (
+    <label className="block text-sm font-medium text-slate-700">
+      {label}
+      <input maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15" />
+    </label>
   );
 }
 
@@ -678,13 +807,17 @@ function PhoneScannerPanel({
   session,
   qrDataUri,
   busy,
+  directBusy,
   onConnect,
+  onDirectScan,
   onDisconnect,
 }: {
   session: OperationsScanSession | null;
   qrDataUri: string;
   busy: boolean;
+  directBusy: boolean;
   onConnect: () => void;
+  onDirectScan: () => void;
   onDisconnect: () => void;
 }) {
   const connected = session?.status === "ACTIVE";
@@ -716,24 +849,37 @@ function PhoneScannerPanel({
             </p>
           </div>
         </div>
-        {connected || pending ? (
-          <button
-            onClick={onDisconnect}
-            disabled={busy}
-            className="h-10 border border-red-300 rounded-4xl bg-white px-4 text-sm font-semibold text-red-700 disabled:opacity-50"
-          >
-            Disconnect
-          </button>
-        ) : (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {!connected && !pending ? (
           <button
             onClick={onConnect}
-            disabled={busy}
+            disabled={busy || directBusy}
             className="inline-flex h-10 items-center rounded-4xl gap-2 bg-[#0D1282] px-4 text-sm font-semibold text-white disabled:opacity-50"
           >
             <FiSmartphone />
             {busy ? "Preparing..." : "Connect Phone"}
           </button>
-        )}
+          ) : null}
+          {!connected ? (
+            <button
+              onClick={onDirectScan}
+              disabled={busy || directBusy}
+              className="inline-flex h-10 items-center rounded-4xl border border-[#0D1282] bg-white px-4 text-sm font-semibold text-[#0D1282] disabled:opacity-50 md:hidden"
+            >
+              <FiCamera className="mr-2" />
+              {directBusy ? "Opening..." : "Scan on this phone"}
+            </button>
+          ) : null}
+          {connected || pending ? (
+            <button
+              onClick={onDisconnect}
+              disabled={busy || directBusy}
+              className="h-10 rounded-4xl border border-red-300 bg-white px-4 text-sm font-semibold text-red-700 disabled:opacity-50"
+            >
+              Disconnect
+            </button>
+          ) : null}
+        </div>
       </div>
       {pending && qrDataUri ? (
         <div className="mt-4 flex flex-col items-center gap-3 border-t border-[#0D1282]/15 pt-4 sm:flex-row sm:items-start">
@@ -770,6 +916,7 @@ function PhoneScannerPanel({
 function ManifestHeader({
   data,
   busy,
+  onEditDetails,
   onExport,
   onSeal,
   onDispatch,
@@ -777,6 +924,7 @@ function ManifestHeader({
 }: {
   data: ManifestDetail;
   busy: boolean;
+  onEditDetails: () => void;
   onExport: (format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "uk", view?: boolean) => void;
   onSeal: () => void;
   onDispatch: () => void;
@@ -788,29 +936,58 @@ function ManifestHeader({
     ? undefined
     : "Only CSB-V shipments should be in this manifest.";
   return (
-    <div className="mb-5 flex flex-wrap items-start justify-between gap-4 rounded-lg border border-[#EEEDED] bg-white p-5 shadow-sm">
-      <div>
-       
-        <div className=" flex items-center gap-3">
-          <h1 className="text-2xl font-semibold text-slate-950">
-            {manifest.manifestNumber}
-          </h1>
-          <span className="rounded border border-[#0D1282]/25 bg-[#EEEDED] px-2.5 py-1 text-xs font-semibold text-[#0D1282]">
-            {manifest.status.replaceAll("_", " ")}
-          </span>
+    <div className="mb-5 rounded-xl border border-[#EEEDED] bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex flex-col gap-5">
+        <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <h1 className="text-2xl font-semibold text-slate-950">
+                {manifest.manifestNumber}
+              </h1>
+              <span className="rounded-md border border-[#0D1282]/25 bg-[#0D1282]/5 px-2.5 py-1 text-xs font-semibold text-[#0D1282]">
+                {manifest.status.replaceAll("_", " ")}
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-slate-500">
+              {manifest.branch?.name} ({manifest.branch?.code}) |{" "}
+              {manifest.header.originIataCode || "Origin"} to{" "}
+              {manifest.header.destinationIataCode ||
+                manifest.header.destinationCountryName ||
+                "Destination"}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2 lg:justify-end">
+            <button type="button" onClick={onEditDetails} disabled={busy} className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-xl border border-[#CDD5DF] bg-white px-3.5 text-sm font-semibold text-slate-700 transition hover:border-[#0D1282] hover:text-[#0D1282] disabled:opacity-50">
+              <FiEdit2 /> Edit details
+            </button>
+            {manifest.status === "READY_TO_SEAL" ? (
+              <button
+                onClick={onSeal}
+                disabled={busy || sealBlocked}
+                title={sealBlocked ? "Resolve the sealing requirements shown below first." : undefined}
+                className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-full bg-[#F0DE36] px-4 text-sm font-semibold text-[#0D1282] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiCheck />
+                Seal Manifest
+              </button>
+            ) : null}
+            {manifest.status === "SEALED" ? (
+              <button
+                onClick={onDispatch}
+                disabled={busy || data.dispatchIssues.length > 0}
+                title={data.dispatchIssues.length ? "Complete all missing shipment milestones before dispatch." : undefined}
+                className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-full bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                <IoMdSend />
+                Confirm Dispatch
+              </button>
+            ) : null}
+          </div>
         </div>
-        <p className="mt-1 text-sm text-slate-500">
-          {manifest.branch?.name} ({manifest.branch?.code}) |{" "}
-          {manifest.header.originIataCode || "Origin"} to{" "}
-          {manifest.header.destinationIataCode ||
-            manifest.header.destinationCountryName ||
-            "Destination"}
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-    
+
         {["SEALED", "DISPATCHED"].includes(manifest.status) ? (
-          <>
+          <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4">
             <ActionButton
               onClick={() => onExport("pdf", true)}
               icon={<FiPrinter />}
@@ -855,29 +1032,7 @@ function ManifestHeader({
                 label="UK Manifest"
               />
             ) : null}
-          </>
-        ) : null}
-        {manifest.status === "READY_TO_SEAL" ? (
-          <button
-            onClick={onSeal}
-            disabled={busy || sealBlocked}
-            title={sealBlocked ? "Resolve the sealing requirements shown below first." : undefined}
-            className="inline-flex h-10 items-center gap-2 rounded-4xl bg-[#F0DE36] px-4 text-sm font-semibold text-[#0D1282] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <FiCheck />
-            Seal Manifest
-          </button>
-        ) : null}
-        {manifest.status === "SEALED" ? (
-          <button
-            onClick={onDispatch}
-            disabled={busy || data.dispatchIssues.length > 0}
-            title={data.dispatchIssues.length ? "Complete all missing shipment milestones before dispatch." : undefined}
-            className="inline-flex h-10 items-center gap-2 rounded-4xl bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:bg-slate-300"
-          >
-            < IoMdSend />
-            Confirm Dispatch
-          </button>
+          </div>
         ) : null}
       </div>
     </div>
@@ -903,7 +1058,7 @@ function ActionButton({
         onClick={onClick}
         disabled={disabled}
         title={disabled ? undefined : title}
-        className="inline-flex h-10 items-center gap-2 rounded-4xl border border-[#0D1282]/20 bg-white px-4 text-sm font-semibold text-[#0D1282] hover:bg-[#EEEDED] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+        className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-full border border-[#0D1282]/20 bg-white px-4 text-sm font-semibold text-[#0D1282] hover:bg-[#EEEDED] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
       >
         {icon}
         {label}
@@ -1050,17 +1205,24 @@ function ConsignmentTable({
                       item.parcelValues?.find(
                         (value) => value.parcelNumber === parcel,
                       )?.valueMinor ?? null;
+                    const parcelWeight = item.parcelWeightSnapshots?.find(
+                      (snapshot) => snapshot.parcelNumber === parcel,
+                    )?.weightKg ?? null;
                     return (
                       <div
                         key={parcel}
-                        className="flex items-center justify-between gap-1.5 rounded border border-[#EEEDED] px-2 py-1"
+                        className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/50 px-2.5 py-1.5"
                       >
-                        <span className="truncate font-mono text-[10px]">
+                        <span className="min-w-0 flex-1 truncate font-mono text-[10px] font-medium text-slate-800">
                           {parcel}
                         </span>
-                        <div className="flex shrink-0 items-center gap-1">
+                        <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[10px]">
+                          <span className="font-semibold text-slate-600">
+                            {formatParcelWeight(parcelWeight)}
+                          </span>
+                          <span aria-hidden="true" className="text-slate-300">•</span>
                           {/* Each box carries its own customs value. */}
-                          <span className={`text-[10px] font-semibold ${parcelValue ? "text-slate-600" : "text-[#D71313]"}`}>
+                          <span className={`font-semibold ${parcelValue ? "text-slate-700" : "text-[#D71313]"}`}>
                             {parcelValue ? formatMoney(parcelValue) : "Goods value unavailable"}
                           </span>
                           {canRemove ? (
@@ -1068,7 +1230,8 @@ function ConsignmentTable({
                               type="button"
                               onClick={() => onRemove(parcel)}
                               title="Remove parcel from bag"
-                              className="rounded p-1 text-[#D71313] hover:bg-[#D71313]/5"
+                              aria-label={`Remove parcel ${parcel} from bag`}
+                              className="ml-1 flex h-6 w-6 items-center justify-center rounded text-[#D71313] hover:bg-[#D71313]/5"
                             >
                               <FiTrash2 />
                             </button>
@@ -1078,6 +1241,9 @@ function ConsignmentTable({
                     );
                   })}
                   {unscannedParcels.map((parcel) => {
+                    const parcelWeight = item.parcelWeightSnapshots?.find(
+                      (snapshot) => snapshot.parcelNumber === parcel,
+                    )?.weightKg ?? null;
                     const recorded = item.parcelDispositions?.find(
                       (entry) => entry.parcelNumber === parcel,
                     );
@@ -1093,13 +1259,19 @@ function ConsignmentTable({
                         key={parcel}
                         className="rounded border border-amber-300 bg-amber-50 px-2 py-2"
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-mono text-[10px] text-slate-800">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-slate-800">
                             {parcel}
                           </span>
-                          <span className={`text-[10px] font-semibold ${recorded ? "text-amber-800" : "text-[#D71313]"}`}>
-                            {statusLabel}
-                          </span>
+                          <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[10px]">
+                            <span className="font-semibold text-slate-600">
+                              {formatParcelWeight(parcelWeight)}
+                            </span>
+                            <span aria-hidden="true" className="text-amber-400">•</span>
+                            <span className={`font-semibold ${recorded ? "text-amber-800" : "text-[#D71313]"}`}>
+                              {statusLabel}
+                            </span>
+                          </div>
                         </div>
                         {recorded?.reason ? (
                           <p className="mt-1 text-[10px] leading-4 text-slate-600">

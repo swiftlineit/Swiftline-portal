@@ -1181,6 +1181,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   />
 
                   <input
+                    type="text"
                     value={searchInput}
                     onChange={(event) => setSearchInput(event.target.value)}
                     maxLength={80}

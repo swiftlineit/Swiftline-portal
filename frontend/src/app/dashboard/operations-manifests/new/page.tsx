@@ -11,14 +11,13 @@ import CountryFlag from "@/components/CountryFlag";
 import { countryCodeOptions } from "@/lib/countries";
 import { findCountries, resolveCountry } from "@/lib/countryLookup";
 import {
-  createOperationsManifest,
+  createOperationsManifestWithFlight,
   listManifestBranches,
-  updateOperationsManifest,
   type ManifestHeader,
 } from "@/lib/operationsManifests";
 import { OPERATIONS_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
-import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
+import { indiaDateTimeLocalToIso } from "@/lib/indiaDateTime";
 
 // Almost every flight clears through the UK agent, so the TO block starts filled in
 // and the operator edits it only when the destination agent differs.
@@ -294,37 +293,18 @@ export default function NewOperationsManifestPage() {
   >([]);
   const [branchId, setBranchId] = useState("");
   const [header, setHeader] = useState(emptyHeader);
-  const [saving, setSaving] = useState(false);
-  const [manifestId, setManifestId] = useState<string | null>(null);
-  const [savedSnapshot, setSavedSnapshot] = useState(() => JSON.stringify({ branchId: "", header: emptyHeader }));
-
-  const currentSnapshot = JSON.stringify({ branchId, header });
-  const hasUnsavedManifest = currentSnapshot !== savedSnapshot;
-
-  async function saveDraft(navigateAfterSave = false) {
-    if (!branchId) throw new Error("Select the origin branch.");
-    setSaving(true);
-    try {
-      let savedId = manifestId;
-      if (savedId) {
-        await updateOperationsManifest(savedId, { header });
-      } else {
-        const result = await createOperationsManifest({ branchId, header });
-        savedId = result.manifestId;
-        setManifestId(savedId);
-      }
-      setSavedSnapshot(currentSnapshot);
-      toast.success("Manifest draft saved.");
-      if (navigateAfterSave && savedId) router.push(`/dashboard/operations-manifests/${savedId}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  useUnsavedChanges(hasUnsavedManifest && !saving, {
-    label: "operations manifest",
-    saveDraft: () => saveDraft(false),
+  const [flight, setFlight] = useState({
+    airlineName: "",
+    scheduledDepartureLocal: "",
+    scheduledArrivalLocal: "",
+    capacityKg: "1000",
+    transitIataCode: "",
+    finalMileCarrier: "",
+    transitAirportCode: "",
+    transitArrivalLocal: "",
+    transitDepartureLocal: "",
   });
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (user)
@@ -340,32 +320,70 @@ export default function NewOperationsManifestPage() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!branchId) return toast.error("Select the origin branch.");
+    const departureAt = indiaDateTimeLocalToIso(flight.scheduledDepartureLocal);
+    const arrivalAt = indiaDateTimeLocalToIso(flight.scheduledArrivalLocal);
+    if (!departureAt || !arrivalAt) return toast.error("Enter valid departure and arrival times in India time.");
+    if (new Date(arrivalAt) <= new Date(departureAt)) return toast.error("Arrival must be after departure.");
+    const capacityKg = Number(flight.capacityKg);
+    if (!Number.isFinite(capacityKg) || capacityKg <= 0) return toast.error("Enter a valid positive flight capacity.");
+    if (flight.transitAirportCode.trim() && !flight.transitArrivalLocal && !flight.transitDepartureLocal) {
+      return toast.error("Enter a transit arrival or departure time, or clear the transit airport.");
+    }
+
+    setSaving(true);
     try {
-      await saveDraft(true);
+      const created = await createOperationsManifestWithFlight({
+        branchId,
+        header: {
+          ...header,
+          departureDate: flight.scheduledDepartureLocal.slice(0, 10),
+        },
+        flight: {
+          airlineName: flight.airlineName.trim(),
+          transitIataCode: flight.transitIataCode.trim().toUpperCase(),
+          scheduledDepartureAt: departureAt,
+          scheduledArrivalAt: arrivalAt,
+          capacityKg,
+          finalMileCarrier: flight.finalMileCarrier.trim(),
+          connection: flight.transitAirportCode.trim()
+            ? {
+                transitAirportCode: flight.transitAirportCode.trim().toUpperCase(),
+                scheduledArrivalAt: flight.transitArrivalLocal
+                  ? indiaDateTimeLocalToIso(flight.transitArrivalLocal)
+                  : null,
+                scheduledDepartureAt: flight.transitDepartureLocal
+                  ? indiaDateTimeLocalToIso(flight.transitDepartureLocal)
+                  : null,
+              }
+            : null,
+        },
+      });
+      toast.success(`${created.manifestNumber} and its booked flight were created.`);
+      router.push(`/dashboard/operations-manifests/${created.manifestId}`);
     } catch (error) {
       toast.error(
         error instanceof Error
           ? error.message
-          : "Manifest could not be created.",
+          : "Manifest and flight could not be created.",
       );
+    } finally {
+      setSaving(false);
     }
   }
 
   return (
       <form onSubmit={submit} className="mx-start max-w-8xl">
         <div className="mb-6 rounded-xl border border-[#EEEDED] bg-white p-5 shadow-sm">
-          <h1 className="text-2xl font-semibold ">
-            Create Operations Manifest
-          </h1>
+          <h1 className="text-2xl font-semibold text-[#0D1282]">Create Manifest &amp; Flight</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Set the branch and flight route. A first bag opens automatically so
-            you can start scanning.
+            One submission creates the manifest, opens its first bag and books the linked flight. You can pack shipments after creation.
           </p>
         </div>
 
         <section className="overflow-hidden rounded-2xl border border-[#EEEDED] bg-white shadow-sm">
           <div className="border-b border-[#EEEDED] bg-[#EEEDED]/70 px-6 py-4">
-            <h2 className="font-semibold text-slate-600">Route And Flight</h2>
+            <h2 className="font-semibold text-slate-700">Manifest routing</h2>
           </div>
           <div className="grid gap-5 p-6 md:grid-cols-2">
             <label className={labelClass}>
@@ -422,16 +440,6 @@ export default function NewOperationsManifestPage() {
                   field("flightNumber", normalizeFlightNumber(event.target.value))
                 }
                 placeholder="EY-219"
-                className={controlClass}
-              />
-            </label>
-
-            <label className={labelClass}>
-              Departure Date *
-              <input
-                type="date"
-                value={header.departureDate}
-                onChange={(event) => field("departureDate", event.target.value)}
                 className={controlClass}
               />
             </label>
@@ -507,6 +515,60 @@ export default function NewOperationsManifestPage() {
           </div>
         </section>
 
+        <section className="mt-5 overflow-hidden rounded-2xl border border-[#EEEDED] bg-white shadow-sm">
+          <div className="border-b border-[#EEEDED] bg-[#EEEDED]/70 px-6 py-4">
+            <h2 className="font-semibold text-slate-700">Flight schedule</h2>
+            <p className="mt-1 text-xs text-slate-600">All scheduled times use India Standard Time (IST, UTC+05:30).</p>
+            <p className="mt-1 text-xs text-slate-600">After this manifest is dispatched, the flight changes to Departed automatically at the scheduled departure time. If a readiness check blocks it, Operations can still use the manual Depart action.</p>
+          </div>
+          <div className="grid gap-5 p-6 sm:grid-cols-2">
+            <label className={labelClass}>
+              Airline *
+              <input required value={flight.airlineName} onChange={(event) => setFlight((current) => ({ ...current, airlineName: event.target.value }))} placeholder="Air India" className={controlClass} />
+            </label>
+            <label className={labelClass}>
+              Flight capacity (kg) *
+              <input required type="number" min="0.1" step="0.1" value={flight.capacityKg} onChange={(event) => setFlight((current) => ({ ...current, capacityKg: event.target.value }))} className={controlClass} />
+            </label>
+            <label className={labelClass}>
+              Scheduled departure (IST) *
+              <input required type="datetime-local" value={flight.scheduledDepartureLocal} onChange={(event) => setFlight((current) => ({ ...current, scheduledDepartureLocal: event.target.value }))} className={controlClass} />
+            </label>
+            <label className={labelClass}>
+              Scheduled arrival (IST) *
+              <input required type="datetime-local" value={flight.scheduledArrivalLocal} onChange={(event) => setFlight((current) => ({ ...current, scheduledArrivalLocal: event.target.value }))} className={controlClass} />
+            </label>
+            <label className={labelClass}>
+              Transit IATA (optional)
+              <input maxLength={3} value={flight.transitIataCode} onChange={(event) => setFlight((current) => ({ ...current, transitIataCode: event.target.value.toUpperCase() }))} placeholder="DXB" className={controlClass} />
+            </label>
+            <label className={labelClass}>
+              Final-mile carrier (optional)
+              <input value={flight.finalMileCarrier} onChange={(event) => setFlight((current) => ({ ...current, finalMileCarrier: event.target.value }))} placeholder="DPD UK" className={controlClass} />
+            </label>
+            <div className="rounded-xl border border-slate-200 p-4 sm:col-span-2">
+              <p className="text-sm font-semibold text-slate-800">Transit connection (optional)</p>
+              <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                <label className={labelClass}>
+                  Transit airport
+                  <input maxLength={3} value={flight.transitAirportCode} onChange={(event) => setFlight((current) => ({ ...current, transitAirportCode: event.target.value.toUpperCase() }))} placeholder="DXB" className={controlClass} />
+                </label>
+                <label className={labelClass}>
+                  Transit arrival (IST)
+                  <input type="datetime-local" value={flight.transitArrivalLocal} onChange={(event) => setFlight((current) => ({ ...current, transitArrivalLocal: event.target.value }))} className={controlClass} />
+                </label>
+                <label className={labelClass}>
+                  Transit departure (IST)
+                  <input type="datetime-local" value={flight.transitDepartureLocal} onChange={(event) => setFlight((current) => ({ ...current, transitDepartureLocal: event.target.value }))} className={controlClass} />
+                </label>
+              </div>
+            </div>
+            <p className="text-sm leading-6 text-slate-600 sm:col-span-2">
+              The flight is booked when this form is submitted. Shipment allocations are made after the manifest is dispatched.
+            </p>
+          </div>
+        </section>
+
         <div className="mt-5 flex justify-end gap-3">
           <Link
             href="/dashboard/operations-manifests"
@@ -515,18 +577,10 @@ export default function NewOperationsManifestPage() {
             Cancel
           </Link>
           <button
-            type="button"
             disabled={saving || !branchId}
-            onClick={() => void saveDraft(false).catch((error) => toast.error(error instanceof Error ? error.message : "Manifest draft could not be saved."))}
-            className="h-11 rounded-4xl border border-[#0D1282]/20 bg-white px-5 text-sm font-semibold text-[#0D1282] disabled:opacity-60"
-          >
-            {saving ? "Saving..." : "Save Draft"}
-          </button>
-          <button
-            disabled={saving}
             className="h-11 rounded-4xl bg-[#0D1282] tracking-wide px-6 text-sm font-semibold text-white hover:bg-[#0D1282]/90 disabled:opacity-60"
           >
-            {saving ? "Creating..." : "Create Manifest"}
+            {saving ? "Creating manifest & flight..." : "Create Manifest & Flight"}
           </button>
         </div>
       </form>

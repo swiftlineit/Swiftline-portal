@@ -12,6 +12,7 @@ import { User } from "../models/user.model.js";
 import { clientCanAccessShipmentDraft } from "../services/shipmentDraftPolicy.service.js";
 import { readShipmentBookingSnapshot, snapshotDeclaredGoodsValueMinor } from "../services/shipmentBookingSnapshot.service.js";
 import { notifyAdminsOfClientManifest } from "../services/shipmentManifestNotification.service.js";
+import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
 import { buildShipmentManifestPdf } from "../services/shipmentManifestPdf.service.js";
 import { dateRangeCondition, dateRangeParams } from "../utils/dateRangeFilter.js";
 import {
@@ -20,6 +21,8 @@ import {
   formatManifestOrigin,
   hydrateMissingManifestParcelChargeableWeights,
   manifestBusinessAccountName,
+  resolveClientManifestAccountScope,
+  shipmentManifestSearchConditions,
   serializeShipmentManifest,
   ShipmentManifestServiceError
 } from "../services/shipmentManifest.service.js";
@@ -110,7 +113,7 @@ async function assertClientAccess(userId: mongoose.Types.ObjectId, draft: IShipm
   if (!allowed) throw new ShipmentManifestServiceError("You do not have access to create this shipment manifest.", 403);
 }
 
-async function manifestForPdf(manifest: IShipmentManifest) {
+async function manifestForHandoverDocument(manifest: IShipmentManifest) {
   const linesNeedingHydration = manifest.lineSnapshots.filter((line) => (
     Array.isArray(line.parcels)
     && line.parcels.length > 0
@@ -322,7 +325,7 @@ async function createManifest(request: Request, response: Response, actorRole: "
         remark: "DONE"
       });
     });
-    const manifestNumber = await allocateShipmentManifestNumber();
+    const manifestNumber = await allocateShipmentManifestNumber(businessAccountName);
     const manifest = await ShipmentManifest.create({
       manifestNumber,
       businessAccountId: currentDraft.businessAccountId,
@@ -406,7 +409,7 @@ async function downloadManifest(request: Request, response: Response, actorRole:
   const disposition = request.query.view === "1" ? "inline" : "attachment";
   response.setHeader("Content-Type", "application/pdf");
   response.setHeader("Content-Disposition", `${disposition}; filename="MANIFEST-${manifest.manifestNumber}.pdf"`);
-  return response.status(200).send(await buildShipmentManifestPdf(await manifestForPdf(manifest)));
+  return response.status(200).send(await buildShipmentManifestPdf(await manifestForHandoverDocument(manifest)));
 }
 
 export async function getAdminShipmentManifestContext(request: Request, response: Response) {
@@ -490,23 +493,26 @@ async function listManifests(request: Request, response: Response, actorRole: "a
   const requestedPage = Math.max(1, Number.parseInt(String(request.query.page ?? "1"), 10) || 1);
   const limit = Math.min(50, Math.max(1, Number.parseInt(String(request.query.limit ?? "15"), 10) || 15));
   const businessAccountId = typeof request.query.businessAccountId === "string" ? request.query.businessAccountId : "";
+  const search = typeof request.query.search === "string" ? request.query.search.trim().slice(0, 80) : "";
 
   const query: Record<string, unknown> = {};
   if (actorRole === "client") {
     // Clients see manifests raised for their own business accounts, whoever sealed them.
     const accountIds = await clientBusinessAccountIds(userId);
-    if (!accountIds.length) {
+    const accountScope = resolveClientManifestAccountScope(accountIds, businessAccountId);
+    if (!accountScope.allowed) {
       return response.status(200).json({
         success: true,
         manifests: [],
         pagination: { page: 1, limit, total: 0, totalPages: 1 }
       });
     }
-    query.businessAccountId = { $in: accountIds };
-  }
-  if (businessAccountId && mongoose.Types.ObjectId.isValid(businessAccountId)) {
+    Object.assign(query, accountScope.filter);
+  } else if (businessAccountId && mongoose.Types.ObjectId.isValid(businessAccountId)) {
     query.businessAccountId = new mongoose.Types.ObjectId(businessAccountId);
   }
+  const searchConditions = shipmentManifestSearchConditions(search);
+  if (searchConditions.length) query.$or = searchConditions;
   const { dateFrom, dateTo } = dateRangeParams(request.query);
   const generatedAt = dateRangeCondition(dateFrom, dateTo);
   if (generatedAt) query.generatedAt = generatedAt;
@@ -562,7 +568,29 @@ async function downloadManifestPdf(request: Request, response: Response, actorRo
     const disposition = request.query.view === "1" ? "inline" : "attachment";
     response.setHeader("Content-Type", "application/pdf");
     response.setHeader("Content-Disposition", `${disposition}; filename="MANIFEST-${manifest.manifestNumber}.pdf"`);
-    return response.status(200).send(await buildShipmentManifestPdf(await manifestForPdf(manifest)));
+    return response.status(200).send(await buildShipmentManifestPdf(await manifestForHandoverDocument(manifest)));
+  } catch (error) {
+    return sendManifestError(response, error);
+  }
+}
+
+async function downloadManifestExcel(request: Request, response: Response, actorRole: "admin" | "client") {
+  const userId = getUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  try {
+    const manifest = await loadVisibleManifest(request, userId, actorRole);
+    const workbook = await buildShipmentManifestHandoverWorkbook(await manifestForHandoverDocument(manifest));
+    await AuditLog.create({
+      action: "SHIPMENT_MANIFEST_DOWNLOADED",
+      entityType: "SHIPMENT_MANIFEST",
+      entityId: manifest._id,
+      performedBy: userId,
+      performedAt: new Date(),
+      metadata: { manifestNumber: manifest.manifestNumber, actorRole, format: "xlsx" }
+    });
+    response.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    response.setHeader("Content-Disposition", `attachment; filename="MANIFEST-${manifest.manifestNumber}.xlsx"`);
+    return response.status(200).send(workbook);
   } catch (error) {
     return sendManifestError(response, error);
   }
@@ -634,7 +662,7 @@ async function createBulkManifest(request: Request, response: Response, actorRol
       });
     });
 
-    const manifestNumber = await allocateShipmentManifestNumber();
+    const manifestNumber = await allocateShipmentManifestNumber(businessAccountName);
     const manifest = await ShipmentManifest.create({
       manifestNumber,
       businessAccountId: firstDraft.businessAccountId,
@@ -711,6 +739,14 @@ export async function downloadAdminShipmentManifestPdf(request: Request, respons
 
 export async function downloadClientShipmentManifestPdf(request: Request, response: Response) {
   return downloadManifestPdf(request, response, "client");
+}
+
+export async function downloadAdminShipmentManifestExcel(request: Request, response: Response) {
+  return downloadManifestExcel(request, response, "admin");
+}
+
+export async function downloadClientShipmentManifestExcel(request: Request, response: Response) {
+  return downloadManifestExcel(request, response, "client");
 }
 
 export async function deleteAdminShipmentManifest(request: Request, response: Response) {

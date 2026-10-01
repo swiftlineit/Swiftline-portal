@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   FiArrowDown,
   FiDownload,
   FiExternalLink,
   FiFileText,
+  FiSearch,
   FiPrinter,
 } from "react-icons/fi";
 import { toast } from "react-toastify";
@@ -63,6 +64,153 @@ function FieldLabel({
 
 function getAccountLabel(account: BusinessAccount) {
   return `${account.accountId} - ${account.company.companyName || account.contact.email}`;
+}
+
+function BusinessAccountPicker({
+  accounts,
+  value,
+  onSelect,
+}: {
+  accounts: BusinessAccount[];
+  value: string;
+  onSelect: (accountId: string) => void;
+}) {
+  const inputId = useId();
+  const listboxId = useId();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [highlighted, setHighlighted] = useState(0);
+  const selectedAccount = accounts.find((account) => account.accountId === value);
+  const selectedLabel = selectedAccount ? getAccountLabel(selectedAccount) : "";
+  const suggestions = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    if (!term) return accounts;
+    return accounts.filter((account) => getAccountLabel(account).toLowerCase().includes(term));
+  }, [accounts, query]);
+  const activeIndex = Math.min(highlighted, Math.max(suggestions.length - 1, 0));
+
+  useEffect(() => {
+    if (!open) return;
+    function closeOnOutsidePointer(event: PointerEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  function selectAccount(accountId: string) {
+    onSelect(accountId);
+    setQuery("");
+    setOpen(false);
+    setHighlighted(0);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setOpen(true);
+      setHighlighted((current) => Math.min(current + 1, Math.max(suggestions.length - 1, 0)));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setOpen(true);
+      setHighlighted((current) => Math.max(current - 1, 0));
+    } else if (event.key === "Enter" && open && suggestions[activeIndex]) {
+      event.preventDefault();
+      selectAccount(suggestions[activeIndex].accountId);
+    }
+  }
+
+  return (
+    <div ref={containerRef} className="relative mt-2">
+      <FiSearch
+        aria-hidden="true"
+        className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400"
+      />
+      <input
+        id={inputId}
+        type="text"
+        role="combobox"
+        aria-label="Search business accounts"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-activedescendant={open && suggestions[activeIndex] ? `${listboxId}-${activeIndex}` : undefined}
+        autoComplete="off"
+        value={open ? query : selectedLabel}
+        onFocus={() => {
+          setQuery("");
+          setHighlighted(0);
+          setOpen(true);
+        }}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setHighlighted(0);
+          setOpen(true);
+        }}
+        onKeyDown={handleKeyDown}
+        onBlur={() => {
+          window.setTimeout(() => {
+            if (!containerRef.current?.contains(document.activeElement)) {
+              setOpen(false);
+              setQuery("");
+            }
+          }, 0);
+        }}
+        placeholder="Search business account"
+        className="h-10 w-full rounded-xl border border-slate-300 bg-white pl-9 pr-10 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+      />
+      <FiArrowDown
+        aria-hidden="true"
+        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+      />
+      {open ? (
+        <div
+          id={listboxId}
+          role="listbox"
+          className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white p-1 shadow-lg [scrollbar-width:thin] [scrollbar-color:#94a3b8_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400"
+        >
+          {suggestions.length ? suggestions.map((account, index) => (
+            <button
+              key={account._id}
+              id={`${listboxId}-${index}`}
+              type="button"
+              role="option"
+              aria-selected={account.accountId === value}
+              title={getAccountLabel(account)}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                selectAccount(account.accountId);
+              }}
+              onMouseEnter={() => setHighlighted(index)}
+              className={`block w-full truncate rounded-lg px-3 py-2 text-left text-sm ${
+                index === activeIndex
+                  ? "bg-blue-50 text-blue-900"
+                  : "text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              {getAccountLabel(account)}
+            </button>
+          )) : (
+            <p className="px-3 py-3 text-sm text-slate-500">No active business accounts found.</p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function formatCapitalized(value?: string | null) {
@@ -456,27 +604,14 @@ export default function DpdLabelsPage() {
 
           <div className="grid gap-4 p-5 md:grid-cols-2">
             {customerType === "BUSINESS" ? (
-              <label className="block">
+              <div className="block">
                 <FieldLabel required>Business Account</FieldLabel>
-                <div className="relative mt-2">
-                  <select
-                    value={businessAccountId}
-                    onChange={(event) => handleBusinessAccountChange(event.target.value)}
-                    className="h-10 w-full appearance-none border rounded-xl border-slate-300 bg-white px-3 pr-11 text-sm outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
-                  >
-                    <option value="">Select account</option>
-                    {activeAccounts.map((account) => (
-                      <option key={account._id} value={account.accountId}>
-                        {getAccountLabel(account)}
-                      </option>
-                    ))}
-                  </select>
-                  <FiArrowDown
-                    aria-hidden="true"
-                    className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
-                  />
-                </div>
-              </label>
+                <BusinessAccountPicker
+                  accounts={activeAccounts}
+                  value={businessAccountId}
+                  onSelect={handleBusinessAccountChange}
+                />
+              </div>
             ) : (
               // Only the name is taken here; the rest of the customer's details
               // are filled in on the draft form itself.

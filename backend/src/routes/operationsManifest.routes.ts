@@ -15,12 +15,15 @@ operationsManifestRouter.get("/scan-sessions/:sessionId/status", scannerFeedLimi
 operationsManifestRouter.get("/branches/options", controller.listBranchOptions);
 operationsManifestRouter.get("/", controller.listManifests);
 operationsManifestRouter.get("/archives", controller.listArchivedManifests);
+operationsManifestRouter.get("/archives/:manifestId/flight-documents/:documentId", controller.downloadArchivedFlightDocument);
 operationsManifestRouter.get("/archives/:manifestId", controller.getArchivedManifest);
 operationsManifestRouter.get("/archives/:manifestId/exports/:format", controller.downloadArchivedManifest);
+operationsManifestRouter.post("/with-flight", requireRequestedOperationsBranch, controller.createManifestWithFlight);
 operationsManifestRouter.post("/", requireRequestedOperationsBranch, controller.createManifest);
 operationsManifestRouter.use("/:manifestId", requireOperationsManifestBranch);
 operationsManifestRouter.get("/:manifestId/scan-sessions/active", scannerFeedLimiter, scanSessionController.getActiveSession);
 operationsManifestRouter.post("/:manifestId/scan-sessions", scannerPairingLimiter, scanSessionController.createSession);
+operationsManifestRouter.post("/:manifestId/scan-sessions/direct", scannerPairingLimiter, scanSessionController.createDirectSession);
 // Kept for one backwards-compatible release; lifecycle traffic must never spend
 // the strict explicit-pairing budget or produce false pairing-attempt toasts.
 operationsManifestRouter.patch("/:manifestId/scan-sessions/:sessionId/bag", scannerFeedLimiter, scanSessionController.changeSessionBag);

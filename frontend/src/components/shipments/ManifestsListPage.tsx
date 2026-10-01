@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { FiDownload, FiEye, FiTrash2, FiPlus } from "react-icons/fi";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { FiDownload, FiEye, FiGrid, FiSearch, FiTrash2, FiPlus, FiX } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { formatDashboardDateTime } from "@/lib/dateFormat";
 import DateRangeFilter from "@/components/ui/DateRangeFilter";
@@ -11,6 +11,7 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import {
   deleteBulkShipmentManifests,
   deleteShipmentManifest,
+  downloadShipmentManifestExcel,
   downloadShipmentManifest,
   listShipmentManifests,
   type ShipmentManifestAudience,
@@ -33,29 +34,46 @@ export default function ManifestsListPage({
   });
   const [page, setPage] = useState(1);
   const [dateRange, setDateRange] = useState(emptyDateRange);
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
+  const [busyFormat, setBusyFormat] = useState<"pdf" | "xlsx" | "">("");
   const [error, setError] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<ShipmentManifestListItem | null>(null);
   const [pendingBulkDelete, setPendingBulkDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const loadSequence = useRef(0);
 
   const load = useCallback(async () => {
+    const requestSequence = ++loadSequence.current;
     setLoading(true);
     setError("");
     try {
-      const data = await listShipmentManifests(audience, { page, dateRange });
+      const data = await listShipmentManifests(audience, { page, dateRange, search });
+      if (requestSequence !== loadSequence.current) return;
       setManifests(data.manifests);
       setPagination(data.pagination);
     } catch (caught) {
+      if (requestSequence !== loadSequence.current) return;
       setError(
         caught instanceof Error ? caught.message : "Unable to load manifests.",
       );
     } finally {
-      setLoading(false);
+      if (requestSequence === loadSequence.current) setLoading(false);
     }
-  }, [audience, dateRange, page]);
+  }, [audience, dateRange, page, search]);
+
+  useEffect(() => {
+    const nextSearch = searchInput.trim().slice(0, 80);
+    if (nextSearch === search) return;
+    const timer = window.setTimeout(() => {
+      setPage(1);
+      setSearch(nextSearch);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search, searchInput]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -65,6 +83,7 @@ export default function ManifestsListPage({
   // `view` opens the PDF in a new tab instead of saving it.
   async function handlePdf(manifest: ShipmentManifestListItem, view: boolean) {
     setBusyId(manifest.id);
+    setBusyFormat("pdf");
     try {
       await downloadShipmentManifest(manifest, audience, view);
     } catch (caught) {
@@ -75,6 +94,20 @@ export default function ManifestsListPage({
       );
     } finally {
       setBusyId("");
+      setBusyFormat("");
+    }
+  }
+
+  async function handleExcel(manifest: ShipmentManifestListItem) {
+    setBusyId(manifest.id);
+    setBusyFormat("xlsx");
+    try {
+      await downloadShipmentManifestExcel(manifest, audience);
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : "Manifest Excel file could not be downloaded.");
+    } finally {
+      setBusyId("");
+      setBusyFormat("");
     }
   }
 
@@ -163,7 +196,30 @@ export default function ManifestsListPage({
           </p>
         </div>
         {/* create manifest button */}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+      <label className="relative w-full sm:w-75">
+        <span className="sr-only">Search shipment manifests</span>
+        <FiSearch aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <input
+          type="text"
+          value={searchInput}
+          onChange={(event) => setSearchInput(event.target.value)}
+          maxLength={80}
+          placeholder="Search manifest, account, or shipment"
+          aria-label="Search shipment manifests"
+          className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-10 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 hover:border-slate-400 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/10"
+        />
+        {searchInput ? (
+          <button
+            type="button"
+            onClick={() => setSearchInput("")}
+            aria-label="Clear manifest search"
+            className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+          >
+            <FiX aria-hidden="true" className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </label>
       <DateRangeFilter
         value={dateRange}
         onChange={(value) => {
@@ -301,7 +357,7 @@ export default function ManifestsListPage({
                     {formatDashboardDateTime(manifest.generatedAt)}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-3">
+                      <div className="flex flex-wrap items-center justify-end gap-3">
                       <button
                         type="button"
                         onClick={() => void handlePdf(manifest, true)}
@@ -318,9 +374,18 @@ export default function ManifestsListPage({
                         className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
                       >
                         <FiDownload aria-hidden="true" className="h-4 w-4" />
-                        {busyId === manifest.id
+                        {busyId === manifest.id && busyFormat === "pdf"
                           ? "Preparing..."
                           : "Download PDF"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleExcel(manifest)}
+                        disabled={busyId === manifest.id}
+                        className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
+                      >
+                        <FiGrid aria-hidden="true" className="h-4 w-4" />
+                        {busyId === manifest.id && busyFormat === "xlsx" ? "Preparing..." : "Download Excel"}
                       </button>
                       {canDelete ? (
                         <button
@@ -343,7 +408,7 @@ export default function ManifestsListPage({
                     colSpan={canDelete ? 9 : 8}
                     className="px-4 py-14 text-center text-slate-500"
                   >
-                    No manifests generated yet.
+                      {search ? "No shipment manifests match your search." : "No manifests generated yet."}
                   </td>
                 </tr>
               ) : null}

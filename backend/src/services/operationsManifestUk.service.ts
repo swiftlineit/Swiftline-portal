@@ -3,7 +3,7 @@ import path from "node:path";
 import ExcelJS from "exceljs";
 import type { IOperationsManifest } from "../models/operationsManifest.model.js";
 import { getGbpToInrRate } from "./flightProfitability.service.js";
-import { buildManifestDocumentModel, parseSealedSnapshot } from "./manifestDocument.service.js";
+import { buildManifestDocumentModel, parseCurrentManifestSnapshot } from "./manifestDocument.service.js";
 import {
   OPERATIONS_BAG_MAX_WEIGHT_KG,
   OperationsManifestServiceError,
@@ -420,7 +420,7 @@ export async function buildOperationsManifestUkExcel(
   manifest: IOperationsManifest,
   options: UkManifestBuildOptions = {}
 ) {
-  const snapshot = parseSealedSnapshot(manifest.sealedSnapshot);
+  const snapshot = parseCurrentManifestSnapshot(manifest.sealedSnapshot, manifest.header);
   if (!snapshot) throw new OperationsManifestServiceError("The sealed manifest snapshot is unavailable.", 409);
   if (String(snapshot.header.destinationCountryCode ?? "").trim().toUpperCase() !== "GB") {
     throw new OperationsManifestServiceError("The UK manifest is available only for United Kingdom operations manifests.", 409);

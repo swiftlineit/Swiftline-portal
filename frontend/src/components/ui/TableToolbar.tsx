@@ -19,7 +19,7 @@ import { downloadTableExport, type TableExportFormat } from "@/lib/tableExport";
  * always opened at; the larger two are for working a whole day's shipments
  * without paging through them.
  */
-export const defaultPageSizeOptions = [20, 50, 100];
+export const defaultPageSizeOptions = [30, 50, 100];
 
 export type TableColumnOption = {
   /** Stable key, also what the hidden set stores. */

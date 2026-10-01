@@ -59,6 +59,15 @@ export function parseSealedSnapshot(value: unknown): SealedSnapshot | null {
   return snapshot as SealedSnapshot;
 }
 
+/** Future downloads use corrected live header metadata without rewriting sealed cargo. */
+export function parseCurrentManifestSnapshot(
+  value: unknown,
+  currentHeader: IOperationsManifest["header"]
+): SealedSnapshot | null {
+  const snapshot = parseSealedSnapshot(value);
+  return snapshot ? { ...snapshot, header: { ...currentHeader } } : null;
+}
+
 /**
  * One row per packed parcel, each describing only its own contents. Manifests sealed
  * before this format keep their single summary row so historical exports stay stable.

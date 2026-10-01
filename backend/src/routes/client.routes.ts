@@ -55,6 +55,7 @@ import {
   createClientBulkShipmentManifest,
   createClientShipmentManifest,
   downloadClientShipmentManifest,
+  downloadClientShipmentManifestExcel,
   downloadClientShipmentManifestPdf,
   getClientShipmentManifestContext,
   listClientShipmentManifests
@@ -254,6 +255,7 @@ clientRouter.get("/shipment-manifests", listClientShipmentManifests);
 clientRouter.post("/shipment-manifests", createClientShipmentManifest);
 clientRouter.post("/shipment-manifests/bulk", createClientBulkShipmentManifest);
 clientRouter.get("/shipment-manifests/:manifestId/download", downloadClientShipmentManifest);
+clientRouter.get("/shipment-manifests/:manifestId/xlsx", downloadClientShipmentManifestExcel);
 clientRouter.get("/shipment-manifests/:manifestId/pdf", downloadClientShipmentManifestPdf);
 clientRouter.get("/shipments/:draftId/cancellation", getClientShipmentCancellation);
 clientRouter.post("/shipments/:draftId/cancellation", requestClientShipmentCancellation);

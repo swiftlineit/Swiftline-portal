@@ -20,6 +20,19 @@ export type ManifestHeader = {
   destinationIataCode: string;
   valueType: string;
 };
+export type CombinedFlightSetup = {
+  airlineName: string;
+  transitIataCode?: string;
+  scheduledDepartureAt: string;
+  scheduledArrivalAt: string;
+  capacityKg: number;
+  finalMileCarrier?: string;
+  connection?: {
+    transitAirportCode?: string;
+    scheduledArrivalAt?: string | null;
+    scheduledDepartureAt?: string | null;
+  } | null;
+};
 export type OperationsManifest = {
   id: string;
   manifestNumber: string;
@@ -43,6 +56,15 @@ export type ArchivedOperationsManifest = {
   branchId?: string;
   archivedAt: string;
   header: ManifestHeader;
+  deletionMode?: "ARCHIVE" | "PERMANENT";
+  deletionReason?: string;
+  linkedFlight?: {
+    flight?: Record<string, unknown>;
+    documents?: Array<{ id: string; originalName: string; mimeType: string; size: number; createdAt: string }>;
+    allocations?: Array<Record<string, unknown>>;
+    exceptions?: Array<Record<string, unknown>>;
+    offloads?: Array<Record<string, unknown>>;
+  } | null;
   documents: Array<{ format: keyof typeof manifestExportPaths; filename: string }>;
   document?: {
     totals: { totalBags: number; totalConsignments: number; totalPhysicalParcels: number; totalWeightKg: number };
@@ -62,6 +84,10 @@ export type OperationsParcelValue = {
   parcelNumber: string;
   valueMinor: number | null;
 };
+export type OperationsParcelWeight = {
+  parcelNumber: string;
+  weightKg: number;
+};
 export type OperationsParcelDisposition =
   | "HELD"
   | "DEFERRED_TO_NEXT_MANIFEST"
@@ -75,6 +101,7 @@ export type OperationsConsignment = {
   displayConsignmentNumber: string;
   expectedParcelNumbers: string[];
   scannedParcelNumbers: string[];
+  parcelWeightSnapshots?: OperationsParcelWeight[];
   parcelDispositions: Array<{
     parcelNumber: string;
     disposition: OperationsParcelDisposition;
@@ -164,6 +191,8 @@ export type OperationsScanSession = {
     status: ManifestStatus;
     destinationCountryCode: string;
     destinationCountryName: string;
+    totalBags: number;
+    totalConsignments: number;
     totalPhysicalParcels: number;
     totalWeightKg: number;
   } | null;
@@ -173,6 +202,12 @@ export type OperationsScanSession = {
     status: OperationsBag["status"];
     totalPhysicalParcels: number;
     totalWeightKg: number;
+  } | null;
+  lastScannedParcel: {
+    scanId: string;
+    parcelNumber: string;
+    bagNumber: string | null;
+    scannedAt: string;
   } | null;
 };
 
@@ -222,9 +257,11 @@ export const listOperationsManifests = (
   page = 1,
   status = "",
   dateRange?: DateRange,
+  search = "",
 ) => {
   const params = new URLSearchParams({ page: String(page), limit: "15" });
   if (status) params.set("status", status);
+  if (search.trim()) params.set("search", search.trim().slice(0, 100));
   setDateRangeParams(params, dateRange);
   return request<{
     success: true;
@@ -240,7 +277,23 @@ export const createOperationsManifest = (body: {
     "/api/v1/operations-manifests",
     { method: "POST", body: JSON.stringify(body) },
   );
-export const updateOperationsManifest = (id: string, body: { header: ManifestHeader }) =>
+export const createOperationsManifestWithFlight = (body: {
+  branchId: string;
+  header: ManifestHeader;
+  flight: CombinedFlightSetup;
+}) =>
+  request<{
+    success: true;
+    manifestId: string;
+    manifestNumber: string;
+    flightId: string;
+    flightLinehaulNumber: string;
+    message: string;
+  }>("/api/v1/operations-manifests/with-flight", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const updateOperationsManifest = (id: string, body: { header: ManifestHeader; reason: string }) =>
   request<{ success: true; message: string }>(
     `/api/v1/operations-manifests/${id}`,
     { method: "PATCH", body: JSON.stringify(body) },
@@ -274,14 +327,30 @@ export async function downloadArchivedOperationsManifest(id: string, format: key
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
-export const deleteOperationsManifest = (id: string, confirmationManifestNumber: string) =>
+export async function downloadArchivedFlightDocument(archiveId: string, documentId: string, filename: string) {
+  const token = getAccessToken() ?? (await refreshAccessToken());
+  const response = await fetch(apiUrl(`/api/v1/operations-manifests/archives/${archiveId}/flight-documents/${documentId}`), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.message || "Archived flight document could not be downloaded.");
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+export const deleteOperationsManifest = (id: string, input: { confirmationManifestNumber: string; mode?: "ARCHIVE" | "PERMANENT"; reason?: string }) =>
   request<{
     success: true;
     message: string;
-    deleted: { manifestNumber: string; status: ManifestStatus; numberWillBeReused: boolean };
+    deleted: { manifestNumber: string; status: ManifestStatus; mode: "ARCHIVE" | "PERMANENT"; numberWillBeReused: boolean; readyMilestonesRemoved: number; storageCleanupPending: number };
   }>(`/api/v1/operations-manifests/${id}`, {
     method: "DELETE",
-    body: JSON.stringify({ confirmationManifestNumber })
+    body: JSON.stringify(input)
   });
 export const createOperationsBag = (id: string) =>
   request(`/api/v1/operations-manifests/${id}/bags`, {
@@ -315,6 +384,14 @@ export const createOperationsScanSession = (manifestId: string) =>
     session: OperationsScanSession;
     qrDataUri: string;
   }>(`/api/v1/operations-manifests/${manifestId}/scan-sessions`, {
+    method: "POST",
+    body: "{}",
+  });
+export const createDirectOperationsScanSession = (manifestId: string) =>
+  request<{
+    success: true;
+    session: OperationsScanSession;
+  }>(`/api/v1/operations-manifests/${manifestId}/scan-sessions/direct`, {
     method: "POST",
     body: "{}",
   });

@@ -9,3 +9,8 @@ export function normalizeFlightNumber(value: string) {
 export function comparableFlightNumber(value: string) {
   return normalizeFlightNumber(value).replace(/-/g, "");
 }
+
+export function isValidFlightNumber(value: string) {
+  const normalized = normalizeFlightNumber(value);
+  return normalized.length <= 20 && /^[A-Z0-9]{2,4}-\d{1,4}[A-Z]?$/.test(normalized);
+}

@@ -33,7 +33,7 @@ const createSchema = z.object({
   branchId: z.string().min(1),
   flightNumber: z.string().trim().min(2).max(20),
   airlineName: z.string().trim().min(2).max(120),
-  mawbNumber: z.string().trim().regex(/^\d{3}-?\d{8}$/, "Enter a valid MAWB (e.g., 098-12345678)."),
+  mawbNumber: z.string().trim().min(1, "MAWB number is required.").max(40),
   originIataCode: z.string().trim().regex(/^[A-Za-z]{3}$/, "Origin IATA must be 3 letters."),
   destinationIataCode: z.string().trim().regex(/^[A-Za-z]{3}$/, "Destination IATA must be 3 letters."),
   transitIataCode: z.string().trim().max(3).optional().default(""),
@@ -135,6 +135,7 @@ export async function updateFlight(request: Request, response: Response) {
     const input = parsedBody(
       response,
       z.object({
+        flightNumber: z.string().trim().min(2).max(20).optional(),
         airlineName: z.string().trim().max(120).optional(),
         mawbNumber: z.string().trim().max(40).optional(),
         originIataCode: z.string().trim().max(3).optional(),
@@ -144,13 +145,15 @@ export async function updateFlight(request: Request, response: Response) {
         scheduledArrivalAt: z.string().optional(),
         capacityKg: z.coerce.number().positive().max(100000).optional(),
         destinationAgent: z.string().trim().max(1000).optional(),
-        finalMileCarrier: z.string().trim().max(200).optional()
-      }),
+        finalMileCarrier: z.string().trim().max(200).optional(),
+        reason: z.string().trim().min(5, "Enter a correction reason of at least 5 characters.").max(500)
+      }).refine((value) => Object.keys(value).some((key) => key !== "reason"), "Change at least one flight detail."),
       request.body
     );
     if (!input) return;
     const allowedBranchIds = flightBranchIds(request);
-    const flight = await service.updateFlightLinehaul({ flightId: String(request.params.flightId), updates: input, userId: actorId, allowedBranchIds });
+    const { reason, ...updates } = input;
+    const flight = await service.updateFlightLinehaul({ flightId: String(request.params.flightId), updates, reason, userId: actorId, allowedBranchIds });
     return response.json({ success: true, message: "Flight updated.", flight });
   } catch (error) {
     return sendError(response, error);

@@ -5,6 +5,8 @@ import { FlightShipmentAllocation, allocationStatusValues } from "../models/flig
 import { portalNotificationTypeValues } from "../models/portalNotification.model.js";
 import {
   calculateConnectionRisk,
+  isScheduledDepartureReady,
+  shouldKeepManifestLinkedWhenCancellingFlight,
   flightAllocationParcelDetails,
   formatFlightLinehaulNumber,
   allowedTransitions,
@@ -14,7 +16,7 @@ import {
 } from "../services/flightLinehaul.service.js";
 import { getEmailPolicy, isEmailEnabledType } from "../services/email/catalog.js";
 import { orphanedFlightCostSheetPipeline } from "../services/flightLinehaulIndexMigration.service.js";
-import { comparableFlightNumber, normalizeFlightNumber } from "../utils/flightNumber.js";
+import { comparableFlightNumber, isValidFlightNumber, normalizeFlightNumber } from "../utils/flightNumber.js";
 import { describeMissingPrerequisites, findMissingPrerequisites } from "../services/shipmentStatusSequence.service.js";
 
 function bookingSnapshot() {
@@ -190,6 +192,12 @@ test("flight numbers use EY-219 display format while matching legacy EY219 value
   assert.equal(comparableFlightNumber("EY219"), comparableFlightNumber("EY-219"));
 });
 
+test("flight number validation remains shared by flight and manifest corrections", () => {
+  assert.equal(isValidFlightNumber("ey219"), true);
+  assert.equal(isValidFlightNumber("AI-313"), true);
+  assert.equal(isValidFlightNumber("invalid"), false);
+});
+
 test("flight departure prerequisites identify the missing shipment milestones", () => {
   const missing = findMissingPrerequisites("ORIGIN_HUB_DISPATCHED", ["ORIGIN_HUB_PROCESSED"]);
   assert.deepEqual(missing, ["WAREHOUSE_SCAN_IN", "READY_FOR_EXPORT"]);
@@ -203,6 +211,27 @@ test("new flights use only the essential operational lifecycle", () => {
   assert.deepEqual(allowedTransitions.ARRIVED_DESTINATION, ["CLOSED"]);
   assert.equal(allowedTransitions.CARGO_ALLOCATED.includes("MANIFEST_READY"), false);
   assert.equal(allowedTransitions.DEPARTED.includes("IN_TRANSIT"), false);
+});
+
+test("scheduled departure requires the due time and one dispatched linked manifest", () => {
+  const now = new Date("2026-09-29T10:00:00.000Z");
+  const base = {
+    flightStatus: "CARGO_ALLOCATED",
+    scheduledDepartureAt: new Date("2026-09-29T09:59:00.000Z"),
+    now,
+    manifestStatuses: ["DISPATCHED"]
+  };
+  assert.equal(isScheduledDepartureReady(base), true);
+  assert.equal(isScheduledDepartureReady({ ...base, scheduledDepartureAt: new Date("2026-09-29T10:01:00.000Z") }), false);
+  assert.equal(isScheduledDepartureReady({ ...base, flightStatus: "BOOKING_CONFIRMED" }), false);
+  assert.equal(isScheduledDepartureReady({ ...base, manifestStatuses: ["SEALED"] }), false);
+  assert.equal(isScheduledDepartureReady({ ...base, manifestStatuses: ["DISPATCHED", "DISPATCHED"] }), false);
+  assert.equal(isScheduledDepartureReady({ ...base, manifestStatuses: [] }), false);
+});
+
+test("cancelling a flight from the combined workflow retains its manifest link for safe deletion", () => {
+  assert.equal(shouldKeepManifestLinkedWhenCancellingFlight(true), true);
+  assert.equal(shouldKeepManifestLinkedWhenCancellingFlight(false), false);
 });
 
 test("a customs hold is released only once when its flight status changes", () => {

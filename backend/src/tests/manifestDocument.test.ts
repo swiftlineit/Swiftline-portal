@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import mongoose from "mongoose";
 import {
   buildManifestDocumentModel,
+  parseCurrentManifestSnapshot,
   parseSealedSnapshot,
   type SealedSnapshot
 } from "../services/manifestDocument.service.js";
@@ -52,6 +53,17 @@ describe("manifest document model", () => {
     assert.ok(parseSealedSnapshot(sealedSnapshot()));
     assert.equal(parseSealedSnapshot(null), null);
     assert.equal(parseSealedSnapshot({ header: {}, branch: {} }), null);
+  });
+
+  it("uses corrected active header metadata without mutating the frozen sealed snapshot", () => {
+    const original = sealedSnapshot();
+    const currentHeader = { ...original.header, flightNumber: "AI-313", mawbNumber: "789-1234-5678", departureDate: "2026-10-02" };
+    const current = parseCurrentManifestSnapshot(original, currentHeader);
+    assert.equal(current?.header.flightNumber, "AI-313");
+    assert.equal(current?.header.mawbNumber, "789-1234-5678");
+    assert.equal(current?.header.departureDate, "2026-10-02");
+    assert.equal(original.header.flightNumber, "EY-219");
+    assert.equal(original.header.departureDate, "2026-07-17");
   });
 
   it("flattens to one row per parcel with a continuous serial", () => {

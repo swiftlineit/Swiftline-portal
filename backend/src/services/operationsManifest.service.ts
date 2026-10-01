@@ -13,6 +13,12 @@ import {
 } from "../models/operationsManifestConsignment.model.js";
 import { OperationsManifestCounter } from "../models/operationsManifestCounter.model.js";
 import { OperationsManifestArchive, type ArchivedManifestDocument } from "../models/operationsManifestArchive.model.js";
+import { FlightLinehaul } from "../models/flightLinehaul.model.js";
+import { FlightShipmentAllocation } from "../models/flightShipmentAllocation.model.js";
+import { FlightOffload } from "../models/flightOffload.model.js";
+import { FlightException } from "../models/flightException.model.js";
+import { FlightDocument } from "../models/flightDocument.model.js";
+import { FlightCostSheet } from "../models/flightCostSheet.model.js";
 import {
   OperationsManifestScan,
   type OperationsScanSource
@@ -21,6 +27,7 @@ import { OperationsManifestScanSession } from "../models/operationsManifestScanS
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import { ShipmentCancellation } from "../models/shipmentCancellation.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
+import { PortalNotification } from "../models/portalNotification.model.js";
 import { ShipmentManifest, type IShipmentManifest } from "../models/shipmentManifest.model.js";
 import {
   buildManifestLine,
@@ -31,6 +38,7 @@ import {
 } from "./shipmentManifest.service.js";
 import {
   buildManifestDocumentModel,
+  parseCurrentManifestSnapshot,
   parseSealedSnapshot,
   type SealedSnapshot
 } from "./manifestDocument.service.js";
@@ -49,7 +57,12 @@ import {
   formatShipmentEventLabel
 } from "./shipmentStatusSequence.service.js";
 import { resolveShipmentEventNote } from "./shipmentEventCopy.service.js";
-import { normalizeFlightNumber } from "../utils/flightNumber.js";
+import { isValidFlightNumber, normalizeFlightNumber } from "../utils/flightNumber.js";
+import { setIstDatePreservingTime } from "../utils/indiaDateTime.js";
+import {
+  allocateDispatchedManifestInTransaction,
+  createFlightLinehaulInSession
+} from "./flightLinehaul.service.js";
 
 export class OperationsManifestServiceError extends Error {
   constructor(message: string, public readonly statusCode = 400) {
@@ -141,7 +154,34 @@ export function formatOperationsManifestNumber(sequence: number) {
 }
 
 export function isOperationsManifestNumberReusable(status: string) {
-  return ["DRAFT", "PACKING", "READY_TO_SEAL", "SEALED", "DISPATCHED", "CANCELLED"].includes(status);
+  return ["DRAFT", "PACKING", "READY_TO_SEAL", "SEALED", "CANCELLED"].includes(status);
+}
+
+export function sealedManifestDeletionBlockReason(input: {
+  flightStatus?: string | null;
+  allocationStatuses?: readonly string[];
+  hasOffloads?: boolean;
+  hasActiveCostSheet?: boolean;
+  shipmentStatuses?: readonly string[];
+}) {
+  if (["DEPARTED", "ARRIVED_DESTINATION", "CLOSED"].includes(input.flightStatus ?? "")) {
+    return "The linked flight has departed or arrived. This manifest cannot be deleted.";
+  }
+  if ((input.allocationStatuses ?? []).some((status) => ["CARRIED", "OFFLOADED"].includes(status))) {
+    return "The linked flight has carried or offloaded shipments. This manifest cannot be deleted.";
+  }
+  if (input.hasOffloads) return "The linked flight has offload history. This manifest cannot be deleted.";
+  if (input.hasActiveCostSheet) return "This manifest has an active flight cost sheet. Cancel or reconcile it before deleting the manifest.";
+
+  const statuses = input.shipmentStatuses ?? [];
+  const later = findRecordedLaterMilestones("READY_FOR_EXPORT", statuses);
+  if (later.length) {
+    return `A shipment has advanced beyond Ready for Dispatch (${later.map(formatShipmentEventLabel).join(", ")}). This manifest cannot be deleted.`;
+  }
+  if (statuses.some((status) => ["SHIPMENT_CANCELLED", "RETURNED", "LOST", "DAMAGED", "IMPORT_CUSTOMS_CLEARANCE", "IMPORT_CUSTOMS_CLEARED"].includes(status))) {
+    return "A shipment has a cancellation, destination or exception milestone. This manifest cannot be deleted.";
+  }
+  return null;
 }
 
 function operationsManifestSequence(manifestNumber: string) {
@@ -491,6 +531,7 @@ export async function listOperationsManifests(input: {
   branchId?: string;
   dateFrom?: string;
   dateTo?: string;
+  search?: string;
   allowedBranchIds?: string[] | null;
 }) {
   const filter: Record<string, unknown> = {};
@@ -502,6 +543,37 @@ export async function listOperationsManifests(input: {
   }
   const createdAt = dateRangeCondition(input.dateFrom, input.dateTo);
   if (createdAt) filter.createdAt = createdAt;
+
+  const search = input.search?.trim().slice(0, 100) ?? "";
+  if (search) {
+    const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(escaped, "i");
+    const branchScope = input.branchId && mongoose.Types.ObjectId.isValid(input.branchId)
+      ? { _id: input.branchId }
+      : input.allowedBranchIds !== null && input.allowedBranchIds !== undefined
+        ? { _id: { $in: input.allowedBranchIds } }
+        : {};
+    const [matchingBranches, matchingConsignments] = await Promise.all([
+      Branch.find({
+        ...branchScope,
+        $or: [{ name: pattern }, { code: pattern }]
+      }).select("_id").lean().exec(),
+      OperationsManifestConsignment.distinct("manifestId", {
+        status: { $ne: "REMOVED" },
+        $or: [
+          { consignmentNumber: pattern },
+          { "consigneeSnapshot.name": pattern },
+          { "consigneeSnapshot.formatted": pattern }
+        ]
+      }).exec()
+    ]);
+    filter.$or = operationsManifestSearchConditions(
+      search,
+      matchingBranches.map((branch) => branch._id),
+      matchingConsignments
+    );
+  }
+
   const skip = (input.page - 1) * input.limit;
   const [items, total] = await Promise.all([
     OperationsManifest.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(input.limit).lean().exec(),
@@ -514,6 +586,28 @@ export async function listOperationsManifests(input: {
     items: items.map((item) => ({ ...serializeManifest(item as unknown as IOperationsManifest), branch: branchById.get(String(item.branchId)) ?? null })),
     pagination: { page: input.page, limit: input.limit, total, pages: Math.max(1, Math.ceil(total / input.limit)) }
   };
+}
+
+export function operationsManifestSearchConditions(
+  searchValue: string,
+  matchingBranchIds: unknown[] = [],
+  matchingManifestIds: unknown[] = []
+) {
+  const search = searchValue.trim().slice(0, 100);
+  if (!search) return [];
+  const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(escaped, "i");
+  const conditions: Record<string, unknown>[] = [
+    { manifestNumber: pattern },
+    { "header.flightNumber": pattern },
+    { "header.mawbNumber": pattern },
+    { "header.originIataCode": pattern },
+    { "header.destinationIataCode": pattern },
+    { "header.destinationAgent": pattern }
+  ];
+  if (matchingBranchIds.length) conditions.push({ branchId: { $in: matchingBranchIds } });
+  if (matchingManifestIds.length) conditions.push({ _id: { $in: matchingManifestIds } });
+  return conditions;
 }
 
 export async function createOperationsManifest(input: {
@@ -553,18 +647,191 @@ export async function createOperationsManifest(input: {
   }
 }
 
+/** Create the active manifest and its booked flight atomically, before packing. */
+export async function createOperationsManifestWithFlight(input: {
+  branchId: string;
+  header: IOperationsManifest["header"];
+  flight: {
+    airlineName: string;
+    transitIataCode?: string;
+    scheduledDepartureAt: string;
+    scheduledArrivalAt: string;
+    capacityKg: number;
+    finalMileCarrier?: string;
+    connection?: { transitAirportCode?: string; scheduledArrivalAt?: string | null; scheduledDepartureAt?: string | null } | null;
+  };
+  userId: mongoose.Types.ObjectId;
+}) {
+  const branchId = asObjectId(input.branchId, "Branch");
+  const header = { ...input.header, flightNumber: normalizeFlightNumber(input.header.flightNumber) };
+  const scheduledDepartureAt = new Date(input.flight.scheduledDepartureAt);
+  const istDepartureDate = Number.isNaN(scheduledDepartureAt.getTime())
+    ? ""
+    : new Date(scheduledDepartureAt.getTime() + 330 * 60_000).toISOString().slice(0, 10);
+  if (!istDepartureDate || header.departureDate !== istDepartureDate) {
+    throw new OperationsManifestServiceError("Manifest departure date must match the flight departure date in India time.", 400);
+  }
+
+  const branch = await Branch.findOne({ _id: branchId, status: "ACTIVE" }).exec();
+  if (!branch) throw new OperationsManifestServiceError("Select an active Swiftline branch.", 409);
+
+  const session = await mongoose.startSession();
+  try {
+    const result = await session.withTransaction(async () => {
+      const manifestNumber = await allocateOperationsManifestNumber(session);
+      const createdManifests = await OperationsManifest.create([{
+        manifestNumber,
+        branchId,
+        header,
+        status: "DRAFT",
+        totalBags: 1,
+        createdBy: input.userId
+      }], { session });
+      const manifest = createdManifests[0];
+      if (!manifest) throw new OperationsManifestServiceError("Manifest could not be created.", 500);
+      await audit("OPERATIONS_MANIFEST_CREATED", manifest._id as mongoose.Types.ObjectId, input.userId, {
+        manifestNumber,
+        branchId,
+        combinedFlightSetup: true
+      }, session);
+      await openNextBag(manifest, input.userId, session);
+
+      const flight = await createFlightLinehaulInSession({
+        branchId: String(branchId),
+        flightNumber: header.flightNumber,
+        airlineName: input.flight.airlineName,
+        mawbNumber: header.mawbNumber,
+        originIataCode: header.originIataCode,
+        destinationIataCode: header.destinationIataCode,
+        transitIataCode: input.flight.transitIataCode,
+        scheduledDepartureAt: input.flight.scheduledDepartureAt,
+        scheduledArrivalAt: input.flight.scheduledArrivalAt,
+        scheduledDepartureAutomationEnabled: true,
+        capacityKg: input.flight.capacityKg,
+        destinationAgent: header.destinationAgent,
+        finalMileCarrier: input.flight.finalMileCarrier,
+        connection: input.flight.connection,
+        userId: input.userId
+      }, session);
+
+      manifest.flightLinehaulId = flight._id as mongoose.Types.ObjectId;
+      await manifest.save({ session });
+      await audit("OPERATIONS_MANIFEST_FLIGHT_LINKED", manifest._id as mongoose.Types.ObjectId, input.userId, {
+        manifestNumber,
+        flightId: String(flight._id),
+        flightLinehaulNumber: flight.flightLinehaulNumber
+      }, session);
+      return { manifest, flight };
+    });
+    if (!result) throw new OperationsManifestServiceError("Manifest and flight could not be created.", 500);
+    return result;
+  } finally {
+    await session.endSession();
+  }
+}
+
 export async function updateOperationsManifest(input: {
   manifestId: string;
   header: IOperationsManifest["header"];
+  reason: string;
   userId: mongoose.Types.ObjectId;
 }) {
-  const manifest = await OperationsManifest.findById(asObjectId(input.manifestId, "Operations manifest")).exec();
-  if (!manifest) throw new OperationsManifestServiceError("Operations manifest was not found.", 404);
-  if (!isEditable(manifest)) throw new OperationsManifestServiceError("A sealed, dispatched or cancelled manifest cannot be edited.", 409);
-  manifest.header = { ...input.header, flightNumber: normalizeFlightNumber(input.header.flightNumber) };
-  await manifest.save();
-  await audit("OPERATIONS_MANIFEST_UPDATED", manifest._id as mongoose.Types.ObjectId, input.userId, { headerUpdated: true });
-  return manifest;
+  const manifestId = asObjectId(input.manifestId, "Operations manifest");
+  const reason = input.reason.trim();
+  if (reason.length < 5) throw new OperationsManifestServiceError("Enter a clear correction reason of at least 5 characters.", 400);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.header.departureDate)
+    || Number.isNaN(Date.parse(`${input.header.departureDate}T00:00:00.000Z`))
+    || new Date(`${input.header.departureDate}T00:00:00.000Z`).toISOString().slice(0, 10) !== input.header.departureDate) {
+    throw new OperationsManifestServiceError("Enter a valid departure date.", 400);
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    let updated: IOperationsManifest | null = null;
+    await session.withTransaction(async () => {
+      const manifest = await OperationsManifest.findById(manifestId).session(session).exec();
+      if (!manifest) throw new OperationsManifestServiceError("Operations manifest was not found.", 404);
+      const before = { ...manifest.header };
+      const nextHeader = { ...input.header, flightNumber: normalizeFlightNumber(input.header.flightNumber) };
+      if (nextHeader.flightNumber && !isValidFlightNumber(nextHeader.flightNumber)) {
+        throw new OperationsManifestServiceError("Enter a valid flight number (e.g., EY-219 or AI-131).", 400);
+      }
+      if ((nextHeader.originIataCode && !/^[A-Z]{3}$/.test(nextHeader.originIataCode))
+        || (nextHeader.destinationIataCode && !/^[A-Z]{3}$/.test(nextHeader.destinationIataCode))) {
+        throw new OperationsManifestServiceError("Origin and destination IATA codes must each be 3 letters.", 400);
+      }
+      if (nextHeader.originIataCode && nextHeader.destinationIataCode && nextHeader.originIataCode === nextHeader.destinationIataCode) {
+        throw new OperationsManifestServiceError("Origin and destination airports must be different.", 400);
+      }
+
+      if (manifest.flightLinehaulId) {
+        const flight = await FlightLinehaul.findById(manifest.flightLinehaulId).session(session).exec();
+        if (!flight) throw new OperationsManifestServiceError("The linked flight could not be found. Refresh and contact an administrator.", 409);
+        let nextDeparture: Date;
+        try {
+          nextDeparture = setIstDatePreservingTime(nextHeader.departureDate, flight.scheduledDepartureAt);
+        } catch (error) {
+          throw new OperationsManifestServiceError(error instanceof Error ? error.message : "Enter a valid departure date.", 400);
+        }
+        if (flight.scheduledArrivalAt <= nextDeparture) {
+          throw new OperationsManifestServiceError("The scheduled arrival must remain after the updated departure.", 400);
+        }
+        const flightBefore = {
+          flightNumber: flight.flightNumber,
+          mawbNumber: flight.mawbNumber,
+          originIataCode: flight.originIataCode,
+          destinationIataCode: flight.destinationIataCode,
+          destinationAgent: flight.destinationAgent,
+          scheduledDepartureAt: flight.scheduledDepartureAt
+        };
+        if (!isValidFlightNumber(nextHeader.flightNumber)) {
+          throw new OperationsManifestServiceError("The linked flight requires a valid flight number.", 400);
+        }
+        if (flight.status !== "PLANNED" && (
+          flight.airlineName.trim().length < 2
+          || !nextHeader.mawbNumber.trim()
+          || !/^[A-Z]{3}$/.test(nextHeader.originIataCode)
+          || !/^[A-Z]{3}$/.test(nextHeader.destinationIataCode)
+        )) {
+          throw new OperationsManifestServiceError("A booked flight must keep its airline, MAWB and valid route details.", 409);
+        }
+        flight.flightNumber = nextHeader.flightNumber;
+        flight.mawbNumber = nextHeader.mawbNumber;
+        flight.originIataCode = nextHeader.originIataCode;
+        flight.destinationIataCode = nextHeader.destinationIataCode;
+        flight.destinationAgent = nextHeader.destinationAgent;
+        flight.scheduledDepartureAt = nextDeparture;
+        flight.updatedBy = input.userId;
+        await flight.save({ session });
+        await audit("FLIGHT_LINEHAUL_UPDATED", flight._id as mongoose.Types.ObjectId, input.userId, {
+          before: flightBefore,
+          after: {
+            flightNumber: flight.flightNumber,
+            mawbNumber: flight.mawbNumber,
+            originIataCode: flight.originIataCode,
+            destinationIataCode: flight.destinationIataCode,
+            destinationAgent: flight.destinationAgent,
+            scheduledDepartureAt: flight.scheduledDepartureAt
+          },
+          reason,
+          source: "MANIFEST_DETAILS"
+        }, session);
+      }
+
+      manifest.header = nextHeader;
+      await manifest.save({ session });
+      await audit("OPERATIONS_MANIFEST_UPDATED", manifest._id as mongoose.Types.ObjectId, input.userId, {
+        before,
+        after: { ...manifest.header },
+        reason
+      }, session);
+      updated = manifest;
+    });
+    if (!updated) throw new OperationsManifestServiceError("Manifest details could not be updated.", 500);
+    return updated;
+  } finally {
+    await session.endSession();
+  }
 }
 
 /** Opens the next sequential bag. Shared by manual creation, manifest setup, and packing overflow. */
@@ -669,6 +936,30 @@ async function recordRejectedScan(input: {
     ).exec();
   }
   throw new OperationsManifestServiceError(input.message, 409);
+}
+
+export function alreadyScannedParcelMessage(bagNumber?: string | null) {
+  const normalizedBagNumber = bagNumber?.trim();
+  return normalizedBagNumber
+    ? `This parcel has already been scanned and is in bag number ${normalizedBagNumber}.`
+    : "This parcel has already been scanned.";
+}
+
+async function duplicateScanMessage(
+  parcelNumber: string,
+  duplicate?: { bagId?: unknown | null }
+) {
+  let bagId = duplicate?.bagId;
+  if (!bagId) {
+    const existingScan = await OperationsManifestScan.findOne({
+      parcelNumber,
+      status: "ACCEPTED"
+    }).select("bagId").lean().exec();
+    bagId = existingScan?.bagId;
+  }
+  if (!bagId) return alreadyScannedParcelMessage();
+  const bag = await OperationsManifestBag.findById(bagId).select("bagNumber").lean().exec();
+  return alreadyScannedParcelMessage(bag?.bagNumber);
 }
 
 async function buildAcceptedScanAcknowledgement(manifestId: mongoose.Types.ObjectId, scanRequestId: string) {
@@ -818,7 +1109,8 @@ export async function scanOperationsParcel(input: {
   }
 
   if (duplicate) {
-    return recordRejectedScan({ manifestId, bagId, parcelNumber, scanRequestId, userId: input.userId, ...scanMetadata, message: "This parcel has already been scanned." });
+    const message = await duplicateScanMessage(parcelNumber, duplicate);
+    return recordRejectedScan({ manifestId, bagId, parcelNumber, scanRequestId, userId: input.userId, ...scanMetadata, message });
   }
   const priorManifestRows = priorConsignments.length
     ? await OperationsManifest.find({ _id: { $in: priorConsignments.map((item) => item.manifestId) } })
@@ -1054,7 +1346,10 @@ export async function scanOperationsParcel(input: {
           // the same consignment. Retry those against the winning transaction.
           if (!parcelDuplicate && attempt < 3) continue;
           if (parcelDuplicate) {
-            throw new OperationsManifestServiceError("This parcel has already been scanned.", 409);
+            throw new OperationsManifestServiceError(
+              await duplicateScanMessage(parcelNumber),
+              409
+            );
           }
           throw new OperationsManifestServiceError(
             "Another scanner changed the manifest at the same time. Scan this parcel again.",
@@ -1467,7 +1762,7 @@ export async function cancelOperationsBag(manifestIdValue: string, bagIdValue: s
   }
 }
 
-export function sealingIssues(manifest: IOperationsManifest, bags: Array<{ status: string; totalWeightKg?: number; totalPhysicalParcels?: number }>, consignments: Array<{ status: string; expectedParcelNumbers: string[]; scannedParcelNumbers?: string[]; parcelDispositions?: ParcelDispositionRecord[]; parcelWeightSnapshots?: ParcelValueSnapshot[] }>) {
+export function sealingIssues(manifest: IOperationsManifest, bags: Array<{ status: string; totalWeightKg?: number; totalPhysicalParcels?: number }>, consignments: Array<{ status: string; consignmentNumber?: string; expectedParcelNumbers: string[]; scannedParcelNumbers?: string[]; parcelDispositions?: ParcelDispositionRecord[]; parcelWeightSnapshots?: ParcelValueSnapshot[] }>) {
   const issues: string[] = [];
   const header = manifest.header;
   if (!header.destinationAgent) issues.push("Destination agent details are required.");
@@ -1490,12 +1785,14 @@ export function sealingIssues(manifest: IOperationsManifest, bags: Array<{ statu
     issues.push(`Every UK bag must contain no more than ${UK_OPERATIONS_BAG_MAX_PIECES} parcels.`);
   }
   if (!consignments.length) issues.push("Scan at least one consignment.");
-  const unaccountedParcels = consignments.flatMap(unaccountedManifestParcelNumbers);
-  if (unaccountedParcels.length) {
+  consignments.forEach((consignment) => {
+    const unaccountedParcels = unaccountedManifestParcelNumbers(consignment);
+    if (!unaccountedParcels.length) return;
+    const reference = consignment.consignmentNumber?.trim();
     issues.push(
-      `Choose Held, Deferred to next manifest, or Cancelled for ${unaccountedParcels.length} unscanned parcel${unaccountedParcels.length === 1 ? "" : "s"}.`
+      `${reference ? `${reference}: ` : ""}Choose Held, Deferred to next manifest, or Cancelled for ${unaccountedParcels.length} unscanned parcel${unaccountedParcels.length === 1 ? "" : "s"}.`
     );
-  }
+  });
   // Every packed parcel needs its own declared value, since each box is a customs line.
   const parcelMissingValue = consignments.some((item) =>
     scannedParcelValues({ scannedParcelNumbers: item.scannedParcelNumbers ?? [], parcelWeightSnapshots: item.parcelWeightSnapshots })
@@ -1510,6 +1807,12 @@ export type ManifestDispatchIssue = {
   reason: string;
   missingStatuses: string[];
 };
+
+export function movingManifestConsignments<T extends { scannedParcelNumbers: readonly string[] }>(
+  consignments: readonly T[]
+) {
+  return consignments.filter((consignment) => consignment.scannedParcelNumbers.length > 0);
+}
 
 export function buildManifestSealReadinessIssues(input: {
   consignments: Array<{ shipmentDraftId: unknown; consignmentNumber: string }>;
@@ -1856,9 +2159,19 @@ export async function dispatchOperationsManifest(
       const consignments = await OperationsManifestConsignment.find({
         manifestId: manifest._id,
         status: { $ne: "REMOVED" }
-      }).select("shipmentDraftId dpdShipmentId consignmentNumber").session(session).lean().exec();
+      }).select("shipmentDraftId dpdShipmentId consignmentNumber scannedParcelNumbers").session(session).lean().exec();
 
-      const dispatchIssues = await loadManifestDispatchIssues(consignments, session);
+      // A consignment with no scanned parcels is being held/deferred in full;
+      // it must not be allocated to the flight or receive a departure milestone.
+      // Legacy manifests without a linked flight retain their established flow.
+      const movingConsignments = manifest.flightLinehaulId
+        ? movingManifestConsignments(consignments)
+        : consignments;
+      if (manifest.flightLinehaulId && !movingConsignments.length) {
+        throw new OperationsManifestServiceError("Dispatch at least one scanned parcel. All manifest shipments are currently held or deferred.", 409);
+      }
+
+      const dispatchIssues = await loadManifestDispatchIssues(movingConsignments, session);
       if (dispatchIssues.length) {
         const visible = dispatchIssues.slice(0, 8).map((issue) => `${issue.reference}: ${issue.reason}`);
         const remainder = dispatchIssues.length - visible.length;
@@ -1869,18 +2182,29 @@ export async function dispatchOperationsManifest(
         );
       }
 
+      // Linkage was created with the manifest. Allocate only scanned pieces
+      // now, atomically with dispatch and its shipment tracking events.
+      if (manifest.flightLinehaulId) {
+        await allocateDispatchedManifestInTransaction({
+          flightId: String(manifest.flightLinehaulId),
+          manifestId: String(manifest._id),
+          userId,
+          session
+        });
+      }
+
       manifest.status = "DISPATCHED";
       manifest.dispatchedAt = dispatchedAt;
       manifest.dispatchedBy = userId;
       await manifest.save({ session });
 
-      if (consignments.length) {
+      if (movingConsignments.length) {
         // Run these sequentially on the transaction session. Mongoose 9 can
         // silently omit a bulk update whose only mutation is `$setOnInsert`,
         // reporting zero matches and zero upserts while allowing the manifest
         // transaction to commit. A direct updateOne reliably performs the
         // idempotent upsert and keeps manifest dispatch and tracking atomic.
-        for (const consignment of consignments) {
+        for (const consignment of movingConsignments) {
           const result = await ShipmentEvent.updateOne(
             {
               shipmentDraftId: consignment.shipmentDraftId,
@@ -1921,7 +2245,7 @@ export async function dispatchOperationsManifest(
         userId,
         {
           dispatchedAt,
-          consignmentsChecked: consignments.length,
+          consignmentsChecked: movingConsignments.length,
           dispatchMethod,
           ...(dispatchMethod === "BARCODE_SCAN" ? { scannedBarcode: options.scannedBarcode?.trim().toUpperCase() } : {})
         },
@@ -1967,6 +2291,8 @@ export async function cancelOperationsManifest(manifestIdValue: string, reason: 
 export async function deleteOperationsManifest(input: {
   manifestId: string;
   confirmationManifestNumber: string;
+  mode?: "ARCHIVE" | "PERMANENT";
+  reason?: string;
   userId: mongoose.Types.ObjectId;
 }, archiveOverride?: {
   stageOperationsManifestArchive: (manifest: IOperationsManifest) => Promise<ArchivedManifestDocument[]>;
@@ -1978,11 +2304,24 @@ export async function deleteOperationsManifest(input: {
   if (input.confirmationManifestNumber.trim().toUpperCase() !== source.manifestNumber) {
     throw new OperationsManifestServiceError("Manifest deletion confirmation did not match.", 409);
   }
-  // A cancelled manifest may also have been sealed before cancellation.
   const issued = Boolean(parseSealedSnapshot(source.sealedSnapshot));
+  if (source.status === "DISPATCHED") {
+    throw new OperationsManifestServiceError("Dispatched manifests cannot be deleted. Use the controlled movement correction process.", 409);
+  }
+  if (source.status === "SEALED" && !input.mode) {
+    throw new OperationsManifestServiceError("Choose whether to archive or permanently delete this sealed manifest.", 400);
+  }
+  if (source.status === "SEALED" && (input.reason ?? "").trim().length < 5) {
+    throw new OperationsManifestServiceError("Enter a deletion reason of at least 5 characters.", 400);
+  }
+  const mode = input.mode ?? (issued ? "ARCHIVE" : "PERMANENT");
+  if (mode === "ARCHIVE" && !issued) {
+    throw new OperationsManifestServiceError("Only a sealed manifest can be archived.", 409);
+  }
   const { stageOperationsManifestArchive, removeStagedArchiveDocuments } = archiveOverride ?? await import("./operationsManifestArchive.service.js");
-  const documents = issued ? await stageOperationsManifestArchive(source) : [];
+  const documents = mode === "ARCHIVE" ? await stageOperationsManifestArchive(source) : [];
   const session = await mongoose.startSession();
+  let flightDocumentKeysForDeletion: string[] = [];
 
   try {
     const deleted = await session.withTransaction(async () => {
@@ -1992,38 +2331,151 @@ export async function deleteOperationsManifest(input: {
         throw new OperationsManifestServiceError("Manifest deletion confirmation did not match.", 409);
       }
       if (manifest.status !== source.status || manifest.updatedAt?.getTime() !== source.updatedAt?.getTime()) {
-        throw new OperationsManifestServiceError("This manifest changed while its archive was prepared. Refresh and try again.", 409);
+        throw new OperationsManifestServiceError("This manifest changed while deletion was being prepared. Refresh and try again.", 409);
+      }
+      if (manifest.status === "DISPATCHED") {
+        throw new OperationsManifestServiceError("Dispatched manifests cannot be deleted. Use the controlled movement correction process.", 409);
       }
 
       const sequence = operationsManifestSequence(manifest.manifestNumber);
       const numberWillBeReused = isOperationsManifestNumberReusable(manifest.status) && sequence !== null;
+      const consignments = await OperationsManifestConsignment.find({ manifestId, status: { $ne: "REMOVED" } })
+        .select("shipmentDraftId")
+        .session(session)
+        .lean()
+        .exec();
+      const shipmentDraftIds = consignments.map((item) => item.shipmentDraftId);
+      const manifestBags = manifest.status === "SEALED"
+        ? await OperationsManifestBag.find({ manifestId })
+            .select("_id")
+            .session(session)
+            .lean()
+            .exec()
+        : [];
+      const shipmentEvents = shipmentDraftIds.length
+        ? await ShipmentEvent.find({ shipmentDraftId: { $in: shipmentDraftIds } })
+            .select("shipmentDraftId status milestoneKey sourceReference eventAt")
+            .session(session)
+            .lean()
+            .exec()
+        : [];
+      const linkedFlight = manifest.flightLinehaulId
+        ? await FlightLinehaul.findById(manifest.flightLinehaulId).session(session).exec()
+        : null;
+      const flightId = linkedFlight?._id as mongoose.Types.ObjectId | undefined;
+      const [allocations, offloads, exceptions, flightDocuments, costSheetCount, cancelledCostSheets] = flightId
+        ? await Promise.all([
+            FlightShipmentAllocation.find({ flightLinehaulId: flightId }).session(session).lean().exec(),
+            FlightOffload.find({ flightLinehaulId: flightId }).session(session).lean().exec(),
+            FlightException.find({ flightLinehaulId: flightId }).session(session).lean().exec(),
+            FlightDocument.find({ flightLinehaulId: flightId }).session(session).lean().exec(),
+            FlightCostSheet.countDocuments({ operationsManifestId: manifestId, status: { $ne: "CANCELLED" } }).session(session).exec(),
+            FlightCostSheet.find({ operationsManifestId: manifestId, status: "CANCELLED" }).session(session).lean().exec()
+          ])
+        : [[], [], [], [], await FlightCostSheet.countDocuments({ operationsManifestId: manifestId, status: { $ne: "CANCELLED" } }).session(session).exec(), []];
 
-      if (issued) {
+      if (manifest.status === "SEALED") {
+        const reason = sealedManifestDeletionBlockReason({
+          flightStatus: linkedFlight?.status ?? null,
+          allocationStatuses: allocations.map((allocation) => allocation.status),
+          hasOffloads: offloads.length > 0,
+          hasActiveCostSheet: costSheetCount > 0,
+          shipmentStatuses: shipmentEvents.map((event) => event.status)
+        });
+        if (reason) throw new OperationsManifestServiceError(reason, 409);
+      } else if (linkedFlight && ["DEPARTED", "ARRIVED_DESTINATION", "CLOSED"].includes(linkedFlight.status)) {
+        throw new OperationsManifestServiceError("The linked flight has departed or arrived. This manifest cannot be deleted.", 409);
+      } else if (costSheetCount > 0) {
+        throw new OperationsManifestServiceError("This manifest has an active flight cost sheet. Cancel or reconcile it before deleting the manifest.", 409);
+      }
+
+      const readyEventSource = `MANIFEST:${String(manifestId)}:SEALED`;
+      const readyEventSources = [
+        readyEventSource,
+        ...manifestBags.map((bag) => `BAG:${String(bag._id)}:READY`)
+      ];
+      const readyEventsToRemove = manifest.status === "SEALED"
+        ? shipmentEvents.filter((event) => event.status === "READY_FOR_EXPORT" && readyEventSources.includes(event.sourceReference ?? ""))
+        : [];
+      const flightSnapshot = linkedFlight ? {
+        flight: linkedFlight.toObject() as unknown as Record<string, unknown>,
+        allocations,
+        offloads,
+        exceptions,
+        documents: flightDocuments.map((document) => ({
+          id: String(document._id),
+          documentType: document.documentType,
+          originalName: document.originalName,
+          storageKey: document.storageKey,
+          mimeType: document.mimeType,
+          size: document.size,
+          note: document.note,
+          createdAt: document.createdAt
+        })),
+        cancelledCostSheets
+      } : null;
+
+      if (mode === "ARCHIVE") {
         await OperationsManifestArchive.create([{
           _id: manifestId,
+          originalManifestId: manifestId,
+          recordType: "ARCHIVED",
           manifestNumber: manifest.manifestNumber,
           branchId: manifest.branchId,
           status: manifest.status,
           manifest: manifest.toObject() as unknown as Record<string, unknown>,
+          linkedFlight: flightSnapshot,
           documents,
+          deletionMode: mode,
+          deletionReason: (input.reason ?? "").trim(),
           archivedAt: new Date(),
           archivedBy: input.userId
         }], { session });
       }
 
-      // Existing tracking milestones remain as shipment history, but the
-      // manifest workspace and all of its packing/scanner children are removed.
-      // Issued documents live in a separate read-only archive keyed by this ID.
       await audit("OPERATIONS_MANIFEST_DELETED", manifestId, input.userId, {
         manifestNumber: manifest.manifestNumber,
         status: manifest.status,
+        mode,
+        reason: (input.reason ?? "").trim(),
         branchId: manifest.branchId,
+        flightLinehaulId: flightId ? String(flightId) : null,
         totalBags: manifest.totalBags,
         totalConsignments: manifest.totalConsignments,
         totalPhysicalParcels: manifest.totalPhysicalParcels,
         totalWeightKg: manifest.totalWeightKg,
-        numberWillBeReused
+        numberWillBeReused,
+        readyMilestonesRemoved: readyEventsToRemove.length
       }, session);
+
+      if (readyEventsToRemove.length) {
+        await ShipmentEvent.deleteMany({
+          shipmentDraftId: { $in: shipmentDraftIds },
+          sourceReference: { $in: readyEventSources },
+          status: "READY_FOR_EXPORT"
+        }, { session }).exec();
+      }
+
+      if (flightId) {
+        const historicalAllocations = allocations.filter((allocation) => ["CARRIED", "OFFLOADED"].includes(allocation.status));
+        if (historicalAllocations.length || offloads.length) {
+          throw new OperationsManifestServiceError("Flight movement history must be corrected before deleting this manifest.", 409);
+        }
+        flightDocumentKeysForDeletion = mode === "PERMANENT"
+          ? flightDocuments.map((document) => document.storageKey)
+          : [];
+        await FlightShipmentAllocation.deleteMany({ flightLinehaulId: flightId }, { session }).exec();
+        await FlightOffload.deleteMany({ flightLinehaulId: flightId }, { session }).exec();
+        await FlightException.deleteMany({ flightLinehaulId: flightId }, { session }).exec();
+        await FlightDocument.deleteMany({ flightLinehaulId: flightId }, { session }).exec();
+        await PortalNotification.deleteMany({ "metadata.flightId": String(flightId) }, { session }).exec();
+        await FlightCostSheet.updateMany(
+          { flightLinehaulId: flightId },
+          { $set: { flightLinehaulId: null } },
+          { session }
+        ).exec();
+        await FlightLinehaul.deleteOne({ _id: flightId }, { session }).exec();
+      }
 
       await OperationsManifestScanSession.deleteMany({ manifestId }, { session }).exec();
       await OperationsManifestScan.deleteMany({ manifestId }, { session }).exec();
@@ -2049,11 +2501,20 @@ export async function deleteOperationsManifest(input: {
       return {
         manifestNumber: manifest.manifestNumber,
         status: manifest.status,
-        numberWillBeReused
+        mode,
+        numberWillBeReused,
+        readyMilestonesRemoved: readyEventsToRemove.length,
+        flightLinehaulId: flightId ? String(flightId) : null
       };
     });
     if (!deleted) throw new OperationsManifestServiceError("Operations manifest could not be deleted.", 500);
-    return deleted;
+    if (flightDocumentKeysForDeletion.length) {
+      const { deleteObject } = await import("./storage/storage.service.js");
+      const results = await Promise.allSettled(flightDocumentKeysForDeletion.map((key) => deleteObject(key)));
+      const storageCleanupPending = results.filter((result) => result.status === "rejected").length;
+      return { ...deleted, storageCleanupPending };
+    }
+    return { ...deleted, storageCleanupPending: 0 };
   } catch (error) {
     await removeStagedArchiveDocuments(documents);
     throw error;
@@ -2226,7 +2687,7 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
 }
 
 function readSealedSnapshot(manifest: IOperationsManifest): SealedSnapshot {
-  const snapshot = parseSealedSnapshot(manifest.sealedSnapshot);
+  const snapshot = parseCurrentManifestSnapshot(manifest.sealedSnapshot, manifest.header);
   if (!snapshot) throw new OperationsManifestServiceError("The sealed manifest snapshot is unavailable.", 409);
   return snapshot;
 }

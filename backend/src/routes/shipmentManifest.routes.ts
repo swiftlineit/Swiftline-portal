@@ -5,6 +5,7 @@ import {
   deleteAdminBulkShipmentManifests,
   deleteAdminShipmentManifest,
   downloadAdminShipmentManifest,
+  downloadAdminShipmentManifestExcel,
   downloadAdminShipmentManifestPdf,
   getAdminShipmentManifestContext,
   listAdminShipmentManifests
@@ -21,5 +22,6 @@ shipmentManifestRouter.post("/", createAdminShipmentManifest);
 shipmentManifestRouter.post("/bulk", createAdminBulkShipmentManifest);
 shipmentManifestRouter.post("/bulk-delete", deleteAdminBulkShipmentManifests);
 shipmentManifestRouter.get("/:manifestId/download", downloadAdminShipmentManifest);
+shipmentManifestRouter.get("/:manifestId/xlsx", downloadAdminShipmentManifestExcel);
 shipmentManifestRouter.get("/:manifestId/pdf", downloadAdminShipmentManifestPdf);
 shipmentManifestRouter.delete("/:manifestId", deleteAdminShipmentManifest);

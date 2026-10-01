@@ -19,6 +19,7 @@ import {
   closeOperationsBags,
   createOperationsBag,
   createOperationsManifest,
+  createOperationsManifestWithFlight,
   deleteOperationsManifest,
   dispatchOperationsManifest,
   getOperationsManifestDetail,
@@ -53,6 +54,20 @@ const headerSchema = z.object({
   originIataCode: z.string().trim().toUpperCase().max(3).default(""),
   destinationIataCode: z.string().trim().toUpperCase().max(3).default(""),
   valueType: z.string().trim().toUpperCase().max(20).default("LV")
+});
+
+const combinedFlightSchema = z.object({
+  airlineName: z.string().trim().min(2).max(120),
+  transitIataCode: z.string().trim().toUpperCase().max(3).optional().default(""),
+  scheduledDepartureAt: z.string().datetime(),
+  scheduledArrivalAt: z.string().datetime(),
+  capacityKg: z.number().finite().positive(),
+  finalMileCarrier: z.string().trim().max(200).optional().default(""),
+  connection: z.object({
+    transitAirportCode: z.string().trim().toUpperCase().max(3).optional().default(""),
+    scheduledArrivalAt: z.string().datetime().nullable().optional(),
+    scheduledDepartureAt: z.string().datetime().nullable().optional()
+  }).nullable().optional().default(null)
 });
 
 const reasonSchema = z.object({ reason: z.string().trim().min(5, "Enter a clear reason of at least 5 characters.").max(500) });
@@ -93,7 +108,7 @@ export async function listBranchOptions(request: Request, response: Response) {
 }
 
 export async function listManifests(request: Request, response: Response) {
-  const query = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(50).default(15), status: z.string().optional(), branchId: z.string().optional(), dateFrom: z.string().optional(), dateTo: z.string().optional() }).safeParse(request.query);
+  const query = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(50).default(15), status: z.string().optional(), branchId: z.string().optional(), dateFrom: z.string().optional(), dateTo: z.string().optional(), search: z.string().trim().max(100).optional() }).safeParse(request.query);
   if (!query.success) return response.status(400).json({ success: false, message: "Manifest filters are invalid." });
   const allowedBranches = operationsBranchIds(request);
   if (query.data.branchId && allowedBranches !== null && !allowedBranches.includes(query.data.branchId)) {
@@ -116,15 +131,81 @@ export async function getArchivedManifest(request: Request, response: Response) 
     const archive = await getOperationsManifestArchive(String(request.params.manifestId), operationsBranchIds(request));
     const manifest = archive.manifest as Record<string, unknown>;
     const snapshot = parseSealedSnapshot(manifest.sealedSnapshot);
+    if (snapshot && manifest.header && typeof manifest.header === "object") {
+      snapshot.header = { ...snapshot.header, ...(manifest.header as Partial<typeof snapshot.header>) };
+    }
+    const flightSnapshot = archive.linkedFlight as {
+      flight?: Record<string, unknown>;
+      allocations?: Array<Record<string, unknown>>;
+      offloads?: Array<Record<string, unknown>>;
+      exceptions?: Array<Record<string, unknown>>;
+      documents?: Array<Record<string, unknown>>;
+    } | null;
+    const rawFlight = flightSnapshot?.flight;
+    const linkedFlight = rawFlight ? {
+      flight: {
+        flightLinehaulNumber: rawFlight.flightLinehaulNumber,
+        flightNumber: rawFlight.flightNumber,
+        airlineName: rawFlight.airlineName,
+        mawbNumber: rawFlight.mawbNumber,
+        originIataCode: rawFlight.originIataCode,
+        destinationIataCode: rawFlight.destinationIataCode,
+        scheduledDepartureAt: rawFlight.scheduledDepartureAt,
+        scheduledArrivalAt: rawFlight.scheduledArrivalAt,
+        status: rawFlight.status
+      },
+      documents: (flightSnapshot?.documents ?? []).map((item) => ({
+        id: item.id,
+        originalName: item.originalName,
+        mimeType: item.mimeType,
+        size: item.size,
+        createdAt: item.createdAt
+      })),
+      allocations: (flightSnapshot?.allocations ?? []).map((item) => ({
+        awb: item.awb,
+        weightKg: item.weightKg,
+        pieces: item.pieces,
+        status: item.status
+      })),
+      exceptions: (flightSnapshot?.exceptions ?? []).map((item) => ({
+        type: item.type,
+        severity: item.severity,
+        status: item.status,
+        title: item.title,
+        description: item.description
+      })),
+      offloads: (flightSnapshot?.offloads ?? []).map((item) => ({
+        reason: item.reason,
+        detail: item.detail,
+        affectedPieces: item.affectedPieces,
+        affectedWeightKg: item.affectedWeightKg
+      }))
+    } : null;
     return response.json({
       success: true,
       archive: {
         id: String(archive._id), manifestNumber: archive.manifestNumber, status: archive.status,
         archivedAt: archive.archivedAt, header: manifest.header,
+        deletionMode: archive.deletionMode ?? "ARCHIVE",
+        deletionReason: archive.deletionReason ?? "",
+        linkedFlight,
         documents: archive.documents.map(({ format, filename }) => ({ format, filename })),
         document: snapshot ? buildManifestDocumentModel(snapshot) : null
       }
     });
+  } catch (error) { return sendError(response, error); }
+}
+
+export async function downloadArchivedFlightDocument(request: Request, response: Response) {
+  try {
+    const archive = await getOperationsManifestArchive(String(request.params.manifestId), operationsBranchIds(request));
+    const linkedFlight = archive.linkedFlight as { documents?: Array<Record<string, unknown>> } | null;
+    const document = linkedFlight?.documents?.find((item) => String(item.id ?? "") === String(request.params.documentId));
+    const storageKey = typeof document?.storageKey === "string" ? document.storageKey : "";
+    const filename = typeof document?.originalName === "string" ? document.originalName : "flight-document";
+    const contentType = typeof document?.mimeType === "string" ? document.mimeType : "application/octet-stream";
+    if (!storageKey) throw new OperationsManifestServiceError("This archived flight document is unavailable.", 404);
+    await streamObjectToResponse({ response, key: storageKey, contentType, filename });
   } catch (error) { return sendError(response, error); }
 }
 
@@ -150,6 +231,27 @@ export async function createManifest(request: Request, response: Response) {
   } catch (error) { return sendError(response, error); }
 }
 
+export async function createManifestWithFlight(request: Request, response: Response) {
+  try {
+    const actorId = userId(request);
+    const input = parsedBody(response, z.object({
+      branchId: z.string(),
+      header: headerSchema,
+      flight: combinedFlightSchema
+    }), request.body);
+    if (!actorId || !input) return;
+    const created = await createOperationsManifestWithFlight({ ...input, userId: actorId });
+    return response.status(201).json({
+      success: true,
+      manifestId: String(created.manifest._id),
+      manifestNumber: created.manifest.manifestNumber,
+      flightId: String(created.flight._id),
+      flightLinehaulNumber: created.flight.flightLinehaulNumber,
+      message: "Manifest and booked flight created. Pack shipments, then seal the manifest."
+    });
+  } catch (error) { return sendError(response, error); }
+}
+
 export async function getManifest(request: Request, response: Response) {
   try { return response.json({ success: true, ...(await getOperationsManifestDetail(String(request.params.manifestId))) }); }
   catch (error) { return sendError(response, error); }
@@ -157,9 +259,13 @@ export async function getManifest(request: Request, response: Response) {
 
 export async function updateManifest(request: Request, response: Response) {
   try {
-    const actorId = userId(request); const header = parsedBody(response, headerSchema, request.body.header);
-    if (!actorId || !header) return;
-    await updateOperationsManifest({ manifestId: String(request.params.manifestId), header, userId: actorId });
+    const actorId = userId(request);
+    const input = parsedBody(response, z.object({
+      header: headerSchema,
+      reason: z.string().trim().min(5, "Enter a correction reason of at least 5 characters.").max(500)
+    }), request.body);
+    if (!actorId || !input) return;
+    await updateOperationsManifest({ manifestId: String(request.params.manifestId), ...input, userId: actorId });
     return response.json({ success: true, message: "Manifest details updated." });
   } catch (error) { return sendError(response, error); }
 }
@@ -332,20 +438,27 @@ export async function deleteManifest(request: Request, response: Response) {
     const actorId = userId(request);
     const input = parsedBody(
       response,
-      z.object({ confirmationManifestNumber: z.string().trim().min(1).max(40) }),
+      z.object({
+        confirmationManifestNumber: z.string().trim().min(1).max(40),
+        mode: z.enum(["ARCHIVE", "PERMANENT"]).optional(),
+        reason: z.string().trim().max(500).optional().default("")
+      }),
       request.body
     );
     if (!actorId || !input) return;
     const deleted = await deleteOperationsManifest({
       manifestId: String(request.params.manifestId),
       confirmationManifestNumber: input.confirmationManifestNumber,
+      mode: input.mode,
+      reason: input.reason,
       userId: actorId
     });
     return response.json({
       success: true,
-      message: deleted.numberWillBeReused
-        ? `${deleted.manifestNumber} deleted. Its number is available for a new manifest.`
-        : `${deleted.manifestNumber} deleted. Its number remains permanently reserved.`,
+      message: deleted.mode === "ARCHIVE"
+        ? `${deleted.manifestNumber} archived and removed from active manifests. Its number is available for reuse.`
+        : `${deleted.manifestNumber} permanently deleted. Its number is available for reuse.`
+          + (deleted.storageCleanupPending ? " Some linked flight files need storage cleanup." : ""),
       deleted
     });
   } catch (error) { return sendError(response, error); }

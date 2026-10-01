@@ -13,6 +13,7 @@ import {
 } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
+import FlightDetailsEditDialog from "@/components/flight-linehaul/FlightDetailsEditDialog";
 import { OPERATIONS_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
 import {
@@ -111,6 +112,7 @@ export default function FlightDetailPage() {
   const [actionReason, setActionReason] = useState("");
   const [actualDepartureAt, setActualDepartureAt] = useState("");
   const [actualArrivalAt, setActualArrivalAt] = useState("");
+  const [editDetailsOpen, setEditDetailsOpen] = useState(false);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -187,6 +189,7 @@ export default function FlightDetailPage() {
 
   return (
     <div className="flight-detail-page mx-auto w-full max-w-[1600px] space-y-5">
+      {editDetailsOpen ? <FlightDetailsEditDialog flight={flight} onClose={() => setEditDetailsOpen(false)} onSaved={load} /> : null}
       {/* Flight identity */}
       <section className="overflow-hidden rounded-xl border border-[#DDE3EC] bg-white shadow-[0_4px_14px_rgba(15,23,42,0.035)]">
         <div className="flex flex-col gap-4 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-7">
@@ -252,6 +255,13 @@ export default function FlightDetailPage() {
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">
+            <button
+              type="button"
+              onClick={() => setEditDetailsOpen(true)}
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-[#D9E0E8] bg-white px-3.5 text-xs font-semibold text-slate-700 transition hover:border-[#0D1282] hover:text-[#0D1282]"
+            >
+              Edit details
+            </button>
             <button
               type="button"
               onClick={() => void load()}

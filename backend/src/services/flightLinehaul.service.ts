@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { env } from "../config/env.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { Branch } from "../models/branch.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
@@ -20,7 +21,9 @@ import { User } from "../models/user.model.js";
 import { readShipmentBookingSnapshot } from "./shipmentBookingSnapshot.service.js";
 import { resolveShipmentEventNote } from "./shipmentEventCopy.service.js";
 import { notifyFlightOperationsStaff } from "./portalNotification.service.js";
-import { comparableFlightNumber, normalizeFlightNumber } from "../utils/flightNumber.js";
+import { comparableFlightNumber, isValidFlightNumber, normalizeFlightNumber } from "../utils/flightNumber.js";
+import { formatIstDate } from "../utils/indiaDateTime.js";
+import { isValidMawbNumber, normalizeMawbNumber } from "../utils/mawbNumber.js";
 import { describeMissingPrerequisites, findMissingPrerequisites } from "./shipmentStatusSequence.service.js";
 
 export class FlightLinehaulServiceError extends Error {
@@ -368,7 +371,7 @@ export async function createExceptionIdempotent(input: {
 // CRUD
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function createFlightLinehaul(input: {
+export type CreateFlightLinehaulInput = {
   branchId: string;
   flightNumber: string;
   airlineName?: string;
@@ -378,6 +381,7 @@ export async function createFlightLinehaul(input: {
   transitIataCode?: string;
   scheduledDepartureAt: string;
   scheduledArrivalAt: string;
+  scheduledDepartureAutomationEnabled?: boolean;
   capacityKg: number;
   destinationAgent?: string;
   finalMileCarrier?: string;
@@ -385,19 +389,25 @@ export async function createFlightLinehaul(input: {
   /** When supplied, the flight and its manifest attachment are one transaction. */
   manifestId?: string;
   userId: mongoose.Types.ObjectId;
-}): Promise<IFlightLinehaul> {
+};
+
+/** Create only the flight record inside a caller-owned transaction. */
+export async function createFlightLinehaulInSession(
+  input: CreateFlightLinehaulInput,
+  session: mongoose.ClientSession
+): Promise<IFlightLinehaul> {
   const branchId = asObjectId(input.branchId, "Branch");
   const branch = await Branch.findOne({ _id: branchId, status: "ACTIVE" }).lean().exec();
   if (!branch) throw new FlightLinehaulServiceError("Select an active branch.", 409);
 
   const flightNumber = normalizeFlightNumber(input.flightNumber);
-  if (!/^[A-Z0-9]{2,4}-\d{1,4}[A-Z]?$/.test(flightNumber)) {
+  if (!isValidFlightNumber(flightNumber)) {
     throw new FlightLinehaulServiceError("Enter a valid flight number (e.g., EY-219 or AI-131).", 400);
   }
   const airlineName = (input.airlineName ?? "").trim();
   if (airlineName.length < 2) throw new FlightLinehaulServiceError("Airline is required.", 400);
-  const mawbNumber = (input.mawbNumber ?? "").trim().toUpperCase();
-  if (!/^\d{3}-?\d{8}$/.test(mawbNumber)) throw new FlightLinehaulServiceError("Enter a valid MAWB (e.g., 098-12345678).", 400);
+  const mawbNumber = normalizeMawbNumber(input.mawbNumber);
+  if (!isValidMawbNumber(mawbNumber)) throw new FlightLinehaulServiceError("MAWB number is required (40 characters maximum).", 400);
   const originIata = (input.originIataCode ?? "").trim().toUpperCase();
   const destIata = (input.destinationIataCode ?? "").trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(originIata)) throw new FlightLinehaulServiceError("Origin IATA must be 3 letters.", 400);
@@ -441,62 +451,72 @@ export async function createFlightLinehaul(input: {
   // still be attached to only one active flight, which prevents double-loading.
   const manifestId = input.manifestId ? asObjectId(input.manifestId, "Manifest") : null;
 
+  const flightLinehaulNumber = await allocateFlightLinehaulNumber(session);
+  const docs = await FlightLinehaul.create(
+    [{
+      flightLinehaulNumber,
+      branchId,
+      flightNumber,
+      airlineName,
+      mawbNumber,
+      originIataCode: originIata,
+      destinationIataCode: destIata,
+      transitIataCode: transitIata || connectionDoc?.transitAirportCode || "",
+      scheduledDepartureAt,
+      scheduledArrivalAt,
+      scheduledDepartureAutomationEnabled: input.scheduledDepartureAutomationEnabled ?? false,
+      capacityKg: roundWeight(input.capacityKg),
+      allocatedWeightKg: 0,
+      utilisationPercent: 0,
+      totalShipments: 0,
+      totalBags: 0,
+      totalPieces: 0,
+      status: "BOOKING_CONFIRMED",
+      connection: connectionDoc,
+      customsStatus: "PENDING",
+      destinationAgent: (input.destinationAgent ?? "").trim(),
+      finalMileCarrier: (input.finalMileCarrier ?? "").trim(),
+      handoverReference: "",
+      cancellationReason: "",
+      createdBy: input.userId
+    }],
+    { session }
+  );
+  const created = docs[0];
+  if (!created) throw new FlightLinehaulServiceError("Flight could not be created.", 500);
+  await audit("FLIGHT_LINEHAUL_CREATED", created._id as mongoose.Types.ObjectId, input.userId, {
+    flightLinehaulNumber,
+    flightNumber,
+    branchId: String(branchId)
+  }, session);
+
+  if (manifestId) {
+    await attachManifestInTransaction({
+      flightId: created._id as mongoose.Types.ObjectId,
+      manifestId,
+      userId: input.userId,
+      session
+    });
+  }
+  return created;
+}
+
+export async function createFlightLinehaul(input: CreateFlightLinehaulInput): Promise<IFlightLinehaul> {
+  const manifestId = input.manifestId ? asObjectId(input.manifestId, "Manifest") : null;
   const session = await mongoose.startSession();
   try {
     let created: IFlightLinehaul | null = null;
     await session.withTransaction(async () => {
-      const flightLinehaulNumber = await allocateFlightLinehaulNumber(session);
-      const docs = await FlightLinehaul.create(
-        [
-          {
-            flightLinehaulNumber,
-            branchId,
-            flightNumber,
-            airlineName,
-            mawbNumber,
-            originIataCode: originIata,
-            destinationIataCode: destIata,
-            transitIataCode: transitIata || connectionDoc?.transitAirportCode || "",
-            scheduledDepartureAt,
-            scheduledArrivalAt,
-            capacityKg: roundWeight(input.capacityKg),
-            allocatedWeightKg: 0,
-            utilisationPercent: 0,
-            totalShipments: 0,
-            totalBags: 0,
-            totalPieces: 0,
-            status: "BOOKING_CONFIRMED",
-            connection: connectionDoc,
-            customsStatus: "PENDING",
-            destinationAgent: (input.destinationAgent ?? "").trim(),
-            finalMileCarrier: (input.finalMileCarrier ?? "").trim(),
-            handoverReference: "",
-            cancellationReason: "",
-            createdBy: input.userId
-          }
-        ],
-        { session }
-      );
-      created = docs[0] ?? null;
-      if (!created) throw new FlightLinehaulServiceError("Flight could not be created.", 500);
-      await audit("FLIGHT_LINEHAUL_CREATED", created._id as mongoose.Types.ObjectId, input.userId, { flightLinehaulNumber, flightNumber, branchId: String(branchId) }, session);
-      if (manifestId) {
-        await attachManifestInTransaction({
-          flightId: created._id as mongoose.Types.ObjectId,
-          manifestId,
-          userId: input.userId,
-          session
-        });
-      }
+      created = await createFlightLinehaulInSession(input, session);
     });
-    if (!created) throw new FlightLinehaulServiceError("Flight could not be created.", 500);
-    const createdFlight = created as IFlightLinehaul;
+    const completedFlight = created as IFlightLinehaul | null;
+    if (!completedFlight) throw new FlightLinehaulServiceError("Flight could not be created.", 500);
     if (manifestId) {
-      const createdFlightId = createdFlight._id as mongoose.Types.ObjectId;
+      const createdFlightId = completedFlight._id as mongoose.Types.ObjectId;
       await recalculateFlightTotals(createdFlightId);
       void maybeMarkCostSheetsForReview(createdFlightId);
     }
-    return createdFlight;
+    return completedFlight;
   } finally {
     await session.endSession();
   }
@@ -863,6 +883,7 @@ export async function runFlightLinehaulExceptionSweep() {
 export async function updateFlightLinehaul(input: {
   flightId: string;
   updates: Partial<{
+    flightNumber: string;
     airlineName: string;
     mawbNumber: string;
     originIataCode: string;
@@ -874,106 +895,130 @@ export async function updateFlightLinehaul(input: {
     destinationAgent: string;
     finalMileCarrier: string;
   }>;
+  reason: string;
   userId: mongoose.Types.ObjectId;
   allowedBranchIds?: string[] | null;
 }) {
   const flightId = asObjectId(input.flightId, "Flight");
-  const flight = await FlightLinehaul.findById(flightId).exec();
-  if (!flight) throw new FlightLinehaulServiceError("Flight was not found.", 404);
-  if (input.allowedBranchIds !== null && input.allowedBranchIds !== undefined && !input.allowedBranchIds.includes(String(flight.branchId))) {
-    throw new FlightLinehaulServiceError("You do not have access to this flight's branch.", 403);
-  }
-  if (["CLOSED", "CANCELLED"].includes(flight.status)) throw new FlightLinehaulServiceError("Closed or cancelled flights cannot be edited.", 409);
+  const reason = input.reason.trim();
+  if (reason.length < 5) throw new FlightLinehaulServiceError("Enter a clear correction reason of at least 5 characters.", 400);
+  const session = await mongoose.startSession();
+  try {
+    let updated: IFlightLinehaul | null = null;
+    await session.withTransaction(async () => {
+      const flight = await FlightLinehaul.findById(flightId).session(session).exec();
+      if (!flight) throw new FlightLinehaulServiceError("Flight was not found.", 404);
+      if (input.allowedBranchIds !== null && input.allowedBranchIds !== undefined && !input.allowedBranchIds.includes(String(flight.branchId))) {
+        throw new FlightLinehaulServiceError("You do not have access to this flight's branch.", 403);
+      }
 
-  const before: Record<string, unknown> = {};
-  const after: Record<string, unknown> = {};
+      const before: Record<string, unknown> = {};
+      const after: Record<string, unknown> = {};
+      const setText = (key: "flightNumber" | "airlineName" | "mawbNumber" | "originIataCode" | "destinationIataCode" | "transitIataCode" | "destinationAgent" | "finalMileCarrier", value: string, uppercase = false) => {
+        before[key] = flight[key];
+        const normalized = uppercase ? value.trim().toUpperCase() : value.trim();
+        (flight as unknown as Record<string, unknown>)[key] = normalized;
+        after[key] = normalized;
+      };
 
-  if (input.updates.airlineName !== undefined) {
-    before.airlineName = flight.airlineName;
-    flight.airlineName = input.updates.airlineName.trim();
-    if (flight.airlineName && flight.airlineName.length < 2) throw new FlightLinehaulServiceError("Airline must contain at least 2 characters.", 400);
-    after.airlineName = flight.airlineName;
-  }
-  if (input.updates.mawbNumber !== undefined) {
-    before.mawbNumber = flight.mawbNumber;
-    flight.mawbNumber = input.updates.mawbNumber.trim().toUpperCase();
-    if (flight.mawbNumber && !/^\d{3}-?\d{8}$/.test(flight.mawbNumber)) throw new FlightLinehaulServiceError("Enter a valid MAWB (e.g., 098-12345678).", 400);
-    after.mawbNumber = flight.mawbNumber;
-  }
-  if (input.updates.originIataCode !== undefined) {
-    const v = input.updates.originIataCode.trim().toUpperCase();
-    if (v && !/^[A-Z]{3}$/.test(v)) throw new FlightLinehaulServiceError("Origin IATA must be 3 letters.", 400);
-    before.originIataCode = flight.originIataCode;
-    flight.originIataCode = v;
-    after.originIataCode = v;
-  }
-  if (input.updates.destinationIataCode !== undefined) {
-    const v = input.updates.destinationIataCode.trim().toUpperCase();
-    if (v && !/^[A-Z]{3}$/.test(v)) throw new FlightLinehaulServiceError("Destination IATA must be 3 letters.", 400);
-    before.destinationIataCode = flight.destinationIataCode;
-    flight.destinationIataCode = v;
-    after.destinationIataCode = v;
-  }
-  if (flight.originIataCode && flight.destinationIataCode && flight.originIataCode === flight.destinationIataCode) {
-    throw new FlightLinehaulServiceError("Origin and destination airports must be different.", 400);
-  }
-  if (input.updates.transitIataCode !== undefined) {
-    const v = input.updates.transitIataCode.trim().toUpperCase();
-    if (v && !/^[A-Z]{3}$/.test(v)) throw new FlightLinehaulServiceError("Transit IATA must be 3 letters.", 400);
-    before.transitIataCode = flight.transitIataCode;
-    flight.transitIataCode = v;
-    after.transitIataCode = v;
-  }
-  if (input.updates.scheduledDepartureAt !== undefined) {
-    const d = new Date(input.updates.scheduledDepartureAt);
-    if (Number.isNaN(d.getTime())) throw new FlightLinehaulServiceError("Invalid departure date.", 400);
-    before.scheduledDepartureAt = flight.scheduledDepartureAt;
-    flight.scheduledDepartureAt = d;
-    after.scheduledDepartureAt = d;
-  }
-  if (input.updates.scheduledArrivalAt !== undefined) {
-    const d = new Date(input.updates.scheduledArrivalAt);
-    if (Number.isNaN(d.getTime())) throw new FlightLinehaulServiceError("Invalid arrival date.", 400);
-    before.scheduledArrivalAt = flight.scheduledArrivalAt;
-    flight.scheduledArrivalAt = d;
-    after.scheduledArrivalAt = d;
-  }
-  if (flight.scheduledArrivalAt <= flight.scheduledDepartureAt) throw new FlightLinehaulServiceError("Arrival must be after departure.", 400);
+      if (input.updates.flightNumber !== undefined) {
+        const value = normalizeFlightNumber(input.updates.flightNumber);
+        if (!isValidFlightNumber(value)) throw new FlightLinehaulServiceError("Enter a valid flight number (e.g., EY-219 or AI-131).", 400);
+        setText("flightNumber", value, true);
+      }
+      if (input.updates.airlineName !== undefined) {
+        setText("airlineName", input.updates.airlineName);
+        if (flight.airlineName && flight.airlineName.length < 2) throw new FlightLinehaulServiceError("Airline must contain at least 2 characters.", 400);
+      }
+      if (input.updates.mawbNumber !== undefined) {
+        setText("mawbNumber", input.updates.mawbNumber, true);
+        if (flight.mawbNumber && !isValidMawbNumber(flight.mawbNumber)) throw new FlightLinehaulServiceError("MAWB number must be 40 characters or fewer.", 400);
+      }
+      if (input.updates.originIataCode !== undefined) {
+        setText("originIataCode", input.updates.originIataCode, true);
+        if (flight.originIataCode && !/^[A-Z]{3}$/.test(flight.originIataCode)) throw new FlightLinehaulServiceError("Origin IATA must be 3 letters.", 400);
+      }
+      if (input.updates.destinationIataCode !== undefined) {
+        setText("destinationIataCode", input.updates.destinationIataCode, true);
+        if (flight.destinationIataCode && !/^[A-Z]{3}$/.test(flight.destinationIataCode)) throw new FlightLinehaulServiceError("Destination IATA must be 3 letters.", 400);
+      }
+      if (flight.originIataCode && flight.destinationIataCode && flight.originIataCode === flight.destinationIataCode) {
+        throw new FlightLinehaulServiceError("Origin and destination airports must be different.", 400);
+      }
+      if (input.updates.transitIataCode !== undefined) {
+        setText("transitIataCode", input.updates.transitIataCode, true);
+        if (flight.transitIataCode && !/^[A-Z]{3}$/.test(flight.transitIataCode)) throw new FlightLinehaulServiceError("Transit IATA must be 3 letters.", 400);
+      }
+      if (input.updates.scheduledDepartureAt !== undefined) {
+        const value = new Date(input.updates.scheduledDepartureAt);
+        if (Number.isNaN(value.getTime())) throw new FlightLinehaulServiceError("Invalid departure date.", 400);
+        before.scheduledDepartureAt = flight.scheduledDepartureAt;
+        flight.scheduledDepartureAt = value;
+        after.scheduledDepartureAt = value;
+      }
+      if (input.updates.scheduledArrivalAt !== undefined) {
+        const value = new Date(input.updates.scheduledArrivalAt);
+        if (Number.isNaN(value.getTime())) throw new FlightLinehaulServiceError("Invalid arrival date.", 400);
+        before.scheduledArrivalAt = flight.scheduledArrivalAt;
+        flight.scheduledArrivalAt = value;
+        after.scheduledArrivalAt = value;
+      }
+      if (flight.scheduledArrivalAt <= flight.scheduledDepartureAt) throw new FlightLinehaulServiceError("Arrival must be after departure.", 400);
 
-  if (input.updates.capacityKg !== undefined) {
-    if (!Number.isFinite(input.updates.capacityKg) || input.updates.capacityKg <= 0) throw new FlightLinehaulServiceError("Capacity must be positive.", 400);
-    before.capacityKg = flight.capacityKg;
-    flight.capacityKg = roundWeight(input.updates.capacityKg);
-    after.capacityKg = flight.capacityKg;
-    flight.utilisationPercent = flight.capacityKg > 0 ? Number(((flight.allocatedWeightKg / flight.capacityKg) * 100).toFixed(1)) : 0;
-  }
-  if (input.updates.destinationAgent !== undefined) {
-    before.destinationAgent = flight.destinationAgent;
-    flight.destinationAgent = input.updates.destinationAgent.trim();
-    after.destinationAgent = flight.destinationAgent;
-  }
-  if (input.updates.finalMileCarrier !== undefined) {
-    before.finalMileCarrier = flight.finalMileCarrier;
-    flight.finalMileCarrier = input.updates.finalMileCarrier.trim();
-    after.finalMileCarrier = flight.finalMileCarrier;
-  }
+      if (input.updates.capacityKg !== undefined) {
+        if (!Number.isFinite(input.updates.capacityKg) || input.updates.capacityKg <= 0) throw new FlightLinehaulServiceError("Capacity must be positive.", 400);
+        before.capacityKg = flight.capacityKg;
+        flight.capacityKg = roundWeight(input.updates.capacityKg);
+        after.capacityKg = flight.capacityKg;
+        flight.utilisationPercent = Number(((flight.allocatedWeightKg / flight.capacityKg) * 100).toFixed(1));
+      }
+      if (input.updates.destinationAgent !== undefined) setText("destinationAgent", input.updates.destinationAgent);
+      if (input.updates.finalMileCarrier !== undefined) setText("finalMileCarrier", input.updates.finalMileCarrier);
 
-  // Once booking is confirmed, core airline identity and route data cannot be
-  // cleared. Legacy planned flights may still be completed incrementally.
-  if (flight.status !== "PLANNED" && (
-    flight.airlineName.trim().length < 2
-    || !/^\d{3}-?\d{8}$/.test(flight.mawbNumber)
-    || !/^[A-Z]{3}$/.test(flight.originIataCode)
-    || !/^[A-Z]{3}$/.test(flight.destinationIataCode)
-  )) {
-    throw new FlightLinehaulServiceError("Airline, MAWB, origin, and destination are required after booking confirmation.", 409);
-  }
+      // Once booked, identity and route fields stay required, but MAWB format is
+      // carrier-defined text rather than a Swiftline-specific pattern.
+      if (flight.status !== "PLANNED" && (
+        flight.airlineName.trim().length < 2
+        || !isValidMawbNumber(flight.mawbNumber)
+        || !/^[A-Z]{3}$/.test(flight.originIataCode)
+        || !/^[A-Z]{3}$/.test(flight.destinationIataCode)
+      )) {
+        throw new FlightLinehaulServiceError("Airline, MAWB, origin, and destination are required after booking confirmation.", 409);
+      }
 
-  flight.updatedBy = input.userId;
-  await flight.save();
-  await audit("FLIGHT_LINEHAUL_UPDATED", flight._id as mongoose.Types.ObjectId, input.userId, { before, after });
-  await recalculateFlightTotals(flight._id as mongoose.Types.ObjectId);
-  return flight;
+      flight.updatedBy = input.userId;
+      await flight.save({ session });
+
+      const manifest = await OperationsManifest.findOne({ flightLinehaulId: flight._id }).session(session).exec();
+      if (manifest) {
+        const manifestBefore = { ...manifest.header };
+        manifest.header = {
+          ...manifest.header,
+          flightNumber: flight.flightNumber,
+          mawbNumber: flight.mawbNumber,
+          originIataCode: flight.originIataCode,
+          destinationIataCode: flight.destinationIataCode,
+          destinationAgent: flight.destinationAgent,
+          departureDate: formatIstDate(flight.scheduledDepartureAt)
+        };
+        await manifest.save({ session });
+        await audit("OPERATIONS_MANIFEST_UPDATED", manifest._id as mongoose.Types.ObjectId, input.userId, {
+          before: manifestBefore,
+          after: { ...manifest.header },
+          reason,
+          source: "FLIGHT_DETAILS"
+        }, session);
+      }
+
+      await audit("FLIGHT_LINEHAUL_UPDATED", flight._id as mongoose.Types.ObjectId, input.userId, { before, after, reason }, session);
+      updated = flight;
+    });
+    if (!updated) throw new FlightLinehaulServiceError("Flight details could not be updated.", 500);
+    await recalculateFlightTotals(flightId);
+    return updated;
+  } finally {
+    await session.endSession();
+  }
 }
 
 async function assertFlightManifestReady(flightId: mongoose.Types.ObjectId, session: mongoose.ClientSession) {
@@ -999,7 +1044,7 @@ async function assertFlightManifestReady(flightId: mongoose.Types.ObjectId, sess
       .exec(),
     OperationsManifestConsignment.find({ manifestId: manifest._id, status: { $ne: "REMOVED" } })
       .session(session)
-      .select("shipmentDraftId status expectedParcelNumbers scannedParcelNumbers")
+      .select("shipmentDraftId status expectedParcelNumbers scannedParcelNumbers parcelDispositions")
       .lean()
       .exec(),
     OperationsManifestBag.find({ manifestId: manifest._id, status: { $ne: "CANCELLED" } })
@@ -1024,14 +1069,23 @@ async function assertFlightManifestReady(flightId: mongoose.Types.ObjectId, sess
   }
 
   const allowedManifestIds = new Set(allocations.map((allocation) => String(allocation.shipmentDraftId)));
-  const manifestedIds = new Set(consignments.map((consignment) => String(consignment.shipmentDraftId)));
+  const travellingConsignments = consignments.filter((consignment) => consignment.scannedParcelNumbers.length > 0);
+  const undecidedHeldConsignment = consignments.find((consignment) => {
+    if (consignment.scannedParcelNumbers.length > 0) return false;
+    const decided = new Set((consignment.parcelDispositions ?? []).map((item) => item.parcelNumber.toUpperCase()));
+    return consignment.expectedParcelNumbers.some((parcelNumber) => !decided.has(parcelNumber.toUpperCase()));
+  });
+  if (undecidedHeldConsignment) {
+    throw new FlightLinehaulServiceError("Every parcel in a shipment that is not travelling must have a recorded hold, defer, or cancel decision.", 409);
+  }
+  const manifestedIds = new Set(travellingConsignments.map((consignment) => String(consignment.shipmentDraftId)));
   if (activeAllocations.some((allocation) => !manifestedIds.has(String(allocation.shipmentDraftId)))) {
     throw new FlightLinehaulServiceError("Every active flight allocation must be present in the operations manifest.", 409);
   }
-  if (consignments.some((consignment) => !allowedManifestIds.has(String(consignment.shipmentDraftId)))) {
-    throw new FlightLinehaulServiceError("The operations manifest contains a shipment that is not allocated to this flight.", 409);
+  if (travellingConsignments.some((consignment) => !allowedManifestIds.has(String(consignment.shipmentDraftId)))) {
+    throw new FlightLinehaulServiceError("A shipment with scanned parcels is not allocated to this flight.", 409);
   }
-  const consignmentByShipment = new Map(consignments.map((consignment) => [String(consignment.shipmentDraftId), consignment]));
+  const consignmentByShipment = new Map(travellingConsignments.map((consignment) => [String(consignment.shipmentDraftId), consignment]));
   for (const allocation of activeAllocations) {
     const consignment = consignmentByShipment.get(String(allocation.shipmentDraftId));
     const scanned = new Set(consignment?.scannedParcelNumbers.map((parcelNumber) => parcelNumber.toUpperCase()) ?? []);
@@ -1175,11 +1229,11 @@ export async function transitionFlightStatus(input: {
         }
         if (
           flight.airlineName.trim().length < 2
-          || !/^\d{3}-?\d{8}$/.test(flight.mawbNumber)
+          || !isValidMawbNumber(flight.mawbNumber)
           || !/^[A-Z]{3}$/.test(flight.originIataCode)
           || !/^[A-Z]{3}$/.test(flight.destinationIataCode)
         ) {
-          throw new FlightLinehaulServiceError("Airline, valid MAWB, origin, and destination are required before booking confirmation.", 409);
+          throw new FlightLinehaulServiceError("Airline, MAWB, origin, and destination are required before booking confirmation.", 409);
         }
       }
       if (to === "CARGO_ALLOCATED") {
@@ -1292,6 +1346,106 @@ export async function transitionFlightStatus(input: {
   }
 }
 
+export function isScheduledDepartureReady(input: {
+  flightStatus: string;
+  scheduledDepartureAt: Date;
+  now: Date;
+  manifestStatuses: readonly string[];
+}) {
+  return input.flightStatus === "CARGO_ALLOCATED"
+    && input.scheduledDepartureAt.getTime() <= input.now.getTime()
+    && input.manifestStatuses.length === 1
+    && input.manifestStatuses[0] === "DISPATCHED";
+}
+
+export function shouldKeepManifestLinkedWhenCancellingFlight(scheduledDepartureAutomationEnabled: boolean) {
+  return scheduledDepartureAutomationEnabled;
+}
+
+/**
+ * Depart only due flights whose single linked manifest has been dispatched.
+ * A failed business prerequisite leaves the flight unchanged for Operations to
+ * resolve and depart manually; unexpected failures are reported to cron.
+ */
+export async function runScheduledFlightDepartureSweep(now = new Date()) {
+  if (!env.FLIGHT_AUTO_DEPARTURE_ENABLED) {
+    return { enabled: false, due: 0, attempted: 0, departed: 0, blocked: 0, failed: 0, issues: [] as string[] };
+  }
+
+  const dueFlights = await FlightLinehaul.find({
+    status: "CARGO_ALLOCATED",
+    scheduledDepartureAutomationEnabled: true,
+    scheduledDepartureAt: { $lte: now }
+  })
+    .sort({ scheduledDepartureAt: 1 })
+    .limit(200)
+    .lean()
+    .exec();
+  if (!dueFlights.length) {
+    return { enabled: true, due: 0, attempted: 0, departed: 0, blocked: 0, failed: 0, issues: [] as string[] };
+  }
+
+  const manifests = await OperationsManifest.find({
+    flightLinehaulId: { $in: dueFlights.map((flight) => flight._id) },
+    status: { $ne: "CANCELLED" }
+  })
+    .select("flightLinehaulId status manifestNumber")
+    .lean()
+    .exec();
+  const manifestsByFlight = new Map<string, typeof manifests>();
+  for (const manifest of manifests) {
+    const key = String(manifest.flightLinehaulId);
+    const linked = manifestsByFlight.get(key) ?? [];
+    linked.push(manifest);
+    manifestsByFlight.set(key, linked);
+  }
+
+  let attempted = 0;
+  let departed = 0;
+  let blocked = 0;
+  let failed = 0;
+  const issues: string[] = [];
+  for (const flight of dueFlights) {
+    const linkedManifests = manifestsByFlight.get(String(flight._id)) ?? [];
+    if (!isScheduledDepartureReady({
+      flightStatus: flight.status,
+      scheduledDepartureAt: flight.scheduledDepartureAt,
+      now,
+      manifestStatuses: linkedManifests.map((manifest) => manifest.status)
+    })) {
+      blocked += 1;
+      issues.push(`${flight.flightLinehaulNumber}: waiting for exactly one dispatched manifest.`);
+      continue;
+    }
+
+    attempted += 1;
+    try {
+      await transitionFlightStatus({
+        flightId: String(flight._id),
+        toStatus: "DEPARTED",
+        userId: flight.createdBy,
+        reason: "Scheduled departure automation.",
+        metadata: {
+          actualDepartureAt: now.toISOString(),
+          automationSource: "SCHEDULED_DEPARTURE"
+        },
+        allowedBranchIds: null
+      });
+      departed += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown departure error.";
+      if (error instanceof FlightLinehaulServiceError && error.statusCode === 409) {
+        blocked += 1;
+      } else {
+        failed += 1;
+      }
+      issues.push(`${flight.flightLinehaulNumber}: ${message}`);
+    }
+  }
+
+  return { enabled: true, due: dueFlights.length, attempted, departed, blocked, failed, issues };
+}
+
 export async function cancelFlightLinehaul(input: { flightId: string; reason: string; userId: mongoose.Types.ObjectId; allowedBranchIds?: string[] | null }) {
   const flightId = asObjectId(input.flightId, "Flight");
   if (!input.reason.trim() || input.reason.trim().length < 5) throw new FlightLinehaulServiceError("Enter a cancellation reason of at least 5 characters.", 400);
@@ -1329,11 +1483,13 @@ export async function cancelFlightLinehaul(input: { flightId: string; reason: st
         { $set: { status: "REMOVED", removedAt: now, removedBy: input.userId, removalReason: `Flight cancelled: ${input.reason.trim()}` } },
         { session }
       ).exec();
-      await OperationsManifest.updateMany(
-        { flightLinehaulId: flightId, status: { $ne: "CANCELLED" } },
-        { $set: { flightLinehaulId: null } },
-        { session }
-      ).exec();
+      if (!shouldKeepManifestLinkedWhenCancellingFlight(flight.scheduledDepartureAutomationEnabled)) {
+        await OperationsManifest.updateMany(
+          { flightLinehaulId: flightId, status: { $ne: "CANCELLED" } },
+          { $set: { flightLinehaulId: null } },
+          { session }
+        ).exec();
+      }
       await audit("FLIGHT_LINEHAUL_CANCELLED", flight._id as mongoose.Types.ObjectId, input.userId, { reason: input.reason.trim() }, session);
       cancelledFlight = flight;
     });
@@ -1925,6 +2081,9 @@ async function attachManifestInTransaction(input: {
   manifestId: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
   session: mongoose.ClientSession;
+  allowAlreadyLinked?: boolean;
+  travellingConsignmentsOnly?: boolean;
+  source?: "MANIFEST_ATTACH" | "MANIFEST_DISPATCH";
 }) {
   const { flightId, manifestId, session } = input;
   const lockedFlight = await FlightLinehaul.findById(flightId).session(session).exec();
@@ -1940,7 +2099,7 @@ async function attachManifestInTransaction(input: {
   if (lockedManifest.flightLinehaulId && String(lockedManifest.flightLinehaulId) !== String(flightId)) {
     throw new FlightLinehaulServiceError("Manifest was attached to another flight while this request was being saved.", 409);
   }
-  if (lockedManifest.flightLinehaulId && String(lockedManifest.flightLinehaulId) === String(flightId)) {
+  if (lockedManifest.flightLinehaulId && String(lockedManifest.flightLinehaulId) === String(flightId) && !input.allowAlreadyLinked) {
     throw new FlightLinehaulServiceError("Manifest already attached to this flight.", 409);
   }
 
@@ -1967,16 +2126,20 @@ async function attachManifestInTransaction(input: {
       throw new FlightLinehaulServiceError(`Manifest ${label} does not match the flight.`, 409);
     }
   }
-  const flightDate = lockedFlight.scheduledDepartureAt.toISOString().slice(0, 10);
+  // The schedule is stored as UTC, while the manifest date is entered in IST.
+  const flightDate = new Date(lockedFlight.scheduledDepartureAt.getTime() + 330 * 60_000).toISOString().slice(0, 10);
   if (lockedManifest.header.departureDate && lockedManifest.header.departureDate !== flightDate) {
     throw new FlightLinehaulServiceError("Manifest departure date does not match the flight.", 409);
   }
 
-  const consignments = await OperationsManifestConsignment.find({ manifestId, status: { $ne: "REMOVED" } })
+  const allConsignments = await OperationsManifestConsignment.find({ manifestId, status: { $ne: "REMOVED" } })
     .select("shipmentDraftId consignmentNumber scannedParcelNumbers")
     .lean()
     .session(session)
     .exec();
+  const consignments = input.travellingConsignmentsOnly
+    ? allConsignments.filter((consignment) => consignment.scannedParcelNumbers.length > 0)
+    : allConsignments;
   if (!consignments.length) throw new FlightLinehaulServiceError("The manifest has no packed shipments to attach.", 409);
   const shipmentIds = consignments.map((consignment) => consignment.shipmentDraftId);
   const activeAllocations = await FlightShipmentAllocation.find({
@@ -2046,21 +2209,40 @@ async function attachManifestInTransaction(input: {
     await audit("FLIGHT_LINEHAUL_STATUS_CHANGED", flightId, input.userId, {
       from: beforeStatus,
       to: "CARGO_ALLOCATED",
-      reason: "Manifest attached during flight setup.",
-      metadata: { source: "MANIFEST_ATTACH", manifestId: String(manifestId) }
+      reason: input.source === "MANIFEST_DISPATCH" ? "Manifest dispatched." : "Manifest attached during flight setup.",
+      metadata: { source: input.source ?? "MANIFEST_ATTACH", manifestId: String(manifestId) }
     }, session);
   }
   await audit("FLIGHT_ALLOCATION_CREATED", flightId, input.userId, {
-    source: "MANIFEST_ATTACH",
+    source: input.source ?? "MANIFEST_ATTACH",
     manifestId: String(manifestId),
     allocated: newAllocations.map((allocation) => String(allocation.shipmentDraftId))
   }, session);
-  await audit("FLIGHT_MANIFEST_ATTACHED", flightId, input.userId, {
+  if (!input.allowAlreadyLinked) await audit("FLIGHT_MANIFEST_ATTACHED", flightId, input.userId, {
     manifestId: String(manifestId),
     manifestNumber: lockedManifest.manifestNumber,
     shipmentsAllocated: newAllocations.length
   }, session);
+  await recalculateFlightTotals(flightId, session);
   return lockedManifest;
+}
+
+/** Allocate only scanned parcels when the linked manifest is dispatched. */
+export async function allocateDispatchedManifestInTransaction(input: {
+  flightId: string;
+  manifestId: string;
+  userId: mongoose.Types.ObjectId;
+  session: mongoose.ClientSession;
+}) {
+  return attachManifestInTransaction({
+    flightId: asObjectId(input.flightId, "Flight"),
+    manifestId: asObjectId(input.manifestId, "Manifest"),
+    userId: input.userId,
+    session: input.session,
+    allowAlreadyLinked: true,
+    travellingConsignmentsOnly: true,
+    source: "MANIFEST_DISPATCH"
+  });
 }
 
 export async function attachManifest(input: {

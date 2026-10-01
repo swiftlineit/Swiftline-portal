@@ -261,7 +261,7 @@ export function createFlight(input: {
   });
 }
 
-export function updateFlight(flightId: string, input: Partial<{ airlineName: string; mawbNumber: string; originIataCode: string; destinationIataCode: string; transitIataCode: string; scheduledDepartureAt: string; scheduledArrivalAt: string; capacityKg: number; destinationAgent: string; finalMileCarrier: string }>) {
+export function updateFlight(flightId: string, input: Partial<{ flightNumber: string; airlineName: string; mawbNumber: string; originIataCode: string; destinationIataCode: string; transitIataCode: string; scheduledDepartureAt: string; scheduledArrivalAt: string; capacityKg: number; destinationAgent: string; finalMileCarrier: string }> & { reason: string }) {
   return requestJson<{ success: true; message: string; flight: FlightListItem }>(`/api/v1/flight-linehauls/${flightId}`, {
     method: "PATCH",
     body: JSON.stringify(input)

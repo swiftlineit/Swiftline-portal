@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import ExcelJS from "exceljs";
 import mongoose from "mongoose";
 import { AuditLog } from "../models/auditLog.model.js";
+import { Branch } from "../models/branch.model.js";
 import { OperationsManifest } from "../models/operationsManifest.model.js";
 import { OperationsManifestArchive } from "../models/operationsManifestArchive.model.js";
 import { OperationsManifestBag } from "../models/operationsManifestBag.model.js";
@@ -11,6 +12,15 @@ import { OperationsManifestConsignment } from "../models/operationsManifestConsi
 import { OperationsManifestCounter } from "../models/operationsManifestCounter.model.js";
 import { OperationsManifestScan } from "../models/operationsManifestScan.model.js";
 import { OperationsManifestScanSession } from "../models/operationsManifestScanSession.model.js";
+import { ShipmentEvent } from "../models/shipmentEvent.model.js";
+import { FlightLinehaul } from "../models/flightLinehaul.model.js";
+import { FlightLinehaulCounter } from "../models/flightLinehaulCounter.model.js";
+import { FlightShipmentAllocation } from "../models/flightShipmentAllocation.model.js";
+import { FlightOffload } from "../models/flightOffload.model.js";
+import { FlightException } from "../models/flightException.model.js";
+import { FlightDocument } from "../models/flightDocument.model.js";
+import { FlightCostSheet } from "../models/flightCostSheet.model.js";
+import { PortalNotification } from "../models/portalNotification.model.js";
 import { operationsBranchIds } from "../middleware/operationsBranchAccess.middleware.js";
 import { normalizePortalRole } from "../utils/portalRole.js";
 import {
@@ -21,14 +31,19 @@ import {
   buildManifestDispatchTrackingEvent,
   buildManifestReadyTrackingEvent,
   allocateOperationsManifestNumber,
+  alreadyScannedParcelMessage,
   calculateScannedParcelWeight,
   chooseOperationsBagForParcel,
+  createOperationsManifestWithFlight,
   deferredParcelEligibility,
   deleteOperationsManifest,
   formatOperationsBagNumber,
   formatOperationsManifestNumber,
   isOperationsBagWeightAllowed,
   isOperationsManifestNumberReusable,
+  movingManifestConsignments,
+  operationsManifestSearchConditions,
+  sealedManifestDeletionBlockReason,
   OPERATIONS_MANIFEST_ORIGIN_ADDRESS,
   sealingIssues,
   shouldReactivateTrailingOperationsBag,
@@ -37,7 +52,30 @@ import {
   unaccountedManifestParcelNumbers
 } from "../services/operationsManifest.service.js";
 
+describe("operations manifest list search", () => {
+  it("searches literal manifest and flight values plus matching branches and shipments", () => {
+    const branchId = new mongoose.Types.ObjectId();
+    const manifestId = new mongoose.Types.ObjectId();
+    const conditions = operationsManifestSearchConditions("EY.219", [branchId], [manifestId]);
+    const flightPattern = conditions.find((condition) => "header.flightNumber" in condition)?.["header.flightNumber"] as RegExp;
+
+    assert.equal(flightPattern.test("EY.219"), true);
+    assert.equal(flightPattern.test("EYx219"), false);
+    assert.ok(conditions.some((condition) => "branchId" in condition));
+    assert.ok(conditions.some((condition) => "_id" in condition));
+    assert.deepEqual(operationsManifestSearchConditions(""), []);
+  });
+});
+
 describe("operations manifest omitted parcels", () => {
+  it("includes the bag number when a parcel was already scanned", () => {
+    assert.equal(
+      alreadyScannedParcelMessage("SLC031B01"),
+      "This parcel has already been scanned and is in bag number SLC031B01."
+    );
+    assert.equal(alreadyScannedParcelMessage(), "This parcel has already been scanned.");
+  });
+
   it("requires every unscanned parcel to have an explicit disposition", () => {
     assert.deepEqual(unaccountedManifestParcelNumbers({
       expectedParcelNumbers: ["P01", "P02", "P03", "P04"],
@@ -80,6 +118,7 @@ describe("operations manifest omitted parcels", () => {
     manifest.status = "READY_TO_SEAL";
     const issues = sealingIssues(manifest, [{ status: "CLOSED", totalWeightKg: 10, totalPhysicalParcels: 3 }], [{
       status: "PARTIAL",
+      consignmentNumber: "SLC-TEST-01",
       expectedParcelNumbers: ["P01", "P02", "P03", "P04"],
       scannedParcelNumbers: ["P01", "P02", "P03"],
       parcelDispositions: [],
@@ -90,7 +129,7 @@ describe("operations manifest omitted parcels", () => {
       ]
     }]);
     assert.equal(issues.some((issue) => /Ready for Dispatch|bag barcode/i.test(issue)), false);
-    assert.ok(issues.some((issue) => /Choose Held, Deferred/i.test(issue)));
+    assert.ok(issues.some((issue) => /^SLC-TEST-01: Choose Held, Deferred/i.test(issue)));
 
     const resolved = sealingIssues(manifest, [{ status: "CLOSED", totalWeightKg: 10, totalPhysicalParcels: 3 }], [{
       status: "PARTIAL",
@@ -107,6 +146,112 @@ describe("operations manifest omitted parcels", () => {
   });
 });
 
+describe("combined operations manifest and flight setup", () => {
+  it("creates and links a draft manifest, first bag, and booked auto-departure flight in one transaction", async () => {
+    const manifestId = new mongoose.Types.ObjectId();
+    const flightId = new mongoose.Types.ObjectId();
+    const branchId = new mongoose.Types.ObjectId();
+    const userId = new mongoose.Types.ObjectId();
+    const savedManifest: Record<string, unknown> = {
+      _id: manifestId,
+      manifestNumber: "SLC031",
+      branchId,
+      status: "DRAFT",
+      header: {
+        destinationAgent: "London Gateway",
+        destinationCountryCode: "GB",
+        destinationCountryName: "United Kingdom",
+        flightNumber: "EY-219",
+        departureDate: "2026-09-30",
+        mawbNumber: "607-54691055",
+        originIataCode: "DEL",
+        destinationIataCode: "LHR",
+        valueType: "LV"
+      },
+      save: async () => undefined
+    };
+    let manifestCreateInput: Record<string, unknown> | undefined;
+    let bagCreateInput: Record<string, unknown> | undefined;
+    let flightCreateInput: Record<string, unknown> | undefined;
+    let transactionCount = 0;
+    const originals = {
+      startSession: mongoose.startSession,
+      branchFindOne: Branch.findOne,
+      manifestCounter: OperationsManifestCounter.findOneAndUpdate,
+      flightCounter: FlightLinehaulCounter.findOneAndUpdate,
+      manifestCreate: OperationsManifest.create,
+      bagFindOne: OperationsManifestBag.findOne,
+      bagCreate: OperationsManifestBag.create,
+      flightCreate: FlightLinehaul.create,
+      auditCreate: AuditLog.create
+    };
+    const query = (result: unknown) => ({
+      lean() { return this; },
+      sort() { return this; },
+      session() { return this; },
+      exec: async () => result
+    });
+
+    (mongoose as any).startSession = async () => ({
+      withTransaction: async (callback: () => Promise<unknown>) => {
+        transactionCount += 1;
+        return callback();
+      },
+      endSession: async () => undefined
+    });
+    (Branch as any).findOne = () => query({ _id: branchId, status: "ACTIVE" });
+    (OperationsManifestCounter as any).findOneAndUpdate = () => ({ exec: async () => ({ lastAllocatedSequence: 31 }) });
+    (FlightLinehaulCounter as any).findOneAndUpdate = () => ({ exec: async () => ({ lastAllocatedSequence: 42 }) });
+    (OperationsManifest as any).create = async (rows: Array<Record<string, unknown>>) => {
+      manifestCreateInput = rows[0];
+      return [savedManifest];
+    };
+    (OperationsManifestBag as any).findOne = () => query(null);
+    (OperationsManifestBag as any).create = async (rows: Array<Record<string, unknown>>) => {
+      bagCreateInput = rows[0];
+      return [{ _id: new mongoose.Types.ObjectId(), bagNumber: "SLC03101" }];
+    };
+    (FlightLinehaul as any).create = async (rows: Array<Record<string, unknown>>) => {
+      flightCreateInput = rows[0];
+      return [{ _id: flightId, flightLinehaulNumber: "FLH0042", status: "BOOKING_CONFIRMED" }];
+    };
+    (AuditLog as any).create = async () => [];
+
+    try {
+      const created = await createOperationsManifestWithFlight({
+        branchId: String(branchId),
+        userId,
+        header: savedManifest.header as never,
+        flight: {
+          airlineName: "Etihad Airways",
+          scheduledDepartureAt: "2026-09-30T06:30:00.000Z",
+          scheduledArrivalAt: "2026-09-30T12:30:00.000Z",
+          capacityKg: 1000
+        }
+      });
+
+      assert.equal(transactionCount, 1);
+      assert.equal(created.manifest.manifestNumber, "SLC031");
+      assert.equal(created.manifest.flightLinehaulId, flightId);
+      assert.equal((manifestCreateInput as Record<string, unknown>).status, "DRAFT");
+      assert.equal((bagCreateInput as Record<string, unknown>).bagNumber, "SLC03101");
+      assert.equal((flightCreateInput as Record<string, unknown>).status, "BOOKING_CONFIRMED");
+      assert.equal((flightCreateInput as Record<string, unknown>).scheduledDepartureAutomationEnabled, true);
+      assert.equal(created.flight.status, "BOOKING_CONFIRMED");
+    } finally {
+      (mongoose as any).startSession = originals.startSession;
+      (Branch as any).findOne = originals.branchFindOne;
+      (OperationsManifestCounter as any).findOneAndUpdate = originals.manifestCounter;
+      (FlightLinehaulCounter as any).findOneAndUpdate = originals.flightCounter;
+      (OperationsManifest as any).create = originals.manifestCreate;
+      (OperationsManifestBag as any).findOne = originals.bagFindOne;
+      (OperationsManifestBag as any).create = originals.bagCreate;
+      (FlightLinehaul as any).create = originals.flightCreate;
+      (AuditLog as any).create = originals.auditCreate;
+    }
+  });
+});
+
 describe("operations manifest dispatch readiness", () => {
   const firstDraftId = new mongoose.Types.ObjectId();
   const secondDraftId = new mongoose.Types.ObjectId();
@@ -117,6 +262,12 @@ describe("operations manifest dispatch readiness", () => {
   ];
   const eventsFor = (shipmentDraftId: mongoose.Types.ObjectId, statuses: string[]) =>
     statuses.map((status, index) => ({ shipmentDraftId, status, eventAt: new Date(2026, 7, 22, 8, index) }));
+
+  it("allocates shipment consignments with scanned pieces and leaves fully omitted shipments behind", () => {
+    const moving = { consignmentNumber: "SLC-MOVING", scannedParcelNumbers: ["P01", "P02", "P03"] };
+    const held = { consignmentNumber: "SLC-HELD", scannedParcelNumbers: [] as string[] };
+    assert.deepEqual(movingManifestConsignments([moving, held]), [moving]);
+  });
 
   it("creates only the dispatch tracking milestone and carries no manifest IATA", () => {
     const event = buildManifestDispatchTrackingEvent({
@@ -272,9 +423,23 @@ function sealedManifest() {
   });
 }
 
-async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
-  const manifestId = new mongoose.Types.ObjectId();
+async function exerciseManifestDeletion(
+  status: "DRAFT" | "SEALED",
+  fixture: {
+    manifestId?: mongoose.Types.ObjectId;
+    bagId?: mongoose.Types.ObjectId;
+    deleteMode?: "ARCHIVE" | "PERMANENT";
+    events?: Array<Record<string, unknown>>;
+    flightStatus?: string;
+    allocations?: Array<Record<string, unknown>>;
+    flightDocuments?: Array<Record<string, unknown>>;
+  } = {}
+) {
+  const manifestId = fixture.manifestId ?? new mongoose.Types.ObjectId();
   const manifestNumber = status === "DRAFT" ? "SLC017" : "SLC018";
+  const shipmentDraftId = new mongoose.Types.ObjectId();
+  const bagId = fixture.bagId ?? new mongoose.Types.ObjectId();
+  const flightId = fixture.flightStatus ? new mongoose.Types.ObjectId() : null;
   const manifest = {
     _id: manifestId,
     manifestNumber,
@@ -284,11 +449,14 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
     totalConsignments: status === "DRAFT" ? 0 : 2,
     totalPhysicalParcels: status === "DRAFT" ? 0 : 3,
     totalWeightKg: status === "DRAFT" ? 0 : 12,
+    flightLinehaulId: flightId,
     sealedSnapshot: status === "SEALED" ? { header: {}, branch: {}, totals: {}, bags: [], consignments: [] } : {},
     updatedAt: new Date("2026-09-28T00:00:00.000Z"),
     toObject() { return { ...this }; }
   };
   const deletedChildren: string[] = [];
+  let removedEventFilter: Record<string, unknown> | undefined;
+  let remainingFixtureEvents = [...(fixture.events ?? [])];
   let counterUpdate: unknown;
   let auditEntry: Record<string, unknown> | undefined;
   let archived: Record<string, unknown> | undefined;
@@ -301,6 +469,24 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
     consignmentDeleteMany: OperationsManifestConsignment.deleteMany,
     scanDeleteMany: OperationsManifestScan.deleteMany,
     sessionDeleteMany: OperationsManifestScanSession.deleteMany,
+    bagFind: OperationsManifestBag.find,
+    consignmentFind: OperationsManifestConsignment.find,
+    shipmentEventFind: ShipmentEvent.find,
+    shipmentEventDeleteMany: ShipmentEvent.deleteMany,
+    flightFindById: FlightLinehaul.findById,
+    flightDeleteOne: FlightLinehaul.deleteOne,
+    allocationFind: FlightShipmentAllocation.find,
+    allocationDeleteMany: FlightShipmentAllocation.deleteMany,
+    offloadFind: FlightOffload.find,
+    offloadDeleteMany: FlightOffload.deleteMany,
+    exceptionFind: FlightException.find,
+    exceptionDeleteMany: FlightException.deleteMany,
+    flightDocumentFind: FlightDocument.find,
+    flightDocumentDeleteMany: FlightDocument.deleteMany,
+    costSheetFind: FlightCostSheet.find,
+    costSheetCountDocuments: FlightCostSheet.countDocuments,
+    costSheetUpdateMany: FlightCostSheet.updateMany,
+    portalNotificationDeleteMany: PortalNotification.deleteMany,
     counterUpdateOne: OperationsManifestCounter.updateOne,
     auditCreate: AuditLog.create,
     archiveCreate: OperationsManifestArchive.create
@@ -312,6 +498,12 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
       return { deletedCount: 1 };
     }
   });
+  const query = <T,>(value: T) => ({
+    select() { return this; },
+    session() { return this; },
+    lean() { return this; },
+    exec: async () => value
+  });
 
   (mongoose as any).startSession = async () => ({
     withTransaction: async (callback: () => Promise<unknown>) => callback(),
@@ -321,6 +513,42 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
     session() { return this; },
     exec: async () => manifest
   });
+  (OperationsManifestConsignment as any).find = () => query(
+    fixture.events?.length ? [{ shipmentDraftId }] : []
+  );
+  (OperationsManifestBag as any).find = () => query(status === "SEALED" ? [{ _id: bagId }] : []);
+  (ShipmentEvent as any).find = () => query(remainingFixtureEvents);
+  (ShipmentEvent as any).deleteMany = (filter: Record<string, unknown>) => {
+    removedEventFilter = filter;
+    const before = remainingFixtureEvents.length;
+    const sourceReferences = filter.sourceReference as { $in: string[] };
+    const shipmentDraftIds = filter.shipmentDraftId as { $in: mongoose.Types.ObjectId[] };
+    remainingFixtureEvents = remainingFixtureEvents.filter((event) => !(
+      sourceReferences.$in.includes(String(event.sourceReference))
+      && shipmentDraftIds.$in.some((id) => String(id) === String(shipmentDraftId))
+      && event.status === filter.status
+    ));
+    return { exec: async () => ({ deletedCount: before - remainingFixtureEvents.length }) };
+  };
+  const flight = flightId ? {
+    _id: flightId,
+    status: fixture.flightStatus,
+    toObject() { return { _id: flightId, status: fixture.flightStatus, flightNumber: "EY-219" }; }
+  } : null;
+  (FlightLinehaul as any).findById = () => query(flight);
+  (FlightLinehaul as any).deleteOne = () => deletionQuery("flight");
+  (FlightShipmentAllocation as any).find = () => query(fixture.allocations ?? []);
+  (FlightShipmentAllocation as any).deleteMany = () => deletionQuery("allocations");
+  (FlightOffload as any).find = () => query([]);
+  (FlightOffload as any).deleteMany = () => deletionQuery("offloads");
+  (FlightException as any).find = () => query([]);
+  (FlightException as any).deleteMany = () => deletionQuery("exceptions");
+  (FlightDocument as any).find = () => query(fixture.flightDocuments ?? []);
+  (FlightDocument as any).deleteMany = () => deletionQuery("flightDocuments");
+  (FlightCostSheet as any).countDocuments = () => query(0);
+  (FlightCostSheet as any).find = () => query([]);
+  (FlightCostSheet as any).updateMany = () => deletionQuery("costSheets");
+  (PortalNotification as any).deleteMany = () => deletionQuery("notifications");
   (OperationsManifest as any).deleteOne = () => deletionQuery("manifest");
   (OperationsManifestBag as any).deleteMany = () => deletionQuery("bags");
   (OperationsManifestConsignment as any).deleteMany = () => deletionQuery("consignments");
@@ -343,12 +571,14 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
     const result = await deleteOperationsManifest({
       manifestId: String(manifestId),
       confirmationManifestNumber: manifestNumber,
+      mode: status === "SEALED" ? fixture.deleteMode ?? "ARCHIVE" : "PERMANENT",
+      reason: status === "SEALED" ? "Test archive deletion" : "Test draft deletion",
       userId: new mongoose.Types.ObjectId()
     }, {
       stageOperationsManifestArchive: async () => [{ format: "pdf", key: "archive/test.pdf", filename: "test.pdf", contentType: "application/pdf", checksumSha256: "abc" }],
       removeStagedArchiveDocuments: async () => undefined
     });
-    return { result, deletedChildren, counterUpdate, auditEntry, archived };
+    return { result, deletedChildren, counterUpdate, auditEntry, archived, removedEventFilter, remainingFixtureEvents, manifestId };
   } finally {
     (mongoose as any).startSession = originals.startSession;
     (OperationsManifest as any).findById = originals.findById;
@@ -357,6 +587,24 @@ async function exerciseManifestDeletion(status: "DRAFT" | "SEALED") {
     (OperationsManifestConsignment as any).deleteMany = originals.consignmentDeleteMany;
     (OperationsManifestScan as any).deleteMany = originals.scanDeleteMany;
     (OperationsManifestScanSession as any).deleteMany = originals.sessionDeleteMany;
+    (OperationsManifestConsignment as any).find = originals.consignmentFind;
+    (OperationsManifestBag as any).find = originals.bagFind;
+    (ShipmentEvent as any).find = originals.shipmentEventFind;
+    (ShipmentEvent as any).deleteMany = originals.shipmentEventDeleteMany;
+    (FlightLinehaul as any).findById = originals.flightFindById;
+    (FlightLinehaul as any).deleteOne = originals.flightDeleteOne;
+    (FlightShipmentAllocation as any).find = originals.allocationFind;
+    (FlightShipmentAllocation as any).deleteMany = originals.allocationDeleteMany;
+    (FlightOffload as any).find = originals.offloadFind;
+    (FlightOffload as any).deleteMany = originals.offloadDeleteMany;
+    (FlightException as any).find = originals.exceptionFind;
+    (FlightException as any).deleteMany = originals.exceptionDeleteMany;
+    (FlightDocument as any).find = originals.flightDocumentFind;
+    (FlightDocument as any).deleteMany = originals.flightDocumentDeleteMany;
+    (FlightCostSheet as any).find = originals.costSheetFind;
+    (FlightCostSheet as any).countDocuments = originals.costSheetCountDocuments;
+    (FlightCostSheet as any).updateMany = originals.costSheetUpdateMany;
+    (PortalNotification as any).deleteMany = originals.portalNotificationDeleteMany;
     (OperationsManifestCounter as any).updateOne = originals.counterUpdateOne;
     (AuditLog as any).create = originals.auditCreate;
     (OperationsManifestArchive as any).create = originals.archiveCreate;
@@ -636,13 +884,22 @@ describe("operations manifest safeguards", () => {
     }
   });
 
-  it("reuses deleted manifest numbers at every status", () => {
+  it("reuses deleted manifest numbers only while their movement is still safely reversible", () => {
     assert.equal(isOperationsManifestNumberReusable("DRAFT"), true);
     assert.equal(isOperationsManifestNumberReusable("PACKING"), true);
     assert.equal(isOperationsManifestNumberReusable("READY_TO_SEAL"), true);
     assert.equal(isOperationsManifestNumberReusable("SEALED"), true);
-    assert.equal(isOperationsManifestNumberReusable("DISPATCHED"), true);
+    assert.equal(isOperationsManifestNumberReusable("DISPATCHED"), false);
     assert.equal(isOperationsManifestNumberReusable("CANCELLED"), true);
+  });
+
+  it("allows sealed deletion only before flight movement, later shipment milestones, offloads, and active costs", () => {
+    assert.equal(sealedManifestDeletionBlockReason({ flightStatus: "BOOKING_CONFIRMED", allocationStatuses: ["ALLOCATED"] }), null);
+    assert.match(sealedManifestDeletionBlockReason({ flightStatus: "DEPARTED" }) ?? "", /departed or arrived/);
+    assert.match(sealedManifestDeletionBlockReason({ allocationStatuses: ["CARRIED"] }) ?? "", /carried or offloaded/);
+    assert.match(sealedManifestDeletionBlockReason({ hasOffloads: true }) ?? "", /offload history/);
+    assert.match(sealedManifestDeletionBlockReason({ hasActiveCostSheet: true }) ?? "", /flight cost sheet/);
+    assert.match(sealedManifestDeletionBlockReason({ shipmentStatuses: ["OUT_FOR_DELIVERY"] }) ?? "", /advanced beyond Ready for Dispatch/);
   });
 
   it("deletes every manifest workspace child and queues a draft number for reuse", async () => {
@@ -659,9 +916,68 @@ describe("operations manifest safeguards", () => {
     assert.equal(deleted.result.manifestNumber, "SLC018");
     assert.equal(deleted.result.numberWillBeReused, true);
     assert.equal(deleted.archived?.manifestNumber, "SLC018");
+    assert.equal(deleted.archived?.recordType, "ARCHIVED");
+    assert.equal(String(deleted.archived?.originalManifestId), String(deleted.manifestId));
+    assert.equal(deleted.archived?.deletionMode, "ARCHIVE");
     assert.equal((deleted.archived?.documents as unknown[])?.length, 1);
     assert.match(JSON.stringify(deleted.counterUpdate), /reusableSequences/);
     assert.deepEqual(deleted.deletedChildren, ["scanSessions", "scans", "consignments", "bags", "manifest"]);
+  });
+
+  it("removes only the Ready for Dispatch milestone created by the sealed manifest and archives its linked pre-departure flight", async () => {
+    const manifestId = new mongoose.Types.ObjectId();
+    const bagId = new mongoose.Types.ObjectId();
+    const sourceReference = `MANIFEST:${String(manifestId)}:SEALED`;
+    const bagSourceReference = `BAG:${String(bagId)}:READY`;
+    const deleted = await exerciseManifestDeletion("SEALED", {
+      manifestId,
+      bagId,
+      flightStatus: "BOOKING_CONFIRMED",
+      allocations: [{ status: "ALLOCATED", awb: "1017000001", weightKg: 8, pieces: 1 }],
+      events: [
+        { status: "ORIGIN_HUB_PROCESSED", sourceReference: "SCAN" },
+        { status: "READY_FOR_EXPORT", sourceReference },
+        { status: "READY_FOR_EXPORT", sourceReference: bagSourceReference },
+        { status: "READY_FOR_EXPORT", sourceReference: "MANUAL" }
+      ],
+      flightDocuments: [{ _id: new mongoose.Types.ObjectId(), documentType: "BOOKING_CONFIRMATION", originalName: "booking.pdf", storageKey: "private/flight/booking.pdf", mimeType: "application/pdf", size: 10, note: "", createdAt: new Date() }]
+    });
+    const removedFilter = deleted.removedEventFilter as {
+      shipmentDraftId: { $in: unknown[] };
+      sourceReference: { $in: string[] };
+      status: string;
+    } | undefined;
+    assert.equal(removedFilter?.shipmentDraftId.$in.length, 1);
+    assert.deepEqual(removedFilter?.sourceReference.$in, [sourceReference, bagSourceReference]);
+    assert.equal(removedFilter?.status, "READY_FOR_EXPORT");
+    assert.deepEqual(deleted.remainingFixtureEvents.map((event) => event.sourceReference), ["SCAN", "MANUAL"]);
+    assert.equal(deleted.result.readyMilestonesRemoved, 2);
+    const linkedFlight = deleted.archived?.linkedFlight as { flight?: Record<string, unknown>; allocations?: unknown[]; documents?: Array<Record<string, unknown>> };
+    assert.equal(linkedFlight.flight?.status, "BOOKING_CONFIRMED");
+    assert.equal(linkedFlight.allocations?.length, 1);
+    assert.equal(linkedFlight.documents?.[0]?.storageKey, "private/flight/booking.pdf");
+    assert.ok(deleted.deletedChildren.includes("flight"));
+    assert.ok(deleted.deletedChildren.includes("allocations"));
+  });
+
+  it("permanently deletes a sealed pre-departure manifest, removes its own readiness event, and releases its number without an archive", async () => {
+    const manifestId = new mongoose.Types.ObjectId();
+    const sourceReference = `MANIFEST:${String(manifestId)}:SEALED`;
+    const deleted = await exerciseManifestDeletion("SEALED", {
+      manifestId,
+      deleteMode: "PERMANENT",
+      flightStatus: "BOOKING_CONFIRMED",
+      events: [
+        { status: "READY_FOR_EXPORT", sourceReference },
+        { status: "READY_FOR_EXPORT", sourceReference: "MANUAL" }
+      ]
+    });
+    assert.equal(deleted.result.mode, "PERMANENT");
+    assert.equal(deleted.result.numberWillBeReused, true);
+    assert.equal(deleted.archived, undefined);
+    assert.deepEqual(deleted.remainingFixtureEvents.map((event) => event.sourceReference), ["MANUAL"]);
+    assert.ok(deleted.deletedChildren.includes("flight"));
+    assert.ok(deleted.deletedChildren.includes("allocations"));
   });
 
   it("enforces idempotent scan request identifiers and active parcel uniqueness", () => {

@@ -4,11 +4,12 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import { BarcodeFormat, BrowserMultiFormatOneDReader } from "@zxing/browser";
-import { FiCamera, FiCheckCircle, FiLogOut, FiRefreshCw, FiZap, FiZapOff, FiXCircle } from "react-icons/fi";
+import { FiCamera, FiCheckCircle, FiClipboard, FiLogOut, FiPackage, FiRefreshCw, FiTrash2, FiZap, FiZapOff, FiXCircle } from "react-icons/fi";
 import { getAccessToken, refreshAccessToken } from "@/lib/auth";
 import {
   disconnectOperationsScanSession,
   getOperationsScanSession,
+  removeOperationsScan,
   scanOperationsParcel,
   type OperationsScanResult,
   type OperationsScanSession
@@ -34,6 +35,19 @@ type BarcodeDetectorConstructor = {
 const SCAN_OUTPUT_WIDTH = 960;
 const OPERATIONS_BAG_MAX_WEIGHT_KG = 32;
 const UK_OPERATIONS_BAG_MAX_PIECES = 5;
+
+function getScannerReturnPath(value: string | null) {
+  if (!value || !value.startsWith("/dashboard/operations-manifests/") || value.startsWith("//") || value.includes("\\")) {
+    return "/";
+  }
+  try {
+    const url = new URL(value, window.location.origin);
+    if (url.origin !== window.location.origin || !url.pathname.startsWith("/dashboard/operations-manifests/")) return "/";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "/";
+  }
+}
 
 /**
  * Copies exactly the camera area visible inside the yellow frame. The video is
@@ -144,6 +158,7 @@ export default function ManifestPhoneScannerPage() {
   const [manualCode, setManualCode] = useState("");
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState("");
+  const [removingLastScan, setRemovingLastScan] = useState(false);
 
   const loadSession = useCallback(async () => {
     const token = getAccessToken() ?? await refreshAccessToken();
@@ -210,10 +225,18 @@ export default function ManifestPhoneScannerPage() {
         lastScanAt: new Date().toISOString(),
         manifest: currentSession.manifest ? {
           ...currentSession.manifest,
+          totalBags: scan.manifestTotals.totalBags,
+          totalConsignments: scan.manifestTotals.totalConsignments,
           totalPhysicalParcels: scan.manifestTotals.totalPhysicalParcels,
           totalWeightKg: scan.manifestTotals.totalWeightKg
         } : null,
-        activeBag: scan.bag
+        activeBag: scan.bag,
+        lastScannedParcel: {
+          scanId: scan.scanId,
+          parcelNumber: scan.parcelNumber,
+          bagNumber: scan.bag.bagNumber,
+          scannedAt: new Date().toISOString()
+        }
       };
       sessionRef.current = nextSession;
       setSession(nextSession);
@@ -311,7 +334,24 @@ export default function ManifestPhoneScannerPage() {
   async function disconnect() {
     if (session?.manifestId) await disconnectOperationsScanSession(session.manifestId, sessionId).catch(() => undefined);
     stopCamera();
-    router.replace("/");
+    const returnTo = getScannerReturnPath(new URLSearchParams(window.location.search).get("returnTo"));
+    router.replace(returnTo);
+  }
+
+  async function removeLastScannedParcel() {
+    const lastScan = session?.lastScannedParcel;
+    if (!lastScan || !session || removingLastScan) return;
+    setRemovingLastScan(true);
+    setError("");
+    try {
+      await removeOperationsScan(session.manifestId, lastScan.scanId, "Removed from the mobile scanner by the operator.");
+      setResult(null);
+      await loadSession();
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "The last parcel scan could not be removed.");
+    } finally {
+      setRemovingLastScan(false);
+    }
   }
 
   function submitManual(event: FormEvent) {
@@ -321,6 +361,7 @@ export default function ManifestPhoneScannerPage() {
 
   const latestConsignment = result?.scan?.consignment;
   const consignee = latestConsignment ? partyLines(latestConsignment.consigneeSnapshot) : null;
+  const lastScannedParcel = session?.lastScannedParcel;
 
   return (
     <main className="min-h-screen bg-slate-950 px-3 pb-4 text-white">
@@ -334,6 +375,34 @@ export default function ManifestPhoneScannerPage() {
         </div>
         <button onClick={() => void disconnect()} title="Disconnect phone" className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white"><FiLogOut /></button>
       </header>
+
+      {session?.manifest ? (
+        <section aria-label="Manifest details" className="mb-3 rounded-2xl bg-white/10 p-4 shadow-lg ring-1 ring-white/10">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-white">Manifest details</h2>
+              <p className="mt-0.5 truncate text-xs text-white/65">{session.manifest.destinationCountryName || "Destination pending"}</p>
+            </div>
+            <span className="shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white/75">
+              {session.manifest.status.replaceAll("_", " ")}
+            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-3 divide-x divide-white/15">
+            <div className="min-w-0 px-2 first:pl-0">
+              <div className="flex items-center gap-1.5 text-xs text-white/65"><FiPackage aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> Bags</div>
+              <p className="mt-1 text-lg font-semibold tabular-nums text-white">{session.manifest.totalBags}</p>
+            </div>
+            <div className="min-w-0 px-2">
+              <div className="flex items-center gap-1.5 text-xs text-white/65"><FiCheckCircle aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> Scanned</div>
+              <p className="mt-1 text-lg font-semibold tabular-nums text-white">{session.manifest.totalPhysicalParcels}</p>
+            </div>
+            <div className="min-w-0 px-2 last:pr-0">
+              <div className="flex items-center gap-1.5 text-xs text-white/65"><FiClipboard aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> Consignments</div>
+              <p className="mt-1 text-lg font-semibold tabular-nums text-white">{session.manifest.totalConsignments}</p>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {/* The live camera exists only inside this taller yellow rectangle. The
           decoder uses the same centre crop, so nothing outside it can scan. */}
@@ -403,6 +472,28 @@ export default function ManifestPhoneScannerPage() {
               </div>
             </div>
           </div>
+        ) : null}
+
+        {lastScannedParcel ? (
+          <section aria-label="Last scanned parcel" className="rounded-2xl bg-white/10 p-4 ring-1 ring-white/10">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-white/60">Last scanned parcel</p>
+                <p className="mt-1 break-all font-mono text-sm font-semibold text-white">{lastScannedParcel.parcelNumber}</p>
+                <p className="mt-1 text-xs text-white/65">
+                  Bag {lastScannedParcel.bagNumber ?? "Not assigned"} · {new Date(lastScannedParcel.scannedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void removeLastScannedParcel()}
+                disabled={session?.status !== "ACTIVE" || removingLastScan}
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-red-300/40 px-4 text-sm font-semibold text-red-200 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <FiTrash2 aria-hidden="true" /> {removingLastScan ? "Removing..." : "Remove last"}
+              </button>
+            </div>
+          </section>
         ) : null}
 
         {error ? <div className="rounded-2xl bg-amber-950 p-3 text-sm text-amber-100 ring-1 ring-amber-400/50">{error}</div> : null}

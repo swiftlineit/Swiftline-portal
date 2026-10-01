@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import ExcelJS from "exceljs";
 import { ShipmentManifestCounter } from "../models/shipmentManifestCounter.model.js";
-import type { IShipmentManifest, ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
+import { ShipmentManifest, type IShipmentManifest, type ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
 import {
   readShipmentBookingSnapshot,
   type ShipmentBookingSnapshot
@@ -400,14 +400,102 @@ export function buildHandoverManifestLine(input: ManifestLineInput & { remark?: 
   };
 }
 
-export async function allocateShipmentManifestNumber(session?: mongoose.ClientSession) {
+/**
+ * Creates a readable prefix from the immutable company name captured on the
+ * booked shipment. Multi-word names use up to three initials; a single word
+ * remains readable in full. Invalid/empty legacy-account names retain the
+ * historical Swiftline fallback.
+ */
+export function shipmentManifestNumberPrefix(businessAccountName: string) {
+  const words = businessAccountName
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .match(/[a-z0-9]+/gi) ?? [];
+  if (!words.length) return "SLC";
+  if (words.length === 1) return words[0]!.toLowerCase();
+  return words.slice(0, 3).map((word) => word[0]!.toUpperCase()).join("");
+}
+
+export function shipmentManifestCounterKey(prefix: string) {
+  // Prefix casing is cosmetic; one canonical counter prevents IDs differing
+  // only by case when a one-word company name overlaps a multi-word acronym.
+  return `shipment-manifest:${prefix.toUpperCase()}`;
+}
+
+export function shipmentManifestSearchConditions(searchValue: string) {
+  const search = searchValue.trim().slice(0, 80);
+  if (!search) return [];
+  const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(escaped, "i");
+  return [
+    { manifestNumber: pattern },
+    { "headerSnapshot.businessAccountName": pattern },
+    { "headerSnapshot.flightNumber": pattern },
+    { "headerSnapshot.mawbNumber": pattern },
+    { "lineSnapshots.consignmentNumber": pattern },
+    { "lineSnapshots.awbNumbers": pattern },
+    { "lineSnapshots.forwardingNumbers": pattern }
+  ];
+}
+
+export function resolveClientManifestAccountScope(
+  accountIds: mongoose.Types.ObjectId[],
+  requestedAccountId = ""
+) {
+  if (!accountIds.length) return { allowed: false as const, filter: {} };
+  if (requestedAccountId && mongoose.Types.ObjectId.isValid(requestedAccountId)) {
+    const requestedId = new mongoose.Types.ObjectId(requestedAccountId);
+    if (!accountIds.some((accountId) => String(accountId) === String(requestedId))) {
+      return { allowed: false as const, filter: {} };
+    }
+    return { allowed: true as const, filter: { businessAccountId: requestedId } };
+  }
+  return { allowed: true as const, filter: { businessAccountId: { $in: accountIds } } };
+}
+
+function duplicateKeyError(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === 11000);
+}
+
+export async function allocateShipmentManifestNumber(businessAccountName = "") {
+  const prefix = shipmentManifestNumberPrefix(businessAccountName);
+  // Keep the historical counter for SLC-prefixed names so old and new backend
+  // instances cannot issue overlapping SLC numbers during a rolling deploy.
+  const usesLegacyCounter = prefix.toUpperCase() === "SLC";
+  const counterId = usesLegacyCounter ? "shipment-manifest" : shipmentManifestCounterKey(prefix);
+  const existingCounter = await ShipmentManifestCounter.findById(counterId).select("sequence").lean().exec();
+
+  if (!existingCounter || usesLegacyCounter) {
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const existingManifests = await ShipmentManifest.find({
+      manifestNumber: new RegExp(`^${escapedPrefix}-(\\d+)$`, "i")
+    }).select("manifestNumber").lean().exec();
+    const existingMaximum = existingManifests.reduce((maximum, manifest) => {
+      const match = new RegExp(`^${escapedPrefix}-(\\d+)$`, "i").exec(manifest.manifestNumber);
+      return Math.max(maximum, match ? Number(match[1]) || 0 : 0);
+    }, 0);
+    const initialSequence = Math.max(existingMaximum, existingCounter?.sequence ?? 0);
+
+    try {
+      // Seed once from historic values. If two first-time allocators race, the
+      // unique _id lets one insert; the other continues using the inserted row.
+      await ShipmentManifestCounter.updateOne(
+        { _id: counterId },
+        { $max: { sequence: initialSequence } },
+        { upsert: true }
+      ).exec();
+    } catch (error) {
+      if (!duplicateKeyError(error)) throw error;
+    }
+  }
+
   const counter = await ShipmentManifestCounter.findOneAndUpdate(
-    { _id: "shipment-manifest" },
+    { _id: counterId },
     { $inc: { sequence: 1 } },
-    { upsert: true, returnDocument: "after", session }
+    { upsert: true, returnDocument: "after" }
   ).exec();
   if (!counter) throw new ShipmentManifestServiceError("Manifest number could not be allocated.", 500);
-  return `SLC-${String(counter.sequence).padStart(3, "0")}`;
+  return `${prefix}-${String(counter.sequence).padStart(3, "0")}`;
 }
 
 export function serializeShipmentManifest(manifest: IShipmentManifest) {
@@ -571,9 +659,8 @@ function manifestPartyOf(value: unknown): ManifestPartySnapshot | null {
 }
 
 /**
- * The courier-manifest workbook. Shipment manifests themselves download as the
- * handover PDF (see `shipmentManifestPdf.service`); this builder remains because
- * the operations manifest reuses it for its own Excel export.
+ * Builds the fixed-layout Operations Manifest workbook. Shipment Manifest
+ * handover downloads use their PDF-matched builder in shipmentManifestExcel.service.
  */
 export async function buildShipmentManifestWorkbook(
   manifest: IShipmentManifest,

@@ -39,6 +39,7 @@ export interface IFlightLinehaul extends mongoose.Document {
   transitIataCode: string;
   scheduledDepartureAt: Date;
   scheduledArrivalAt: Date;
+  scheduledDepartureAutomationEnabled: boolean;
   actualDepartureAt?: Date | null;
   actualArrivalAt?: Date | null;
   capacityKg: number;
@@ -104,6 +105,7 @@ const schema = new mongoose.Schema<IFlightLinehaul>(
     transitIataCode: { type: String, trim: true, uppercase: true, maxlength: 3, default: "" },
     scheduledDepartureAt: { type: Date, required: true, index: true },
     scheduledArrivalAt: { type: Date, required: true, index: true },
+    scheduledDepartureAutomationEnabled: { type: Boolean, default: false },
     actualDepartureAt: { type: Date, default: null },
     actualArrivalAt: { type: Date, default: null },
     capacityKg: { type: Number, required: true, min: 0, default: 1000 },
@@ -136,5 +138,13 @@ const schema = new mongoose.Schema<IFlightLinehaul>(
 schema.index({ branchId: 1, status: 1, scheduledDepartureAt: -1 });
 schema.index({ branchId: 1, flightNumber: 1, scheduledDepartureAt: 1 }, { unique: false });
 schema.index({ "connection.transitAirportCode": 1 });
+schema.index(
+  {
+    status: 1,
+    scheduledDepartureAutomationEnabled: 1,
+    scheduledDepartureAt: 1
+  },
+  { name: "idx_flight_auto_departure_due" }
+);
 
 export const FlightLinehaul = mongoose.model<IFlightLinehaul>("FlightLinehaul", schema);

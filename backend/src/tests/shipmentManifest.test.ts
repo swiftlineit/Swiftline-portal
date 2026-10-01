@@ -2,18 +2,102 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import ExcelJS from "exceljs";
 import mongoose from "mongoose";
-import type { IShipmentManifest, ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
+import { ShipmentManifest, type IShipmentManifest, type ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
+import { ShipmentManifestCounter } from "../models/shipmentManifestCounter.model.js";
 import {
+  allocateShipmentManifestNumber,
   buildHandoverManifestLine,
   buildManifestLine,
-  buildShipmentManifestWorkbook,
   formatManifestOrigin,
   hydrateMissingManifestParcelChargeableWeights,
   manifestBusinessAccountName,
+  resolveClientManifestAccountScope,
+  shipmentManifestCounterKey,
+  shipmentManifestNumberPrefix,
+  shipmentManifestSearchConditions,
   type ManifestPartySnapshot
 } from "../services/shipmentManifest.service.js";
+import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
 import { buildShipmentManifestPdf, manifestRows } from "../services/shipmentManifestPdf.service.js";
 import type { ShipmentBookingSnapshot } from "../services/shipmentBookingSnapshot.service.js";
+
+describe("shipment manifest identifiers and search", () => {
+  it("uses up to three business-name initials or the full single-word name", () => {
+    assert.equal(shipmentManifestNumberPrefix("ADITYA INTERNATIONAL COURIER AND LOGISTICS"), "AIC");
+    assert.equal(shipmentManifestNumberPrefix("SITARAM EXPORT"), "SE");
+    assert.equal(shipmentManifestNumberPrefix("routes"), "routes");
+    assert.equal(shipmentManifestNumberPrefix(""), "SLC");
+    assert.equal(shipmentManifestCounterKey("routes"), "shipment-manifest:ROUTES");
+    assert.equal(new ShipmentManifest({ manifestNumber: "routes-001" }).manifestNumber, "routes-001");
+  });
+
+  it("treats manifest search input literally and searches manifest/account/shipment references", () => {
+    const conditions = shipmentManifestSearchConditions("AIC.001");
+    assert.equal(conditions.length, 7);
+    const numberPattern = conditions[0]?.manifestNumber as RegExp;
+    assert.equal(numberPattern.test("AIC.001"), true);
+    assert.equal(numberPattern.test("AICx001"), false);
+    assert.ok(conditions.some((condition) => "lineSnapshots.consignmentNumber" in condition));
+    assert.deepEqual(shipmentManifestSearchConditions("  "), []);
+  });
+
+  it("keeps an explicitly requested client account inside their active membership scope", () => {
+    const ownAccountId = new mongoose.Types.ObjectId();
+    const otherAccountId = new mongoose.Types.ObjectId();
+    const ownScope = resolveClientManifestAccountScope([ownAccountId], String(ownAccountId));
+    assert.equal(ownScope.allowed, true);
+    assert.equal(String(ownScope.filter.businessAccountId), String(ownAccountId));
+    assert.equal(resolveClientManifestAccountScope([ownAccountId], String(otherAccountId)).allowed, false);
+    assert.equal(resolveClientManifestAccountScope([]).allowed, false);
+  });
+
+  it("allocates atomic prefix sequences and seeds the legacy SLC counter without reusing old numbers", async () => {
+    const counters = new Map<string, { sequence: number }>([["shipment-manifest", { sequence: 42 }]]);
+    const existingNumbers = ["SLC-045"];
+    const originals = {
+      counterFindById: ShipmentManifestCounter.findById,
+      counterFindOneAndUpdate: ShipmentManifestCounter.findOneAndUpdate,
+      counterUpdateOne: ShipmentManifestCounter.updateOne,
+      manifestFind: ShipmentManifest.find
+    };
+    const query = <T,>(value: T) => ({
+      select() { return this; },
+      lean() { return this; },
+      exec: async () => value
+    });
+
+    (ShipmentManifestCounter as any).findById = (id: string) => query(counters.get(id) ?? null);
+    (ShipmentManifest as any).find = (filter: { manifestNumber: RegExp }) =>
+      query(existingNumbers.filter((manifestNumber) => filter.manifestNumber.test(manifestNumber)).map((manifestNumber) => ({ manifestNumber })));
+    (ShipmentManifestCounter as any).updateOne = (filter: { _id: string }, update: { $max: { sequence: number } }) => ({
+      exec: async () => {
+        const current = counters.get(filter._id);
+        counters.set(filter._id, { sequence: Math.max(current?.sequence ?? 0, update.$max.sequence) });
+        return { acknowledged: true };
+      }
+    });
+    (ShipmentManifestCounter as any).findOneAndUpdate = (filter: { _id: string }) => ({
+      exec: async () => {
+        const next = { sequence: (counters.get(filter._id)?.sequence ?? 0) + 1 };
+        counters.set(filter._id, next);
+        return next;
+      }
+    });
+
+    try {
+      assert.equal(await allocateShipmentManifestNumber("ADITYA INTERNATIONAL COURIER AND LOGISTICS"), "AIC-001");
+      assert.equal(await allocateShipmentManifestNumber("ANOTHER INTERNATIONAL CARGO"), "AIC-002");
+      assert.equal(await allocateShipmentManifestNumber("SITARAM EXPORT"), "SE-001");
+      assert.equal(await allocateShipmentManifestNumber("routes"), "routes-001");
+      assert.equal(await allocateShipmentManifestNumber("Swiftline Line Cargo"), "SLC-046");
+    } finally {
+      (ShipmentManifestCounter as any).findById = originals.counterFindById;
+      (ShipmentManifestCounter as any).findOneAndUpdate = originals.counterFindOneAndUpdate;
+      (ShipmentManifestCounter as any).updateOne = originals.counterUpdateOne;
+      (ShipmentManifest as any).find = originals.manifestFind;
+    }
+  });
+});
 
 function bookingSnapshot(): ShipmentBookingSnapshot {
   return {
@@ -167,8 +251,8 @@ describe("shipment manifest workbook", () => {
     assert.equal("aadhaarNumber" in (capturedParty as Record<string, unknown>), false);
   });
 
-  it("creates a styled Excel manifest containing the header and shipment values", async () => {
-    const line = buildManifestLine({
+  it("creates a PDF-shaped Excel handover manifest with one row per parcel", async () => {
+    const line = buildHandoverManifestLine({
       shipmentDraftId: new mongoose.Types.ObjectId(),
       dpdShipmentId: new mongoose.Types.ObjectId(),
       snapshot: bookingSnapshot(),
@@ -182,15 +266,11 @@ describe("shipment manifest workbook", () => {
       branchId: new mongoose.Types.ObjectId(),
       shipmentDraftIds: [line.shipmentDraftId],
       headerSnapshot: {
-        originBranch: "Swiftline Delhi - DEL-001",
-        originAddress: "Swiftline Delhi\n1 Logistics Park\nDelhi\nDelhi\n110001\nIndia",
-        destinationAgent: "Swiftline UK",
-        flightNumber: "EY-219",
-        departureDate: "2026-07-21",
-        mawbNumber: "607-54691055",
-        originIataCode: "DEL",
-        destinationIataCode: "LHR",
-        valueType: "LV"
+        businessAccountName: "Example Exporter",
+        origin: "Ahmedabad",
+        destination: "UK Service Del",
+        coloader: "Sky Cargo",
+        paymentType: "PREPAID"
       },
       lineSnapshots: [line],
       totalPieces: 2,
@@ -201,7 +281,7 @@ describe("shipment manifest workbook", () => {
     } as unknown as IShipmentManifest;
 
     const workbook = new ExcelJS.Workbook();
-    const workbookBytes = await buildShipmentManifestWorkbook(manifest);
+    const workbookBytes = await buildShipmentManifestHandoverWorkbook(manifest);
     const workbookData = workbookBytes.buffer.slice(
       workbookBytes.byteOffset,
       workbookBytes.byteOffset + workbookBytes.byteLength
@@ -209,29 +289,59 @@ describe("shipment manifest workbook", () => {
     await workbook.xlsx.load(workbookData);
     const sheet = workbook.getWorksheet("Manifest");
     assert.ok(sheet);
-    assert.equal(sheet.getCell("A2").value, "Courier Manifest");
-    assert.equal(sheet.getCell("F3").value, "FROM *");
-    assert.equal(sheet.getCell("G3").value, "TO *");
-    assert.equal(sheet.getCell("I3").value, "SLC-001");
-    assert.equal(sheet.getCell("F4").value, "SWIFTLINE DELHI");
-    assert.equal(sheet.getCell("F5").value, "1 LOGISTICS PARK");
-    assert.equal(sheet.getCell("B15").value, "SLDL210720260001");
-    assert.equal(sheet.getCell("C15").value, 2);
-    assert.equal(sheet.getCell("D15").value, 10);
-    assert.equal(sheet.getCell("E15").value, 10);
-    // The fixed ten-row block starts at the contact name (no company) and keeps each
-    // field on its own row: name, address 1, address 2 (blank here), city, …
-    assert.equal(sheet.getCell("F15").value, "Mr. Ravi Sharma");
-    assert.equal(sheet.getCell("F16").value, "1 Export Road");
-    assert.equal(sheet.getCell("F17").value, "");
-    assert.equal(sheet.getCell("F18").value, "Delhi");
-    assert.equal(sheet.getCell("I15").value, 25000);
-    assert.equal(sheet.getCell("K15").value, "BAG-01");
-    assert.equal(sheet.getCell("L15").value, "EXP");
+    assert.equal(sheet.getCell("A1").value, "MANIFEST");
+    assert.equal(sheet.getCell("A3").value, "FROM,");
+    assert.equal(sheet.getCell("A4").value, "AHMEDABAD");
+    assert.equal(sheet.getCell("E3").value, "TO,");
+    assert.equal(sheet.getCell("E4").value, "UK SERVICE DEL");
+    assert.equal(sheet.getCell("I3").value, "DATE: 21/07/2026");
+    assert.equal(sheet.getCell("I4").value, "TOTAL PCS : 2");
+    assert.equal(sheet.getCell("I5").value, "TOTAL WEIGHT: 10.00");
+    assert.equal(sheet.getCell("I6").value, "MANIFEST #: SLC-001");
+    assert.equal(sheet.getCell("I7").value, "COLOADER: Sky Cargo");
+    assert.equal(sheet.getCell("I8").value, "PAYMENT TYPE: PREPAID");
+    for (let column = 1; column <= 12; column += 1) {
+      const labelCellBorder: Partial<ExcelJS.Borders> = sheet.getCell(3, column).border;
+      assert.equal(labelCellBorder.top?.style, "thin", `missing header top border at column ${column}`);
+      assert.equal(labelCellBorder.bottom?.style, "thin", `missing label divider at column ${column}`);
+    }
+    for (let row = 4; row <= 8; row += 1) {
+      for (let column = 1; column <= 8; column += 1) {
+        const cellBorder: Partial<ExcelJS.Borders> = sheet.getCell(row, column).border;
+        if (row === 4) assert.equal(cellBorder.top?.style, "thin", `missing origin/destination top at ${row},${column}`);
+        if (row === 8) assert.equal(cellBorder.bottom?.style, "thin", `missing origin/destination bottom at ${row},${column}`);
+        if (column === 1 || column === 5) assert.equal(cellBorder.left?.style, "thin", `missing section left at ${row},${column}`);
+        if (column === 4 || column === 8) assert.equal(cellBorder.right?.style, "thin", `missing section right at ${row},${column}`);
+      }
+      for (let column = 9; column <= 12; column += 1) {
+        const cellBorder: Partial<ExcelJS.Borders> = sheet.getCell(row, column).border;
+        assert.equal(cellBorder.top?.style, "thin", `missing metadata row top at ${row},${column}`);
+        assert.equal(cellBorder.bottom?.style, "thin", `missing metadata row bottom at ${row},${column}`);
+        if (column === 9) assert.equal(cellBorder.left?.style, "thin", `missing metadata left at ${row}`);
+        if (column === 12) assert.equal(cellBorder.right?.style, "thin", `missing metadata right at ${row}`);
+      }
+    }
+    assert.deepEqual(Array.from({ length: 12 }, (_value, index) => sheet.getCell(10, index + 1).value), [
+      "Sr.\nNo.", "AWB No. /\nParcel No", "Forwarding\nNo.", "Destination", "Shipper", "Receiver",
+      "Service", "Product", "Pcs", "Weight", "Chg Wt", "Remark"
+    ]);
+    assert.equal(sheet.getCell("A11").value, 1);
+    assert.equal(sheet.getCell("B11").value, "S1");
+    assert.equal(sheet.getCell("C11").value, "P1");
+    assert.equal(sheet.getCell("D11").value, "United Kingdom");
+    assert.equal(sheet.getCell("H11").value, "PARCEL");
+    assert.equal(sheet.getCell("I11").value, 1);
+    assert.equal(sheet.getCell("J11").value, 4.5);
+    assert.equal(sheet.getCell("B12").value, "S2");
+    assert.equal(sheet.getCell("H12").value, "DOCUMENTS");
+    assert.equal(sheet.getCell("J12").value, 5.5);
+    assert.equal(String(sheet.getCell("A14").value).startsWith("We hereby declare"), true);
+    assert.equal(sheet.getCell("A16").value, "FOR AHMEDABAD (SIGN AND STAMP)");
     assert.equal(sheet.autoFilter, undefined);
-    assert.notEqual(sheet.views[0]?.state, "frozen");
-    assert.equal(sheet.getCell("A2").font.bold, true);
-    assert.equal(sheet.getCell("A14").font.bold, true);
+    assert.equal(sheet.views[0]?.state, "normal");
+    assert.equal(Object.hasOwn(sheet.views[0] ?? {}, "ySplit"), false);
+    assert.equal(sheet.getCell("A1").font.bold, true);
+    assert.equal(sheet.getCell("A10").font.bold, true);
   });
 
 });

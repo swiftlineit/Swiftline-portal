@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import type { IOperationsManifest } from "../models/operationsManifest.model.js";
 import { OperationsManifestArchive, type ArchivedManifestDocument } from "../models/operationsManifestArchive.model.js";
-import { buildManifestDocumentModel, parseSealedSnapshot } from "./manifestDocument.service.js";
+import { buildManifestDocumentModel, parseCurrentManifestSnapshot } from "./manifestDocument.service.js";
 import { buildOperationsManifestExcel, buildOperationsManifestPdf, OperationsManifestServiceError } from "./operationsManifest.service.js";
 import { buildOperationsManifestEdi } from "./edi/ediExport.service.js";
 import { buildOperationsManifestOpsEdi } from "./opsEdi/opsEdiExport.service.js";
@@ -17,7 +17,7 @@ type PreparedDocument = { format: ArchiveFormat; filename: string; contentType: 
 
 /** Render while the live manifest and its draft references still exist. */
 export async function stageOperationsManifestArchive(manifest: IOperationsManifest) {
-  const snapshot = parseSealedSnapshot(manifest.sealedSnapshot);
+  const snapshot = parseCurrentManifestSnapshot(manifest.sealedSnapshot, manifest.header);
   if (!snapshot) throw new OperationsManifestServiceError("This issued manifest has no sealed snapshot to archive.", 409);
 
   const model = buildManifestDocumentModel(snapshot);

@@ -43,6 +43,11 @@ MAILTO=""
 # exception and its alert is deduplicated by a stable key.
 */10 * * * *  ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:flight:exceptions
 
+# Depart a due flight only after its single linked operations manifest is
+# dispatched. Business-rule failures stay unchanged for Operations to resolve
+# and can be completed with the manual Depart action.
+* * * * *     ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:flight:auto-depart
+
 # Mark due-passed statements overdue, expire credit facilities past their
 # validity window, and send utilisation warnings.
 # Note: overdue *blocking* is computed live at booking time and does not depend

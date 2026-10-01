@@ -1,6 +1,6 @@
 import { ShipmentDraft } from "../../models/shipmentDraft.model.js";
 import type { IOperationsManifest } from "../../models/operationsManifest.model.js";
-import { buildManifestDocumentModel, parseSealedSnapshot } from "../manifestDocument.service.js";
+import { buildManifestDocumentModel, parseCurrentManifestSnapshot } from "../manifestDocument.service.js";
 import { OperationsManifestServiceError } from "../operationsManifest.service.js";
 import { buildCsbVEdiRows, type CsbVEdiDraftContext } from "./csbVEdiColumns.js";
 import { buildCsbVEdiWorkbookBuffer } from "./csbVEdiWorkbook.service.js";
@@ -28,7 +28,7 @@ export function assertCsbVCustomsFields(drafts: CsbVEdiDraftContext[]) {
 }
 
 export async function buildOperationsManifestCsbVEdi(manifest: IOperationsManifest) {
-  const snapshot = parseSealedSnapshot(manifest.sealedSnapshot);
+  const snapshot = parseCurrentManifestSnapshot(manifest.sealedSnapshot, manifest.header);
   if (!snapshot) throw new OperationsManifestServiceError("The sealed manifest snapshot is unavailable.", 409);
   const model = buildManifestDocumentModel(snapshot);
   if (!model.parcelRows.length) throw new OperationsManifestServiceError("This manifest has no parcels to export.", 409);

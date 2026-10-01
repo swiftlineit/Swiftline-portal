@@ -140,6 +140,8 @@ const environmentSchema = z.object({
   // Opt in to creating automatic sync rows; manual single-AWB refresh remains available.
   ALS_TRACKING_SWEEP_MAX_NEW_SYNCS: z.coerce.number().int().min(0).max(30).default(0),
   ALS_TRACKING_SWEEP_AWB_ALLOWLIST: z.string().trim().optional(),
+  // Scheduled flight departure is opt-in so deployments can stage the worker dark.
+  FLIGHT_AUTO_DEPARTURE_ENABLED: booleanFromEnv.default(false),
   // Used server-side only. Historical cost sheets persist the fetched rate so
   // their INR totals never move when a later market rate is published.
   EXCHANGE_RATE_API_KEY: z.string().trim().min(1).optional(),

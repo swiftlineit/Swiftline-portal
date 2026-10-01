@@ -1,5 +1,5 @@
 import type { IOperationsManifest } from "../../models/operationsManifest.model.js";
-import { buildManifestDocumentModel, parseSealedSnapshot } from "../manifestDocument.service.js";
+import { buildManifestDocumentModel, parseCurrentManifestSnapshot } from "../manifestDocument.service.js";
 import { OperationsManifestServiceError } from "../operationsManifest.service.js";
 import { buildMhbsEdiWorkbookBuffer } from "./mhbsEdiWorkbook.service.js";
 import { collectMhbsEdiWarnings } from "./mhbsEdiColumns.js";
@@ -8,7 +8,7 @@ import { withCsbVExportHawb } from "../edi/csbVExportHawb.js";
 
 /** Builds the MHBS filing workbook from the immutable sealed manifest snapshot. */
 export async function buildOperationsManifestMhbsEdi(manifest: IOperationsManifest) {
-  const snapshot = parseSealedSnapshot(manifest.sealedSnapshot);
+  const snapshot = parseCurrentManifestSnapshot(manifest.sealedSnapshot, manifest.header);
   if (!snapshot) throw new OperationsManifestServiceError("The sealed manifest snapshot is unavailable.", 409);
   const model = buildManifestDocumentModel(snapshot);
   if (!model.parcelRows.length) throw new OperationsManifestServiceError("This manifest has no parcels to export.", 409);

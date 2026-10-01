@@ -4,6 +4,7 @@ import bwipjs from "bwip-js";
 import { env } from "../config/env.js";
 import { OperationsManifest } from "../models/operationsManifest.model.js";
 import { OperationsManifestBag } from "../models/operationsManifestBag.model.js";
+import { OperationsManifestScan } from "../models/operationsManifestScan.model.js";
 import {
   OperationsManifestScanSession,
   type IOperationsManifestScanSession
@@ -48,12 +49,24 @@ async function endExpiredSession(session: IOperationsManifestScanSession) {
 }
 
 async function sessionDetail(session: IOperationsManifestScanSession) {
-  const [manifest, bag] = await Promise.all([
-    OperationsManifest.findById(session.manifestId).select("manifestNumber header status totalPhysicalParcels totalWeightKg").lean().exec(),
+  const [manifest, bag, lastScan] = await Promise.all([
+    OperationsManifest.findById(session.manifestId).select("manifestNumber header status totalBags totalConsignments totalPhysicalParcels totalWeightKg").lean().exec(),
     session.activeBagId
       ? OperationsManifestBag.findById(session.activeBagId).select("bagNumber status totalPhysicalParcels totalWeightKg").lean().exec()
-      : null
+      : null,
+    OperationsManifestScan.findOne({
+      manifestId: session.manifestId,
+      scanSessionId: session._id,
+      status: "ACCEPTED"
+    })
+      .sort({ scannedAt: -1, _id: -1 })
+      .select("parcelNumber bagId scannedAt")
+      .lean()
+      .exec()
   ]);
+  const lastScanBag = lastScan?.bagId
+    ? await OperationsManifestBag.findById(lastScan.bagId).select("bagNumber").lean().exec()
+    : null;
   return {
     id: String(session._id),
     manifestId: String(session.manifestId),
@@ -70,6 +83,8 @@ async function sessionDetail(session: IOperationsManifestScanSession) {
       status: manifest.status,
       destinationCountryCode: manifest.header.destinationCountryCode,
       destinationCountryName: manifest.header.destinationCountryName,
+      totalBags: manifest.totalBags,
+      totalConsignments: manifest.totalConsignments,
       totalPhysicalParcels: manifest.totalPhysicalParcels,
       totalWeightKg: manifest.totalWeightKg
     } : null,
@@ -79,6 +94,12 @@ async function sessionDetail(session: IOperationsManifestScanSession) {
       status: bag.status,
       totalPhysicalParcels: bag.totalPhysicalParcels,
       totalWeightKg: bag.totalWeightKg
+    } : null,
+    lastScannedParcel: lastScan ? {
+      scanId: String(lastScan._id),
+      parcelNumber: lastScan.parcelNumber,
+      bagNumber: lastScanBag?.bagNumber ?? null,
+      scannedAt: lastScan.scannedAt
     } : null
   };
 }
@@ -149,6 +170,54 @@ export async function createOperationsScanSession(input: {
     session: await sessionDetail(session),
     qrDataUri: `data:image/png;base64,${qrBuffer.toString("base64")}`
   };
+}
+
+export async function createDirectOperationsScanSession(input: {
+  manifestId: string;
+  actor: SessionActor;
+}) {
+  const manifestId = objectId(input.manifestId, "Operations manifest");
+  const manifest = await OperationsManifest.findById(manifestId).exec();
+  if (!manifest || !["DRAFT", "PACKING", "READY_TO_SEAL"].includes(manifest.status)) {
+    throw new OperationsScanSessionError("This manifest cannot start a phone scanner.", 409);
+  }
+  if (!actorCanAccessBranch(input.actor, manifest.branchId)) {
+    throw new OperationsScanSessionError("You do not have access to this manifest's branch.", 403);
+  }
+
+  const now = new Date();
+  await OperationsManifestScanSession.updateMany(
+    {
+      manifestId,
+      status: "PENDING"
+    },
+    { $set: { status: "ENDED", endedAt: now, endedReason: "A direct phone scanner was opened.", activeBagId: null } }
+  ).exec();
+  const active = await OperationsManifestScanSession.findOne({ manifestId, status: "ACTIVE" }).exec();
+  if (active) {
+    await endExpiredSession(active);
+    if (active.status === "ACTIVE") throw new OperationsScanSessionError("A phone scanner is already connected to this manifest.", 409);
+  }
+
+  const sessionExpiresAt = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+  const session = await OperationsManifestScanSession.create({
+    manifestId,
+    branchId: manifest.branchId,
+    activeBagId: null,
+    // The schema requires a unique pairing hash. Direct sessions never expose
+    // this value, but keeping it preserves the same session record contract.
+    pairingTokenHash: tokenHash(crypto.randomBytes(32).toString("hex")),
+    pairingExpiresAt: now,
+    sessionExpiresAt,
+    purgeAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    desktopUserId: input.actor.userId,
+    phoneUserId: input.actor.userId,
+    status: "ACTIVE",
+    connectedAt: now,
+    lastSeenAt: now
+  });
+
+  return { session: await sessionDetail(session) };
 }
 
 export async function pairOperationsScanSession(input: { token: string; actor: SessionActor }) {

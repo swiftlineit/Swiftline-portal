@@ -100,7 +100,10 @@ const manifestLineSchema = new mongoose.Schema<ShipmentManifestLineSnapshot>({
 }, { _id: false });
 
 const shipmentManifestSchema = new mongoose.Schema<IShipmentManifest>({
-  manifestNumber: { type: String, required: true, unique: true, index: true, trim: true, maxlength: 40 },
+  // Single-word business accounts retain their full name as a lowercase prefix.
+  // Existing manifest numbers are unchanged; the larger limit accommodates a
+  // maximum-length company name plus its sequence suffix.
+  manifestNumber: { type: String, required: true, unique: true, index: true, trim: true, maxlength: 140 },
   businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, index: true },
   branchId: { type: mongoose.Schema.Types.ObjectId, ref: "Branch", required: true, index: true },
   shipmentDraftIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "ShipmentDraft", required: true }],

@@ -1,7 +1,7 @@
 import { ShipmentDraft } from "../../models/shipmentDraft.model.js";
 import type { IOperationsManifest } from "../../models/operationsManifest.model.js";
 import type { ManifestDocumentParcelRow } from "../../types/manifestDocument.js";
-import { buildManifestDocumentModel, parseSealedSnapshot } from "../manifestDocument.service.js";
+import { buildManifestDocumentModel, parseCurrentManifestSnapshot } from "../manifestDocument.service.js";
 import { OperationsManifestServiceError } from "../operationsManifest.service.js";
 import type { EdiContext } from "./ediColumns.js";
 import { buildEdiWorkbookBuffer } from "./ediWorkbook.service.js";
@@ -20,7 +20,7 @@ function parcelSequenceFromBarcode(parcelNumber: string): number | null {
  * keep redacted and is therefore read live from the shipment draft here.
  */
 export async function buildOperationsManifestEdi(manifest: IOperationsManifest): Promise<Buffer> {
-  const snapshot = parseSealedSnapshot(manifest.sealedSnapshot);
+  const snapshot = parseCurrentManifestSnapshot(manifest.sealedSnapshot, manifest.header);
   if (!snapshot) throw new OperationsManifestServiceError("The sealed manifest snapshot is unavailable.", 409);
   const model = buildManifestDocumentModel(snapshot);
 

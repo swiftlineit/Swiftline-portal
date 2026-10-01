@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { z } from "zod";
 import { operationsUser } from "../middleware/operationsBranchAccess.middleware.js";
 import {
+  createDirectOperationsScanSession,
   createOperationsScanSession,
   endOperationsScanSession,
   getActiveOperationsScanSession,
@@ -40,6 +41,22 @@ export async function createSession(request: Request, response: Response) {
       ...(await createOperationsScanSession({
         manifestId: String(request.params.manifestId),
         activeBagId: parsed.data.activeBagId,
+        actor: currentActor
+      }))
+    });
+  } catch (error) {
+    return sendError(response, error);
+  }
+}
+
+export async function createDirectSession(request: Request, response: Response) {
+  try {
+    const currentActor = actor(request);
+    if (!currentActor) return response.status(401).json({ success: false, message: "Unauthorized" });
+    return response.status(201).json({
+      success: true,
+      ...(await createDirectOperationsScanSession({
+        manifestId: String(request.params.manifestId),
         actor: currentActor
       }))
     });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { FiLoader } from "react-icons/fi";
@@ -9,21 +9,45 @@ import { pairOperationsScanSession } from "@/lib/operationsManifests";
 
 const tokenStorageKey = "swiftline_manifest_pairing_token";
 
+function readStoredPairingToken() {
+  try {
+    return sessionStorage.getItem(tokenStorageKey) || "";
+  } catch {
+    return "";
+  }
+}
+
+function storePairingToken(token: string) {
+  try {
+    sessionStorage.setItem(tokenStorageKey, token);
+  } catch {
+    // The URL fragment remains the source of truth when Safari blocks storage.
+  }
+}
+
+function clearStoredPairingToken() {
+  try {
+    sessionStorage.removeItem(tokenStorageKey);
+  } catch {
+    // There is nothing else to clean up when browser storage is unavailable.
+  }
+}
+
 export default function ConnectManifestScannerPage() {
   const router = useRouter();
   const [message, setMessage] = useState("Connecting this phone to the manifest...");
   const [error, setError] = useState("");
+  const pairingAttemptedRef = useRef(false);
 
   useEffect(() => {
+    if (pairingAttemptedRef.current) return;
+    pairingAttemptedRef.current = true;
     let active = true;
     async function connect() {
       const hash = new URLSearchParams(window.location.hash.slice(1));
       const tokenFromLink = hash.get("token") ?? "";
-      if (tokenFromLink) {
-        sessionStorage.setItem(tokenStorageKey, tokenFromLink);
-        window.history.replaceState({}, "", "/manifest-scanner/connect");
-      }
-      const token = tokenFromLink || sessionStorage.getItem(tokenStorageKey) || "";
+      if (tokenFromLink) storePairingToken(tokenFromLink);
+      const token = tokenFromLink || readStoredPairingToken();
       if (!token) {
         if (active) setError("This pairing link is incomplete. Create a new phone connection on the laptop.");
         return;
@@ -31,13 +55,18 @@ export default function ConnectManifestScannerPage() {
 
       const accessToken = getAccessToken() ?? await refreshAccessToken();
       if (!accessToken) {
-        router.replace(`/?next=${encodeURIComponent("/manifest-scanner/connect")}`);
+        // Keep the one-time token in the fragment while the user signs in.
+        // Fragments are not sent to the server, and this also survives Safari
+        // tabs where sessionStorage is unavailable or partitioned.
+        const destination = `/manifest-scanner/connect#token=${encodeURIComponent(token)}`;
+        router.replace(`/?next=${encodeURIComponent(destination)}`);
         return;
       }
 
       try {
         const result = await pairOperationsScanSession(token);
-        sessionStorage.removeItem(tokenStorageKey);
+        clearStoredPairingToken();
+        window.history.replaceState({}, "", "/manifest-scanner/connect");
         if (active) {
           setMessage("Phone connected. Opening the camera scanner...");
           router.replace(`/manifest-scanner/${result.session.id}`);

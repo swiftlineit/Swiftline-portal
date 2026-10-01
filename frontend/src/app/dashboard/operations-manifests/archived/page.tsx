@@ -6,6 +6,7 @@ import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
 import {
   downloadArchivedOperationsManifest,
+  downloadArchivedFlightDocument,
   getArchivedOperationsManifest,
   listArchivedOperationsManifests,
   type ArchivedOperationsManifest,
@@ -78,6 +79,8 @@ export default function ArchivedOperationsManifestsPage() {
           <div>
             <h2 className="text-lg font-semibold text-[#0D1282]">{selected.manifestNumber} · archived copy</h2>
             <p className="text-sm text-slate-600">{selected.header.flightNumber || "Flight not recorded"} · Departure {selected.header.departureDate || "not recorded"} · {selected.document?.totals.totalPhysicalParcels ?? 0} parcels</p>
+            <p className="mt-2 inline-flex rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-bold uppercase tracking-wide text-amber-900">Archived copy · not active</p>
+            {selected.deletionReason ? <p className="mt-2 text-sm text-slate-600">Deletion reason: {selected.deletionReason}</p> : null}
           </div>
           <div className="flex flex-wrap gap-2">
             {selected.documents.map((file) => <button key={file.format} type="button" onClick={async () => {
@@ -93,6 +96,33 @@ export default function ArchivedOperationsManifestsPage() {
               )))}</tbody>
             </table>
           </div>
+          {selected.linkedFlight?.flight ? (() => {
+            const flight = selected.linkedFlight.flight;
+            const flightLabel = typeof flight.flightLinehaulNumber === "string" ? flight.flightLinehaulNumber : "Flight record";
+            const flightNumber = typeof flight.flightNumber === "string" ? flight.flightNumber : "Not recorded";
+            const mawb = typeof flight.mawbNumber === "string" ? flight.mawbNumber : "Not recorded";
+            return (
+              <section className="space-y-3 rounded-lg border border-slate-200 p-4" aria-label="Archived linked flight">
+                <div>
+                  <h3 className="font-semibold text-slate-900">Linked flight · {flightLabel}</h3>
+                  <p className="text-sm text-slate-600">{flightNumber} · MAWB {mawb} · archived with this manifest</p>
+                </div>
+                {selected.linkedFlight?.documents?.length ? (
+                  <div className="space-y-2">
+                    <h4 className="text-sm font-semibold text-slate-700">Archived flight documents</h4>
+                    {selected.linkedFlight.documents.map((file) => (
+                      <button key={file.id} type="button" onClick={async () => {
+                        try { await downloadArchivedFlightDocument(selected.id, file.id, file.originalName); }
+                        catch (caught) { toast.error(caught instanceof Error ? caught.message : "Archived flight document could not be downloaded."); }
+                      }} className="block text-left text-sm font-semibold text-[#0D1282] underline underline-offset-4">
+                        {file.originalName}
+                      </button>
+                    ))}
+                  </div>
+                ) : <p className="text-sm text-slate-500">No flight documents were attached.</p>}
+              </section>
+            );
+          })() : null}
         </section>
       )}
     </main>

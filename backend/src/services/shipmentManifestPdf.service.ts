@@ -8,7 +8,7 @@ const muted = "#f2f2f2";
 
 /** Sr, AWB/Parcel, Forwarding, Destination, Shipper, Receiver, Service, Product, Pcs, Weight, Chargeable Weight, Remark. */
 const columnWidths = [26, 92, 96, 78, 90, 90, 74, 62, 30, 44, 44, 50];
-const columnHeadings = [
+export const shipmentManifestTableHeadings = [
   "Sr.\nNo.",
   "AWB No. /\nParcel No",
   "Forwarding\nNo.",
@@ -161,7 +161,7 @@ export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<B
     }
 
     function drawTableHeadings(y: number) {
-      columnHeadings.forEach((heading, column) => drawCell(column, y, 26, heading, {
+      shipmentManifestTableHeadings.forEach((heading, column) => drawCell(column, y, 26, heading, {
         bold: true,
         size: 6.5,
         fill: muted

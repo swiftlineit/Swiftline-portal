@@ -43,6 +43,8 @@
     "migrate:operations-manifest-counter": "tsx src/scripts/migrateOperationsManifestCounter.ts --apply",
     "audit:flight-linehaul-indexes": "tsx src/scripts/migrateFlightLinehaulIndexes.ts",
     "migrate:flight-linehaul-indexes": "tsx src/scripts/migrateFlightLinehaulIndexes.ts --apply",
+    "audit:manifest-flight-workflow-indexes": "tsx src/scripts/migrateManifestFlightWorkflowIndexes.ts",
+    "migrate:manifest-flight-workflow-indexes": "tsx src/scripts/migrateManifestFlightWorkflowIndexes.ts --apply",
     "migrate:carrier-tracking-indexes": "tsx src/scripts/migrateCarrierTrackingIndexes.ts",
     "migrate:shipment-invoice-revised-document-indexes": "tsx src/scripts/migrateShipmentInvoiceRevisedDocumentIndexes.ts",
     "migrate:shipment-operations-scan-indexes": "tsx src/scripts/migrateShipmentOperationsScanIndexes.ts --apply",
