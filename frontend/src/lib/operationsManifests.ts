@@ -65,7 +65,7 @@ export type ArchivedOperationsManifest = {
     exceptions?: Array<Record<string, unknown>>;
     offloads?: Array<Record<string, unknown>>;
   } | null;
-  documents: Array<{ format: keyof typeof manifestExportPaths; filename: string }>;
+  documents: Array<{ format: keyof typeof manifestExportPaths; filename: string; warnings?: string[] }>;
   document?: {
     totals: { totalBags: number; totalConsignments: number; totalPhysicalParcels: number; totalWeightKg: number };
     consignments: Array<{ consignmentNumber: string; parcels: Array<{ parcelNumber: string; bagNumber: string }> }>;
@@ -509,7 +509,7 @@ export const setOperationsParcelDisposition = (
 // EDI and OPS EDI exports live at their own paths; xlsx and pdf share the export.<format> route.
 // `fileName` builds the download name from the manifest number.
 const manifestExportPaths: Record<
-  "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "uk",
+  "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "csbVEdi2" | "uk",
   { path: string; fileName: (manifestNumber: string) => string }
 > = {
   xlsx: {
@@ -524,6 +524,7 @@ const manifestExportPaths: Record<
   opsEdi: { path: "export-ops-edi.xls", fileName: (number) => `ops-edi-${number}.xls` },
   mhbs: { path: "export-mhbs.xls", fileName: (number) => `mhbs-${number}.xls` },
   csbVEdi: { path: "export-csb-v.xls", fileName: (number) => `csb-v-${number}.xls` },
+  csbVEdi2: { path: "export-csb-v-edi2.xls", fileName: (number) => `csb-v-edi2-${number}.xls` },
   uk: {
     path: "export-uk.xlsx",
     fileName: (number) => `${number.toUpperCase()}UKmanifest.xlsx`,
@@ -532,7 +533,7 @@ const manifestExportPaths: Record<
 
 export async function downloadOperationsManifest(
   id: string,
-  format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "uk",
+  format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "csbVEdi2" | "uk",
   view = false,
   manifestNumber = "",
 ) {
@@ -548,9 +549,9 @@ export async function downloadOperationsManifest(
     const data = await response.json().catch(() => ({}));
     throw new Error(data.message || "Manifest export could not be opened.");
   }
-  if (format === "opsEdi" || format === "mhbs") {
-    const warningHeader = format === "opsEdi" ? "X-OPS-EDI-Warnings" : "X-MHBS-Warnings";
-    const warningEvent = format === "opsEdi" ? "swiftline:ops-edi-warnings" : "swiftline:mhbs-warnings";
+  if (format === "opsEdi" || format === "mhbs" || format === "csbVEdi" || format === "csbVEdi2") {
+    const warningHeader = format === "opsEdi" ? "X-OPS-EDI-Warnings" : format === "mhbs" ? "X-MHBS-Warnings" : "X-CSB-V-EDI-Warnings";
+    const warningEvent = format === "opsEdi" ? "swiftline:ops-edi-warnings" : format === "mhbs" ? "swiftline:mhbs-warnings" : "swiftline:csb-v-edi-warnings";
     const encodedWarnings = response.headers.get(warningHeader);
     if (encodedWarnings) {
       try {

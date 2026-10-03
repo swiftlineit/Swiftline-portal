@@ -120,6 +120,7 @@ function validPayload() {
     csbVGstin: "",
     csbVAccountNumber: "",
     csbVIecCode: "",
+    csbVAdCode: "",
     csbVInvoiceNumber: "",
     kycUseForAllParcels: true,
     parcels: [{ weightKg: 2, lengthCm: 20, widthCm: 15, heightCm: 10, shipmentContentType: "PARCEL", shipmentReference1: "WEB-1", shipmentReference2: "", items: [{ description: "Cotton shirts", hsnCode: "", unitType: "Pcs", quantity: 2, unitRate: 500 }] }],
@@ -217,11 +218,19 @@ describe("public shipment booking validation", () => {
       assert.ok(paths.includes("csbVGstin"));
       assert.ok(paths.includes("csbVAccountNumber"));
       assert.ok(paths.includes("csbVIecCode"));
+      assert.ok(paths.includes("csbVAdCode"));
       assert.ok(paths.includes("csbVInvoiceNumber"));
     }
 
-    const complete = { ...payload, csbVGstin: "08ABCDE1234F1Z5", csbVAccountNumber: "001234", csbVIecCode: "CUSTOMIEC1", csbVInvoiceNumber: "INV-100" };
+    const complete = { ...payload, sender: { ...payload.sender, aadhaarNumber: "" }, csbVGstin: "08ABCDE1234F1Z5", csbVAccountNumber: "001234", csbVIecCode: "CUSTOMIEC1", csbVAdCode: "0123456", csbVInvoiceNumber: "INV-100" };
     assert.equal(publicShipmentDraftPayloadSchema.safeParse(complete).success, true);
+    assert.equal(publicShipmentDraftPayloadSchema.safeParse({ ...complete, csbVAdCode: "0123456-7654321" }).success, true);
+    assert.equal(publicShipmentDraftPayloadSchema.safeParse({ ...complete, csbVAdCode: "0123456-765432" }).success, false);
+    const over = { ...complete, parcels: [
+      { ...complete.parcels[0]!, items: [{ ...complete.parcels[0]!.items[0]!, quantity: 1, unitRate: 500000 }] },
+      { ...complete.parcels[0]!, shipmentReference1: "WEB-2", items: [{ ...complete.parcels[0]!.items[0]!, quantity: 1, unitRate: 500000.01 }] }
+    ] };
+    assert.ok(publicShipmentDraftPayloadSchema.safeParse(over).error?.issues.some((issue) => issue.message.includes("₹10,00,000")));
   });
 
   it("rejects an invalid CSB-V GSTIN and missing consignee state code", () => {

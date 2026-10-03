@@ -155,11 +155,17 @@ export default function OperationsManifestWorkspace() {
       const detail = (event as CustomEvent<string>).detail;
       if (detail) toast.warning(`MHBS downloaded with warnings. ${detail}`);
     };
+    const onCsbVWarnings = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail) toast.warning(`CSB-V EDI downloaded with missing historical fields. ${detail}`);
+    };
     window.addEventListener("swiftline:ops-edi-warnings", onOpsWarnings);
     window.addEventListener("swiftline:mhbs-warnings", onMhbsWarnings);
+    window.addEventListener("swiftline:csb-v-edi-warnings", onCsbVWarnings);
     return () => {
       window.removeEventListener("swiftline:ops-edi-warnings", onOpsWarnings);
       window.removeEventListener("swiftline:mhbs-warnings", onMhbsWarnings);
+      window.removeEventListener("swiftline:csb-v-edi-warnings", onCsbVWarnings);
     };
   }, []);
 
@@ -339,7 +345,7 @@ export default function OperationsManifestWorkspace() {
     }
   }
 
-  async function exportFile(format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "uk", view = false) {
+  async function exportFile(format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "csbVEdi2" | "uk", view = false) {
     try {
       await downloadOperationsManifest(
         manifestId,
@@ -925,7 +931,7 @@ function ManifestHeader({
   data: ManifestDetail;
   busy: boolean;
   onEditDetails: () => void;
-  onExport: (format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "uk", view?: boolean) => void;
+  onExport: (format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "csbVEdi2" | "uk", view?: boolean) => void;
   onSeal: () => void;
   onDispatch: () => void;
   sealBlocked: boolean;
@@ -1022,6 +1028,13 @@ function ManifestHeader({
               onClick={() => onExport("csbVEdi")}
               icon={<FiDownload />}
               label="CSB-V EDI"
+              disabled={!csbVEligible}
+              title={csbVTooltip}
+            />
+            <ActionButton
+              onClick={() => onExport("csbVEdi2")}
+              icon={<FiDownload />}
+              label="CSB-V EDI2"
               disabled={!csbVEligible}
               title={csbVTooltip}
             />

@@ -7,8 +7,9 @@ import {
   type ShipmentParcel
 } from "../models/shipmentDraft.model.js";
 import { isValidAadhaarNumber } from "./aadhaarValidation.service.js";
+import { getAdCodeError } from "./adCode.service.js";
 import { normalizeCsbType } from "./csbType.service.js";
-import { getParcelItemAmountError, isValidHsnCode, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "./parcelItems.service.js";
+import { getDeclaredGoodsValue, getParcelItemAmountError, isValidHsnCode, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "./parcelItems.service.js";
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
 import { getGstinError } from "./gstin.js";
@@ -129,8 +130,8 @@ function validateKycDocuments(draft: IShipmentDraft): string[] {
   const issues: string[] = [];
   const isCsbV = draft.csbType === "CSB_V";
   const requiredDocuments = isCsbV ? csbVKycDocuments : csbIvKycDocuments;
-  // The Aadhaar number identifies the sender and is required on every route,
-  // whatever the document checklist asks for.
+  // CSB-V needs the uploaded card, not a typed Aadhaar number. CSB-IV still
+  // requires its number independently of the optional document checklist.
   const aadhaarNumberIssue = (value: string | undefined, label?: string) => {
     const scope = label ? `${label}: ` : "";
 
@@ -153,7 +154,7 @@ function validateKycDocuments(draft: IShipmentDraft): string[] {
 
   if (draft.kycUseForAllParcels !== false) {
     const documents = draft.kycDocuments ?? {};
-    const aadhaarIssue = aadhaarNumberIssue(draft.consignorAddress?.aadhaarNumber);
+    const aadhaarIssue = isCsbV ? "" : aadhaarNumberIssue(draft.consignorAddress?.aadhaarNumber);
     if (aadhaarIssue) issues.push(aadhaarIssue);
     appendMissingDocuments(documents);
     if (documents.other?.storageKey && !hasText(documents.other.documentLabel)) {
@@ -165,7 +166,7 @@ function validateKycDocuments(draft: IShipmentDraft): string[] {
   draft.parcelList.forEach((parcel, index) => {
     const label = `Parcel ${index + 1}`;
     const documents = parcel.kycDocuments ?? {};
-    const aadhaarIssue = aadhaarNumberIssue(parcel.aadhaarNumber, label);
+    const aadhaarIssue = isCsbV ? "" : aadhaarNumberIssue(parcel.aadhaarNumber, label);
     if (aadhaarIssue) issues.push(aadhaarIssue);
     appendMissingDocuments(documents, label);
     if (documents.other?.storageKey && !hasText(documents.other.documentLabel)) {
@@ -265,7 +266,7 @@ function validateParcel(
   return issues;
 }
 
-function validateCsbVFields(draft: IShipmentDraft): string[] {
+function validateCsbVFields(draft: IShipmentDraft, enforceNewBookingFields: boolean): string[] {
   if (normalizeCsbType(draft.csbType) !== "CSB_V") return [];
 
   const issues: string[] = [];
@@ -281,6 +282,10 @@ function validateCsbVFields(draft: IShipmentDraft): string[] {
 
   if (!hasText(draft.csbVAccountNumber)) issues.push("Bank account number is required");
   if (!hasText(draft.csbVIecCode)) issues.push("IEC code is required");
+  if (enforceNewBookingFields) {
+    const adCodeError = getAdCodeError(draft.csbVAdCode ?? "");
+    if (adCodeError) issues.push(adCodeError);
+  }
   if (!hasText(draft.csbVInvoiceNumber)) issues.push("Commercial invoice number is required");
   if (!hasText(address.stateCode)) issues.push("Consignee state code is required");
 
@@ -320,6 +325,8 @@ export function validateShipmentDraftFields(
      * which is required by CSB type instead.
      */
     requireItemHsnCodes?: boolean;
+    /** Keep newly introduced CSB-V booking checks off legacy amendment reviews. */
+    enforceNewCsbVBookingRules?: boolean;
   } = {}
 ): string[] {
   const issues: string[] = [];
@@ -351,7 +358,7 @@ export function validateShipmentDraftFields(
   if (!hasText(address.addressLine1)) issues.push("Address line 1 is required");
   if (!hasText(address.townOrCity)) issues.push("Town or city is required");
   if (!hasText(address.county)) issues.push("Consignee state is required");
-  issues.push(...validateCsbVFields(draft));
+  issues.push(...validateCsbVFields(draft, options.enforceNewCsbVBookingRules !== false));
 
   const phoneNumber = parsePhoneNumberFromString(`${address.mobileCountryCode}${address.mobileNumber}`);
   if (hasText(address.mobileCountryCode) && hasText(address.mobileNumber) && !phoneNumber?.isValid()) {
@@ -402,6 +409,10 @@ export function validateShipmentDraftFields(
   const requireItemDetails = options.requireItemHsnCodes !== false;
   const isCsbV = normalizeCsbType(draft.csbType) === "CSB_V";
   const requireHsnCode = requireItemDetails && isCsbV;
+
+  if (isCsbV && options.enforceNewCsbVBookingRules !== false && getDeclaredGoodsValue(draft.parcelList) > 1_000_000) {
+    issues.push("CSB-V shipment goods value cannot exceed ₹10,00,000");
+  }
 
   draft.parcelList.forEach((parcel, index) => {
     issues.push(...validateParcel(parcel, index, requireItemDetails, requireHsnCode, !isCsbV));

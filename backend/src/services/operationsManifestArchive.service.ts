@@ -8,12 +8,13 @@ import { buildOperationsManifestEdi } from "./edi/ediExport.service.js";
 import { buildOperationsManifestOpsEdi } from "./opsEdi/opsEdiExport.service.js";
 import { buildOperationsManifestMhbsEdi } from "./mhbsEdi/mhbsEdiExport.service.js";
 import { buildOperationsManifestCsbVEdi } from "./csbVEdi/csbVEdiExport.service.js";
+import { buildOperationsManifestCsbVEdi2 } from "./csbVEdi/csbVEdi2Export.service.js";
 import { buildOperationsManifestUkExcel, ukOperationsManifestFilename } from "./operationsManifestUk.service.js";
 import { operationsManifestArchiveKey } from "./storage/keys.js";
 import { deleteObject, putObject } from "./storage/storage.service.js";
 
 type ArchiveFormat = ArchivedManifestDocument["format"];
-type PreparedDocument = { format: ArchiveFormat; filename: string; contentType: string; buffer: Buffer };
+type PreparedDocument = { format: ArchiveFormat; filename: string; contentType: string; buffer: Buffer; warnings?: string[] };
 
 /** Render while the live manifest and its draft references still exist. */
 export async function stageOperationsManifestArchive(manifest: IOperationsManifest) {
@@ -30,18 +31,22 @@ export async function stageOperationsManifestArchive(manifest: IOperationsManife
     { format: "pdf", filename: `ops-manifest-${number}.pdf`, contentType: "application/pdf", buffer: await buildOperationsManifestPdf(manifest) },
   ];
 
-  const optional: Array<{ format: ArchiveFormat; filename: string; contentType: string; build: () => Promise<Buffer> }> = [
+  const optional: Array<{ format: ArchiveFormat; filename: string; contentType: string; build: () => Promise<Buffer | { buffer: Buffer; warnings: string[] }> }> = [
     { format: "edi", filename: `edi-${number}.xlsx`, contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", build: () => buildOperationsManifestEdi(manifest) },
     { format: "opsEdi", filename: `ops-edi-${number}.xls`, contentType: "application/vnd.ms-excel", build: async () => (await buildOperationsManifestOpsEdi(manifest)).buffer },
     { format: "mhbs", filename: `mhbs-${number}.xls`, contentType: "application/vnd.ms-excel", build: async () => (await buildOperationsManifestMhbsEdi(manifest)).buffer },
   ];
-  if (csbVOnly) optional.push({ format: "csbVEdi", filename: `csb-v-${number}.xls`, contentType: "application/vnd.ms-excel", build: () => buildOperationsManifestCsbVEdi(manifest) });
+  if (csbVOnly) optional.push(
+    { format: "csbVEdi", filename: `csb-v-${number}.xls`, contentType: "application/vnd.ms-excel", build: () => buildOperationsManifestCsbVEdi(manifest) },
+    { format: "csbVEdi2", filename: `csb-v-edi2-${number}.xls`, contentType: "application/vnd.ms-excel", build: () => buildOperationsManifestCsbVEdi2(manifest) }
+  );
   if (snapshot.header.destinationCountryCode === "GB") optional.push({ format: "uk", filename: ukOperationsManifestFilename(number), contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", build: () => buildOperationsManifestUkExcel(manifest) });
 
   // An issued export must not silently disappear during deletion. If one cannot
   // be rendered, leave the live manifest intact so staff can resolve it first.
   for (const item of optional) {
-    documents.push({ ...item, buffer: await item.build() });
+    const built = await item.build();
+    documents.push({ ...item, ...(Buffer.isBuffer(built) ? { buffer: built } : built) });
   }
 
   const stored: ArchivedManifestDocument[] = [];
@@ -49,7 +54,7 @@ export async function stageOperationsManifestArchive(manifest: IOperationsManife
     for (const document of documents) {
       const key = operationsManifestArchiveKey(String(manifest._id), document.filename);
       const result = await putObject({ key, body: document.buffer, contentType: document.contentType });
-      stored.push({ format: document.format, key: result.key, filename: document.filename, contentType: document.contentType, checksumSha256: result.checksumSha256 });
+      stored.push({ format: document.format, key: result.key, filename: document.filename, contentType: document.contentType, checksumSha256: result.checksumSha256, warnings: document.warnings?.slice(0, 20) });
     }
     return stored;
   } catch (error) {

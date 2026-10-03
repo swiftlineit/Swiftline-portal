@@ -170,15 +170,15 @@ export function ConsignorKycSection({
     }
   }
 
-  // The Aadhaar number identifies the sender and is required on every route.
+  // CSB-V keeps the Aadhaar card upload but does not ask for a typed number.
   // Only the document uploads follow the CSB checklist.
-  const aadhaarRequired = true;
+  const aadhaarRequired = csbType !== "CSB_V";
   const aadhaarError = (value: string) => {
     if (!submitAttempted) return undefined;
     if (!value.trim()) return "Aadhaar number is required";
     return isValidAadhaarNumber(value) ? undefined : "Enter a valid 12 digit Aadhaar number";
   };
-  const sharedAadhaarError = kycUseForAll ? aadhaarError(form.aadhaarNumber) : undefined;
+  const sharedAadhaarError = kycUseForAll && aadhaarRequired ? aadhaarError(form.aadhaarNumber) : undefined;
 
   return (
     <>
@@ -311,13 +311,13 @@ export function ConsignorKycSection({
               <span className="block text-[12px] font-semibold text-slate-900">Use the same KYC for every parcel</span>
               <span className="mt-0.5 block text-[11px] leading-4 text-slate-500">
                 {kycUseForAll
-                  ? "One Aadhaar and document set applies to all parcels."
-                  : "Each parcel uses its own Aadhaar and documents."}
+                  ? (csbType === "CSB_V" ? "One document set applies to all parcels." : "One Aadhaar number and document set applies to all parcels.")
+                  : (csbType === "CSB_V" ? "Each parcel uses its own documents." : "Each parcel uses its own Aadhaar number and documents.")}
               </span>
             </span>
           </label>
 
-          {kycUseForAll ? (
+          {kycUseForAll && aadhaarRequired ? (
             <ShipmentTextField
               label="Aadhaar Number"
               required={aadhaarRequired}
@@ -363,7 +363,7 @@ export function ConsignorKycSection({
                       <span className="font-medium normal-case tracking-normal text-slate-400">{saved ? "Saved" : "Save shipment to upload"}</span>
                     </div>
                     <div className="space-y-3 p-3">
-                      <div className="max-w-xs">
+                      {aadhaarRequired ? <div className="max-w-xs">
                         <ShipmentTextField
                           label="Aadhaar Number"
                           required={aadhaarRequired}
@@ -375,7 +375,7 @@ export function ConsignorKycSection({
                           readOnly={readOnly}
                           placeholder="1234 5678 9012"
                         />
-                      </div>
+                      </div> : null}
                       <div>
                         <KycSlotRow
                           slots={kycSlots}

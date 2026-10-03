@@ -1,11 +1,12 @@
 import mongoose from "mongoose";
 
 export type ArchivedManifestDocument = {
-  format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "uk";
+  format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "csbVEdi2" | "uk";
   key: string;
   filename: string;
   contentType: string;
   checksumSha256: string;
+  warnings?: string[];
 };
 
 export interface IOperationsManifestArchive extends mongoose.Document {
@@ -29,7 +30,8 @@ const documentSchema = new mongoose.Schema<ArchivedManifestDocument>({
   key: { type: String, required: true },
   filename: { type: String, required: true },
   contentType: { type: String, required: true },
-  checksumSha256: { type: String, required: true }
+  checksumSha256: { type: String, required: true },
+  warnings: { type: [String], default: [] }
 }, { _id: false });
 
 const schema = new mongoose.Schema<IOperationsManifestArchive>({

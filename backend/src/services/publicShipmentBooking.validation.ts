@@ -3,9 +3,10 @@ import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { isValidAadhaarNumber, normalizeAadhaarNumber } from "./aadhaarValidation.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
-import { maxParcelItems, maxParcelsPerShipment, parcelItemUnitTypeValues } from "./parcelItems.service.js";
+import { getDeclaredGoodsValue, maxParcelItems, maxParcelsPerShipment, parcelItemUnitTypeValues } from "./parcelItems.service.js";
 import { shipmentContentTypeValues } from "../models/shipmentDraft.model.js";
 import { getGstinError } from "./gstin.js";
+import { getAdCodeError } from "./adCode.service.js";
 
 const cleanText = (max: number) => z.string().trim().max(max);
 const requiredText = (label: string, max = 120) => cleanText(max).min(1, `${label} is required.`);
@@ -46,7 +47,7 @@ const senderSchema = addressSchema.safeExtend({
   countryCode: z.literal("IN"),
   countryName: z.literal("India"),
   mobileCountryCode: z.literal("+91"),
-  aadhaarNumber: z.string().transform(normalizeAadhaarNumber).refine(isValidAadhaarNumber, "Enter a valid 12 digit Aadhaar number."),
+  aadhaarNumber: z.string().default("").transform(normalizeAadhaarNumber),
 });
 
 const itemSchema = z.object({
@@ -79,10 +80,14 @@ export const publicShipmentDraftPayloadSchema = z.object({
   csbVGstin: cleanText(20).default(""),
   csbVAccountNumber: cleanText(40).default(""),
   csbVIecCode: cleanText(20).default("").transform((value) => value.toUpperCase()),
+  csbVAdCode: cleanText(15).default(""),
   csbVInvoiceNumber: cleanText(80).default(""),
   kycUseForAllParcels: z.boolean().default(true),
   parcels: z.array(parcelSchema).min(1, "Add at least one parcel.").max(maxParcelsPerShipment, `A booking can contain up to ${maxParcelsPerShipment} parcels.`),
 }).superRefine((value, context) => {
+  if (value.csbType === "CSB_IV" && !isValidAadhaarNumber(value.sender.aadhaarNumber)) {
+    context.addIssue({ code: "custom", path: ["sender", "aadhaarNumber"], message: "Enter a valid 12 digit Aadhaar number." });
+  }
   if (value.consignee.countryCode === "IN") {
     context.addIssue({
       code: "custom",
@@ -91,6 +96,11 @@ export const publicShipmentDraftPayloadSchema = z.object({
     });
   }
   if (value.csbType === "CSB_V") {
+    const adCodeError = getAdCodeError(value.csbVAdCode);
+    if (adCodeError) context.addIssue({ code: "custom", path: ["csbVAdCode"], message: adCodeError });
+    if (getDeclaredGoodsValue(value.parcels) > 1_000_000) {
+      context.addIssue({ code: "custom", path: ["parcels"], message: "CSB-V shipment goods value cannot exceed ₹10,00,000." });
+    }
     if (!value.csbVGstin) {
       context.addIssue({ code: "custom", path: ["csbVGstin"], message: "GSTIN number is required." });
     } else {

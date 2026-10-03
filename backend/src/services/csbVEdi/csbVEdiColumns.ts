@@ -17,6 +17,7 @@ export type CsbVEdiDraftContext = {
   csbVGstin?: string;
   csbVAccountNumber?: string;
   csbVIecCode?: string;
+  csbVAdCode?: string;
   csbVInvoiceNumber?: string;
   consigneeEnteredAddress?: { stateCode?: string };
 };
@@ -71,7 +72,7 @@ export function buildCsbVEdiRow(context: CsbVEdiRowContext): Array<string | numb
     bagList,
     "Y",
     "N",
-    "0292087-5000008",
+    ediText(draft.csbVAdCode),
     repeatedHawb,
     bagList,
     ediText(partyConsignor?.companyName || partyConsignor?.contactName),

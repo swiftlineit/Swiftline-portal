@@ -121,9 +121,7 @@ export default function ReviewPaymentStep({
             </div>
           </div>
           <div className="mt-5 rounded-lg bg-slate-50 p-4 text-sm text-slate-700">
-            <span className="font-semibold">Aadhaar:</span> XXXX XXXX{" "}
-            {data.sender.aadhaarNumber.slice(-4)}{" "}
-            <span className="mx-2 text-slate-300">·</span>{" "}
+            {data.csbType === "CSB_IV" ? <><span className="font-semibold">Aadhaar:</span> XXXX XXXX{" "}{data.sender.aadhaarNumber.slice(-4)}{" "}<span className="mx-2 text-slate-300">·</span>{" "}</> : null}
             <span className="font-semibold">Volumetric:</span>{" "}
             {volumetric.toFixed(2)} kg
           </div>

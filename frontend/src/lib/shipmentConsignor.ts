@@ -205,8 +205,7 @@ export function getKycIssues(input: {
     });
   }
 
-  // Mirrors the server rule: the Aadhaar number identifies the sender and is
-  // required on every route, whatever the document checklist asks for.
+  // CSB-IV requires the number; CSB-V requires the uploaded Aadhaar card only.
   function appendAadhaarIssue(value: string, label?: string) {
     const scope = label ? `${label}: ` : "";
 
@@ -220,14 +219,14 @@ export function getKycIssues(input: {
   }
 
   if (input.useForAll) {
-    appendAadhaarIssue(input.sharedAadhaar);
+    if (!isCsbV) appendAadhaarIssue(input.sharedAadhaar);
     appendMissingDocuments(input.sharedDocuments);
     return issues;
   }
 
   input.parcels.forEach((parcel, index) => {
     const label = `Parcel ${index + 1}`;
-    appendAadhaarIssue(parcel.aadhaarNumber, label);
+    if (!isCsbV) appendAadhaarIssue(parcel.aadhaarNumber, label);
     appendMissingDocuments(parcel.kycDocuments, label);
   });
 

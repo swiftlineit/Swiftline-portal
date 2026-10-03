@@ -84,9 +84,12 @@ export default function ArchivedOperationsManifestsPage() {
           </div>
           <div className="flex flex-wrap gap-2">
             {selected.documents.map((file) => <button key={file.format} type="button" onClick={async () => {
-              try { await downloadArchivedOperationsManifest(selected.id, file.format, file.filename); }
+              try {
+                if (file.warnings?.length) toast.warning(`This historical EDI has blank customs fields. ${file.warnings.slice(0, 2).join(" ")}`);
+                await downloadArchivedOperationsManifest(selected.id, file.format, file.filename);
+              }
               catch (caught) { toast.error(caught instanceof Error ? caught.message : "Archived export could not be downloaded."); }
-            }} className="rounded-lg border border-[#0D1282]/20 px-3 py-2 text-sm font-semibold text-[#0D1282] hover:bg-slate-50">{file.format === "csbVEdi" ? "CSB-V EDI" : file.format === "opsEdi" ? "OPS EDI" : file.format.toUpperCase()}</button>)}
+            }} className="rounded-lg border border-[#0D1282]/20 px-3 py-2 text-sm font-semibold text-[#0D1282] hover:bg-slate-50">{file.format === "csbVEdi" ? "CSB-V EDI" : file.format === "csbVEdi2" ? "CSB-V EDI2" : file.format === "opsEdi" ? "OPS EDI" : file.format.toUpperCase()}</button>)}
           </div>
           <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full min-w-[32rem] text-left text-sm">

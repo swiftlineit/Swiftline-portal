@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { test } from "node:test";
 import * as CFB from "cfb";
 import XLSX from "xlsx";
 import type { ManifestDocumentConsignment, ManifestDocumentParcelRow } from "../types/manifestDocument.js";
-import { assertCsbVCustomsFields, assertCsbVOnlyDrafts, CSB_V_ONLY_MANIFEST_MESSAGE } from "../services/csbVEdi/csbVEdiExport.service.js";
+import { missingCsbVCustomsFields, assertCsbVOnlyDrafts, CSB_V_ONLY_MANIFEST_MESSAGE } from "../services/csbVEdi/csbVEdiExport.service.js";
 import { buildCsbVEdiRows, CSB_V_EDI_HEADERS } from "../services/csbVEdi/csbVEdiColumns.js";
 import { buildCsbVEdiWorkbookBuffer } from "../services/csbVEdi/csbVEdiWorkbook.service.js";
+import { buildCsbVEdi2Rows, CSB_V_EDI2_HEADERS } from "../services/csbVEdi/csbVEdi2Columns.js";
+import { buildCsbVEdi2WorkbookBuffer } from "../services/csbVEdi/csbVEdi2Workbook.service.js";
 
 const consignor = {
   companyName: "KALINGA ARTS",
@@ -99,6 +102,7 @@ test("CSB-V EDI repeats shipment-level values and joins multi-item values", () =
         csbVGstin: "08ABCDE1234F1Z5",
         csbVAccountNumber: "001234",
         csbVIecCode: "CUSTOMIEC1",
+        csbVAdCode: "0123456-7654321",
         csbVInvoiceNumber: "INV-100",
         consigneeEnteredAddress: { stateCode: "39" }
       }
@@ -115,6 +119,7 @@ test("CSB-V EDI repeats shipment-level values and joins multi-item values", () =
   assert.equal(rows[0]?.[2], 4);
   assert.equal(rows[0]?.[5], "SLC00701|SLC00702");
   assert.equal(rows[0]?.[3], "CUSTOMIEC1");
+  assert.equal(rows[0]?.[8], "0123456-7654321");
   assert.equal(rows[0]?.[9], "SLCAMD260926001|SLCAMD260926001");
   assert.equal(rows[0]?.[24], "UNITED STATES");
   assert.equal(rows[0]?.[25], "INV-100");
@@ -134,13 +139,50 @@ test("CSB-V EDI repeats shipment-level values and joins multi-item values", () =
   assert.equal(matrix[1]?.[25], "INV-100");
 });
 
-test("CSB-V EDI refuses a missing customer IEC instead of using a default", () => {
-  assert.throws(() => assertCsbVCustomsFields([{
-    csbVAccountNumber: "001234", csbVIecCode: "", csbVInvoiceNumber: "INV-100"
-  }]), /IEC code/);
-  assert.doesNotThrow(() => assertCsbVCustomsFields([{
-    csbVAccountNumber: "001234", csbVIecCode: "CUSTOMIEC1", csbVInvoiceNumber: "INV-100"
-  }]));
+test("CSB-V EDI leaves missing historical customs fields blank instead of inventing sample values", () => {
+  assert.deepEqual(missingCsbVCustomsFields({ csbVAccountNumber: "001234", csbVIecCode: "", csbVInvoiceNumber: "INV-100" }),
+    ["GSTIN", "IEC code", "AD code"]);
+  const rows = buildCsbVEdiRows([consignment], new Map([["draft-1", { csbVIecCode: "", csbVAdCode: "" }]]), "2026-09-26");
+  assert.equal(rows[0]?.[3], "");
+  assert.equal(rows[0]?.[8], "");
+});
+
+test("CSB-V EDI2 keeps the supplied Sheet1 format and emits one row per item", () => {
+  const model = { header: { mawbNumber: "123-45678901" }, consignments: [consignment] } as never;
+  const rows = buildCsbVEdi2Rows(model, new Map([["draft-1", { csbVInvoiceNumber: "INV-100" }]]));
+  assert.equal(rows.length, 3);
+  assert.ok(rows.every((row) => row.length === CSB_V_EDI2_HEADERS.length));
+  assert.deepEqual(rows.map((row) => row[1]), ["SLCAMD260926001", "SLCAMD260926001", "SLCAMD260926001"]);
+  assert.deepEqual(rows.map((row) => row[5]), [200, 30, 50]);
+  assert.deepEqual(rows.map((row) => row[6]), [280, 280, 280]);
+  assert.deepEqual(rows.map((row) => row[10]), [200, 30, 50]);
+  assert.deepEqual(rows.map((row) => row[7]), ["49019900", "96081000", "49019900"]);
+  assert.ok(rows.every((row) => row[11] === "INR" && row[12] === 0 && row[13] === 0 && row[14] === "N"));
+  const buffer = buildCsbVEdi2WorkbookBuffer(rows);
+  const source = fs.readFileSync("assets/csb-v-edi2-template.xls");
+  const workbook = XLSX.read(buffer, { type: "buffer", cellStyles: true });
+  const template = XLSX.read(source, { type: "buffer", cellStyles: true });
+  assert.deepEqual(workbook.SheetNames, ["Sheet1"]);
+  const sheet = workbook.Sheets.Sheet1!;
+  assert.deepEqual(XLSX.utils.sheet_to_json(sheet, { header: 1 })[0], [...CSB_V_EDI2_HEADERS]);
+  assert.equal(sheet.B2?.v, "SLCAMD260926001");
+  assert.equal(sheet.G4?.v, 280);
+  assert.deepEqual(fontSizes(buffer), fontSizes(source));
+  assert.deepEqual(sheet["!cols"]?.map((column) => column.wch), template.Sheets.Sheet1?.["!cols"]?.map((column) => column.wch));
+});
+
+test("CSB-V EDI2 keeps legacy parcels readable without fabricating item values", () => {
+  const legacy = { ...consignment, parcels: [{ ...parcel(1, "", undefined), description: "LEGACY GOODS", items: undefined }] };
+  const rows = buildCsbVEdi2Rows({ header: { mawbNumber: "123-45678901" }, consignments: [legacy] } as never,
+    new Map([["draft-1", {}]]));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.[1], "SLCAMD260926001");
+  assert.equal(rows[0]?.[2], "");
+  assert.equal(rows[0]?.[3], "");
+  assert.equal(rows[0]?.[5], "");
+  assert.equal(rows[0]?.[6], 2500);
+  assert.equal(rows[0]?.[8], "LEGACY GOODS");
+  assert.doesNotThrow(() => XLSX.read(buildCsbVEdi2WorkbookBuffer(rows), { type: "buffer" }));
 });
 
 test("CSB-V EDI uses the legacy 11-point workbook font", () => {

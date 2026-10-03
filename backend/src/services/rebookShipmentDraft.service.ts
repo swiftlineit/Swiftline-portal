@@ -253,6 +253,7 @@ export async function rebookShipmentDraft(input: {
         csbVGstin: source.csbVGstin ?? "",
         csbVAccountNumber: source.csbVAccountNumber ?? "",
         csbVIecCode: source.csbVIecCode ?? "",
+        csbVAdCode: source.csbVAdCode ?? "",
         csbVInvoiceNumber: source.csbVInvoiceNumber ?? "",
         insuranceOptIn: source.insuranceOptIn ?? false,
         forceGst: source.forceGst ?? false,

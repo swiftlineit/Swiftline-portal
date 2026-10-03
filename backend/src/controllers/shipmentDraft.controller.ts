@@ -148,6 +148,7 @@ const draftPatchSchema = z.object({
   csbVGstin: z.string().trim().toUpperCase().max(20).optional(),
   csbVAccountNumber: z.string().trim().max(40).optional(),
   csbVIecCode: z.string().trim().toUpperCase().max(20).optional(),
+  csbVAdCode: z.string().trim().max(15).optional(),
   csbVInvoiceNumber: z.string().trim().max(80).optional(),
   // Optional transit cover; drives the insurance premium on the estimate.
   insuranceOptIn: z.boolean().optional(),
@@ -759,7 +760,7 @@ export async function updateShipmentDraft(request: Request, response: Response):
     shipmentDraft.csbType = parsed.data.csbType;
   }
 
-  for (const fieldName of ["csbVGstin", "csbVAccountNumber", "csbVIecCode", "csbVInvoiceNumber"] as const) {
+  for (const fieldName of ["csbVGstin", "csbVAccountNumber", "csbVIecCode", "csbVAdCode", "csbVInvoiceNumber"] as const) {
     const nextValue = parsed.data[fieldName];
     if (typeof nextValue !== "string") continue;
 

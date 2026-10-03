@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "react-toastify";
 import { FiCheck, FiCreditCard, FiMapPin, FiPackage } from "react-icons/fi";
 import { isValidAadhaarNumber } from "@/lib/aadhaar";
-import { getCsbVBookingIssues } from "@/lib/csbVBooking";
+import { getCsbVBookingIssues, getCsbVShipmentValueError } from "@/lib/csbVBooking";
 import { getPositiveNumberError } from "@/lib/parcelItems";
 import {
   getPostcodeError,
@@ -73,6 +73,7 @@ const initialData: PublicShipmentFormData = {
   csbVGstin: "",
   csbVAccountNumber: "",
   csbVIecCode: "",
+  csbVAdCode: "",
   csbVInvoiceNumber: "",
   kycUseForAllParcels: true,
   parcels: [emptyParcel("WEB-1")],
@@ -140,7 +141,7 @@ function validateAddressStep(data: PublicShipmentFormData) {
     )
       errors[`${prefix}.countryCode`] = "Select an international destination.";
   }
-  if (!isValidAadhaarNumber(data.sender.aadhaarNumber))
+  if (data.csbType === "CSB_IV" && !isValidAadhaarNumber(data.sender.aadhaarNumber))
     errors["sender.aadhaarNumber"] = "Enter a valid 12 digit Aadhaar number.";
   if (
     data.sender.contactName.trim().toLowerCase() ===
@@ -214,10 +215,16 @@ function validateShipmentStep(
       errors[key] = "Enter a name for each other KYC document.";
   }
   if (data.csbType === "CSB_V") {
+    const total = data.parcels.reduce((sum, parcel) => sum + parcel.items.reduce(
+      (itemSum, item) => itemSum + item.quantity * item.unitRate, 0
+    ), 0);
+    const valueError = getCsbVShipmentValueError(Math.round(total * 100) / 100, data.csbType);
+    if (valueError) errors.parcels = valueError;
     const csbVIssues = getCsbVBookingIssues({
       gstin: data.csbVGstin,
       accountNumber: data.csbVAccountNumber,
       iecCode: data.csbVIecCode,
+      adCode: data.csbVAdCode,
       invoiceNumber: data.csbVInvoiceNumber
     }, data.csbType);
     Object.entries(csbVIssues).forEach(([field, message]) => {
@@ -549,6 +556,9 @@ export default function PublicShipmentBookingForm() {
             }
             onConsignee={(consignee) =>
               setData((current) => ({ ...current, consignee }))
+            }
+            onCsbTypeChange={(csbType) =>
+              setData((current) => ({ ...current, csbType }))
             }
             errors={addressErrors}
             revealErrors={revealAddressErrors}

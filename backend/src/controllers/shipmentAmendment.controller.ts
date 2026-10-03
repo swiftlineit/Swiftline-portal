@@ -382,7 +382,8 @@ function applyRequestedChanges(draft: IShipmentDraft, appliedChanges: AppliedCha
   // per-item HSN codes existed, so neither is demanded retroactively here.
   draft.validationIssues = validateShipmentDraftFields(draft, {
     requireConsignorDetails: false,
-    requireItemHsnCodes: false
+    requireItemHsnCodes: false,
+    enforceNewCsbVBookingRules: false
   });
   draft.status = draft.validationIssues.length ? "VALIDATION_FAILED" : "READY_FOR_DPD";
 

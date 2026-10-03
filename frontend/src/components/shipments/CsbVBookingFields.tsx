@@ -45,6 +45,16 @@ export function CsbVBookingFields({
         maxLength={20}
       />
       <ShipmentTextField
+        label="AD Code"
+        value={value.adCode}
+        onChange={(event) => onChange({ ...value, adCode: event.target.value })}
+        error={issues.adCode}
+        revealError={revealError}
+        required
+        maxLength={15}
+        placeholder="1234567 or 1234567-1234567"
+      />
+      <ShipmentTextField
         label="Commercial Invoice Number"
         value={value.invoiceNumber}
         onChange={(event) => onChange({ ...value, invoiceNumber: event.target.value })}

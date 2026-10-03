@@ -162,6 +162,7 @@ export async function savePublicShipmentDraft(bookingId: mongoose.Types.ObjectId
     csbVGstin: data.csbVGstin,
     csbVAccountNumber: data.csbVAccountNumber,
     csbVIecCode: data.csbVIecCode,
+    csbVAdCode: data.csbVAdCode,
     csbVInvoiceNumber: data.csbVInvoiceNumber,
     insuranceOptIn: false,
     forceGst: false,

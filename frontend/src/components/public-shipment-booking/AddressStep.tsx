@@ -20,7 +20,7 @@ import {
 import { formatAadhaarNumber, normalizeAadhaarNumber } from "@/lib/aadhaar";
 import { getDialCodeForCountryCode } from "@/lib/shipmentContactValidation";
 import type { PublicAddress, PublicSender } from "@/lib/publicShipmentBooking";
-import { BookingField } from "./BookingField";
+import { BookingField, BookingSelect } from "./BookingField";
 
 const PUBLIC_REFERENCE_ROOT = "/api/v1/public/shipment-bookings/reference";
 const PUBLIC_ADDRESS_ROOT = "/api/v1/public/shipment-bookings/address-lookup";
@@ -30,6 +30,7 @@ type Props = {
   consignee: PublicAddress;
   onSender: (next: PublicSender) => void;
   onConsignee: (next: PublicAddress) => void;
+  onCsbTypeChange: (next: "CSB_IV" | "CSB_V") => void;
   errors: Record<string, string>;
   revealErrors?: boolean;
   csbType: "CSB_IV" | "CSB_V";
@@ -406,7 +407,7 @@ function AddressPanel<T extends PublicAddress>({
             revealError={revealErrors}
           />
         ) : null}
-        {sender ? (
+        {sender && csbType === "CSB_IV" ? (
           <div className="sm:col-span-2">
             <BookingField
               label="Aadhaar Number"
@@ -444,28 +445,41 @@ function AddressPanel<T extends PublicAddress>({
 
 export default function AddressStep(props: Props) {
   return (
-    <div className="grid items-start gap-5 lg:grid-cols-2">
-      <AddressPanel
-        title="Sender Details"
-        eyebrow="From"
-        value={props.sender}
-        onChange={props.onSender}
-        sender
-        errors={props.errors}
-        revealErrors={props.revealErrors}
-        prefix="sender"
-        csbType={props.csbType}
-      />
-      <AddressPanel
-        title="Receiver Details"
-        eyebrow="To"
-        value={props.consignee}
-        onChange={props.onConsignee}
-        errors={props.errors}
-        revealErrors={props.revealErrors}
-        prefix="consignee"
-        csbType={props.csbType}
-      />
+    <div className="space-y-5">
+      <div className="max-w-sm">
+        <BookingSelect
+          label="Customs route"
+          required
+          value={props.csbType}
+          onChange={(event) => props.onCsbTypeChange(event.target.value as Props["csbType"])}
+        >
+          <option value="CSB_IV">CSB-IV</option>
+          <option value="CSB_V">CSB-V</option>
+        </BookingSelect>
+      </div>
+      <div className="grid items-start gap-5 lg:grid-cols-2">
+        <AddressPanel
+          title="Sender Details"
+          eyebrow="From"
+          value={props.sender}
+          onChange={props.onSender}
+          sender
+          errors={props.errors}
+          revealErrors={props.revealErrors}
+          prefix="sender"
+          csbType={props.csbType}
+        />
+        <AddressPanel
+          title="Receiver Details"
+          eyebrow="To"
+          value={props.consignee}
+          onChange={props.onConsignee}
+          errors={props.errors}
+          revealErrors={props.revealErrors}
+          prefix="consignee"
+          csbType={props.csbType}
+        />
+      </div>
     </div>
   );
 }

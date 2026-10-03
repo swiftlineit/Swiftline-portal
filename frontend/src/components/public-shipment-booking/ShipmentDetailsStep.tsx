@@ -327,20 +327,6 @@ export default function ShipmentDetailsStep({
             <option value="COURIER">International courier</option>
             <option value="CARGO">International cargo</option>
           </BookingSelect>
-          <BookingSelect
-            label="Customs route"
-            value={data.csbType}
-            onChange={(event) =>
-              onChange({
-                ...data,
-                csbType: event.target
-                  .value as PublicShipmentFormData["csbType"],
-              })
-            }
-          >
-            <option value="CSB_IV">CSB-IV</option>
-            <option value="CSB_V">CSB-V</option>
-          </BookingSelect>
           <div className="flex items-end sm:col-span-2">
             <button
               type="button"
@@ -359,9 +345,9 @@ export default function ShipmentDetailsStep({
         {data.csbType === "CSB_V" ? (
           <div className="mt-4">
             <CsbVBookingFields
-              value={{ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, iecCode: data.csbVIecCode, invoiceNumber: data.csbVInvoiceNumber }}
-              onChange={(next) => onChange({ ...data, csbVGstin: next.gstin, csbVAccountNumber: next.accountNumber, csbVIecCode: next.iecCode, csbVInvoiceNumber: next.invoiceNumber })}
-              issues={getCsbVBookingIssues({ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, iecCode: data.csbVIecCode, invoiceNumber: data.csbVInvoiceNumber }, data.csbType)}
+              value={{ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, iecCode: data.csbVIecCode, adCode: data.csbVAdCode, invoiceNumber: data.csbVInvoiceNumber }}
+              onChange={(next) => onChange({ ...data, csbVGstin: next.gstin, csbVAccountNumber: next.accountNumber, csbVIecCode: next.iecCode, csbVAdCode: next.adCode, csbVInvoiceNumber: next.invoiceNumber })}
+              issues={getCsbVBookingIssues({ gstin: data.csbVGstin, accountNumber: data.csbVAccountNumber, iecCode: data.csbVIecCode, adCode: data.csbVAdCode, invoiceNumber: data.csbVInvoiceNumber }, data.csbType)}
               revealError={revealErrors}
             />
           </div>
@@ -397,6 +383,9 @@ export default function ShipmentDetailsStep({
           }
         />
       ))}
+      {revealErrors && errors.parcels ? (
+        <p role="alert" className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">{errors.parcels}</p>
+      ) : null}
       {data.parcels.length < maxParcelsPerShipment ? (
         <button
           type="button"

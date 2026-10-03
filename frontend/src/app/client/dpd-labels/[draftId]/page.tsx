@@ -45,11 +45,12 @@ import {
 import { getDraftRateCardContext, type ClientCountryRateCard } from "@/lib/countryRateCards";
 import { findRestrictedCategories } from "@/lib/restrictedGoods";
 import { normalizeCsbType, type CsbType } from "@/lib/csbType";
-import { getCsbVBookingIssues, type CsbVBookingDetails } from "@/lib/csbVBooking";
+import { getCsbVBookingIssues, getCsbVShipmentValueError, type CsbVBookingDetails } from "@/lib/csbVBooking";
 import { maxParcelsPerShipment } from "@/lib/shipmentLimits";
 import { defaultDeclarationNote } from "@/lib/customsInvoice";
 import {
   composeContentsDescription,
+  getDeclaredGoodsValue,
   createEmptyParcelItem,
   getParcelItemAmountError,
   getHsnCodeError,
@@ -275,7 +276,7 @@ function getReviewIssueDetail(
   contactForm: ContactForm,
   parcelForms: ParcelForm[],
   csbType: CsbType,
-  csbVDetails: CsbVBookingDetails = { gstin: "", accountNumber: "", iecCode: "", invoiceNumber: "" }
+  csbVDetails: CsbVBookingDetails = { gstin: "", accountNumber: "", iecCode: "", adCode: "", invoiceNumber: "" }
 ): ShipmentFormIssues {
   const missing: string[] = [];
   const invalid: string[] = [];
@@ -365,6 +366,8 @@ function getReviewIssueDetail(
     });
   });
 
+  const valueError = getCsbVShipmentValueError(getDeclaredGoodsValue(parcelForms), csbType);
+  if (valueError) invalid.push(valueError);
   return { missing, invalid };
 }
 
@@ -433,7 +436,7 @@ export default function ClientDpdDraftReviewPage() {
   // Customs route for the shipment. Drafts saved before CSB selection existed
   // read as CSB-IV, matching how the backend prices them.
   const [csbType, setCsbType] = useState<CsbType>("CSB_IV");
-  const [csbVDetails, setCsbVDetails] = useState<CsbVBookingDetails>({ gstin: "", accountNumber: "", iecCode: "", invoiceNumber: "" });
+  const [csbVDetails, setCsbVDetails] = useState<CsbVBookingDetails>({ gstin: "", accountNumber: "", iecCode: "", adCode: "", invoiceNumber: "" });
   // Optional transit cover. Off unless the customer asks for it.
   const [insuranceOptIn, setInsuranceOptIn] = useState(false);
   const [forceGst, setForceGst] = useState(false);
@@ -662,6 +665,7 @@ export default function ClientDpdDraftReviewPage() {
     csbVGstin: csbVDetails.gstin,
     csbVAccountNumber: csbVDetails.accountNumber,
     csbVIecCode: csbVDetails.iecCode,
+    csbVAdCode: csbVDetails.adCode,
     csbVInvoiceNumber: csbVDetails.invoiceNumber,
     insuranceOptIn,
     forceGst,
@@ -684,6 +688,7 @@ export default function ClientDpdDraftReviewPage() {
       || csbVDetails.gstin !== (draft.csbVGstin ?? "")
       || csbVDetails.accountNumber !== (draft.csbVAccountNumber ?? "")
       || csbVDetails.iecCode !== (draft.csbVIecCode ?? "")
+      || csbVDetails.adCode !== (draft.csbVAdCode ?? "")
       || csbVDetails.invoiceNumber !== (draft.csbVInvoiceNumber ?? "")
       || declarationNote !== (draft.declarationNote ?? defaultDeclarationNote)
       || JSON.stringify(comparableParcelForms(parcelForms))
@@ -763,7 +768,7 @@ export default function ClientDpdDraftReviewPage() {
       serviceCode: nextDraft.serviceCode ?? ""
     });
     setCsbType(normalizeCsbType(nextDraft.csbType));
-    setCsbVDetails({ gstin: nextDraft.csbVGstin ?? "", accountNumber: nextDraft.csbVAccountNumber ?? "", iecCode: nextDraft.csbVIecCode ?? "", invoiceNumber: nextDraft.csbVInvoiceNumber ?? "" });
+    setCsbVDetails({ gstin: nextDraft.csbVGstin ?? "", accountNumber: nextDraft.csbVAccountNumber ?? "", iecCode: nextDraft.csbVIecCode ?? "", adCode: nextDraft.csbVAdCode ?? "", invoiceNumber: nextDraft.csbVInvoiceNumber ?? "" });
     setInsuranceOptIn(nextDraft.insuranceOptIn ?? false);
     setForceGst(nextDraft.forceGst ?? false);
     setDeclarationNote(nextDraft.declarationNote ?? defaultDeclarationNote);
@@ -1593,6 +1598,11 @@ export default function ClientDpdDraftReviewPage() {
                     </div>
                   ))}
 
+                  {getCsbVShipmentValueError(getDeclaredGoodsValue(parcelForms), csbType) ? (
+                    <p role="alert" className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-[12px] font-medium text-red-800">
+                      {getCsbVShipmentValueError(getDeclaredGoodsValue(parcelForms), csbType)}
+                    </p>
+                  ) : null}
                   <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
                     Enter the actual parcel contents. Incorrect or mismatched descriptions may result in inspection and additional penalty charges.
                   </p>

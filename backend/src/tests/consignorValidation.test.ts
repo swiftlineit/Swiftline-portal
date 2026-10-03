@@ -8,6 +8,7 @@ import {
 } from "../services/aadhaarValidation.service.js";
 import type { IShipmentDraft } from "../models/shipmentDraft.model.js";
 import { validateShipmentDraftFields } from "../services/shipmentValidation.service.js";
+import { getAdCodeError } from "../services/adCode.service.js";
 
 // Carries a valid Verhoeff check digit.
 const validAadhaar = "234567890124";
@@ -120,15 +121,23 @@ describe("consignor draft validation", () => {
     assert.ok(issues.includes("Enter a valid 12 digit Aadhaar number"));
   });
 
-  test("requires the Aadhaar number for CSB-V", () => {
+  test("does not require a typed Aadhaar number for CSB-V", () => {
     const issues = validateShipmentDraftFields(draftWith({ csbType: "CSB_V", consignor: { aadhaarNumber: "" } }));
-    assert.ok(issues.includes("Aadhaar number is required"), issues.join(" | "));
+    assert.equal(issues.some((issue) => issue.includes("Aadhaar number")), false, issues.join(" | "));
+  });
+
+  test("accepts both supported AD code formats and rejects malformed ones", () => {
+    assert.equal(getAdCodeError("0123456"), "");
+    assert.equal(getAdCodeError("0123456-7654321"), "");
+    assert.ok(getAdCodeError("0123456-765432"));
+    assert.ok(getAdCodeError("ABC1234"));
   });
 
   test("requires CSB-V customs fields and consignee state code", () => {
     const issues = validateShipmentDraftFields(draftWith({ csbType: "CSB_V" }));
     assert.ok(issues.includes("GSTIN number is required"));
-    assert.ok(issues.includes("Account number is required"));
+    assert.ok(issues.includes("AD code is required"));
+    assert.ok(issues.includes("Bank account number is required"));
     assert.ok(issues.includes("Commercial invoice number is required"));
     assert.ok(issues.includes("Consignee state code is required"));
   });
@@ -150,7 +159,7 @@ describe("consignor draft validation", () => {
     assert.equal(issues.includes("Upload Other Certificates"), false);
   });
 
-  test("requires per-parcel Aadhaar + card when KYC is not shared on CSB-V", () => {
+  test("requires per-parcel Aadhaar card, but not typed number, on CSB-V", () => {
     const issues = validateShipmentDraftFields(draftWith({
       csbType: "CSB_V",
       useForAll: false,
@@ -159,7 +168,7 @@ describe("consignor draft validation", () => {
         { sequence: 2, weightKg: 6, lengthCm: 10, widthCm: 10, heightCm: 10, shipmentContentType: "PARCEL", contentsDescription: "B", aadhaarNumber: validAadhaar, kycDocuments: { aadhaar: { storageKey: "shipments/test/kyc/p2-aadhaar.pdf" }, pan: { storageKey: "shipments/test/kyc/p2-pan.pdf" } } }
       ]
     }));
-    assert.ok(issues.includes("Parcel 1: Aadhaar number is required"));
+    assert.equal(issues.includes("Parcel 1: Aadhaar number is required"), false);
     assert.ok(issues.includes("Parcel 1: upload Aadhaar Card"));
     assert.ok(issues.includes("Parcel 1: upload PAN Card"));
     // Parcel 2 supplied its Aadhaar and cards, so it raises no Aadhaar issue.
@@ -220,6 +229,24 @@ describe("consignor draft validation", () => {
 
   // A fully specified item, so tests can vary one field at a time.
   const completeItem = { description: "Cookies", hsnCode: "19053100", unitType: "Pkt", quantity: 2, unitRate: 50 };
+
+  test("CSB-V enforces the combined value across parcels, not each item alone", () => {
+    const parcel = (sequence: number, rate: number) => ({
+      sequence, weightKg: 5, lengthCm: 10, widthCm: 10, heightCm: 10,
+      shipmentContentType: "PARCEL", contentsDescription: "Cookies", shipmentReference1: `REF-${sequence}`,
+      items: [{ ...completeItem, quantity: 1, unitRate: rate }]
+    });
+    const within = validateShipmentDraftFields(draftWith({ csbType: "CSB_V", parcels: [parcel(1, 500000), parcel(2, 500000)] }));
+    const over = validateShipmentDraftFields(draftWith({ csbType: "CSB_V", parcels: [parcel(1, 500000), parcel(2, 500000.01)] }));
+    const iv = validateShipmentDraftFields(draftWith({ csbType: "CSB_IV", parcels: [parcel(1, 500000), parcel(2, 500000.01)] }));
+    assert.equal(within.some((issue) => issue.includes("₹10,00,000")), false);
+    assert.ok(over.some((issue) => issue.includes("₹10,00,000")));
+    assert.equal(iv.some((issue) => issue.includes("₹10,00,000")), false);
+    const legacy = validateShipmentDraftFields(draftWith({ csbType: "CSB_V", parcels: [parcel(1, 500000), parcel(2, 500000.01)] }), {
+      requireConsignorDetails: false, requireItemHsnCodes: false, enforceNewCsbVBookingRules: false
+    });
+    assert.equal(legacy.some((issue) => issue.includes("₹10,00,000") || issue.includes("AD code")), false);
+  });
 
   // One item complete, one with the HS code left blank. Only the CSB type decides
   // whether the blank is a problem.

@@ -19,7 +19,7 @@ async function mockApis(page: Page) {
   let sessionStarts = 0;
   let paymentCompleted = false;
   await page.route(
-    "http://localhost:5000/api/v1/public/shipment-bookings/**",
+    "http://localhost:5000/api/v1/**",
     async (route) => {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/policies"))
@@ -166,7 +166,8 @@ async function mockApis(page: Page) {
   return { sessionStarts: () => sessionStarts };
 }
 
-async function completeAddressStep(page: Page) {
+async function completeAddressStep(page: Page, csbType: "CSB_IV" | "CSB_V" = "CSB_IV") {
+  await page.getByLabel("Customs route").selectOption(csbType);
   const sender = page.getByRole("region", { name: "Sender details" });
   await expect(sender.getByText("Confirm sender email", { exact: true })).toHaveCount(0);
   await sender.getByLabel("Contact name").fill("Ravi Kumar");
@@ -176,10 +177,12 @@ async function completeAddressStep(page: Page) {
   await sender.getByLabel("Address line 1").fill("10 Market Road");
   await sender.getByLabel("State / county").fill("Delhi");
   await sender.getByLabel("Town / city").fill("Delhi");
-  await sender.getByLabel("Aadhaar number").fill("234567890124");
-  await expect(sender.getByLabel("Aadhaar number")).toHaveValue(
-    "2345 6789 0124",
-  );
+  if (csbType === "CSB_IV") {
+    await sender.getByLabel("Aadhaar number").fill("234567890124");
+    await expect(sender.getByLabel("Aadhaar number")).toHaveValue(
+      "2345 6789 0124",
+    );
+  }
   const receiver = page.getByRole("region", { name: "Receiver details" });
   await receiver.getByLabel("Contact name").fill("Alex Smith");
   await receiver.getByLabel("Email").fill("alex@example.com");
@@ -197,7 +200,15 @@ async function completeAddressStep(page: Page) {
     "Greater London",
   );
   await expect(receiver.getByLabel("Town / city")).toHaveValue("London");
+  if (csbType === "CSB_V") {
+    await receiver.getByLabel("Consignee State Code").fill("10");
+  }
   await page.getByRole("button", { name: "Continue" }).click();
+}
+
+async function openParcelItemEditor(page: Page) {
+  await page.getByRole("button", { name: "Add items" }).click();
+  return page.getByRole("dialog", { name: "Manage contents" });
 }
 
 let mockedApi: Awaited<ReturnType<typeof mockApis>>;
@@ -249,8 +260,11 @@ test("books and pays for a public shipment", async ({ page }, testInfo) => {
   await page.getByLabel("Length (cm)").fill("20");
   await page.getByLabel("Width (cm)").fill("15");
   await page.getByLabel("Height (cm)").fill("10");
-  await page.getByLabel("Description").fill("Cotton shirts");
-  await page.getByLabel("Unit value (₹)").fill("1000");
+  const itemEditor = await openParcelItemEditor(page);
+  await itemEditor.getByLabel("Description").fill("Cotton shirts");
+  await itemEditor.getByLabel("Quantity").fill("2");
+  await itemEditor.getByLabel("Unit rate").fill("500");
+  await itemEditor.getByRole("button", { name: "Close item editor" }).click();
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("Confirm before pricing")).toBeVisible();
   await page.getByLabel(/I accept the online booking terms/).check();
@@ -275,6 +289,29 @@ test("books and pays for a public shipment", async ({ page }, testInfo) => {
   await expect.poll(() => mockedApi.sessionStarts()).toBe(2);
   await expect(page.getByRole("region", { name: "Sender details" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Your shipment is ready" })).toHaveCount(0);
+});
+
+test("CSB-V hides Aadhaar number and blocks a combined value above ten lakh", async ({ page }) => {
+  await page.goto("/book-shipment-online");
+  await page.getByLabel("Customs route").selectOption("CSB_V");
+  const sender = page.getByRole("region", { name: "Sender details" });
+  await expect(sender.getByLabel("Aadhaar number")).toHaveCount(0);
+  await completeAddressStep(page, "CSB_V");
+  await page.getByLabel("Actual weight (kg)").fill("2");
+  await page.getByLabel("Length (cm)").fill("20");
+  await page.getByLabel("Width (cm)").fill("15");
+  await page.getByLabel("Height (cm)").fill("10");
+  const itemEditor = await openParcelItemEditor(page);
+  await itemEditor.getByLabel("Description").fill("Cotton shirts");
+  await itemEditor.getByLabel("HS code").fill("62052000");
+  await itemEditor.getByLabel("Quantity").fill("2");
+  await itemEditor.getByLabel("Unit rate").fill("500001");
+  await itemEditor.getByRole("button", { name: "Close item editor" }).click();
+  const adCodeField = page.getByRole("textbox", { name: /^AD Code/ });
+  await expect(adCodeField).toBeVisible();
+  await adCodeField.fill("1234567");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("main").getByText(/CSB-V shipment goods value cannot exceed.*10,00,000/)).toBeVisible();
 });
 
 test("company selection requires a company name", async ({ page }) => {
@@ -324,8 +361,11 @@ test("does not advance when the persisted draft fails quote validation", async (
   await page.getByLabel("Length (cm)").fill("20");
   await page.getByLabel("Width (cm)").fill("15");
   await page.getByLabel("Height (cm)").fill("10");
-  await page.getByLabel("Description").fill("Cotton shirts");
-  await page.getByLabel("Unit value (₹)").fill("1000");
+  const itemEditor = await openParcelItemEditor(page);
+  await itemEditor.getByLabel("Description").fill("Cotton shirts");
+  await itemEditor.getByLabel("Quantity").fill("2");
+  await itemEditor.getByLabel("Unit rate").fill("500");
+  await itemEditor.getByRole("button", { name: "Close item editor" }).click();
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(
     page.getByText("Receiver address could not be validated.", { exact: true }),
@@ -336,18 +376,18 @@ test("does not advance when the persisted draft fails quote validation", async (
   await expect(page.getByText("Confirm before pricing")).toHaveCount(0);
 });
 
-test("shows country flags, address suggestions and HS-code search", async ({
+test("shows address suggestions and accepts a manually entered HS code", async ({
   page,
 }) => {
   await page.goto("/book-shipment-online");
   const sender = page.getByRole("region", { name: "Sender details" });
   await expect(sender.locator("img").first()).toBeVisible();
   await completeAddressStep(page);
-  await page.getByLabel("Description").fill("Cotton shirts");
-  await page.getByLabel("HS code").focus();
-  await expect(page.getByRole("button", { name: /62052000/ })).toBeVisible();
-  await page.getByRole("button", { name: /62052000/ }).click();
-  await expect(page.getByLabel("HS code")).toHaveValue("62052000");
+  const itemEditor = await openParcelItemEditor(page);
+  await itemEditor.getByLabel("Description").fill("Cotton shirts");
+  await itemEditor.getByLabel("HS code").fill("62052000");
+  await expect(itemEditor.getByLabel("HS code")).toHaveValue("62052000");
+  await itemEditor.getByRole("button", { name: "Close item editor" }).click();
 });
 
 test("receiver state and city use reference search without clearing an entered city", async ({

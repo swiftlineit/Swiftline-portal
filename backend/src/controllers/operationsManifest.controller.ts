@@ -10,6 +10,7 @@ import { buildOperationsManifestEdi } from "../services/edi/ediExport.service.js
 import { buildOperationsManifestMhbsEdi } from "../services/mhbsEdi/mhbsEdiExport.service.js";
 import { buildOperationsManifestOpsEdi } from "../services/opsEdi/opsEdiExport.service.js";
 import { buildOperationsManifestCsbVEdi } from "../services/csbVEdi/csbVEdiExport.service.js";
+import { buildOperationsManifestCsbVEdi2 } from "../services/csbVEdi/csbVEdi2Export.service.js";
 import {
   buildOperationsManifestExcel,
   buildOperationsManifestPdf,
@@ -193,7 +194,7 @@ export async function getArchivedManifest(request: Request, response: Response) 
         deletionMode: archive.deletionMode ?? "ARCHIVE",
         deletionReason: archive.deletionReason ?? "",
         linkedFlight,
-        documents: archive.documents.map(({ format, filename }) => ({ format, filename })),
+        documents: archive.documents.map(({ format, filename, warnings }) => ({ format, filename, warnings: warnings ?? [] })),
         document: snapshot ? buildManifestDocumentModel(snapshot) : null
       }
     });
@@ -558,7 +559,7 @@ export async function exportMhbsEdi(request: Request, response: Response) {
   }
 }
 
-export async function exportCsbVEdi(request: Request, response: Response) {
+async function downloadCsbVEdi(request: Request, response: Response, version: 1 | 2) {
   try {
     const manifest = await OperationsManifest.findById(String(request.params.manifestId)).exec();
     if (!manifest) throw new OperationsManifestServiceError("Operations manifest was not found.", 404);
@@ -566,11 +567,22 @@ export async function exportCsbVEdi(request: Request, response: Response) {
       throw new OperationsManifestServiceError("Exports are available after the manifest is sealed.", 409);
     }
 
-    const buffer = await buildOperationsManifestCsbVEdi(manifest);
+    const result = version === 1
+      ? await buildOperationsManifestCsbVEdi(manifest)
+      : await buildOperationsManifestCsbVEdi2(manifest);
     response.setHeader("Content-Type", "application/vnd.ms-excel");
-    response.setHeader("Content-Disposition", `${request.query.view === "1" ? "inline" : "attachment"}; filename="csb-v-${manifest.manifestNumber}.xls"`);
-    return response.send(buffer);
+    response.setHeader("Content-Disposition", `${request.query.view === "1" ? "inline" : "attachment"}; filename="csb-v-${version === 2 ? "edi2-" : ""}${manifest.manifestNumber}.xls"`);
+    response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, X-CSB-V-EDI-Warnings");
+    if (result.warnings.length) {
+      const messages = result.warnings.slice(0, 3).map((message) => ({ message }));
+      if (result.warnings.length > 3) messages.push({ message: `${result.warnings.length - 3} more shipments have missing customs fields.` });
+      response.setHeader("X-CSB-V-EDI-Warnings", Buffer.from(JSON.stringify(messages), "utf8").toString("base64"));
+    }
+    return response.send(result.buffer);
   } catch (error) {
     return sendError(response, error);
   }
 }
+
+export const exportCsbVEdi = (request: Request, response: Response) => downloadCsbVEdi(request, response, 1);
+export const exportCsbVEdi2 = (request: Request, response: Response) => downloadCsbVEdi(request, response, 2);

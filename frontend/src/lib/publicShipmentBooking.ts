@@ -38,6 +38,7 @@ export type PublicShipmentFormData = {
   csbVGstin: string;
   csbVAccountNumber: string;
   csbVIecCode: string;
+  csbVAdCode: string;
   csbVInvoiceNumber: string;
   kycUseForAllParcels: boolean;
   parcels: PublicParcel[];
