@@ -170,9 +170,9 @@ function buildAccountBlock(draft: IShipmentDraft, account: IBusinessAccount) {
       mobileNumber: consignor.mobileNumber ?? ""
     },
     company: {
-      // Individuals trade under their own name and hold no GSTIN, so the invoice
-      // is raised without one and GST is charged accordingly.
-      companyName: consignor.contactName ?? "",
+      // Keep the sender's registered company name when one was supplied;
+      // otherwise bill the individual under their contact name.
+      companyName: consignor.companyName || consignor.contactName || "",
       gstin: "",
       registeredAddress: consignor.addressLine1 ?? "",
       city: consignor.townOrCity ?? "",

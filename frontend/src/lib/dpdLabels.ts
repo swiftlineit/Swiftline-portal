@@ -59,6 +59,7 @@ export type ShipmentConsignorAddress = {
 
 export const shipmentKycDocumentTypes = [
   "aadhaar",
+  "aadhaarBack",
   "pan",
   "iec",
   "gst",
@@ -74,6 +75,7 @@ export type ShipmentKycDocumentType = (typeof shipmentKycDocumentTypes)[number];
 
 export const shipmentKycDocumentLabels: Record<ShipmentKycDocumentType, string> = {
   aadhaar: "Aadhaar Card",
+  aadhaarBack: "Aadhaar Back Side",
   pan: "PAN Card",
   iec: "IEC",
   gst: "GST",
@@ -85,7 +87,7 @@ export const shipmentKycDocumentLabels: Record<ShipmentKycDocumentType, string> 
   other: "Other Document"
 };
 
-export const csbIvKycDocumentTypes = ["pan", "aadhaar"] as const;
+export const csbIvKycDocumentTypes = ["aadhaar", "pan"] as const;
 export const csbVKycDocumentTypes = [
   "iec",
   "gst",

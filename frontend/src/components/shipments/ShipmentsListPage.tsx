@@ -50,7 +50,8 @@ import {
 
 const emptyPagination: ShipmentListPagination = { page: 1, limit: 20, total: 0, totalPages: 1 };
 const REBOOKED_FILTER_VALUE = "__REBOOKED__";
-const PUBLIC_BOOKING_FILTER_VALUE = "PUBLIC_ONLINE";
+const INDIVIDUAL_BOOKINGS_FILTER_VALUE = "__INDIVIDUAL_BOOKINGS__";
+const LEGACY_PUBLIC_BOOKING_SOURCE = "PUBLIC_ONLINE";
 // One-time namespace bump prevents an earlier saved test filter from hiding
 // the normal list after this persistence behavior is introduced.
 const shipmentViewStorageVersion = "v2";
@@ -63,6 +64,7 @@ const shipmentViewQueryKeys = [
   "dateFrom",
   "dateTo",
   "businessAccountId",
+  "individualBookings",
   "creationSource",
   "destinationRegions",
   "operationsManifestId",
@@ -80,7 +82,7 @@ type ShipmentViewState = {
   rebookedOnly: boolean;
   dateRange: DateRange;
   businessAccountId: string;
-  creationSource: string;
+  individualBookings: boolean;
   destinationRegions: ShipmentDestinationRegionCode[];
   operationsManifestId: string;
   page: number;
@@ -119,7 +121,7 @@ function readShipmentViewState(value: string | null): ShipmentViewState | null {
         to: typeof savedDateRange?.to === "string" ? savedDateRange.to : ""
       },
       businessAccountId: typeof parsed.businessAccountId === "string" ? parsed.businessAccountId : "",
-      creationSource: parsed.creationSource === PUBLIC_BOOKING_FILTER_VALUE ? PUBLIC_BOOKING_FILTER_VALUE : "",
+      individualBookings: parsed.individualBookings === true || parsed.creationSource === LEGACY_PUBLIC_BOOKING_SOURCE,
       destinationRegions: Array.isArray(parsed.destinationRegions)
         ? parseShipmentDestinationRegions(
           parsed.destinationRegions.filter((value): value is string => typeof value === "string").join(",")
@@ -172,11 +174,22 @@ const dpdLabelPresentation: Record<DpdLabelStatus, { label: string; className: s
   NOT_APPLICABLE: { label: "DPD label not applicable", className: "text-slate-500" }
 };
 
-function DpdLabelAvailability({ status }: { status: DpdLabelStatus }) {
+function DpdLabelAvailability({ status, href }: { status: DpdLabelStatus; href?: string }) {
   const presentation = dpdLabelPresentation[status];
+  const label = presentation.label;
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className={`mt-1 inline-flex text-[10px] font-semibold leading-4 underline underline-offset-2 transition-colors hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-1 ${presentation.className}`}
+      >
+        {label}
+      </Link>
+    );
+  }
   return (
     <p className={`mt-1 text-[10px] font-semibold leading-4 ${presentation.className}`}>
-      {presentation.label}
+      {label}
     </p>
   );
 }
@@ -202,7 +215,7 @@ function BusinessAccountFilter({
   const [highlighted, setHighlighted] = useState(0);
   const choices = useMemo(() => [
     { value: "", label: "All Business Accounts" },
-    { value: PUBLIC_BOOKING_FILTER_VALUE, label: "Public online" },
+    { value: INDIVIDUAL_BOOKINGS_FILTER_VALUE, label: "Individual bookings" },
     ...accounts.map((account) => ({ value: account._id, label: getAccountLabel(account) }))
   ], [accounts]);
   const selectedLabel = choices.find((choice) => choice.value === value)?.label ?? "Selected business account";
@@ -358,9 +371,9 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const dateToQuery = searchParams.get("dateTo") ?? "";
   const searchFromQuery = searchParams.get("search")?.trim() ?? "";
   const businessAccountFromQuery = searchParams.get("businessAccountId") ?? "";
-  const creationSourceFromQuery = searchParams.get("creationSource") === PUBLIC_BOOKING_FILTER_VALUE
-    ? PUBLIC_BOOKING_FILTER_VALUE
-    : "";
+  const individualBookingsFromQuery = searchParams.get("individualBookings") === "1"
+    || searchParams.get("individualBookings") === "true"
+    || searchParams.get("creationSource") === LEGACY_PUBLIC_BOOKING_SOURCE;
   const destinationRegionsFromQuery = parseShipmentDestinationRegions(searchParams.get("destinationRegions"));
   const operationsManifestFromQuery = audience === "admin" ? searchParams.get("operationsManifestId") ?? "" : "";
   const allShipmentsViewFromQuery = searchParams.get("view") === "all";
@@ -383,9 +396,9 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   // Business-account filter, staff only. Clients are already scoped to the
   // accounts they belong to, so the dropdown would only ever offer one row.
   const [businessAccountId, setBusinessAccountId] = useState(
-    creationSourceFromQuery ? "" : businessAccountFromQuery
+    individualBookingsFromQuery ? "" : businessAccountFromQuery
   );
-  const [creationSource, setCreationSource] = useState(creationSourceFromQuery);
+  const [individualBookings, setIndividualBookings] = useState(individualBookingsFromQuery);
   const [destinationRegions, setDestinationRegions] = useState<ShipmentDestinationRegionCode[]>(destinationRegionsFromQuery);
   const [operationsManifestId, setOperationsManifestId] = useState(operationsManifestFromQuery);
   const [operationsManifests, setOperationsManifests] = useState<Array<{ id: string; manifestNumber: string; status: string }>>([]);
@@ -487,9 +500,9 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     attentionOnly,
     bookedDate,
     businessAccountId,
+    individualBookings,
     dateFrom: dateRange.from,
     dateTo: dateRange.to,
-    creationSource,
     destinationRegions: [...destinationRegions].sort(),
     operationsManifestId,
     rebookedOnly,
@@ -561,8 +574,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         dateRange: bookedDate ? emptyDateRange : dateRange,
         bookedDate,
         rebooked: rebookedOnly,
-        businessAccountId: creationSource ? "" : businessAccountId,
-        creationSource: creationSource === PUBLIC_BOOKING_FILTER_VALUE ? "PUBLIC_ONLINE" : undefined,
+        businessAccountId: individualBookings ? "" : businessAccountId,
+        individualBookings: audience === "admin" ? individualBookings : false,
         destinationRegions: audience === "admin" ? destinationRegions : [],
         operationsManifestId: audience === "admin" ? operationsManifestId : "",
         sort,
@@ -599,7 +612,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         setLoading(false);
       }
     }
-  }, [attentionOnly, audience, bookedDate, businessAccountId, creationSource, dateRange, destinationRegions, operationsManifestId, limit, page, rebookedOnly, search, sort, status]);
+  }, [attentionOnly, audience, bookedDate, businessAccountId, dateRange, destinationRegions, individualBookings, operationsManifestId, limit, page, rebookedOnly, search, sort, status]);
 
   // The URL wins when it contains a dashboard drill-down or an explicit
   // filter. Otherwise restore only this audience's last view from the tab
@@ -644,8 +657,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         setAttentionOnly(saved.attentionOnly);
         setBookedDate(saved.bookedDate);
         setDateRange(saved.dateRange);
-        setBusinessAccountId(audience === "admin" && !saved.creationSource ? saved.businessAccountId : "");
-        setCreationSource(audience === "admin" ? saved.creationSource : "");
+        setBusinessAccountId(audience === "admin" && !saved.individualBookings ? saved.businessAccountId : "");
+        setIndividualBookings(audience === "admin" && saved.individualBookings);
         setDestinationRegions(audience === "admin" ? saved.destinationRegions : []);
         setOperationsManifestId(audience === "admin" ? saved.operationsManifestId : "");
         setPage(saved.page);
@@ -684,7 +697,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       setBookedDate("");
       setDateRange(emptyDateRange);
       setBusinessAccountId("");
-      setCreationSource("");
+      setIndividualBookings(false);
       setDestinationRegions([]);
       setOperationsManifestId("");
       setPage(1);
@@ -813,8 +826,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       bookedDate,
       rebookedOnly,
       dateRange: { from: dateRange.from, to: dateRange.to },
-      businessAccountId: audience === "admin" && !creationSource ? businessAccountId : "",
-      creationSource: audience === "admin" ? creationSource : "",
+      businessAccountId: audience === "admin" && !individualBookings ? businessAccountId : "",
+      individualBookings: audience === "admin" && individualBookings,
       destinationRegions: audience === "admin" ? destinationRegions : [],
       operationsManifestId: audience === "admin" ? operationsManifestId : "",
       page,
@@ -841,8 +854,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       if (dateRange.to) params.set("dateTo", dateRange.to);
     }
     if (rebookedOnly) params.set("rebooked", "1");
-    if (audience === "admin" && creationSource === PUBLIC_BOOKING_FILTER_VALUE) {
-      params.set("creationSource", "PUBLIC_ONLINE");
+    if (audience === "admin" && individualBookings) {
+      params.set("individualBookings", "1");
     } else if (audience === "admin" && businessAccountId) {
       params.set("businessAccountId", businessAccountId);
     }
@@ -859,7 +872,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         { scroll: false }
       );
     }
-  }, [allShipmentsViewFromQuery, attentionOnly, audience, bookedDate, businessAccountId, creationSource, dateRange.from, dateRange.to, destinationRegions, operationsManifestId, limit, page, rebookedOnly, restoringView, router, search, sort, status]);
+  }, [allShipmentsViewFromQuery, attentionOnly, audience, bookedDate, businessAccountId, dateRange.from, dateRange.to, destinationRegions, individualBookings, operationsManifestId, limit, page, rebookedOnly, restoringView, router, search, sort, status]);
 
   useEffect(() => {
     if (previousSelectionScope.current === selectionScope) return;
@@ -1207,13 +1220,13 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                 <div className="min-w-0 md:col-span-2 xl:col-span-4">
                   <BusinessAccountFilter
                     accounts={accounts}
-                    value={creationSource || businessAccountId}
+                    value={individualBookings ? INDIVIDUAL_BOOKINGS_FILTER_VALUE : businessAccountId}
                     onSelect={(value) => {
-                      if (value === PUBLIC_BOOKING_FILTER_VALUE) {
+                      if (value === INDIVIDUAL_BOOKINGS_FILTER_VALUE) {
                         setBusinessAccountId("");
-                        setCreationSource(PUBLIC_BOOKING_FILTER_VALUE);
+                        setIndividualBookings(true);
                       } else {
-                        setCreationSource("");
+                        setIndividualBookings(false);
                         setBusinessAccountId(value);
                       }
                       setPage(1);
@@ -1746,8 +1759,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
             dateRange: bookedDate ? emptyDateRange : dateRange,
             bookedDate,
             rebooked: rebookedOnly,
-            businessAccountId: creationSource ? "" : businessAccountId,
-            creationSource: creationSource === PUBLIC_BOOKING_FILTER_VALUE ? "PUBLIC_ONLINE" : undefined,
+            businessAccountId: individualBookings ? "" : businessAccountId,
+            individualBookings: audience === "admin" ? individualBookings : false,
             destinationRegions: audience === "admin" ? destinationRegions : [],
             operationsManifestId: audience === "admin" ? operationsManifestId : "",
             sort,
@@ -1890,7 +1903,10 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                       {shipment.statusLabel}
                     </span>
                     {audience === "admin" && shipment.dpdLabelStatus ? (
-                      <DpdLabelAvailability status={shipment.dpdLabelStatus} />
+                      <DpdLabelAvailability
+                        status={shipment.dpdLabelStatus}
+                        href={shipment.dpdLabelStatus === "AVAILABLE" ? `/dashboard/dpd-labels/${shipment.id}` : undefined}
+                      />
                     ) : null}
                     {shipment.manifest ? (
                       <p className="mt-1 text-[10px] font-semibold leading-4 text-slate-500">
@@ -1929,7 +1945,12 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   ) : null}
                   {shows("created") ? (
                     <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                      {formatDashboardDateTime(shipment.createdAt)}
+                      <p>{formatDashboardDateTime(shipment.createdAt)}</p>
+                      {audience === "admin" && shipment.rebookedFromDraftId ? (
+                        <span className="mt-1 inline-flex rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
+                          Rebooked
+                        </span>
+                      ) : null}
                     </td>
                   ) : null}
                   <td className="px-4 py-3">

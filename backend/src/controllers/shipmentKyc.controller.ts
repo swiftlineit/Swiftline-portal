@@ -13,7 +13,7 @@ import {
   ShipmentDraftPolicyError
 } from "../services/shipmentDraftPolicy.service.js";
 import { validateShipmentDraftFields } from "../services/shipmentValidation.service.js";
-import { isSupportedDocument } from "../services/storage/fileSignature.js";
+import { isSupportedDocument, isSupportedImage } from "../services/storage/fileSignature.js";
 import {
   StorageObjectNotFoundError,
   deleteObject,
@@ -27,6 +27,7 @@ const documentLabelSchema = z.string().trim().min(2).max(80);
 
 export const kycDocumentLabels: Record<ShipmentKycDocumentType, string> = {
   aadhaar: "Aadhaar Card",
+  aadhaarBack: "Aadhaar Back Side",
   pan: "PAN Card",
   iec: "IEC",
   gst: "GST",
@@ -37,6 +38,10 @@ export const kycDocumentLabels: Record<ShipmentKycDocumentType, string> = {
   hsnCode: "HSN Code",
   other: "Other Document"
 };
+
+function isSupportedImageMimeType(mimeType: string | undefined) {
+  return mimeType === "image/jpeg" || mimeType === "image/png";
+}
 
 function getAuthenticatedUserId(request: Request): mongoose.Types.ObjectId | null {
   const user = (request as Request & { user?: { _id?: unknown } }).user;
@@ -143,6 +148,7 @@ export function serializeKycDocuments(
 
   return {
     aadhaar: serializeKycDocument(source.aadhaar),
+    aadhaarBack: serializeKycDocument(source.aadhaarBack),
     pan: serializeKycDocument(source.pan),
     iec: serializeKycDocument(source.iec),
     gst: serializeKycDocument(source.gst),
@@ -176,8 +182,16 @@ export async function uploadShipmentParcelKycDocument(request: Request, response
     return response.status(400).json({ success: false, message: "Select a document to upload." });
   }
 
+  if (parsedType.data === "aadhaarBack" && !isSupportedImageMimeType(request.file.mimetype)) {
+    return response.status(400).json({ success: false, message: "The Aadhaar back side must be uploaded as a JPG or PNG image." });
+  }
+
   if (!isSupportedDocument(request.file.buffer)) {
     return response.status(400).json({ success: false, message: "The document is not a valid PDF, JPG, or PNG file." });
+  }
+
+  if (parsedType.data === "aadhaarBack" && !isSupportedImage(request.file.buffer)) {
+    return response.status(400).json({ success: false, message: "The Aadhaar back side must be a valid JPG or PNG image." });
   }
 
   let documentLabel = kycDocumentLabels[parsedType.data];
@@ -210,7 +224,17 @@ export async function uploadShipmentParcelKycDocument(request: Request, response
     throw error;
   }
 
+  if (parsedType.data === "aadhaarBack") {
+    const front = shipmentDraft.parcelList[parcelIndex]?.kycDocuments?.aadhaar;
+    if (shipmentDraft.csbType !== "CSB_IV" || !isSupportedImageMimeType(front?.mimeType)) {
+      return response.status(400).json({ success: false, message: "Upload an Aadhaar front-side image before adding the back side. This option is available for CSB-IV only." });
+    }
+  }
+
   const previousDocument = shipmentDraft.parcelList[parcelIndex]?.kycDocuments?.[parsedType.data];
+  const previousAadhaarBack = parsedType.data === "aadhaar"
+    ? shipmentDraft.parcelList[parcelIndex]?.kycDocuments?.aadhaarBack
+    : undefined;
 
   const stored = await storeKycDocument({
     file: request.file,
@@ -221,6 +245,10 @@ export async function uploadShipmentParcelKycDocument(request: Request, response
   });
 
   shipmentDraft.set(`parcelList.${parcelIndex}.kycDocuments.${parsedType.data}`, stored);
+  if (parsedType.data === "aadhaar") {
+    // A newly selected front must be paired with a back image from the same card.
+    shipmentDraft.set(`parcelList.${parcelIndex}.kycDocuments.aadhaarBack`, undefined);
+  }
   shipmentDraft.validationIssues = validateShipmentDraftFields(shipmentDraft);
   shipmentDraft.status = shipmentDraft.validationIssues.length ? "VALIDATION_FAILED" : "READY_FOR_DPD";
   try {
@@ -233,6 +261,7 @@ export async function uploadShipmentParcelKycDocument(request: Request, response
   }
   // Only drop the replaced object once the new one is committed.
   await discardStoredObject(previousDocument?.storageKey);
+  await discardStoredObject(previousAadhaarBack?.storageKey);
 
   await AuditLog.create({
     action: "SHIPMENT_KYC_DOCUMENT_UPLOADED",
@@ -240,7 +269,14 @@ export async function uploadShipmentParcelKycDocument(request: Request, response
     entityId: shipmentDraft._id,
     performedBy: userId,
     performedAt: new Date(),
-    metadata: { parcelSequence: sequence, documentType: parsedType.data, documentLabel, originalName: request.file.originalname, size: request.file.size }
+    metadata: {
+      parcelSequence: sequence,
+      documentType: parsedType.data,
+      documentLabel,
+      originalName: request.file.originalname,
+      size: request.file.size,
+      removedPairedAadhaarBack: Boolean(previousAadhaarBack?.storageKey)
+    }
   });
 
   return response.status(200).json({
@@ -272,6 +308,9 @@ export async function deleteShipmentParcelKycDocument(request: Request, response
   const parcelIndex = sequence - 1;
   const existing = shipmentDraft.parcelList[parcelIndex]?.kycDocuments?.[parsedType.data];
   if (!existing?.storageKey) return response.status(404).json({ success: false, message: "Document not found" });
+  const pairedAadhaarBack = parsedType.data === "aadhaar"
+    ? shipmentDraft.parcelList[parcelIndex]?.kycDocuments?.aadhaarBack
+    : undefined;
 
   try {
     await assertShipmentDraftMutationAllowed({ draft: shipmentDraft, userId, portalRole: getAuthenticatedPortalRole(request) });
@@ -282,10 +321,14 @@ export async function deleteShipmentParcelKycDocument(request: Request, response
   }
 
   shipmentDraft.set(`parcelList.${parcelIndex}.kycDocuments.${parsedType.data}`, undefined);
+  if (parsedType.data === "aadhaar") {
+    shipmentDraft.set(`parcelList.${parcelIndex}.kycDocuments.aadhaarBack`, undefined);
+  }
   shipmentDraft.validationIssues = validateShipmentDraftFields(shipmentDraft);
   shipmentDraft.status = shipmentDraft.validationIssues.length ? "VALIDATION_FAILED" : "READY_FOR_DPD";
   await shipmentDraft.save();
   await discardStoredObject(existing.storageKey);
+  await discardStoredObject(pairedAadhaarBack?.storageKey);
 
   await AuditLog.create({
     action: "SHIPMENT_KYC_DOCUMENT_REMOVED",
@@ -293,7 +336,12 @@ export async function deleteShipmentParcelKycDocument(request: Request, response
     entityId: shipmentDraft._id,
     performedBy: userId,
     performedAt: new Date(),
-    metadata: { parcelSequence: sequence, documentType: parsedType.data, originalName: existing.originalName }
+    metadata: {
+      parcelSequence: sequence,
+      documentType: parsedType.data,
+      originalName: existing.originalName,
+      removedPairedAadhaarBack: Boolean(pairedAadhaarBack?.storageKey)
+    }
   });
 
   return response.status(200).json({
@@ -342,8 +390,16 @@ export async function uploadShipmentKycDocument(request: Request, response: Resp
     return response.status(400).json({ success: false, message: "Select a document to upload." });
   }
 
+  if (parsedType.data === "aadhaarBack" && !isSupportedImageMimeType(request.file.mimetype)) {
+    return response.status(400).json({ success: false, message: "The Aadhaar back side must be uploaded as a JPG or PNG image." });
+  }
+
   if (!isSupportedDocument(request.file.buffer)) {
     return response.status(400).json({ success: false, message: "The document is not a valid PDF, JPG, or PNG file." });
+  }
+
+  if (parsedType.data === "aadhaarBack" && !isSupportedImage(request.file.buffer)) {
+    return response.status(400).json({ success: false, message: "The Aadhaar back side must be a valid JPG or PNG image." });
   }
 
   // "Other" documents are meaningless to a reviewer without a name, so the
@@ -380,7 +436,17 @@ export async function uploadShipmentKycDocument(request: Request, response: Resp
     throw error;
   }
 
+  if (parsedType.data === "aadhaarBack") {
+    const front = shipmentDraft.kycDocuments?.aadhaar;
+    if (shipmentDraft.csbType !== "CSB_IV" || !isSupportedImageMimeType(front?.mimeType)) {
+      return response.status(400).json({ success: false, message: "Upload an Aadhaar front-side image before adding the back side. This option is available for CSB-IV only." });
+    }
+  }
+
   const previousDocument = shipmentDraft.kycDocuments?.[parsedType.data];
+  const previousAadhaarBack = parsedType.data === "aadhaar"
+    ? shipmentDraft.kycDocuments?.aadhaarBack
+    : undefined;
 
   const stored = await storeKycDocument({
     file: request.file,
@@ -391,6 +457,10 @@ export async function uploadShipmentKycDocument(request: Request, response: Resp
   });
 
   shipmentDraft.set(`kycDocuments.${parsedType.data}`, stored);
+  if (parsedType.data === "aadhaar") {
+    // A newly selected front must be paired with a back image from the same card.
+    shipmentDraft.set("kycDocuments.aadhaarBack", undefined);
+  }
   shipmentDraft.validationIssues = validateShipmentDraftFields(shipmentDraft);
   shipmentDraft.status = shipmentDraft.validationIssues.length ? "VALIDATION_FAILED" : "READY_FOR_DPD";
   try {
@@ -402,6 +472,7 @@ export async function uploadShipmentKycDocument(request: Request, response: Resp
 
   // Only drop the replaced object once the new one is committed.
   await discardStoredObject(previousDocument?.storageKey);
+  await discardStoredObject(previousAadhaarBack?.storageKey);
 
   await AuditLog.create({
     action: "SHIPMENT_KYC_DOCUMENT_UPLOADED",
@@ -414,7 +485,8 @@ export async function uploadShipmentKycDocument(request: Request, response: Resp
       documentLabel,
       originalName: request.file.originalname,
       size: request.file.size,
-      replacedExisting: Boolean(previousDocument?.storageKey)
+      replacedExisting: Boolean(previousDocument?.storageKey),
+      removedPairedAadhaarBack: Boolean(previousAadhaarBack?.storageKey)
     }
   });
 
@@ -458,12 +530,19 @@ export async function deleteShipmentKycDocument(request: Request, response: Resp
   if (!existing?.storageKey) {
     return response.status(404).json({ success: false, message: "Document not found" });
   }
+  const pairedAadhaarBack = parsedType.data === "aadhaar"
+    ? shipmentDraft.kycDocuments?.aadhaarBack
+    : undefined;
 
   shipmentDraft.set(`kycDocuments.${parsedType.data}`, undefined);
+  if (parsedType.data === "aadhaar") {
+    shipmentDraft.set("kycDocuments.aadhaarBack", undefined);
+  }
   shipmentDraft.validationIssues = validateShipmentDraftFields(shipmentDraft);
   shipmentDraft.status = shipmentDraft.validationIssues.length ? "VALIDATION_FAILED" : "READY_FOR_DPD";
   await shipmentDraft.save();
   await discardStoredObject(existing.storageKey);
+  await discardStoredObject(pairedAadhaarBack?.storageKey);
 
   await AuditLog.create({
     action: "SHIPMENT_KYC_DOCUMENT_REMOVED",
@@ -471,7 +550,11 @@ export async function deleteShipmentKycDocument(request: Request, response: Resp
     entityId: shipmentDraft._id,
     performedBy: userId,
     performedAt: new Date(),
-    metadata: { documentType: parsedType.data, originalName: existing.originalName }
+    metadata: {
+      documentType: parsedType.data,
+      originalName: existing.originalName,
+      removedPairedAadhaarBack: Boolean(pairedAadhaarBack?.storageKey)
+    }
   });
 
   return response.status(200).json({

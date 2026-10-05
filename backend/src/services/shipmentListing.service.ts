@@ -30,6 +30,8 @@ export type ShipmentListingFilter = {
   businessAccountIds?: mongoose.Types.ObjectId[];
   /** Staff-only source filter for self-serve public bookings. */
   creationSource?: "PUBLIC_ONLINE";
+  /** Staff-only filter that includes both public and staff-booked individual shipments. */
+  individualBookings?: boolean;
   branchIds?: mongoose.Types.ObjectId[];
   status?: string;
   /**
@@ -335,6 +337,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   const draftFilter: Record<string, unknown> = { deletedAt: null };
   if (filter.businessAccountIds) draftFilter.businessAccountId = { $in: filter.businessAccountIds };
   if (filter.creationSource) draftFilter.creationSource = filter.creationSource;
+  if (filter.individualBookings) draftFilter.customerType = "INDIVIDUAL";
   if (filter.branchIds) draftFilter.branchId = { $in: filter.branchIds };
   if (filter.rebookedOnly) {
     draftFilter.rebookedFromDraftId = { $exists: true, $ne: null };
@@ -476,6 +479,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     "businessAccountId",
     "branchId",
     "creationSource",
+    "rebookedFromDraftId",
     "customerType",
     "consignorAddress.contactName",
     "consigneeEnteredAddress",
@@ -659,6 +663,9 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     return {
       id: draftId,
       creationSource: draft.creationSource,
+      ...(filter.actorRole === "admin"
+        ? { rebookedFromDraftId: draft.rebookedFromDraftId ? String(draft.rebookedFromDraftId) : null }
+        : {}),
       businessAccountId: String(draft.businessAccountId),
       // A walk-in is booked against the system sentinel, whose name is bookkeeping.
       // The list shows the person who actually sent the shipment instead.

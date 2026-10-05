@@ -259,6 +259,7 @@ export async function ensureShipmentInvoiceForDraft(input: {
   const snapshotAccount = asRecord(bookingSnapshot?.account);
   const snapshotCompany = asRecord(snapshotAccount.company);
   const snapshotContact = asRecord(snapshotAccount.contact);
+  const snapshotConsignor = asRecord(bookingSnapshot?.consignor);
   const snapshotConsignee = asRecord(bookingSnapshot?.consignee);
   // Every field below falls back to the business account when the snapshot leaves
   // it blank. For a walk-in that account is the shared sentinel, so the fallback
@@ -312,19 +313,25 @@ export async function ensureShipmentInvoiceForDraft(input: {
   // company address. When it does, that address is the one the tax invoice bills
   // to; otherwise the registered address stands in.
   const separateBilling = asRecord(
-    asRecord(snapshotCompany.billingAddress).addressLine1 ? snapshotCompany.billingAddress : account.company.billingAddress
+    asRecord(snapshotCompany.billingAddress).addressLine1
+      ? snapshotCompany.billingAddress
+      : isIndividualCustomer ? null : account.company.billingAddress
   );
+  const hasSeparateSnapshotBillingAddress = Boolean(asString(separateBilling.addressLine1));
   const usesCompanyAddress = Boolean(
-    snapshotCompany.useCompanyAddressAsBillingAddress ?? account.company.useCompanyAddressAsBillingAddress
+    snapshotCompany.useCompanyAddressAsBillingAddress
+      ?? (isIndividualCustomer ? false : account.company.useCompanyAddressAsBillingAddress)
   );
-  const separateBillingAddressLine = usesCompanyAddress ? "" : addressLine([
-    asString(separateBilling.addressLine1),
-    asString(separateBilling.addressLine2),
-    asString(separateBilling.city),
-    asString(separateBilling.stateOrProvince),
-    asString(separateBilling.postalCode),
-    asString(separateBilling.country)
-  ]);
+  const separateBillingAddressLine = (isIndividualCustomer && hasSeparateSnapshotBillingAddress) || !usesCompanyAddress
+    ? addressLine([
+      asString(separateBilling.addressLine1),
+      asString(separateBilling.addressLine2),
+      asString(separateBilling.city),
+      asString(separateBilling.stateOrProvince),
+      asString(separateBilling.postalCode),
+      asString(separateBilling.country)
+    ])
+    : "";
   const registeredAddressLine = addressLine([
     asString(snapshotCompany.registeredAddress) || fallbackCompany.registeredAddress,
     asString(snapshotCompany.city) || fallbackCompany.city,
@@ -332,16 +339,42 @@ export async function ensureShipmentInvoiceForDraft(input: {
     asString(snapshotCompany.postalCode) || fallbackCompany.postalCode,
     asString(snapshotCompany.addressCountry) || fallbackCompany.addressCountry
   ]);
+  const consignorAddressLine = addressLine([
+    asString(snapshotConsignor.addressLine1),
+    asString(snapshotConsignor.addressLine2),
+    asString(snapshotConsignor.townOrCity),
+    asString(snapshotConsignor.county),
+    asString(snapshotConsignor.postcode),
+    asString(snapshotConsignor.countryName)
+  ]);
+  const consignorContactName = asString(snapshotConsignor.contactName);
+  const consignorCompanyName = asString(snapshotConsignor.companyName);
+  const accountContactName = `${asString(snapshotContact.firstName) || fallbackContact.firstName} ${asString(snapshotContact.lastName) || fallbackContact.lastName}`.trim();
+  const snapshotHasIndividualIdentity = asString(snapshotAccount.accountId) === "INDIVIDUAL";
+  const individualName = consignorCompanyName
+    || consignorContactName
+    || (snapshotHasIndividualIdentity ? asString(snapshotCompany.companyName) || accountContactName : "");
+  const individualContactName = consignorContactName || (snapshotHasIndividualIdentity ? accountContactName : "");
+  const individualEmail = asString(snapshotConsignor.email)
+    || (snapshotHasIndividualIdentity ? asString(snapshotContact.email) : "")
+    || fallbackContact.email;
+  const individualPhone = `${asString(snapshotConsignor.mobileCountryCode) || (snapshotHasIndividualIdentity ? asString(snapshotContact.countryCode) : "") || fallbackContact.countryCode} ${asString(snapshotConsignor.mobileNumber) || (snapshotHasIndividualIdentity ? asString(snapshotContact.mobileNumber) : "") || fallbackContact.mobileNumber}`.trim();
   const customer = {
     accountId: asString(snapshotAccount.accountId) || account.accountId,
-    companyName: asString(snapshotCompany.companyName) || fallbackCompany.companyName,
-    contactName: `${asString(snapshotContact.firstName) || fallbackContact.firstName} ${asString(snapshotContact.lastName) || fallbackContact.lastName}`.trim(),
+    companyName: isIndividualCustomer
+      ? individualName
+      : asString(snapshotCompany.companyName) || fallbackCompany.companyName,
+    contactName: isIndividualCustomer
+      ? individualContactName
+      : accountContactName,
     gstin: customerGstin,
     state: customerState,
     stateCode: customerGstin.slice(0, 2),
-    billingAddress: separateBillingAddressLine || registeredAddressLine,
-    email: asString(snapshotContact.email) || fallbackContact.email,
-    phone: `${asString(snapshotContact.countryCode) || fallbackContact.countryCode} ${asString(snapshotContact.mobileNumber) || fallbackContact.mobileNumber}`.trim()
+    billingAddress: separateBillingAddressLine || (isIndividualCustomer ? consignorAddressLine : "") || registeredAddressLine,
+    email: isIndividualCustomer ? individualEmail : asString(snapshotContact.email) || fallbackContact.email,
+    phone: isIndividualCustomer
+      ? individualPhone
+      : `${asString(snapshotContact.countryCode) || fallbackContact.countryCode} ${asString(snapshotContact.mobileNumber) || fallbackContact.mobileNumber}`.trim()
   };
   const snapshotParcels = bookingSnapshot?.parcels ?? [];
   // The shipment's public identity is the Swiftline AWB.

@@ -58,8 +58,12 @@ function destinationRegionsParam(request: Request): ShipmentDestinationRegionCod
   return normalizeShipmentDestinationRegions(values);
 }
 
-function creationSourceParam(request: Request): "PUBLIC_ONLINE" | undefined {
-  return request.query.creationSource === "PUBLIC_ONLINE" ? "PUBLIC_ONLINE" : undefined;
+function individualBookingsParam(request: Request): boolean {
+  return request.query.individualBookings === "1"
+    || request.query.individualBookings === "true"
+    // Old saved links used this public-only filter. Preserve their intent by
+    // upgrading them to the new public + staff-booked individual filter.
+    || request.query.creationSource === "PUBLIC_ONLINE";
 }
 
 function pagination(request: Request) {
@@ -94,7 +98,7 @@ function sendShipmentExport(
       From: request.query.dateFrom,
       To: request.query.dateTo,
       Rebooked: request.query.rebooked === "1" || request.query.rebooked === "true" ? "Yes" : undefined,
-      "Booking source": request.query.creationSource === "PUBLIC_ONLINE" ? "Public online" : undefined,
+      "Customer type": individualBookingsParam(request) ? "Individual bookings" : undefined,
       "Operations manifest": operationsManifestNumber
     })
   });
@@ -145,7 +149,7 @@ export async function listAdminBookedShipments(request: Request, response: Respo
     search: typeof request.query.search === "string" ? request.query.search.slice(0, 80) : "",
     sort: typeof request.query.sort === "string" ? request.query.sort : "",
     destinationRegions: destinationRegionsParam(request),
-    creationSource: creationSourceParam(request),
+    individualBookings: individualBookingsParam(request),
     operationsManifestId: operationsManifest ? operationsManifest._id : undefined,
     ...dateRangeParams(request.query),
     businessAccountIds: businessAccountId ? [businessAccountId] : undefined,

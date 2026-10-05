@@ -10,6 +10,8 @@ export type DpdLabelStatus = "AVAILABLE" | "NOT_AVAILABLE" | "NOT_APPLICABLE";
 export type ShipmentListItem = {
   id: string;
   creationSource: "MANUAL" | "INDIVIDUAL" | "PUBLIC_ONLINE" | "SHIPMENT_IMPORT";
+  /** Present only on a newly created shipment cloned through rebooking. */
+  rebookedFromDraftId?: string | null;
   businessAccountId: string;
   businessAccountName: string;
   businessAccountCode: string;
@@ -190,8 +192,10 @@ export function shipmentListParams(input: {
   search?: string;
   dateRange?: DateRange;
   businessAccountId?: string;
-  /** Staff-only filter for self-serve public bookings. */
+  /** Legacy staff-only public source filter for callers that still send it. */
   creationSource?: "PUBLIC_ONLINE";
+  /** Staff-only filter for public and staff-booked individual shipments. */
+  individualBookings?: boolean;
   branchId?: string;
   sort?: string;
   destinationRegions?: ShipmentDestinationRegionCode[];
@@ -209,6 +213,7 @@ export function shipmentListParams(input: {
   setDateRangeParams(params, input.dateRange);
   if (input.businessAccountId) params.set("businessAccountId", input.businessAccountId);
   if (input.creationSource) params.set("creationSource", input.creationSource);
+  if (input.individualBookings) params.set("individualBookings", "1");
   if (input.branchId) params.set("branchId", input.branchId);
   if (input.sort) params.set("sort", input.sort);
   if (input.destinationRegions?.length) params.set("destinationRegions", input.destinationRegions.join(","));
@@ -227,8 +232,10 @@ export async function listShipments(audience: ShipmentAudience, input: {
   search?: string;
   dateRange?: DateRange;
   businessAccountId?: string;
-  /** Staff-only filter for self-serve public bookings. */
+  /** Legacy staff-only public source filter for callers that still send it. */
   creationSource?: "PUBLIC_ONLINE";
+  /** Staff-only filter for public and staff-booked individual shipments. */
+  individualBookings?: boolean;
   branchId?: string;
   /** `field:asc|desc`, limited to the columns the server can order by. */
   sort?: string;

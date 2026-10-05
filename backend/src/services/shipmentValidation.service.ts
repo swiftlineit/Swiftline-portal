@@ -112,6 +112,7 @@ const csbVKycDocuments: readonly ShipmentKycDocumentType[] = [
 ];
 const kycDocumentNames: Record<ShipmentKycDocumentType, string> = {
   aadhaar: "Aadhaar Card",
+  aadhaarBack: "Aadhaar Back Side",
   pan: "PAN Card",
   iec: "IEC",
   gst: "GST",

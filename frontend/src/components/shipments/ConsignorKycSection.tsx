@@ -1,7 +1,8 @@
 "use client";
 
-import { ChangeEvent, type KeyboardEvent, type ReactNode, useId, useMemo, useRef, useState } from "react";
-import { FiCheck, FiChevronDown, FiFileText, FiMapPin, FiSearch, FiTrash2, FiUploadCloud } from "react-icons/fi";
+import { ChangeEvent, type KeyboardEvent, type ReactNode, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { FiCheck, FiChevronDown, FiFileText, FiInfo, FiMapPin, FiSearch, FiTrash2, FiUploadCloud } from "react-icons/fi";
 import { toast } from "react-toastify";
 import {
   ShipmentFieldLabel,
@@ -45,6 +46,7 @@ type SlotConfig = {
   title: string;
   required: boolean;
   needsLabel: boolean;
+  helpText?: string;
 };
 
 function openBlobInNewTab(blob: Blob) {
@@ -101,7 +103,10 @@ export function ConsignorKycSection({
       type,
       title: shipmentKycDocumentLabels[type],
       required: requiredTypes.includes(type),
-      needsLabel: false
+      needsLabel: false,
+      helpText: type === "aadhaar" && csbType === "CSB_IV"
+        ? "Upload one PDF containing both sides, or upload the front image here and optionally add the back image."
+        : undefined
     })),
     // Always last and optional for both routes. Its typed label identifies what
     // the additional document contains when it is viewed later.
@@ -282,8 +287,8 @@ export function ConsignorKycSection({
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-2.5">
+      <section className="overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-t-xl border-b border-slate-200 bg-slate-50/70 px-4 py-2.5">
           <div>
             <h2 className="text-[13px] font-semibold uppercase tracking-wide text-slate-600">KYC Documents</h2>
             <p className="mt-0.5 max-w-3xl text-[11px] leading-4 text-slate-500">
@@ -298,7 +303,7 @@ export function ConsignorKycSection({
         </div>
 
         <div className="space-y-3 p-3 sm:p-4">
-          <div className="grid items-start gap-3 rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 sm:p-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,300px)]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,300px)]">
           <label className={`flex min-h-10 items-center gap-2.5 rounded-md border px-2.5 py-2 transition ${kycUseForAll ? "border-blue-300 bg-blue-50/70" : "border-slate-200 bg-white"}`}>
             <input
               type="checkbox"
@@ -337,6 +342,7 @@ export function ConsignorKycSection({
               <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Shared documents</p>
               <KycSlotRow
                 slots={kycSlots}
+                csbType={csbType}
                 documents={sharedKycDocuments}
                 submitAttempted={submitAttempted}
                 readOnly={readOnly}
@@ -357,8 +363,8 @@ export function ConsignorKycSection({
               {parcels.map((parcel, index) => {
                 const saved = parcel.sequence <= savedParcelCount;
                 return (
-                  <div key={parcel.sequence} className="overflow-hidden rounded-lg border border-slate-200">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  <div key={parcel.sequence} className="rounded-lg border border-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-t-lg border-b border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       <span>Parcel {index + 1}</span>
                       <span className="font-medium normal-case tracking-normal text-slate-400">{saved ? "Saved" : "Save shipment to upload"}</span>
                     </div>
@@ -379,6 +385,7 @@ export function ConsignorKycSection({
                       <div>
                         <KycSlotRow
                           slots={kycSlots}
+                          csbType={csbType}
                           documents={parcel.kycDocuments}
                           submitAttempted={submitAttempted}
                           readOnly={readOnly}
@@ -562,6 +569,7 @@ function IndianStateAutocompleteField({
 
 function KycSlotRow({
   slots,
+  csbType,
   documents,
   submitAttempted,
   readOnly,
@@ -571,6 +579,7 @@ function KycSlotRow({
   onOpen
 }: {
   slots: SlotConfig[];
+  csbType: CsbType;
   documents: ShipmentKycDocuments | undefined;
   submitAttempted: boolean;
   readOnly: boolean;
@@ -581,19 +590,27 @@ function KycSlotRow({
 }) {
   return (
     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-      {slots.map((slot) => (
-        <KycSlot
-          key={slot.type}
-          slot={slot}
-          document={documents?.[slot.type] ?? null}
-          submitAttempted={submitAttempted}
-          readOnly={readOnly}
-          disabled={disabled}
-          onUpload={(file, label) => onUpload(slot.type, file, label)}
-          onDelete={() => onDelete(slot.type)}
-          onOpen={() => onOpen(slot.type)}
-        />
-      ))}
+      {slots.map((slot) => {
+        const supportsOptionalAadhaarBack = csbType === "CSB_IV" && slot.type === "aadhaar";
+
+        return (
+          <KycSlot
+            key={slot.type}
+            slot={slot}
+            document={documents?.[slot.type] ?? null}
+            secondaryDocument={supportsOptionalAadhaarBack ? documents?.aadhaarBack ?? null : null}
+            submitAttempted={submitAttempted}
+            readOnly={readOnly}
+            disabled={disabled}
+            onUpload={(file, label) => onUpload(slot.type, file, label)}
+            onDelete={() => onDelete(slot.type)}
+            onOpen={() => onOpen(slot.type)}
+            onUploadSecondary={supportsOptionalAadhaarBack ? (file) => onUpload("aadhaarBack", file) : undefined}
+            onDeleteSecondary={supportsOptionalAadhaarBack ? () => onDelete("aadhaarBack") : undefined}
+            onOpenSecondary={supportsOptionalAadhaarBack ? () => onOpen("aadhaarBack") : undefined}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -601,23 +618,32 @@ function KycSlotRow({
 function KycSlot({
   slot,
   document,
+  secondaryDocument,
   submitAttempted,
   readOnly,
   disabled,
   onUpload,
   onDelete,
-  onOpen
+  onOpen,
+  onUploadSecondary,
+  onDeleteSecondary,
+  onOpenSecondary
 }: {
   slot: SlotConfig;
   document: ShipmentKycDocument | null;
+  secondaryDocument: ShipmentKycDocument | null;
   submitAttempted: boolean;
   readOnly: boolean;
   disabled: boolean;
   onUpload: (file: File, documentLabel?: string) => Promise<void>;
   onDelete: () => Promise<void>;
   onOpen: () => Promise<Blob>;
+  onUploadSecondary?: (file: File) => Promise<void>;
+  onDeleteSecondary?: () => Promise<void>;
+  onOpenSecondary?: () => Promise<Blob>;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const secondaryInputRef = useRef<HTMLInputElement>(null);
   const [documentLabel, setDocumentLabel] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -636,6 +662,21 @@ function KycSlot({
     try {
       await onUpload(file, slot.needsLabel ? documentLabel.trim().toUpperCase() : undefined);
       setDocumentLabel("");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Upload failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSecondaryFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !onUploadSecondary) return;
+
+    setBusy(true);
+    try {
+      await onUploadSecondary(file);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Upload failed.");
     } finally {
@@ -662,14 +703,41 @@ function KycSlot({
     }
   }
 
+  async function handleRemoveSecondary() {
+    if (!onDeleteSecondary) return;
+    setBusy(true);
+    try {
+      await onDeleteSecondary();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not remove the back image.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleOpenSecondary() {
+    if (!onOpenSecondary) return;
+    try {
+      openBlobInNewTab(await onOpenSecondary());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not open the back image.");
+    }
+  }
+
+  const primaryIsImage = document?.mimeType === "image/jpeg" || document?.mimeType === "image/png";
+  const showSecondaryControl = Boolean(onUploadSecondary && (secondaryDocument || (primaryIsImage && !readOnly)));
+
   return (
-    <div className={`flex min-h-28 flex-col gap-2 rounded-lg border p-2.5 text-[11px] transition ${missing && submitAttempted ? "border-red-300 bg-red-50" : document ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50/70"}`}>
+    <div className={`relative z-0 flex min-h-28 flex-col gap-2 rounded-lg border p-2.5 text-[11px] transition hover:z-40 focus-within:z-40 ${missing && submitAttempted ? "border-red-300 bg-red-50" : document ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50/70"}`}>
       <span className="flex items-start justify-between gap-2 font-semibold uppercase tracking-wide text-slate-700">
         <span>
           {slot.title}
           {slot.required ? <span className="ml-0.5 text-red-600">*</span> : null}
         </span>
-        {document ? <FiCheck aria-hidden="true" className="h-4 w-4 shrink-0 text-emerald-600" /> : null}
+        {slot.helpText ? (
+          <KycHelpTooltip text={slot.helpText} />
+        ) : null}
+
       </span>
 
       {slot.needsLabel && !document && !readOnly ? (
@@ -685,16 +753,18 @@ function KycSlot({
 
       {document ? (
         <div className="flex flex-1 flex-col justify-between gap-3">
-          <button type="button" onClick={handleOpen} className="flex min-w-0 items-center gap-1.5 text-left">
-            <FiFileText aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-blue-900" />
-            <span className="min-w-0 truncate font-medium text-blue-900 hover:underline">{document.documentLabel || document.originalName}</span>
-          </button>
-          {!readOnly ? (
-            <button type="button" onClick={handleRemove} disabled={busy} className="inline-flex w-fit shrink-0 items-center gap-1 font-semibold text-red-600 hover:text-red-700 disabled:opacity-50">
-              <FiTrash2 aria-hidden="true" className="h-3 w-3" />
-              Remove
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <button type="button" onClick={handleOpen} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+              <FiFileText aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-blue-900" />
+              <span className="min-w-0 truncate font-medium text-blue-900 hover:underline">{document.documentLabel || document.originalName}</span>
             </button>
-          ) : null}
+            {!readOnly ? (
+              <button type="button" onClick={handleRemove} disabled={busy} className="inline-flex shrink-0 items-center gap-1 font-semibold text-red-600 hover:text-red-700 disabled:opacity-50">
+                <FiTrash2 aria-hidden="true" className="h-3 w-3" />
+                Remove
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : (
         <>
@@ -714,6 +784,155 @@ function KycSlot({
           )}
         </>
       )}
+
+      {showSecondaryControl ? (
+        <div className="mt-auto border-t border-slate-200 pt-2">
+          {secondaryDocument ? (
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <button type="button" onClick={handleOpenSecondary} className="flex min-w-0 items-center gap-1.5 text-left text-emerald-800 hover:underline">
+                <FiFileText aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate font-medium">Back image: {secondaryDocument.originalName}</span>
+              </button>
+              {!readOnly ? (
+                <button type="button" onClick={handleRemoveSecondary} disabled={busy} className="inline-flex shrink-0 items-center gap-1 font-semibold text-red-600 hover:text-red-700 disabled:opacity-50">
+                  <FiTrash2 aria-hidden="true" className="h-3 w-3" />
+                  Remove
+                </button>
+              ) : null}
+            </div>
+          ) : primaryIsImage && !readOnly ? (
+            <>
+              <input ref={secondaryInputRef} type="file" accept="image/jpeg,image/png" className="hidden" onChange={handleSecondaryFile} />
+              <button
+                type="button"
+                onClick={() => secondaryInputRef.current?.click()}
+                disabled={busy || disabled}
+                className="inline-flex items-center gap-1.5 font-semibold text-emerald-700 underline decoration-emerald-300 underline-offset-2 transition hover:text-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiUploadCloud aria-hidden="true" className="h-3.5 w-3.5" />
+              Add Aadhaar back if missing
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function KycHelpTooltip({ text }: { text: string }) {
+  const tooltipId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const tooltipRef = useRef<HTMLSpanElement>(null);
+  const hideTimeoutRef = useRef<number | null>(null);
+  const [open, setOpen] = useState(false);
+
+  function cancelHide() {
+    if (hideTimeoutRef.current !== null) {
+      window.clearTimeout(hideTimeoutRef.current);
+      hideTimeoutRef.current = null;
+    }
+  }
+
+  function show() {
+    cancelHide();
+    setOpen(true);
+  }
+
+  function scheduleHide() {
+    cancelHide();
+    hideTimeoutRef.current = window.setTimeout(() => {
+      setOpen(false);
+      hideTimeoutRef.current = null;
+    }, 150);
+  }
+
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    const updatePosition = () => {
+      const trigger = triggerRef.current;
+      const tooltip = tooltipRef.current;
+      if (!trigger || !tooltip) return;
+
+      const anchor = trigger.getBoundingClientRect();
+      const width = Math.max(0, Math.min(224, window.innerWidth - 16));
+      tooltip.style.width = `${width}px`;
+      tooltip.style.maxHeight = `${Math.max(0, window.innerHeight - 16)}px`;
+
+      const height = tooltip.getBoundingClientRect().height;
+      const left = Math.max(8, Math.min(
+        anchor.left + anchor.width / 2 - width / 2,
+        window.innerWidth - width - 8
+      ));
+      let top = anchor.bottom + 8;
+      if (top + height > window.innerHeight - 8 && anchor.top >= height + 16) {
+        top = anchor.top - height - 8;
+      }
+      top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !triggerRef.current?.contains(target) && !tooltipRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      cancelHide();
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label="Aadhaar upload requirements"
+        aria-describedby={open ? tooltipId : undefined}
+        aria-expanded={open}
+        onMouseEnter={show}
+        onMouseLeave={scheduleHide}
+        onFocus={show}
+        onBlur={scheduleHide}
+        onClick={show}
+        className="ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-500 outline-none transition hover:text-blue-900 focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2"
+      >
+        <FiInfo aria-hidden="true" className="h-4 w-4" />
+      </button>
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <span
+              ref={tooltipRef}
+              id={tooltipId}
+              role="tooltip"
+              onMouseEnter={cancelHide}
+              onMouseLeave={scheduleHide}
+              style={{ left: -10_000, top: -10_000, width: 224 }}
+              className="fixed z-[100] max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-left text-[11px] font-normal normal-case leading-4 tracking-normal text-white shadow-lg"
+            >
+              {text}
+            </span>,
+            document.body
+          )
+        : null}
+    </>
   );
 }

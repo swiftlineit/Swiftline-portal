@@ -62,6 +62,7 @@ export type ShipmentServiceType = (typeof shipmentServiceTypeValues)[number];
 
 export const shipmentKycDocumentTypeValues = [
   "aadhaar",
+  "aadhaarBack",
   "pan",
   "iec",
   "gst",
@@ -421,6 +422,7 @@ const parcelSchema = new mongoose.Schema<ShipmentParcel>(
     aadhaarNumber: { type: String, trim: true, maxlength: 12, default: "" },
     kycDocuments: {
       aadhaar: { type: kycDocumentSchema },
+      aadhaarBack: { type: kycDocumentSchema },
       pan: { type: kycDocumentSchema },
       iec: { type: kycDocumentSchema },
       gst: { type: kycDocumentSchema },
@@ -487,6 +489,7 @@ const shipmentDraftSchema = new mongoose.Schema<IShipmentDraft>(
     kycUseForAllParcels: { type: Boolean, default: true },
     kycDocuments: {
       aadhaar: { type: kycDocumentSchema },
+      aadhaarBack: { type: kycDocumentSchema },
       pan: { type: kycDocumentSchema },
       iec: { type: kycDocumentSchema },
       gst: { type: kycDocumentSchema },

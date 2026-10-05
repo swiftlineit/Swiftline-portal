@@ -89,6 +89,18 @@ function draftWith(overrides: {
   } as unknown as IShipmentDraft;
 }
 
+function storedKycDocument(type: "aadhaar" | "aadhaarBack", originalName: string, mimeType: string) {
+  return {
+    type,
+    documentLabel: type === "aadhaar" ? "Aadhaar Card" : "Aadhaar Back Side",
+    originalName,
+    storageKey: `shipments/test/kyc/${originalName}`,
+    mimeType,
+    size: 100,
+    uploadedAt: new Date("2026-01-01T00:00:00.000Z")
+  };
+}
+
 describe("consignor draft validation", () => {
   test("a complete consignor and KYC set produces no consignor issues", () => {
     const issues = validateShipmentDraftFields(draftWith({}));
@@ -124,6 +136,44 @@ describe("consignor draft validation", () => {
   test("does not require a typed Aadhaar number for CSB-V", () => {
     const issues = validateShipmentDraftFields(draftWith({ csbType: "CSB_V", consignor: { aadhaarNumber: "" } }));
     assert.equal(issues.some((issue) => issue.includes("Aadhaar number")), false, issues.join(" | "));
+  });
+
+  test("keeps the Aadhaar back image optional for CSB-IV and preserves CSB-V behavior", () => {
+    const imageFrontOnly = validateShipmentDraftFields(draftWith({
+      kyc: { aadhaar: storedKycDocument("aadhaar", "front.jpg", "image/jpeg") }
+    }));
+    const completePair = validateShipmentDraftFields(draftWith({
+      kyc: {
+        aadhaar: storedKycDocument("aadhaar", "front.jpg", "image/jpeg"),
+        aadhaarBack: storedKycDocument("aadhaarBack", "back.png", "image/png")
+      }
+    }));
+    const onePdf = validateShipmentDraftFields(draftWith({
+      kyc: { aadhaar: storedKycDocument("aadhaar", "aadhaar.pdf", "application/pdf") }
+    }));
+    const perParcelFrontOnly = validateShipmentDraftFields(draftWith({
+      useForAll: false,
+      kyc: {},
+      parcels: [{
+        sequence: 1,
+        weightKg: 5,
+        lengthCm: 10,
+        widthCm: 10,
+        heightCm: 10,
+        shipmentContentType: "PARCEL",
+        contentsDescription: "Clothing",
+        aadhaarNumber: validAadhaar,
+        kycDocuments: { aadhaar: storedKycDocument("aadhaar", "parcel-front.jpg", "image/jpeg") }
+      }]
+    }));
+    const csbVSingleImage = validateShipmentDraftFields(draftWith({
+      csbType: "CSB_V",
+      kyc: { aadhaar: storedKycDocument("aadhaar", "csbv-front.jpg", "image/jpeg") }
+    }));
+
+    for (const issues of [imageFrontOnly, completePair, onePdf, perParcelFrontOnly, csbVSingleImage]) {
+      assert.equal(issues.some((issue) => issue.toLowerCase().includes("aadhaar back-side")), false, issues.join(" | "));
+    }
   });
 
   test("accepts both supported AD code formats and rejects malformed ones", () => {

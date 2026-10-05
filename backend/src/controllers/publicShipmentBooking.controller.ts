@@ -148,6 +148,9 @@ export async function confirmPublicShipmentPayment(request: Request, response: R
 
 function publicDocumentTarget(request: Request) {
   const type = documentTypeSchema.parse(request.params.type);
+  if (type === "aadhaarBack") {
+    throw new PublicShipmentBookingError("Aadhaar back-side uploads are available only in authenticated CSB-IV bookings.", 400);
+  }
   const sequenceRaw = typeof request.params.sequence === "string" ? Number(request.params.sequence) : null;
   const sequence = sequenceRaw && Number.isInteger(sequenceRaw) && sequenceRaw > 0 ? sequenceRaw : null;
   return { type, sequence };
