@@ -43,6 +43,7 @@ import {
   assertCameraScanSession,
   OperationsScanSessionError
 } from "../services/operationsScanSession.service.js";
+import { FlightLinehaulServiceError } from "../services/flightLinehaul.service.js";
 
 const headerSchema = z.object({
   destinationAgent: z.string().trim().max(1000).default(""),
@@ -90,6 +91,9 @@ function sendError(response: Response, error: unknown) {
     return response.status(error.statusCode).json({ success: false, message: error.message });
   }
   if (error instanceof OperationsManifestServiceError) {
+    return response.status(error.statusCode).json({ success: false, message: error.message });
+  }
+  if (error instanceof FlightLinehaulServiceError) {
     return response.status(error.statusCode).json({ success: false, message: error.message });
   }
   if (error instanceof mongoose.mongo.MongoServerError && error.code === 11000) {

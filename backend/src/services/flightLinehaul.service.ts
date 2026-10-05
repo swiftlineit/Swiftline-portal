@@ -1667,8 +1667,16 @@ async function latestShipmentEventStatus(draftId: mongoose.Types.ObjectId, sessi
 async function buildShipmentSnapshot(
   draftId: mongoose.Types.ObjectId,
   session?: mongoose.ClientSession,
-  options: { ignoreManifestId?: mongoose.Types.ObjectId } = {}
+  options: {
+    ignoreManifestId?: mongoose.Types.ObjectId;
+    onIneligible?: (reason: string) => void;
+  } = {}
 ): Promise<EligibleShipment | null> {
+  const ineligible = (reason: string) => {
+    options.onIneligible?.(reason);
+    return null;
+  };
+
   // A Swiftline booking may travel with a DPD label supplied later by the
   // client or another approved source. Allocation therefore needs a durable
   // booking snapshot, not a locally stored DPD label at this point.
@@ -1678,19 +1686,37 @@ async function buildShipmentSnapshot(
     dpdQuery.session(session);
     hubQuery.session(session);
   }
-  const [dpd, hubReceived, latestStatus] = await Promise.all([
-    dpdQuery.exec(),
-    hubQuery.exec(),
-    latestShipmentEventStatus(draftId, session)
-  ]);
-  if (!dpd || !hubReceived) return null;
-  if (["ON_HOLD", "SHIPMENT_CANCELLED", "DELIVERED"].includes(String(latestStatus))) return null;
+  let dpd: Awaited<ReturnType<typeof dpdQuery.exec>>;
+  let hubReceived: Awaited<ReturnType<typeof hubQuery.exec>>;
+  let latestStatus: Awaited<ReturnType<typeof latestShipmentEventStatus>>;
+  if (session) {
+    // MongoDB's Node.js driver does not support parallel operations in one
+    // transaction. These queries share the dispatch transaction session.
+    dpd = await dpdQuery.exec();
+    hubReceived = await hubQuery.exec();
+    latestStatus = await latestShipmentEventStatus(draftId, session);
+  } else {
+    [dpd, hubReceived, latestStatus] = await Promise.all([
+      dpdQuery.exec(),
+      hubQuery.exec(),
+      latestShipmentEventStatus(draftId)
+    ]);
+  }
+  if (!dpd) return ineligible("No DPD booking record with status DPD_CREATED or LABEL_RECEIVED was found.");
+  if (!hubReceived) return ineligible("The ORIGIN_HUB_PROCESSED event is missing.");
+  if (["ON_HOLD", "SHIPMENT_CANCELLED", "DELIVERED"].includes(String(latestStatus))) {
+    return ineligible(`The latest shipment event is ${String(latestStatus)}.`);
+  }
   const snapshot = readShipmentBookingSnapshot(dpd.currentShipmentSnapshot) ?? readShipmentBookingSnapshot(dpd.bookingSnapshot);
-  if (!snapshot) return null;
-  if (!snapshot.parcels.length || !Array.isArray(snapshot.pricing.parcels) || snapshot.pricing.parcels.length !== snapshot.parcels.length) return null;
+  if (!snapshot) return ineligible("The booking snapshot is missing or invalid.");
+  if (!snapshot.parcels.length || !Array.isArray(snapshot.pricing.parcels) || snapshot.pricing.parcels.length !== snapshot.parcels.length) {
+    return ineligible("The booking snapshot parcel pricing does not match its parcel list.");
+  }
 
   const allParcelDetails = flightAllocationParcelDetails(snapshot);
-  if (allParcelDetails.length !== snapshot.parcels.length) return null;
+  if (allParcelDetails.length !== snapshot.parcels.length) {
+    return ineligible("One or more snapshot parcels have missing or invalid parcel numbers or weights.");
+  }
   const allocatableParcelNumbers = new Set(await loadRemainingAllocatableParcelNumbers(
     draftId,
     allParcelDetails.map((parcel) => parcel.parcelNumber),
@@ -1698,7 +1724,9 @@ async function buildShipmentSnapshot(
     options.ignoreManifestId
   ));
   const parcelDetails = allParcelDetails.filter((parcel) => allocatableParcelNumbers.has(parcel.parcelNumber));
-  if (!parcelDetails.length) return null;
+  if (!parcelDetails.length) {
+    return ineligible("No snapshot parcels remain allocatable; they may already have travelled or been cancelled.");
+  }
   const actualWeightKg = roundWeight(parcelDetails.reduce((sum, parcel) => sum + parcel.actualWeightKg, 0));
   const volumetricWeightKg = roundWeight(parcelDetails.reduce((sum, parcel) => sum + parcel.volumetricWeightKg, 0));
   const chargeableWeightKg = roundWeight(parcelDetails.reduce((sum, parcel) => sum + parcel.chargeableWeightKg, 0));
@@ -2160,10 +2188,14 @@ async function attachManifestInTransaction(input: {
       status: { $in: ["REQUESTED", "COMPLETED"] }
     }).select("status").lean().session(session).exec();
     if (cancellation) throw new FlightLinehaulServiceError("A manifest shipment has a pending or completed cancellation.", 409);
-    const snapshot = await buildShipmentSnapshot(consignment.shipmentDraftId, session, { ignoreManifestId: manifestId });
+    let eligibilityFailureReason = "The shipment did not pass the flight-allocation checks.";
+    const snapshot = await buildShipmentSnapshot(consignment.shipmentDraftId, session, {
+      ignoreManifestId: manifestId,
+      onIneligible: (reason) => { eligibilityFailureReason = reason; }
+    });
     if (!snapshot) {
       throw new FlightLinehaulServiceError(
-        `Manifest shipment ${consignment.consignmentNumber || String(consignment.shipmentDraftId)} is not eligible for flight allocation. Confirm it is booked, origin processed, active, and has allocatable parcel data.`,
+        `Manifest shipment ${consignment.consignmentNumber || String(consignment.shipmentDraftId)} is not eligible for flight allocation. ${eligibilityFailureReason}`,
         409
       );
     }
