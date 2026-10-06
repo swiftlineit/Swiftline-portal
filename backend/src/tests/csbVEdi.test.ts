@@ -154,7 +154,7 @@ test("CSB-V EDI2 keeps the supplied Sheet1 format and emits one row per item", (
   assert.ok(rows.every((row) => row.length === CSB_V_EDI2_HEADERS.length));
   assert.deepEqual(rows.map((row) => row[1]), ["SLCAMD260926001", "SLCAMD260926001", "SLCAMD260926001"]);
   assert.deepEqual(rows.map((row) => row[5]), [200, 30, 50]);
-  assert.deepEqual(rows.map((row) => row[6]), [280, 280, 280]);
+  assert.deepEqual(rows.map((row) => row[6]), [200, 30, 50]);
   assert.deepEqual(rows.map((row) => row[10]), [200, 30, 50]);
   assert.deepEqual(rows.map((row) => row[7]), ["49019900", "96081000", "49019900"]);
   assert.ok(rows.every((row) => row[11] === "INR" && row[12] === 0 && row[13] === 0 && row[14] === "N"));
@@ -166,7 +166,9 @@ test("CSB-V EDI2 keeps the supplied Sheet1 format and emits one row per item", (
   const sheet = workbook.Sheets.Sheet1!;
   assert.deepEqual(XLSX.utils.sheet_to_json(sheet, { header: 1 })[0], [...CSB_V_EDI2_HEADERS]);
   assert.equal(sheet.B2?.v, "SLCAMD260926001");
-  assert.equal(sheet.G4?.v, 280);
+  assert.equal(sheet.G2?.v, 200);
+  assert.equal(sheet.G3?.v, 30);
+  assert.equal(sheet.G4?.v, 50);
   assert.deepEqual(fontSizes(buffer), fontSizes(source));
   assert.deepEqual(sheet["!cols"]?.map((column) => column.wch), template.Sheets.Sheet1?.["!cols"]?.map((column) => column.wch));
 });
@@ -180,7 +182,7 @@ test("CSB-V EDI2 keeps legacy parcels readable without fabricating item values",
   assert.equal(rows[0]?.[2], "");
   assert.equal(rows[0]?.[3], "");
   assert.equal(rows[0]?.[5], "");
-  assert.equal(rows[0]?.[6], 2500);
+  assert.equal(rows[0]?.[6], "");
   assert.equal(rows[0]?.[8], "LEGACY GOODS");
   assert.doesNotThrow(() => XLSX.read(buildCsbVEdi2WorkbookBuffer(rows), { type: "buffer" }));
 });

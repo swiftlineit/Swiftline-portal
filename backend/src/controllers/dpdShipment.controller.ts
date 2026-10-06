@@ -56,6 +56,7 @@ import {
   DpdShipmentServiceError,
   createLabelForShipmentDraft,
   generateDpdLabelForExistingShipment,
+  reconcileAlsCarrierBooking,
   reconcileShipmentDocuments,
   resetBookingForDevelopment
 } from "../services/dpdShipment.service.js";
@@ -162,6 +163,15 @@ const acceptedPricingSchema = z.object({
   // ahead without the carrier label. Never defaulted true.
   skipDpdLabel: z.boolean().optional()
 });
+
+const reconcileAlsCarrierBookingSchema = z.object({
+  manifestId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid manifest."),
+  carrierAwbNumber: z.string().trim().regex(/^\d{6,20}$/, "Enter the confirmed numeric ALS AWB."),
+  carrierForwardingNumber: z.string().trim().min(1).max(120)
+    .refine((value) => !/[\u0000-\u001F\u007F]/.test(value), "Enter a valid ALS forwarding number."),
+  swiftlineTrackingNumber: z.string().trim().min(1).max(40),
+  confirmationNote: z.string().trim().min(10).max(500)
+}).strict();
 
 function getAuthenticatedUserId(request: Request): mongoose.Types.ObjectId | null {
   const user = (request as Request & { user?: { _id?: unknown } }).user;
@@ -835,6 +845,54 @@ export async function resetDevelopmentShipmentBooking(request: Request, response
       return response.status(error.statusCode).json({ success: false, message: error.message, ...error.details });
     }
     return response.status(500).json({ success: false, message: "The simulated booking attempt could not be reset." });
+  }
+}
+
+export async function reconcileAlsCarrierBookingForDraft(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+
+  const shipmentDraftId = typeof request.params.draftId === "string" ? request.params.draftId : "";
+  if (!mongoose.Types.ObjectId.isValid(shipmentDraftId)) {
+    return response.status(404).json({ success: false, message: "Shipment draft not found." });
+  }
+
+  const parsed = reconcileAlsCarrierBookingSchema.safeParse(request.body ?? {});
+  if (!parsed.success) {
+    return response.status(400).json({
+      success: false,
+      message: parsed.error.issues[0]?.message ?? "Enter the confirmed ALS AWB and reconciliation details."
+    });
+  }
+
+  const draft = await ShipmentDraft.findById(shipmentDraftId).select("branchId").lean().exec();
+  if (!draft) return response.status(404).json({ success: false, message: "Shipment draft not found." });
+  if (!canAccessBranch(request, draft.branchId)) {
+    return response.status(403).json({ success: false, message: "You do not have access to this branch." });
+  }
+
+  try {
+    const result = await reconcileAlsCarrierBooking({
+      shipmentDraftId,
+      ...parsed.data,
+      userId
+    });
+    return response.status(200).json({
+      success: true,
+      reused: result.reused,
+      message: "The confirmed ALS AWB and forwarding number are recorded. The carrier label remains missing; no label was created.",
+      dpdShipment: serializeDpdShipment(result.dpdShipment),
+      carrierForwardingNumber: result.dpdShipment.forwardingNumber ?? "",
+      carrierLabelStatus: "NOT_PROVIDED"
+    });
+  } catch (error) {
+    if (error instanceof DpdShipmentServiceError) {
+      return response.status(error.statusCode).json({ success: false, message: error.message, ...error.details });
+    }
+    return response.status(500).json({
+      success: false,
+      message: "The ALS carrier booking could not be reconciled. Check the shipment audit history before retrying."
+    });
   }
 }
 

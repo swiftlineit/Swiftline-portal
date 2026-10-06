@@ -85,6 +85,23 @@ dpdShipmentSchema.index(
   { swiftlineTrackingNumber: 1 },
   { unique: true, partialFilterExpression: { swiftlineTrackingNumber: { $type: "string", $gt: "" } } }
 );
+dpdShipmentSchema.index(
+  { dpdShipmentId: 1 },
+  {
+    unique: true,
+    name: "uniq_dpd_carrier_awb",
+    partialFilterExpression: { dpdShipmentId: { $type: "string", $gt: "" } }
+  }
+);
+dpdShipmentSchema.index(
+  { forwardingNumber: 1 },
+  {
+    unique: true,
+    name: "uniq_dpd_carrier_forwarding_number",
+    collation: { locale: "en", strength: 2 },
+    partialFilterExpression: { forwardingNumber: { $type: "string", $gt: "" } }
+  }
+);
 
 export const DpdShipment = mongoose.model<IDpdShipment>(
   "DpdShipment",

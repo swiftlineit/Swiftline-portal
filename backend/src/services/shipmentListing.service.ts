@@ -43,6 +43,8 @@ export type ShipmentListingFilter = {
    * sitting on page three.
    */
   search?: string;
+  /** Staff tracking picker: match consignee names without address/reference hits. */
+  consigneeName?: string;
   dateFrom?: string;
   dateTo?: string;
   /** Carrier booking calendar day used by the dashboard's Booked today KPI. */
@@ -426,6 +428,18 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
       ...byDraft.map((draft) => String(draft._id))
     ]);
     allowedDraftIds = allowedDraftIds.filter((id) => matched.has(String(id)));
+  }
+
+  if (filter.consigneeName?.trim()) {
+    const pattern = new RegExp(filter.consigneeName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    draftFilter.$or = [
+      { "consigneeEnteredAddress.companyName": pattern },
+      { "consigneeEnteredAddress.contactName": pattern },
+      { "consigneeValidatedAddress.companyName": pattern },
+      { "consigneeValidatedAddress.contactName": pattern },
+      { "consigneeSelectedAddress.companyName": pattern },
+      { "consigneeSelectedAddress.contactName": pattern }
+    ];
   }
 
   const candidateFilter = { ...draftFilter, _id: { $in: allowedDraftIds } };

@@ -590,6 +590,66 @@ describe("flight linehaul workflow boundaries", () => {
     assert.equal(await ShipmentEvent.countDocuments({ shipmentDraftId: shipment.draft._id, status: "FLIGHT_DEPARTED" }), 0);
   });
 
+  test("does not commit flight departure when its time predates the shipment dispatch event", async () => {
+    const flight = await createFlight();
+    const shipment = await createShipment({ parcelCount: 1 });
+    await allocateShipments({ flightId: String(flight._id), shipmentDraftIds: [String(shipment.draft._id)], userId, allowedBranchIds: null });
+    await createManifestFixture(flight._id as mongoose.Types.ObjectId, shipment, "SEALED");
+    await FlightLinehaul.updateOne({ _id: flight._id }, { $set: { status: "CARGO_ALLOCATED" } });
+
+    const actualDepartureAt = new Date(Date.now() - 10_000);
+    const latestShipmentEventAt = new Date(actualDepartureAt.getTime() + 4_687);
+    await ShipmentEvent.create([
+      {
+        shipmentDraftId: shipment.draft._id,
+        dpdShipmentId: shipment.dpd._id,
+        status: "WAREHOUSE_SCAN_IN",
+        source: "MANUAL",
+        note: "Received at origin",
+        createdBy: userId,
+        eventAt: new Date(actualDepartureAt.getTime() - 65_000)
+      },
+      {
+        shipmentDraftId: shipment.draft._id,
+        dpdShipmentId: shipment.dpd._id,
+        status: "READY_FOR_EXPORT",
+        source: "MANIFEST",
+        note: "Ready for dispatch",
+        createdBy: userId,
+        eventAt: new Date(actualDepartureAt.getTime() + 2_135)
+      },
+      {
+        shipmentDraftId: shipment.draft._id,
+        dpdShipmentId: shipment.dpd._id,
+        status: "ORIGIN_HUB_DISPATCHED",
+        source: "MANIFEST",
+        note: "Dispatched from origin hub",
+        createdBy: userId,
+        eventAt: latestShipmentEventAt
+      }
+    ]);
+
+    await assert.rejects(
+      () => transitionFlightStatus({
+        flightId: String(flight._id),
+        toStatus: "DEPARTED",
+        userId,
+        allowedBranchIds: null,
+        metadata: { actualDepartureAt: actualDepartureAt.toISOString() }
+      }),
+      (error: unknown) => error instanceof Error
+        && (error as FlightLinehaulServiceError).statusCode === 409
+        && error.message.includes("ORIGIN_HUB_DISPATCHED")
+    );
+
+    const persistedFlight = await FlightLinehaul.findById(flight._id).lean().exec();
+    const persistedAllocation = await FlightShipmentAllocation.findOne({ flightLinehaulId: flight._id }).lean().exec();
+    assert.equal(persistedFlight?.status, "CARGO_ALLOCATED");
+    assert.equal(persistedFlight?.actualDepartureAt ?? null, null);
+    assert.equal(persistedAllocation?.status, "ALLOCATED");
+    assert.equal(await ShipmentEvent.exists({ shipmentDraftId: shipment.draft._id, status: "IN_TRANSIT" }), null);
+  });
+
   test("cancellation is allowed before sealing and rejected after a manifest is sealed", async () => {
     const cancellable = await createFlight();
     const shipment = await createShipment();

@@ -18,6 +18,11 @@ import {
 import { OPERATIONS_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
 import { indiaDateTimeLocalToIso } from "@/lib/indiaDateTime";
+import {
+  flightArrivalDateTimeLocalToIso,
+  flightArrivalTimeZoneLabel,
+  isUkFlightDestination,
+} from "@/lib/dateTimeZones";
 
 // Almost every flight clears through the UK agent, so the TO block starts filled in
 // and the operator edits it only when the destination agent differs.
@@ -322,8 +327,13 @@ export default function NewOperationsManifestPage() {
     event.preventDefault();
     if (!branchId) return toast.error("Select the origin branch.");
     const departureAt = indiaDateTimeLocalToIso(flight.scheduledDepartureLocal);
-    const arrivalAt = indiaDateTimeLocalToIso(flight.scheduledArrivalLocal);
-    if (!departureAt || !arrivalAt) return toast.error("Enter valid departure and arrival times in India time.");
+    const arrivalAt = flightArrivalDateTimeLocalToIso(flight.scheduledArrivalLocal, header.destinationIataCode);
+    if (!departureAt) return toast.error("Enter a valid scheduled departure time in IST.");
+    if (!arrivalAt) {
+      return toast.error(isUkFlightDestination(header.destinationIataCode)
+        ? "Enter a valid UK arrival time (GMT/BST); skipped or repeated clock times cannot be used."
+        : "Enter a valid scheduled arrival time in IST.");
+    }
     if (new Date(arrivalAt) <= new Date(departureAt)) return toast.error("Arrival must be after departure.");
     const capacityKg = Number(flight.capacityKg);
     if (!Number.isFinite(capacityKg) || capacityKg <= 0) return toast.error("Enter a valid positive flight capacity.");
@@ -518,7 +528,7 @@ export default function NewOperationsManifestPage() {
         <section className="mt-5 overflow-hidden rounded-2xl border border-[#EEEDED] bg-white shadow-sm">
           <div className="border-b border-[#EEEDED] bg-[#EEEDED]/70 px-6 py-4">
             <h2 className="font-semibold text-slate-700">Flight schedule</h2>
-            <p className="mt-1 text-xs text-slate-600">All scheduled times use India Standard Time (IST, UTC+05:30).</p>
+            <p className="mt-1 text-xs text-slate-600">Departure and transit use IST. Scheduled arrival uses local time at the destination airport (UK GMT/BST for UK airports; IST otherwise). Shipment destination countries do not restrict which consignments can use this flight.</p>
             <p className="mt-1 text-xs text-slate-600">After this manifest is dispatched, the flight changes to Departed automatically at the scheduled departure time. If a readiness check blocks it, Operations can still use the manual Depart action.</p>
           </div>
           <div className="grid gap-5 p-6 sm:grid-cols-2">
@@ -535,7 +545,7 @@ export default function NewOperationsManifestPage() {
               <input required type="datetime-local" value={flight.scheduledDepartureLocal} onChange={(event) => setFlight((current) => ({ ...current, scheduledDepartureLocal: event.target.value }))} className={controlClass} />
             </label>
             <label className={labelClass}>
-              Scheduled arrival (IST) *
+              Scheduled arrival ({flightArrivalTimeZoneLabel(header.destinationIataCode)}) *
               <input required type="datetime-local" value={flight.scheduledArrivalLocal} onChange={(event) => setFlight((current) => ({ ...current, scheduledArrivalLocal: event.target.value }))} className={controlClass} />
             </label>
             <label className={labelClass}>

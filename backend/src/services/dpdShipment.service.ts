@@ -4,6 +4,8 @@ import { AuditLog } from "../models/auditLog.model.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { DpdShipment, IDpdShipment } from "../models/dpdShipment.model.js";
+import { OperationsManifest } from "../models/operationsManifest.model.js";
+import { OperationsManifestConsignment } from "../models/operationsManifestConsignment.model.js";
 import {
   LabelDocument,
   type LabelFormat,
@@ -124,6 +126,25 @@ export class DpdShipmentServiceError extends Error {
   ) {
     super(message);
   }
+}
+
+export function normalizeAlsCarrierReferences(input: {
+  carrierAwbNumber: string;
+  carrierForwardingNumber: string;
+}) {
+  const carrierAwbNumber = input.carrierAwbNumber.trim();
+  const carrierForwardingNumber = input.carrierForwardingNumber.trim().toUpperCase();
+  if (!/^\d{6,20}$/.test(carrierAwbNumber)) {
+    throw new DpdShipmentServiceError("Enter the confirmed numeric ALS AWB.", 400);
+  }
+  if (
+    !carrierForwardingNumber
+    || carrierForwardingNumber.length > 120
+    || /[\u0000-\u001F\u007F]/.test(carrierForwardingNumber)
+  ) {
+    throw new DpdShipmentServiceError("Enter a valid ALS forwarding number.", 400);
+  }
+  return { carrierAwbNumber, carrierForwardingNumber };
 }
 
 /**
@@ -1261,6 +1282,256 @@ export async function reconcileShipmentDocuments(
   );
 
   return { dpdShipment, labels, shipmentInvoice, reused: false };
+}
+
+/**
+ * Records operator-confirmed ALS carrier references when ALS accepted a
+ * label-only request but did not return a carrier label. This deliberately does
+ * not request or fabricate a label, change financial state, or modify the manifest.
+ */
+export async function reconcileAlsCarrierBooking(input: {
+  shipmentDraftId: string;
+  manifestId: string;
+  carrierAwbNumber: string;
+  carrierForwardingNumber: string;
+  swiftlineTrackingNumber: string;
+  confirmationNote: string;
+  userId: mongoose.Types.ObjectId;
+}) {
+  if (!mongoose.Types.ObjectId.isValid(input.shipmentDraftId)
+    || !mongoose.Types.ObjectId.isValid(input.manifestId)) {
+    throw new DpdShipmentServiceError("Shipment or manifest not found.", 404);
+  }
+
+  const shipmentDraftId = new mongoose.Types.ObjectId(input.shipmentDraftId);
+  const manifestId = new mongoose.Types.ObjectId(input.manifestId);
+  const { carrierAwbNumber, carrierForwardingNumber } = normalizeAlsCarrierReferences(input);
+  const confirmedTrackingNumber = input.swiftlineTrackingNumber.trim().toUpperCase();
+  const confirmationNote = input.confirmationNote.trim();
+  const session = await mongoose.startSession();
+  const transactionResult: { dpdShipment?: IDpdShipment; reused: boolean } = { reused: false };
+
+  try {
+    await session.withTransaction(async () => {
+      const draft = await ShipmentDraft.findOne({ _id: shipmentDraftId, deletedAt: null }).session(session).exec();
+      const shipment = await DpdShipment.findOne({ shipmentDraftId }).session(session).exec();
+      const manifest = await OperationsManifest.findById(manifestId).session(session).exec();
+      const consignment = await OperationsManifestConsignment.findOne({ manifestId, shipmentDraftId })
+        .session(session).exec();
+
+      if (!draft || !shipment || !manifest || !consignment) {
+        throw new DpdShipmentServiceError("The shipment is not linked to the specified manifest.", 404);
+      }
+
+      const alreadyReconciled = shipment.status === "DPD_CREATED"
+        && shipment.dpdShipmentId?.trim() === carrierAwbNumber
+        && shipment.forwardingNumber?.trim().toUpperCase() === carrierForwardingNumber
+        && shipment.responseSnapshot?.manuallyReconciled === true
+        && String(shipment.responseSnapshot?.awbNumber ?? "").trim() === carrierAwbNumber
+        && String(shipment.responseSnapshot?.forwardingNumber ?? "").trim().toUpperCase() === carrierForwardingNumber
+        && String(shipment.responseSnapshot?.manifestId ?? "") === input.manifestId;
+      if (alreadyReconciled) {
+        transactionResult.dpdShipment = shipment;
+        transactionResult.reused = true;
+        return;
+      }
+
+      if (draft.bookingState !== "BOOKED") {
+        throw new DpdShipmentServiceError("Only an already-booked shipment can be reconciled.", 409);
+      }
+      if (manifest.status !== "SEALED" || String(manifest.branchId) !== String(draft.branchId)) {
+        throw new DpdShipmentServiceError("The shipment must belong to this branch's sealed manifest.", 409);
+      }
+      if (shipment.status !== "DPD_STATUS_UNKNOWN" || shipment.responseSnapshot?.stage !== "DPD_LABEL_ONLY") {
+        throw new DpdShipmentServiceError(
+          "This shipment is not in the expected uncertain label-only state. Do not change its carrier reference.",
+          409
+        );
+      }
+      if (shipment.dpdShipmentId?.trim()) {
+        throw new DpdShipmentServiceError("A carrier AWB is already recorded. Do not replace it through this action.", 409);
+      }
+      if (shipment.forwardingNumber?.trim()
+        && shipment.forwardingNumber.trim().toUpperCase() !== carrierForwardingNumber) {
+        throw new DpdShipmentServiceError("A different forwarding number is already recorded. Do not replace it through this action.", 409);
+      }
+
+      const snapshot = readShipmentBookingSnapshot(shipment.currentShipmentSnapshot)
+        ?? readShipmentBookingSnapshot(shipment.bookingSnapshot);
+      if (!snapshot || !shipment.swiftlineTrackingNumber?.trim()) {
+        throw new DpdShipmentServiceError("The locked shipment snapshot or Swiftline tracking number is missing.", 409);
+      }
+
+      const trackingNumber = shipment.swiftlineTrackingNumber.trim();
+      const snapshotTrackingNumber = snapshot.tracking.swiftlineTrackingNumber.trim().toUpperCase();
+      if (trackingNumber.toUpperCase() !== confirmedTrackingNumber
+        || snapshotTrackingNumber !== trackingNumber.toUpperCase()
+        || consignment.consignmentNumber.trim().toUpperCase() !== trackingNumber.toUpperCase()) {
+        throw new DpdShipmentServiceError(
+          "The confirmed Swiftline tracking number does not match the shipment on this manifest.",
+          409
+        );
+      }
+
+      const expectedParcelNumbers = snapshot.parcels
+        .map((parcel) => parcel.swiftlineParcelNumber.trim().toUpperCase())
+        .sort();
+      const manifestParcelNumbers = [...consignment.expectedParcelNumbers]
+        .map((parcelNumber) => parcelNumber.trim().toUpperCase())
+        .sort();
+      const scannedParcelNumbers = [...consignment.scannedParcelNumbers]
+        .map((parcelNumber) => parcelNumber.trim().toUpperCase())
+        .sort();
+      if (consignment.dpdShipmentId.toString() !== shipment._id.toString()
+        || consignment.status !== "COMPLETE"
+        || expectedParcelNumbers.length === 0
+        || new Set(expectedParcelNumbers).size !== expectedParcelNumbers.length
+        || new Set(manifestParcelNumbers).size !== manifestParcelNumbers.length
+        || new Set(scannedParcelNumbers).size !== scannedParcelNumbers.length
+        || expectedParcelNumbers.join("|") !== manifestParcelNumbers.join("|")
+        || expectedParcelNumbers.join("|") !== scannedParcelNumbers.join("|")) {
+        throw new DpdShipmentServiceError(
+          "The manifest consignment is incomplete or its parcel set does not match the booked shipment.",
+          409
+        );
+      }
+
+      const swiftlineLabels = await LabelDocument.find({
+        dpdShipmentId: shipment._id,
+        labelType: "SWIFTLINE",
+        labelVersion: shipment.snapshotRevision || 1,
+        voidedAt: null
+      }).session(session).lean().exec();
+      const activeDpdLabelCount = await LabelDocument.countDocuments({
+        dpdShipmentId: shipment._id,
+        labelType: "DPD",
+        voidedAt: null
+      }).session(session).exec();
+      const carrierReferenceOwner = await DpdShipment.findOne({
+        _id: { $ne: shipment._id },
+        $or: [
+          { dpdShipmentId: carrierAwbNumber },
+          { forwardingNumber: carrierForwardingNumber },
+          {
+            $expr: {
+              $eq: [
+                { $trim: { input: { $ifNull: ["$dpdShipmentId", ""] } } },
+                carrierAwbNumber
+              ]
+            }
+          },
+          {
+            $expr: {
+              $eq: [
+                { $toUpper: { $trim: { input: { $ifNull: ["$forwardingNumber", ""] } } } },
+                carrierForwardingNumber
+              ]
+            }
+          }
+        ]
+      })
+        .collation({ locale: "en", strength: 2 })
+        .session(session).select("_id").lean().exec();
+      const hasEverySwiftlineLabel = hasCompleteSwiftlineLabelSet({
+        parcelCount: snapshot.parcels.length,
+        labels: swiftlineLabels
+      }) && expectedParcelNumbers.every((parcelNumber) => swiftlineLabels.some(
+        (label) => label.parcelNumber.trim().toUpperCase() === parcelNumber
+      ));
+      if (!hasEverySwiftlineLabel) {
+        throw new DpdShipmentServiceError("The shipment's Swiftline parcel labels are incomplete.", 409);
+      }
+      if (activeDpdLabelCount > 0) {
+        throw new DpdShipmentServiceError(
+          "A carrier label is already stored. Use the normal document-reconciliation workflow instead.",
+          409
+        );
+      }
+      if (carrierReferenceOwner) {
+        throw new DpdShipmentServiceError("This ALS AWB or forwarding number is already linked to another shipment.", 409);
+      }
+
+      const now = new Date();
+      const previousResponse = shipment.responseSnapshot && typeof shipment.responseSnapshot === "object"
+        ? shipment.responseSnapshot as Record<string, unknown>
+        : {};
+      const currentForwardingNumber = shipment.forwardingNumber?.trim() ?? "";
+      const forwardingNumberFilter = currentForwardingNumber
+        ? { forwardingNumber: shipment.forwardingNumber }
+        : { forwardingNumber: { $in: ["", null] } };
+      const updatedShipment = await DpdShipment.findOneAndUpdate(
+        {
+          _id: shipment._id,
+          status: "DPD_STATUS_UNKNOWN",
+          dpdShipmentId: { $in: ["", null] },
+          ...forwardingNumberFilter
+        },
+        {
+          $set: {
+            dpdShipmentId: carrierAwbNumber,
+            forwardingNumber: carrierForwardingNumber,
+            status: "DPD_CREATED",
+            responseSnapshot: {
+              ...previousResponse,
+              provider: "ALS",
+              outcome: "ACCEPTED_WITHOUT_LABEL",
+              stage: "DPD_LABEL_ONLY",
+              awbNumber: carrierAwbNumber,
+              forwardingNumber: carrierForwardingNumber,
+              labelCount: 0,
+              carrierLabelStatus: "NOT_PROVIDED",
+              manuallyReconciled: true,
+              manifestId: input.manifestId,
+              reconciledAt: now.toISOString()
+            }
+          }
+        },
+        { new: true, runValidators: true, session }
+      ).exec();
+      if (!updatedShipment) {
+        throw new DpdShipmentServiceError("The shipment changed during reconciliation. Refresh and verify its status.", 409);
+      }
+
+      await AuditLog.create([{
+        action: "DPD_CARRIER_BOOKING_RECONCILED",
+        entityType: "DPD_SHIPMENT",
+        entityId: shipment._id,
+        performedBy: input.userId,
+        performedAt: now,
+        metadata: {
+          shipmentDraftId,
+          manifestId,
+          swiftlineTrackingNumber: trackingNumber,
+          carrierAwbNumber,
+          carrierForwardingNumber,
+          previousForwardingNumber: shipment.forwardingNumber ?? "",
+          previousStatus: "DPD_STATUS_UNKNOWN",
+          newStatus: "DPD_CREATED",
+          carrierLabelStatus: "NOT_PROVIDED",
+          evidenceSource: "ALS_OPERATOR_CONFIRMED",
+          confirmationNote
+        }
+      }], { session });
+
+      transactionResult.dpdShipment = updatedShipment;
+    });
+  } catch (error) {
+    if (
+      error instanceof mongoose.mongo.MongoServerError
+      && error.code === 11000
+      && (error.keyPattern?.dpdShipmentId || error.keyPattern?.forwardingNumber)
+    ) {
+      throw new DpdShipmentServiceError("This ALS AWB or forwarding number is already linked to another shipment.", 409);
+    }
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+
+  if (!transactionResult.dpdShipment) {
+    throw new DpdShipmentServiceError("The carrier booking could not be reconciled.", 409);
+  }
+  return { dpdShipment: transactionResult.dpdShipment, reused: transactionResult.reused };
 }
 
 /**

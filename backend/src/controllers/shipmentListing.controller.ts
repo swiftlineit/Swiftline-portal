@@ -147,6 +147,7 @@ export async function listAdminBookedShipments(request: Request, response: Respo
     bookedDate: typeof request.query.bookedDate === "string" ? request.query.bookedDate : "",
     rebookedOnly: request.query.rebooked === "1" || request.query.rebooked === "true",
     search: typeof request.query.search === "string" ? request.query.search.slice(0, 80) : "",
+    consigneeName: typeof request.query.consigneeName === "string" ? request.query.consigneeName.slice(0, 80) : "",
     sort: typeof request.query.sort === "string" ? request.query.sort : "",
     destinationRegions: destinationRegionsParam(request),
     individualBookings: individualBookingsParam(request),

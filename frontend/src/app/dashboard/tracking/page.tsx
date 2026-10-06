@@ -12,7 +12,7 @@ export default function AdminTrackingPage() {
     <ShipmentTrackingPage
       mode="admin"
       title="Shipment Tracking"
-      description="Search every Swiftline shipment using its Swiftline, carrier, or parcel tracking number."
+      description="Find a shipment by consignee name or by its Swiftline, carrier, or parcel tracking number."
     />
   );
 }

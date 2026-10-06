@@ -4,6 +4,12 @@ import { FormEvent, useState } from "react";
 import { toast } from "react-toastify";
 import { updateFlight, type FlightListItem } from "@/lib/flightLinehaul";
 import { indiaDateTimeLocalToIso, isoToIndiaDateTimeLocal } from "@/lib/indiaDateTime";
+import {
+  flightArrivalDateTimeLocalToIso,
+  flightArrivalTimeZoneLabel,
+  isUkFlightDestination,
+  isoToFlightArrivalDateTimeLocal,
+} from "@/lib/dateTimeZones";
 import { useDialog } from "@/lib/useDialog";
 
 type FlightForm = {
@@ -29,7 +35,7 @@ function formFromFlight(flight: FlightListItem): FlightForm {
     destinationIataCode: flight.destinationIataCode,
     transitIataCode: flight.transitIataCode,
     scheduledDepartureLocal: isoToIndiaDateTimeLocal(flight.scheduledDepartureAt),
-    scheduledArrivalLocal: isoToIndiaDateTimeLocal(flight.scheduledArrivalAt),
+    scheduledArrivalLocal: isoToFlightArrivalDateTimeLocal(flight.scheduledArrivalAt, flight.destinationIataCode),
     capacityKg: String(flight.capacityKg),
     destinationAgent: flight.destinationAgent,
     finalMileCarrier: flight.finalMileCarrier
@@ -51,14 +57,30 @@ export default function FlightDetailsEditDialog({
   const dialogRef = useDialog<HTMLFormElement>(true, () => {
     if (!saving) onClose();
   });
-  const field = (key: keyof FlightForm, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const field = (key: keyof FlightForm, value: string) => setForm((current) => {
+    if (key !== "destinationIataCode") return { ...current, [key]: value };
+    const nextDestination = value.trim().toUpperCase();
+    const currentArrivalAt = flightArrivalDateTimeLocalToIso(current.scheduledArrivalLocal, current.destinationIataCode);
+    return {
+      ...current,
+      destinationIataCode: nextDestination,
+      scheduledArrivalLocal: currentArrivalAt
+        ? isoToFlightArrivalDateTimeLocal(currentArrivalAt, nextDestination)
+        : "",
+    };
+  });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (reason.trim().length < 5) return toast.error("Enter a clear correction reason of at least 5 characters.");
     const scheduledDepartureAt = indiaDateTimeLocalToIso(form.scheduledDepartureLocal);
-    const scheduledArrivalAt = indiaDateTimeLocalToIso(form.scheduledArrivalLocal);
-    if (!scheduledDepartureAt || !scheduledArrivalAt) return toast.error("Enter valid scheduled departure and arrival times in IST.");
+    const scheduledArrivalAt = flightArrivalDateTimeLocalToIso(form.scheduledArrivalLocal, form.destinationIataCode);
+    if (!scheduledDepartureAt) return toast.error("Enter a valid scheduled departure time in IST.");
+    if (!scheduledArrivalAt) {
+      return toast.error(isUkFlightDestination(form.destinationIataCode)
+        ? "Enter a valid UK arrival time (GMT/BST); skipped or repeated clock times cannot be used."
+        : "Enter a valid scheduled arrival time in IST.");
+    }
     setSaving(true);
     try {
       await updateFlight(flight.id || flight._id, {
@@ -108,14 +130,14 @@ export default function FlightDetailsEditDialog({
           <Field label="Destination IATA" value={form.destinationIataCode} maxLength={3} required onChange={(value) => field("destinationIataCode", value.toUpperCase())} />
           <Field label="Transit IATA" value={form.transitIataCode} maxLength={3} onChange={(value) => field("transitIataCode", value.toUpperCase())} />
           <Field label="Scheduled departure (IST)" value={form.scheduledDepartureLocal} type="datetime-local" required onChange={(value) => field("scheduledDepartureLocal", value)} />
-          <Field label="Scheduled arrival (IST)" value={form.scheduledArrivalLocal} type="datetime-local" required onChange={(value) => field("scheduledArrivalLocal", value)} />
+          <Field label={`Scheduled arrival (${flightArrivalTimeZoneLabel(form.destinationIataCode)})`} value={form.scheduledArrivalLocal} type="datetime-local" required onChange={(value) => field("scheduledArrivalLocal", value)} />
           <Field label="Flight capacity (kg)" value={form.capacityKg} type="number" required onChange={(value) => field("capacityKg", value)} />
           <Field label="Final-mile carrier" value={form.finalMileCarrier} maxLength={200} onChange={(value) => field("finalMileCarrier", value)} />
           <label className="block text-sm font-medium text-slate-700 sm:col-span-2">
             Destination agent details
             <textarea maxLength={1000} rows={3} value={form.destinationAgent} onChange={(event) => field("destinationAgent", event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15" />
           </label>
-          <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs leading-5 text-slate-600 sm:col-span-2">Departure date and time use IST. If the flight has not departed, changing the schedule also changes its automatic-departure time. The printed manifest uses the date only; actual flight times and shipment events are not rewritten.</p>
+          <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs leading-5 text-slate-600 sm:col-span-2">Departure uses IST. Arrival uses the destination airport timezone ({flightArrivalTimeZoneLabel(form.destinationIataCode)}). If the flight has not departed, changing the departure schedule also changes its automatic-departure time. Actual flight times and shipment events are not rewritten.</p>
           <label className="block text-sm font-medium text-slate-700 sm:col-span-2">
             Correction reason
             <textarea required minLength={5} maxLength={500} rows={3} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Explain why the flight details need correction" className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15" />

@@ -32,6 +32,16 @@ export class FlightLinehaulServiceError extends Error {
   }
 }
 
+export function describeFlightDepartureTimestampConflict(input: {
+  shipmentDraftId: string;
+  latestShipmentStatus: string;
+  latestShipmentEventAt: Date;
+  actualDepartureAt: Date;
+}) {
+  if (input.latestShipmentEventAt.getTime() <= input.actualDepartureAt.getTime()) return null;
+  return `Flight cannot be marked departed because shipment ${input.shipmentDraftId.slice(-8)} has ${input.latestShipmentStatus} recorded at ${input.latestShipmentEventAt.toISOString()}, later than the actual departure time ${input.actualDepartureAt.toISOString()}. Correct the departure time or resolve the shipment event sequence first. No flight or shipment status was changed.`;
+}
+
 function asObjectId(value: string, label: string) {
   if (!mongoose.Types.ObjectId.isValid(value)) throw new FlightLinehaulServiceError(`${label} was not found.`, 404);
   return new mongoose.Types.ObjectId(value);
@@ -1158,7 +1168,19 @@ async function recordFlightShipmentMilestones(input: {
     const latest = recordedEvents[recordedEvents.length - 1];
     if (!latest) continue;
     if (["ON_HOLD", "SHIPMENT_CANCELLED", "DELIVERED", "RETURNED", "LOST", "DAMAGED"].includes(String(latest.status))) continue;
-    if (laterStatuses.includes(String(latest.status)) || latest.eventAt > input.eventAt) continue;
+    if (laterStatuses.includes(String(latest.status))) continue;
+    if (latest.eventAt > input.eventAt) {
+      if (input.status === "IN_TRANSIT") {
+        const message = describeFlightDepartureTimestampConflict({
+          shipmentDraftId: String(allocation.shipmentDraftId),
+          latestShipmentStatus: String(latest.status),
+          latestShipmentEventAt: latest.eventAt,
+          actualDepartureAt: input.eventAt
+        });
+        if (message) throw new FlightLinehaulServiceError(message, 409);
+      }
+      continue;
+    }
 
     const missing = findMissingPrerequisites(milestoneKey, recordedEvents.map((event) => event.status));
     if (missing.length) {
@@ -1204,6 +1226,7 @@ export async function transitionFlightStatus(input: {
   toStatus: FlightLinehaulStatus;
   reason?: string;
   metadata?: Record<string, unknown>;
+  scheduledDepartureCandidate?: { scheduledDepartureAt: Date };
   userId: mongoose.Types.ObjectId;
   allowedBranchIds?: string[] | null;
 }) {
@@ -1221,6 +1244,24 @@ export async function transitionFlightStatus(input: {
       const to = input.toStatus;
       if (from === to) throw new FlightLinehaulServiceError(`Flight is already ${from}.`, 409);
       if (!canTransition(from, to)) throw new FlightLinehaulServiceError(`Cannot transition from ${from} to ${to}.`, 409);
+
+      if (input.scheduledDepartureCandidate) {
+        const departureAt = input.metadata?.actualDepartureAt
+          ? new Date(String(input.metadata.actualDepartureAt))
+          : new Date();
+        if (to !== "DEPARTED" || !isScheduledDepartureCandidateCurrent({
+          flightStatus: flight.status,
+          scheduledDepartureAutomationEnabled: flight.scheduledDepartureAutomationEnabled,
+          scheduledDepartureAt: flight.scheduledDepartureAt,
+          expectedScheduledDepartureAt: input.scheduledDepartureCandidate.scheduledDepartureAt,
+          now: departureAt
+        })) {
+          throw new FlightLinehaulServiceError(
+            "The scheduled departure or automation setting changed while this flight was being processed. No departure was recorded; review the latest schedule and automation setting.",
+            409
+          );
+        }
+      }
 
       // Prerequisites
       if (to === "BOOKING_CONFIRMED") {
@@ -1358,6 +1399,23 @@ export function isScheduledDepartureReady(input: {
     && input.manifestStatuses[0] === "DISPATCHED";
 }
 
+export function isScheduledDepartureCandidateCurrent(input: {
+  flightStatus: string;
+  scheduledDepartureAutomationEnabled: boolean;
+  scheduledDepartureAt: Date | null | undefined;
+  expectedScheduledDepartureAt: Date;
+  now: Date;
+}) {
+  const currentSchedule = input.scheduledDepartureAt?.getTime();
+  const expectedSchedule = input.expectedScheduledDepartureAt.getTime();
+  return input.flightStatus === "CARGO_ALLOCATED"
+    && input.scheduledDepartureAutomationEnabled
+    && Number.isFinite(currentSchedule)
+    && Number.isFinite(expectedSchedule)
+    && currentSchedule === expectedSchedule
+    && currentSchedule <= input.now.getTime();
+}
+
 export function shouldKeepManifestLinkedWhenCancellingFlight(scheduledDepartureAutomationEnabled: boolean) {
   return scheduledDepartureAutomationEnabled;
 }
@@ -1423,6 +1481,7 @@ export async function runScheduledFlightDepartureSweep(now = new Date()) {
       await transitionFlightStatus({
         flightId: String(flight._id),
         toStatus: "DEPARTED",
+        scheduledDepartureCandidate: { scheduledDepartureAt: flight.scheduledDepartureAt },
         userId: flight.createdBy,
         reason: "Scheduled departure automation.",
         metadata: {

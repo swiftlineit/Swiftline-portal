@@ -5,7 +5,9 @@ import { FlightShipmentAllocation, allocationStatusValues } from "../models/flig
 import { portalNotificationTypeValues } from "../models/portalNotification.model.js";
 import {
   calculateConnectionRisk,
+  describeFlightDepartureTimestampConflict,
   isScheduledDepartureReady,
+  isScheduledDepartureCandidateCurrent,
   shouldKeepManifestLinkedWhenCancellingFlight,
   flightAllocationParcelDetails,
   formatFlightLinehaulNumber,
@@ -204,6 +206,27 @@ test("flight departure prerequisites identify the missing shipment milestones", 
   assert.match(describeMissingPrerequisites("ORIGIN_HUB_DISPATCHED", missing), /Ready for Dispatch/);
 });
 
+test("flight departure rejects a timestamp earlier than the shipment's latest recorded milestone", () => {
+  const actualDepartureAt = new Date("2026-10-05T11:56:00.000Z");
+  const latestShipmentEventAt = new Date("2026-10-05T11:56:04.687Z");
+  const conflict = describeFlightDepartureTimestampConflict({
+    shipmentDraftId: "test-draft-12345678",
+    latestShipmentStatus: "ORIGIN_HUB_DISPATCHED",
+    latestShipmentEventAt,
+    actualDepartureAt
+  });
+
+  assert.match(conflict ?? "", /shipment 12345678 has ORIGIN_HUB_DISPATCHED recorded/);
+  assert.match(conflict ?? "", /later than the actual departure time/);
+  assert.match(conflict ?? "", /No flight or shipment status was changed\./);
+  assert.equal(describeFlightDepartureTimestampConflict({
+    shipmentDraftId: "test-draft-12345678",
+    latestShipmentStatus: "ORIGIN_HUB_DISPATCHED",
+    latestShipmentEventAt: actualDepartureAt,
+    actualDepartureAt
+  }), null);
+});
+
 test("new flights use only the essential operational lifecycle", () => {
   assert.deepEqual(allowedTransitions.BOOKING_CONFIRMED, ["CARGO_ALLOCATED", "CANCELLED"]);
   assert.deepEqual(allowedTransitions.CARGO_ALLOCATED, ["DEPARTED", "CANCELLED"]);
@@ -227,6 +250,40 @@ test("scheduled departure requires the due time and one dispatched linked manife
   assert.equal(isScheduledDepartureReady({ ...base, manifestStatuses: ["SEALED"] }), false);
   assert.equal(isScheduledDepartureReady({ ...base, manifestStatuses: ["DISPATCHED", "DISPATCHED"] }), false);
   assert.equal(isScheduledDepartureReady({ ...base, manifestStatuses: [] }), false);
+});
+
+test("scheduled departure revalidates its fetched schedule and automation setting before transitioning", () => {
+  const now = new Date("2026-09-29T10:00:00.000Z");
+  const fetchedSchedule = new Date("2026-09-29T09:59:00.000Z");
+  const base = {
+    flightStatus: "CARGO_ALLOCATED",
+    scheduledDepartureAutomationEnabled: true,
+    scheduledDepartureAt: fetchedSchedule,
+    expectedScheduledDepartureAt: fetchedSchedule,
+    now
+  };
+
+  assert.equal(isScheduledDepartureCandidateCurrent(base), true);
+  assert.equal(isScheduledDepartureCandidateCurrent({
+    ...base,
+    scheduledDepartureAt: new Date("2026-09-29T12:00:00.000Z")
+  }), false);
+  const correctedMissedSchedule = new Date("2026-09-29T08:00:00.000Z");
+  assert.equal(isScheduledDepartureCandidateCurrent({
+    ...base,
+    scheduledDepartureAt: correctedMissedSchedule
+  }), false, "a stale sweep candidate must not depart using the previously fetched time");
+  assert.equal(isScheduledDepartureCandidateCurrent({
+    ...base,
+    scheduledDepartureAt: correctedMissedSchedule,
+    expectedScheduledDepartureAt: correctedMissedSchedule
+  }), true, "the next sweep should accept the current corrected time once it is due");
+  assert.equal(isScheduledDepartureCandidateCurrent({ ...base, scheduledDepartureAutomationEnabled: false }), false);
+  assert.equal(isScheduledDepartureCandidateCurrent({ ...base, flightStatus: "DEPARTED" }), false);
+  assert.equal(isScheduledDepartureCandidateCurrent({
+    ...base,
+    scheduledDepartureAt: new Date("2026-09-29T10:01:00.000Z")
+  }), false);
 });
 
 test("cancelling a flight from the combined workflow retains its manifest link for safe deletion", () => {

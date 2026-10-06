@@ -13,6 +13,7 @@ import {
   reconcileDpdShipmentDocuments,
   releaseDpdShipment,
   refreshCarrierTracking,
+  reconcileAlsCarrierBookingForDraft,
   scanShipmentOperationsMilestone,
   resetDevelopmentShipmentBooking,
   updateDpdShipmentOperationalStatus,
@@ -78,6 +79,7 @@ dpdShipmentRouter.get("/drafts/:draftId/shipment-invoice/pdf", downloadCustomsIn
 dpdShipmentRouter.get("/drafts/:draftId/shipment-invoice/xlsx", downloadCustomsInvoiceWorkbook);
 dpdShipmentRouter.get("/drafts/:draftId/audit", requireOperations, listDpdShipmentAudit);
 dpdShipmentRouter.post("/drafts/:draftId/reset-development-booking", requireOperations, resetDevelopmentShipmentBooking);
+dpdShipmentRouter.post("/drafts/:draftId/reconcile-als-booking", requireOperations, reconcileAlsCarrierBookingForDraft);
 dpdShipmentRouter.get("/drafts/:draftId/details", getAdminShipmentDetails);
 dpdShipmentRouter.get("/:id", getDpdShipment);
 dpdShipmentRouter.get("/:id/charge-verification", requireChargeVerification, getShipmentChargeVerification);

@@ -41,6 +41,7 @@ import {
 } from "@/lib/flightLinehaul";
 import { listFlights } from "@/lib/flightLinehaul";
 import { normalizeFlightNumber } from "@/lib/flightNumber";
+import { flightArrivalTimeZoneLabel, formatFlightArrivalDateTime } from "@/lib/dateTimeZones";
 
 const tabs = [
   "Overview",
@@ -286,16 +287,14 @@ export default function FlightDetailPage() {
         {/* Essential flight metadata */}
         <div className="grid gap-px border-t border-[#E7EBF0] bg-[#E7EBF0] sm:grid-cols-2 lg:grid-cols-4">
           <HeaderMeta
-            label="Scheduled departure"
+            label="Scheduled departure (IST)"
             value={new Date(flight.scheduledDepartureAt).toLocaleString("en-IN", {
               timeZone: "Asia/Kolkata",
             })}
           />
           <HeaderMeta
-            label="Scheduled arrival"
-            value={new Date(flight.scheduledArrivalAt).toLocaleString("en-IN", {
-              timeZone: "Asia/Kolkata",
-            })}
+            label={`Scheduled arrival (${flightArrivalTimeZoneLabel(flight.destinationIataCode)})`}
+            value={formatFlightArrivalDateTime(flight.scheduledArrivalAt, flight.destinationIataCode)}
           />
           <HeaderMeta
             label="Shipments"
@@ -646,16 +645,14 @@ function OverviewTab({
               }
             />
             <OverviewRow
-              label="Scheduled departure"
+              label="Scheduled departure (IST)"
               value={new Date(flight.scheduledDepartureAt).toLocaleString("en-IN", {
                 timeZone: "Asia/Kolkata",
               })}
             />
             <OverviewRow
-              label="Scheduled arrival"
-              value={new Date(flight.scheduledArrivalAt).toLocaleString("en-IN", {
-                timeZone: "Asia/Kolkata",
-              })}
+              label={`Scheduled arrival (${flightArrivalTimeZoneLabel(flight.destinationIataCode)})`}
+              value={formatFlightArrivalDateTime(flight.scheduledArrivalAt, flight.destinationIataCode)}
             />
             {flight.actualDepartureAt ? (
               <OverviewRow

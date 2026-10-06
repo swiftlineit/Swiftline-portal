@@ -30,6 +30,7 @@ import { normalizeFlightNumber } from "@/lib/flightNumber";
 import { IoAirplaneSharp } from "react-icons/io5";
 import { BsAirplane } from "react-icons/bs";
 import { MdAirplanemodeInactive } from "react-icons/md";
+import { flightArrivalTimeZoneLabel, formatFlightArrivalDateTime } from "@/lib/dateTimeZones";
 
 const statusOptions = [
   "",
@@ -396,7 +397,7 @@ export default function FlightLinehaulDashboardPage() {
                       <div className="grid gap-2">
                         <div>
                           <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                            Departure
+                            Departure (IST)
                           </p>
                           <p className="mt-0.5 font-semibold text-slate-800">
                             {new Date(item.scheduledDepartureAt).toLocaleString(
@@ -408,13 +409,10 @@ export default function FlightLinehaulDashboardPage() {
 
                         <div>
                           <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                            Arrival
+                            Arrival ({flightArrivalTimeZoneLabel(item.destinationIataCode)})
                           </p>
                           <p className="mt-0.5 text-xs font-medium text-slate-600">
-                            {new Date(item.scheduledArrivalAt).toLocaleString(
-                              "en-IN",
-                              { timeZone: "Asia/Kolkata" },
-                            )}
+                            {formatFlightArrivalDateTime(item.scheduledArrivalAt, item.destinationIataCode)}
                           </p>
                         </div>
                       </div>

@@ -43,6 +43,8 @@
     "migrate:operations-manifest-counter": "tsx src/scripts/migrateOperationsManifestCounter.ts --apply",
     "audit:flight-linehaul-indexes": "tsx src/scripts/migrateFlightLinehaulIndexes.ts",
     "migrate:flight-linehaul-indexes": "tsx src/scripts/migrateFlightLinehaulIndexes.ts --apply",
+    "audit:dpd-carrier-reference-indexes": "tsx src/scripts/migrateDpdCarrierReferenceIndexes.ts",
+    "migrate:dpd-carrier-reference-indexes": "tsx src/scripts/migrateDpdCarrierReferenceIndexes.ts --apply",
     "audit:manifest-flight-workflow-indexes": "tsx src/scripts/migrateManifestFlightWorkflowIndexes.ts",
     "migrate:manifest-flight-workflow-indexes": "tsx src/scripts/migrateManifestFlightWorkflowIndexes.ts --apply",
     "migrate:carrier-tracking-indexes": "tsx src/scripts/migrateCarrierTrackingIndexes.ts",
@@ -139,6 +141,7 @@
     "test:claims:integration": "tsx --test src/tests/claim.integration.test.ts",
     "test:claims": "tsx --test src/tests/claimStateMachine.test.ts src/tests/claimPermissions.test.ts src/tests/claimModels.test.ts src/tests/claimSnapshot.test.ts src/tests/claimChecklist.test.ts src/tests/claimNotifications.test.ts src/tests/claimWorkflowReachability.test.ts",
     "test:shipment:als-label": "tsx --test src/tests/alsLabel.test.ts",
+    "test:shipment:als-carrier-reconciliation": "tsx --test src/tests/alsCarrierBookingReconciliation.test.ts",
     "test:shipment:als-tracking": "tsx --test src/tests/alsTracking.test.ts",
     "test:shipment:als-tracking-rate-limit-integration": "tsx --test src/tests/alsTrackingRateLimit.integration.test.ts",
     "test:async-concurrency": "tsx --test src/tests/runWithConcurrency.test.ts"

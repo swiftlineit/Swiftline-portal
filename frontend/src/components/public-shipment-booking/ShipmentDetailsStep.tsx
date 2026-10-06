@@ -279,6 +279,7 @@ function ParcelEditor({
           parcelLabel={`Parcel ${index + 1}`}
           revealError={revealErrors}
           requireHsnCode={csbType === "CSB_V"}
+          enforceItemValueLimit={csbType !== "CSB_V"}
           maxItems={maxParcelItems}
           maxQuantity={100_000}
           maxUnitRate={100_000_000}

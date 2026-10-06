@@ -190,6 +190,8 @@ export function shipmentListParams(input: {
   /** Keeps only shipments whose draft was created by the rebooking flow. */
   rebooked?: boolean;
   search?: string;
+  /** Staff tracking picker: search consignee names only. */
+  consigneeName?: string;
   dateRange?: DateRange;
   businessAccountId?: string;
   /** Legacy staff-only public source filter for callers that still send it. */
@@ -210,6 +212,7 @@ export function shipmentListParams(input: {
   if (input.bookedDate) params.set("bookedDate", input.bookedDate);
   if (input.rebooked) params.set("rebooked", "1");
   if (input.search?.trim()) params.set("search", input.search.trim());
+  if (input.consigneeName?.trim()) params.set("consigneeName", input.consigneeName.trim());
   setDateRangeParams(params, input.dateRange);
   if (input.businessAccountId) params.set("businessAccountId", input.businessAccountId);
   if (input.creationSource) params.set("creationSource", input.creationSource);
@@ -230,6 +233,9 @@ export async function listShipments(audience: ShipmentAudience, input: {
   rebooked?: boolean;
   /** Free text over AWB, piece number, consignee, consignee address (including destination country/county/postcode), and your own reference. */
   search?: string;
+  /** Staff tracking picker: search consignee names only. */
+  consigneeName?: string;
+  signal?: AbortSignal;
   dateRange?: DateRange;
   businessAccountId?: string;
   /** Legacy staff-only public source filter for callers that still send it. */
@@ -250,7 +256,7 @@ export async function listShipments(audience: ShipmentAudience, input: {
     success: true;
     shipments: ShipmentListItem[];
     pagination: ShipmentListPagination;
-  }>(`${base}?${params.toString()}`);
+  }>(`${base}?${params.toString()}`, { signal: input.signal });
 }
 
 export function listShipmentOperationsManifestOptions() {
