@@ -2655,6 +2655,9 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
         // Every bag holding a parcel of this consignment, in packing order.
         bagIds: packedIn,
         bagNumbers: packedIn.map((id) => bagNumberById.get(id) ?? "").filter(Boolean),
+        activeParcelScans: acceptedScans
+          .filter((scan) => String(scan.consignmentId) === String(item._id))
+          .map((scan) => ({ parcelNumber: scan.parcelNumber, scanId: String(scan._id) })),
         shipmentDraftId: String(item.shipmentDraftId),
         dpdShipmentId: String(item.dpdShipmentId),
         csbType: csbTypeByDraftId.get(String(item.shipmentDraftId)) === "CSB_V" ? "CSB_V" : "CSB_IV",

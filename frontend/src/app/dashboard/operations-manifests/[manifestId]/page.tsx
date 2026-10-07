@@ -394,17 +394,13 @@ export default function OperationsManifestWorkspace() {
     setPendingReason({ title, run });
   }
 
-  function requestParcelRemoval(parcelNumber: string) {
-    const scan = currentData.scans.find(
-      (item) =>
-        item.parcelNumber === parcelNumber && item.status === "ACCEPTED",
-    );
-    if (!scan)
+  function requestParcelRemoval(parcelNumber: string, scanId: string | undefined) {
+    if (!scanId)
       return toast.error(
-        "The active parcel scan could not be found. Refresh the manifest and try again.",
+        "The active parcel scan could not be found. Contact support with this manifest and parcel number.",
       );
     requestReason(`Remove ${parcelNumber} from this bag`, (reason) =>
-      removeOperationsScan(manifestId, scan.id, reason),
+      removeOperationsScan(manifestId, scanId, reason),
     );
   }
 
@@ -1160,7 +1156,7 @@ function ConsignmentTable({
   rows: OperationsConsignment[];
   canRemove: boolean;
   canDecide: boolean;
-  onRemove: (parcel: string) => void;
+  onRemove: (parcel: string, scanId: string | undefined) => void;
   onDisposition: (
     consignmentId: string,
     parcel: string,
@@ -1241,7 +1237,7 @@ function ConsignmentTable({
                           {canRemove ? (
                             <button
                               type="button"
-                              onClick={() => onRemove(parcel)}
+                              onClick={() => onRemove(parcel, item.activeParcelScans.find((scan) => scan.parcelNumber === parcel)?.scanId)}
                               title="Remove parcel from bag"
                               aria-label={`Remove parcel ${parcel} from bag`}
                               className="ml-1 flex h-6 w-6 items-center justify-center rounded text-[#D71313] hover:bg-[#D71313]/5"

@@ -101,6 +101,7 @@ export type OperationsConsignment = {
   displayConsignmentNumber: string;
   expectedParcelNumbers: string[];
   scannedParcelNumbers: string[];
+  activeParcelScans: Array<{ parcelNumber: string; scanId: string }>;
   parcelWeightSnapshots?: OperationsParcelWeight[];
   parcelDispositions: Array<{
     parcelNumber: string;
