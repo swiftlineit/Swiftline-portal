@@ -3,7 +3,6 @@
 import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import ParcelScanner from "@/components/driver/ParcelScanner";
 import {
   FiAlertTriangle,
   FiArchive,
@@ -44,6 +43,10 @@ import {
   type OperationsParcelDisposition,
   type OperationsScanSession,
 } from "@/lib/operationsManifests";
+import {
+  reconcileManualAlsBooking,
+  type ManualAlsBookingReconciliationInput,
+} from "@/lib/dpdLabels";
 import { OPERATIONS_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
 import { useDialog } from "@/lib/useDialog";
@@ -86,6 +89,8 @@ export default function OperationsManifestWorkspace() {
   const [pendingReason, setPendingReason] = useState<PendingReason | null>(
     null,
   );
+  const [reconciliationTarget, setReconciliationTarget] =
+    useState<OperationsConsignment | null>(null);
   const [phoneSession, setPhoneSession] =
     useState<OperationsScanSession | null>(null);
   const [pairingQr, setPairingQr] = useState("");
@@ -358,6 +363,20 @@ export default function OperationsManifestWorkspace() {
         error instanceof Error ? error.message : "Export unavailable.",
       );
     }
+  }
+
+  async function submitManualAlsRebooking(
+    input: Omit<ManualAlsBookingReconciliationInput, "manifestId" | "swiftlineTrackingNumber">
+  ) {
+    if (!reconciliationTarget) return;
+    const result = await reconcileManualAlsBooking(reconciliationTarget.shipmentDraftId, {
+      ...input,
+      manifestId: String(manifestId),
+      swiftlineTrackingNumber: reconciliationTarget.consignmentNumber,
+    });
+    setReconciliationTarget(null);
+    toast.success(result.message);
+    await load();
   }
 
   // Bags are closed and reopened one after another so each recalculation settles
@@ -709,8 +728,10 @@ export default function OperationsManifestWorkspace() {
                 )}
                 canRemove={canEdit}
                 canDecide={canEdit}
+                canReconcileAlsBooking={manifest.status === "SEALED"}
                 onRemove={requestParcelRemoval}
                 onDisposition={requestParcelDisposition}
+                onReconcileAlsBooking={setReconciliationTarget}
               />
             </div>
           </div>
@@ -719,8 +740,10 @@ export default function OperationsManifestWorkspace() {
             rows={data.consignments}
             canRemove={false}
             canDecide={manifest.status === "SEALED"}
+            canReconcileAlsBooking={manifest.status === "SEALED"}
             onRemove={requestParcelRemoval}
             onDisposition={requestParcelDisposition}
+            onReconcileAlsBooking={setReconciliationTarget}
           />
         )}
 
@@ -749,6 +772,14 @@ export default function OperationsManifestWorkspace() {
             await refreshAction(() => pendingReason.run(reason));
             setPendingReason(null);
           }}
+        />
+      ) : null}
+      {reconciliationTarget ? (
+        <ManualAlsRebookingDialog
+          manifestNumber={manifest.manifestNumber}
+          trackingNumber={reconciliationTarget.consignmentNumber}
+          onClose={() => setReconciliationTarget(null)}
+          onSubmit={submitManualAlsRebooking}
         />
       ) : null}
       {editDetailsOpen && editHeader ? (
@@ -1153,18 +1184,22 @@ function ConsignmentTable({
   rows,
   canRemove,
   canDecide,
+  canReconcileAlsBooking,
   onRemove,
   onDisposition,
+  onReconcileAlsBooking,
 }: {
   rows: OperationsConsignment[];
   canRemove: boolean;
   canDecide: boolean;
+  canReconcileAlsBooking: boolean;
   onRemove: (parcel: string, scanId: string | undefined) => void;
   onDisposition: (
     consignmentId: string,
     parcel: string,
     disposition: OperationsParcelDisposition,
   ) => void;
+  onReconcileAlsBooking: (consignment: OperationsConsignment) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-[#EEEDED] bg-white shadow-sm">
@@ -1197,6 +1232,22 @@ function ConsignmentTable({
                   <p className="mt-1 text-[11px] text-amber-700">
                     No label
                   </p>
+                ) : null}
+                {item.dpdStatus === "DPD_STATUS_UNKNOWN" ? (
+                  <p className="mt-1 text-[11px] font-semibold text-amber-800">
+                    Outcome unconfirmed
+                  </p>
+                ) : null}
+                {canReconcileAlsBooking
+                && item.dpdStatus === "DPD_STATUS_UNKNOWN"
+                && item.dpdStage === "DPD_LABEL_ONLY" ? (
+                  <button
+                    type="button"
+                    onClick={() => onReconcileAlsBooking(item)}
+                    className="mt-2 inline-flex min-h-8 items-center rounded-lg border border-[#0D1282]/25 bg-white px-2.5 py-1 text-left text-[11px] font-semibold text-[#0D1282] transition hover:bg-[#0D1282]/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30"
+                  >
+                    Reconcile manual ALS booking
+                  </button>
                 ) : null}
               </td>
               <td className="max-w-50 whitespace-pre-line px-3 py-3 text-[11px] leading-4 text-slate-700">
@@ -1345,6 +1396,159 @@ function ConsignmentTable({
           ) : null}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function ManualAlsRebookingDialog({
+  manifestNumber,
+  trackingNumber,
+  onClose,
+  onSubmit,
+}: {
+  manifestNumber: string;
+  trackingNumber: string;
+  onClose: () => void;
+  onSubmit: (
+    input: Omit<ManualAlsBookingReconciliationInput, "manifestId" | "swiftlineTrackingNumber">
+  ) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+  const dialogRef = useDialog<HTMLFormElement>(true, () => {
+    if (!saving) onClose();
+  });
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving) return;
+    const values = new FormData(event.currentTarget);
+    const input: Omit<ManualAlsBookingReconciliationInput, "manifestId" | "swiftlineTrackingNumber"> = {
+      carrierAwbNumber: String(values.get("carrierAwbNumber") ?? "").trim(),
+      carrierForwardingNumber: String(values.get("carrierForwardingNumber") ?? "").trim(),
+      originalAlsAttemptVoided: true,
+      replacementBookingVerified: true,
+      confirmationNote: String(values.get("confirmationNote") ?? "").trim(),
+    };
+    setSaving(true);
+    try {
+      await onSubmit(input);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The manual ALS booking could not be recorded.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 sm:p-5"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+    >
+      <form
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="manual-als-rebooking-title"
+        aria-describedby="manual-als-rebooking-description"
+        tabIndex={-1}
+        onSubmit={(event) => void submit(event)}
+        className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl outline-none"
+      >
+        <div className="border-b border-slate-200 px-5 py-4 sm:px-6">
+          <h2 id="manual-als-rebooking-title" className="text-lg font-semibold text-slate-950">
+            Reconcile manual ALS booking
+          </h2>
+          <p id="manual-als-rebooking-description" className="mt-1 text-sm leading-5 text-slate-600">
+            Use this only after the original uncertain ALS attempt has been voided and Operations has verified the replacement booking against this shipment. The ALS label will not be imported into the portal.
+          </p>
+        </div>
+
+        <div className="space-y-4 p-5 sm:p-6">
+          <div className="grid gap-3 rounded-xl bg-slate-50 p-3 text-sm sm:grid-cols-2">
+            <div>
+              <p className="text-xs font-medium text-slate-500">Manifest</p>
+              <p className="mt-0.5 font-semibold text-slate-800">{manifestNumber}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-slate-500">Swiftline tracking number</p>
+              <p className="mt-0.5 break-all font-mono text-xs font-semibold text-slate-800">{trackingNumber}</p>
+            </div>
+          </div>
+
+          <label className="block text-sm font-medium text-slate-700">
+            Replacement ALS AWB <span className="text-red-600">*</span>
+            <input
+              required
+              name="carrierAwbNumber"
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6,20}"
+              maxLength={20}
+              autoComplete="off"
+              placeholder="Enter the numeric ALS AWB"
+              className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20"
+            />
+          </label>
+
+          <label className="block text-sm font-medium text-slate-700">
+            ALS forwarding number <span className="text-red-600">*</span>
+            <input
+              required
+              name="carrierForwardingNumber"
+              type="text"
+              maxLength={120}
+              autoComplete="off"
+              placeholder="Enter the forwarding number from ALS"
+              className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20"
+            />
+          </label>
+
+          <fieldset className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3.5">
+            <legend className="px-1 text-sm font-semibold text-slate-800">Required verification</legend>
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm leading-5 text-slate-700">
+              <input required name="originalAlsAttemptVoided" type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[#0D1282]" />
+              <span>I confirm Operations voided the original uncertain ALS attempt.</span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm leading-5 text-slate-700">
+              <input required name="replacementBookingVerified" type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[#0D1282]" />
+              <span>I verified the replacement booking and its label in ALS against this shipment’s consignee, service, and parcels.</span>
+            </label>
+          </fieldset>
+
+          <label className="block text-sm font-medium text-slate-700">
+            Confirmation note <span className="text-red-600">*</span>
+            <textarea
+              required
+              name="confirmationNote"
+              minLength={10}
+              maxLength={500}
+              rows={3}
+              placeholder="Include the replacement ALS booking reference and void confirmation details"
+              className="mt-1.5 w-full resize-y rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20"
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={onClose}
+            className="h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="h-10 rounded-lg bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {saving ? "Recording…" : "Record replacement booking"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

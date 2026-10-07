@@ -170,6 +170,8 @@ const reconcileAlsCarrierBookingSchema = z.object({
   carrierForwardingNumber: z.string().trim().min(1).max(120)
     .refine((value) => !/[\u0000-\u001F\u007F]/.test(value), "Enter a valid ALS forwarding number."),
   swiftlineTrackingNumber: z.string().trim().min(1).max(40),
+  originalAlsAttemptVoided: z.boolean().refine((value) => value, "Confirm the original uncertain ALS attempt was voided."),
+  replacementBookingVerified: z.boolean().refine((value) => value, "Confirm the replacement ALS booking matches this shipment."),
   confirmationNote: z.string().trim().min(10).max(500)
 }).strict();
 
@@ -880,10 +882,10 @@ export async function reconcileAlsCarrierBookingForDraft(request: Request, respo
     return response.status(200).json({
       success: true,
       reused: result.reused,
-      message: "The confirmed ALS AWB and forwarding number are recorded. The carrier label remains missing; no label was created.",
+      message: "The replacement ALS booking is recorded. Its label remains in ALS and is not stored in the portal.",
       dpdShipment: serializeDpdShipment(result.dpdShipment),
       carrierForwardingNumber: result.dpdShipment.forwardingNumber ?? "",
-      carrierLabelStatus: "NOT_PROVIDED"
+      carrierLabelStatus: "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL"
     });
   } catch (error) {
     if (error instanceof DpdShipmentServiceError) {

@@ -974,6 +974,37 @@ export async function reconcileDpdShipmentDocuments(dpdShipmentId: string) {
   }>(response);
 }
 
+export type ManualAlsBookingReconciliationInput = {
+  manifestId: string;
+  carrierAwbNumber: string;
+  carrierForwardingNumber: string;
+  swiftlineTrackingNumber: string;
+  originalAlsAttemptVoided: true;
+  replacementBookingVerified: true;
+  confirmationNote: string;
+};
+
+export async function reconcileManualAlsBooking(
+  shipmentDraftId: string,
+  input: ManualAlsBookingReconciliationInput
+) {
+  const response = await fetchWithAuth(
+    apiUrl(`/api/v1/dpd-shipments/drafts/${encodeURIComponent(shipmentDraftId)}/reconcile-als-booking`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    }
+  );
+
+  return parseApiResponse<{
+    success: true;
+    reused: boolean;
+    message: string;
+    carrierLabelStatus: "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL";
+  }>(response);
+}
+
 export async function refreshCarrierTracking(dpdShipmentId: string) {
   const response = await fetchWithAuth(
     apiUrl(`/api/v1/dpd-shipments/${dpdShipmentId}/refresh-carrier-tracking`),

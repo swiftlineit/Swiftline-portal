@@ -94,6 +94,7 @@ export type OperationsParcelDisposition =
   | "CANCELLED";
 export type OperationsConsignment = {
   id: string;
+  shipmentDraftId: string;
   bagId: string;
   bagIds: string[];
   bagNumbers: string[];
@@ -112,6 +113,8 @@ export type OperationsConsignment = {
   parcelValues: OperationsParcelValue[];
   weightKg: number;
   status: "PARTIAL" | "COMPLETE";
+  dpdStatus?: "DPD_CREATING" | "DPD_CREATED" | "LABEL_RECEIVED" | "DPD_REJECTED" | "DPD_STATUS_UNKNOWN" | null;
+  dpdStage?: string | null;
   consigneeSnapshot: { name?: string; formatted?: string };
   consignorSnapshot: { name?: string; formatted?: string };
   description: string;

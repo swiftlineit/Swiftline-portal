@@ -28,10 +28,36 @@ function reconciliationInput(fixture: Awaited<ReturnType<typeof createFixture>>)
     carrierAwbNumber: "1017173313",
     carrierForwardingNumber: "3702191406",
     swiftlineTrackingNumber: fixture.trackingNumber,
+    originalAlsAttemptVoided: true,
+    replacementBookingVerified: true,
     confirmationNote: "Confirmed against the ALS docket record.",
     userId: operatorId
   };
 }
+
+test("requires explicit confirmation that the original attempt was voided and the replacement was verified", async () => {
+  const baseInput = {
+    shipmentDraftId: new mongoose.Types.ObjectId().toString(),
+    manifestId: new mongoose.Types.ObjectId().toString(),
+    carrierAwbNumber: "1017173313",
+    carrierForwardingNumber: "3702191406",
+    swiftlineTrackingNumber: "SLC-ALS-RECON-TEST",
+    originalAlsAttemptVoided: true,
+    replacementBookingVerified: true,
+    confirmationNote: "Confirmed against the ALS replacement booking.",
+    userId: operatorId
+  };
+
+  for (const confirmation of [
+    { originalAlsAttemptVoided: false },
+    { replacementBookingVerified: false }
+  ]) {
+    await assert.rejects(
+      () => reconcileAlsCarrierBooking({ ...baseInput, ...confirmation }),
+      (error: unknown) => error instanceof DpdShipmentServiceError && error.statusCode === 400
+    );
+  }
+});
 
 async function createFixture(parcelCount = 2) {
   fixtureSequence += 1;
@@ -238,8 +264,11 @@ describe("ALS carrier booking reconciliation transaction", { skip: !testMongoUri
     assert.equal(first.dpdShipment.dpdShipmentId, input.carrierAwbNumber);
     assert.equal(first.dpdShipment.forwardingNumber, input.carrierForwardingNumber);
     assert.equal(first.dpdShipment.status, "DPD_CREATED");
-    assert.equal(first.dpdShipment.responseSnapshot?.carrierLabelStatus, "NOT_PROVIDED");
+    assert.equal(first.dpdShipment.responseSnapshot?.outcome, "MANUAL_ALS_REBOOK_RECONCILED");
+    assert.equal(first.dpdShipment.responseSnapshot?.carrierLabelStatus, "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL");
     assert.equal(first.dpdShipment.responseSnapshot?.labelCount, 0);
+    assert.equal(first.dpdShipment.responseSnapshot?.originalAlsAttemptVoided, true);
+    assert.equal(first.dpdShipment.responseSnapshot?.replacementBookingVerified, true);
     assert.equal(await LabelDocument.countDocuments({ dpdShipmentId: fixture.shipment._id, labelType: "DPD", voidedAt: null }), 0);
     assert.equal(await LabelDocument.countDocuments({ dpdShipmentId: fixture.shipment._id, labelType: "SWIFTLINE", voidedAt: null }), fixture.parcelNumbers.length);
 
@@ -247,7 +276,10 @@ describe("ALS carrier booking reconciliation transaction", { skip: !testMongoUri
     assert.equal(audit.length, 1);
     assert.equal(audit[0]?.metadata?.carrierAwbNumber, input.carrierAwbNumber);
     assert.equal(audit[0]?.metadata?.carrierForwardingNumber, input.carrierForwardingNumber);
-    assert.equal(audit[0]?.metadata?.carrierLabelStatus, "NOT_PROVIDED");
+    assert.equal(audit[0]?.metadata?.carrierLabelStatus, "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL");
+    assert.equal(audit[0]?.metadata?.evidenceSource, "ALS_MANUAL_REBOOK_CONFIRMED_BY_OPERATIONS");
+    assert.equal(audit[0]?.metadata?.originalAlsAttemptVoided, true);
+    assert.equal(audit[0]?.metadata?.replacementBookingVerified, true);
 
     const repeated = await reconcileAlsCarrierBooking(input);
     assert.equal(repeated.reused, true);

@@ -2629,10 +2629,23 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
         }).select("shipmentDraftId status").lean().exec()
       ])
     : [[], []];
-  const shipmentDrafts = sealShipmentIds.length
-    ? await ShipmentDraft.find({ _id: { $in: sealShipmentIds } }).select("csbType").lean().exec()
-    : [];
+  const [shipmentDrafts, carrierShipments] = sealShipmentIds.length
+    ? await Promise.all([
+        ShipmentDraft.find({ _id: { $in: sealShipmentIds } }).select("csbType").lean().exec(),
+        DpdShipment.find({ shipmentDraftId: { $in: sealShipmentIds } })
+          .select("shipmentDraftId status responseSnapshot")
+          .lean()
+          .exec()
+      ])
+    : [[], []];
   const csbTypeByDraftId = new Map(shipmentDrafts.map((draft) => [String(draft._id), draft.csbType ?? "CSB_IV"]));
+  const carrierStateByDraftId = new Map(carrierShipments.map((shipment) => {
+    const stage = shipment.responseSnapshot?.stage;
+    return [String(shipment.shipmentDraftId), {
+      status: shipment.status,
+      stage: typeof stage === "string" ? stage : ""
+    }] as const;
+  }));
   const dispatchIssues = manifest.status === "SEALED"
     ? await loadManifestDispatchIssues(consignments)
     : [];
@@ -2660,6 +2673,8 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
           .map((scan) => ({ parcelNumber: scan.parcelNumber, scanId: String(scan._id) })),
         shipmentDraftId: String(item.shipmentDraftId),
         dpdShipmentId: String(item.dpdShipmentId),
+        dpdStatus: carrierStateByDraftId.get(String(item.shipmentDraftId))?.status ?? null,
+        dpdStage: carrierStateByDraftId.get(String(item.shipmentDraftId))?.stage ?? null,
         csbType: csbTypeByDraftId.get(String(item.shipmentDraftId)) === "CSB_V" ? "CSB_V" : "CSB_IV",
         businessAccountId: String(item.businessAccountId),
         displayConsignmentNumber: formatManifestConsignmentNumber(item.consignmentNumber),

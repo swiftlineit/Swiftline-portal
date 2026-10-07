@@ -1285,9 +1285,10 @@ export async function reconcileShipmentDocuments(
 }
 
 /**
- * Records operator-confirmed ALS carrier references when ALS accepted a
- * label-only request but did not return a carrier label. This deliberately does
- * not request or fabricate a label, change financial state, or modify the manifest.
+ * Records a manually rebooked ALS shipment against an existing portal booking.
+ * The original uncertain ALS attempt and the replacement booking must both be
+ * explicitly verified. This does not import the ALS label, change financial
+ * state, create another shipment, or modify the manifest.
  */
 export async function reconcileAlsCarrierBooking(input: {
   shipmentDraftId: string;
@@ -1295,9 +1296,17 @@ export async function reconcileAlsCarrierBooking(input: {
   carrierAwbNumber: string;
   carrierForwardingNumber: string;
   swiftlineTrackingNumber: string;
+  originalAlsAttemptVoided: boolean;
+  replacementBookingVerified: boolean;
   confirmationNote: string;
   userId: mongoose.Types.ObjectId;
 }) {
+  if (input.originalAlsAttemptVoided !== true || input.replacementBookingVerified !== true) {
+    throw new DpdShipmentServiceError(
+      "Confirm that the original ALS attempt was voided and the replacement booking was verified.",
+      400
+    );
+  }
   if (!mongoose.Types.ObjectId.isValid(input.shipmentDraftId)
     || !mongoose.Types.ObjectId.isValid(input.manifestId)) {
     throw new DpdShipmentServiceError("Shipment or manifest not found.", 404);
@@ -1327,6 +1336,8 @@ export async function reconcileAlsCarrierBooking(input: {
         && shipment.dpdShipmentId?.trim() === carrierAwbNumber
         && shipment.forwardingNumber?.trim().toUpperCase() === carrierForwardingNumber
         && shipment.responseSnapshot?.manuallyReconciled === true
+        && shipment.responseSnapshot?.originalAlsAttemptVoided === true
+        && shipment.responseSnapshot?.replacementBookingVerified === true
         && String(shipment.responseSnapshot?.awbNumber ?? "").trim() === carrierAwbNumber
         && String(shipment.responseSnapshot?.forwardingNumber ?? "").trim().toUpperCase() === carrierForwardingNumber
         && String(shipment.responseSnapshot?.manifestId ?? "") === input.manifestId;
@@ -1474,13 +1485,15 @@ export async function reconcileAlsCarrierBooking(input: {
             responseSnapshot: {
               ...previousResponse,
               provider: "ALS",
-              outcome: "ACCEPTED_WITHOUT_LABEL",
+              outcome: "MANUAL_ALS_REBOOK_RECONCILED",
               stage: "DPD_LABEL_ONLY",
               awbNumber: carrierAwbNumber,
               forwardingNumber: carrierForwardingNumber,
               labelCount: 0,
-              carrierLabelStatus: "NOT_PROVIDED",
+              carrierLabelStatus: "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL",
               manuallyReconciled: true,
+              originalAlsAttemptVoided: true,
+              replacementBookingVerified: true,
               manifestId: input.manifestId,
               reconciledAt: now.toISOString()
             }
@@ -1507,8 +1520,10 @@ export async function reconcileAlsCarrierBooking(input: {
           previousForwardingNumber: shipment.forwardingNumber ?? "",
           previousStatus: "DPD_STATUS_UNKNOWN",
           newStatus: "DPD_CREATED",
-          carrierLabelStatus: "NOT_PROVIDED",
-          evidenceSource: "ALS_OPERATOR_CONFIRMED",
+          carrierLabelStatus: "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL",
+          evidenceSource: "ALS_MANUAL_REBOOK_CONFIRMED_BY_OPERATIONS",
+          originalAlsAttemptVoided: true,
+          replacementBookingVerified: true,
           confirmationNote
         }
       }], { session });
