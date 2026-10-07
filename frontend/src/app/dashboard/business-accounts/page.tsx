@@ -286,7 +286,7 @@ export default function BusinessAccountsPage() {
   );
 
   return (
-      <div className="min-h-full bg-[#EEEDED]/60 -m-6 p-6 lg:-m-8 lg:p-8">
+      <div className="min-h-full -m-6 p-6 lg:-m-8 lg:p-8">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl  tracking-tight text-[#0D1282]">

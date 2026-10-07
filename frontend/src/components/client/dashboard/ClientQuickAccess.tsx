@@ -50,7 +50,7 @@ export default function ClientQuickAccess({
   ].filter((item) => item.show);
 
   return (
-    <section className=" rounded-lg bg-white p-4 shadow-sm sm:px-5">
+    <section data-portal-theme-scope data-portal-theme-client-quick-access className=" rounded-lg bg-white p-4 shadow-sm sm:px-5">
      
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
@@ -58,6 +58,7 @@ export default function ClientQuickAccess({
           <Link
             key={item.href}
             href={item.href}
+            data-portal-theme-quick-action
             className="group flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-[#03AED2] text-slate-200 px-3 py-2.5 transition-all shadow-sm duration-200 hover:border-[#0D1282]/25 hover:bg-white hover:text-black hover:shadow-[0_8px_20px_-14px_rgba(13,18,130,0.4)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/20 focus-visible:ring-offset-2"
           >
             <div className="min-w-0">

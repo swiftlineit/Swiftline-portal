@@ -208,13 +208,13 @@ export default function ShipmentInvoicePage({
   const noGst = invoice.taxTreatment === "NO_GST" || invoice.gstRatePercent === 0;
 
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-6 print:bg-white print:p-0">
+    <main className="min-h-screen bg-slate-100 px-2 py-4 sm:px-4 sm:py-6 print:bg-white print:p-0">
       <div className="no-print mx-auto mb-4 flex max-w-[210mm] flex-wrap items-center justify-between gap-3">
         <p className="text-sm font-semibold text-slate-600">
           {invoice.invoiceNumber} | Invoice {invoice.revision} of{" "}
           {invoice.versions.length}
         </p>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {canEdit ? (
             <button
               type="button"
@@ -255,23 +255,23 @@ export default function ShipmentInvoicePage({
         </div>
       ) : null}
 
-      <article className="invoice-sheet relative mx-auto min-h-[297mm] max-w-[210mm] bg-white p-10 text-slate-950 shadow-sm print:min-h-0 print:max-w-none print:p-0 print:shadow-none">
+      <article className="invoice-sheet relative mx-auto min-h-[297mm] w-full max-w-[210mm] bg-white p-3 text-slate-950 shadow-sm sm:p-6 lg:p-10 print:min-h-0 print:max-w-none print:p-0 print:shadow-none">
         {showDraftStatus ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-7xl font-bold text-red-600 opacity-[0.06] -rotate-45">
             DRAFT
           </div>
         ) : null}
-        <header className="relative flex items-start justify-between gap-8 border-b-2 border-slate-950 pb-4">
+        <header className="relative flex flex-col items-start justify-between gap-4 border-b-2 border-slate-950 pb-4 sm:flex-row sm:gap-8">
           <Image
             src="/swiftline-invoice-logo.png"
             alt="Swiftline Cargo and Express Logistics"
             width={180}
             height={120}
             priority
-            className="h-[120px] w-[180px] shrink-0 object-contain object-left"
+            className="h-[86px] w-[130px] shrink-0 object-contain object-left sm:h-[120px] sm:w-[180px]"
           />
-          <div className="min-w-0 pt-3 text-right">
-            <h1 className={`text-2xl font-bold ${revisedId ? "text-amber-800" : ""}`}>
+          <div className="min-w-0 pt-1 text-left sm:pt-3 sm:text-right">
+            <h1 className={`text-xl font-bold sm:text-2xl ${revisedId ? "text-amber-800" : ""}`}>
               {revisedId
                 ? "REVISED DOCUMENT"
                 : noGst
@@ -298,7 +298,7 @@ export default function ShipmentInvoicePage({
           </section>
         ) : null}
 
-        <section className="relative mt-5 grid grid-cols-2 gap-4">
+        <section className="relative mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
           <Party
             title="Supplier / Shipper Branch"
             name={value(invoice.supplier, "legalName")}
@@ -317,7 +317,7 @@ export default function ShipmentInvoicePage({
           />
         </section>
 
-        <section className="relative mt-5 grid grid-cols-4 gap-3 text-xs">
+        <section className="relative mt-5 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
           <Meta label="Origin" text={value(invoice.shipment, "origin")} />
           <Meta
             label="Destination"
@@ -327,7 +327,7 @@ export default function ShipmentInvoicePage({
           <Meta label="Boxes" text={String(parcels.length)} />
         </section>
 
-        <section className="relative mt-5 overflow-hidden border border-slate-950">
+        <section className="invoice-line-items relative mt-5 overflow-x-auto border border-slate-950">
           <div className="grid grid-cols-[1.8fr_repeat(5,1fr)] bg-slate-100 text-center text-[10px] font-bold uppercase text-slate-700">
             <div className="border-r border-slate-950 px-3 py-2">
               Description
@@ -398,7 +398,7 @@ export default function ShipmentInvoicePage({
           ))}
         </section>
 
-        <section className="relative grid grid-cols-[1fr_280px] border-x border-b border-slate-950 text-xs">
+        <section className="relative grid grid-cols-1 border-x border-b border-slate-950 text-xs sm:grid-cols-[1fr_280px]">
           <div className="p-4">
             <p className="font-semibold uppercase text-slate-500">
               Delivery Address
@@ -442,7 +442,7 @@ export default function ShipmentInvoicePage({
           </div>
         </section>
 
-        <footer className="relative mt-8 flex items-end justify-between border-t border-slate-300 pt-5 text-xs">
+        <footer className="relative mt-8 flex flex-col items-start justify-between gap-6 border-t border-slate-300 pt-5 text-xs sm:flex-row sm:items-end">
           <div className="max-w-sm">
             <p className="font-semibold">Declaration</p>
             <p className="mt-2 leading-5 text-slate-600">
@@ -450,7 +450,7 @@ export default function ShipmentInvoicePage({
               applicable taxes shown above.
             </p>
           </div>
-          <div className="text-right">
+          <div className="w-full text-left sm:w-auto sm:text-right">
             <p className="font-semibold">
               For Swiftline Cargo and Express Logistics Pvt. Ltd.
             </p>
@@ -478,6 +478,15 @@ export default function ShipmentInvoicePage({
           }
           .invoice-sheet {
             width: 190mm;
+          }
+        }
+        @media screen and (max-width: 640px) {
+          .invoice-sheet {
+            min-height: 0;
+            padding: 1rem !important;
+          }
+          .invoice-line-items > div {
+            min-width: 600px;
           }
         }
       `}</style>

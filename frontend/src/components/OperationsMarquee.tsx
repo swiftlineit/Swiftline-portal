@@ -168,6 +168,8 @@ export default function OperationsMarquee({
   return (
     <div
       role="status"
+      data-portal-theme-scope
+      data-portal-theme-advisory
       className="relative shrink-0 overflow-hidden rounded-xl border border-[#DDE0EE] bg-[#F7F8FC]"
     >
       {/* Soft brand-tinted background */}
@@ -175,7 +177,7 @@ export default function OperationsMarquee({
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 overflow-hidden"
       >
-        <div className="absolute inset-0 bg-[linear-gradient(110deg,_#ffffff_0%,_#f8f8fd_42%,_#f1f2fb_72%,_#eceef9_100%)]" />
+        <div data-portal-theme-advisory-gradient className="absolute inset-0 bg-[linear-gradient(110deg,_#ffffff_0%,_#f8f8fd_42%,_#f1f2fb_72%,_#eceef9_100%)]" />
 
         <div className="absolute -left-20 -top-24 h-52 w-52 rounded-full bg-[#0D1282]/[0.035] blur-3xl" />
 

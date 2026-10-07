@@ -22,7 +22,7 @@ export default function RateCardCountryGrid({
           key={destination.countryCode}
           type="button"
           onClick={() => onSelect(destination.countryCode)}
-          className="group flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[#0D1282]/25 hover:shadow-[0_10px_26px_-18px_rgba(13,18,130,0.4)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/20"
+          className="portal-theme-surface group flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[#0D1282]/25 hover:shadow-[0_10px_26px_-18px_rgba(13,18,130,0.4)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/20"
         >
           <div className="flex items-center gap-2.5">
             <CountryFlag code={destination.countryCode} size={20} />

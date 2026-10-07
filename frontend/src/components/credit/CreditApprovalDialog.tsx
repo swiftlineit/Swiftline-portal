@@ -110,8 +110,8 @@ export default function CreditApprovalDialog({ account, onClose, onSaved }: {
         <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
           <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
             {account.limitIncreaseRequest ? (
-              <div className="rounded-lg border-l-4 px-3 py-2" style={{ borderColor: "#0D1282", backgroundColor: "#EEF0FB" }}>
-                <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "#0D1282" }}>
+              <div className="rounded-lg border-l-4 border-[#0D1282] bg-[#EEF0FB] px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-[#0D1282]">
                   Limit increase requested
                 </p>
                 <p className="mt-0.5 text-sm text-slate-800">
@@ -126,8 +126,8 @@ export default function CreditApprovalDialog({ account, onClose, onSaved }: {
               </div>
             ) : null}
             {account.requestReason ? (
-              <div className="rounded-lg border-l-4 px-3 py-2" style={{ borderColor: "#F0DE36", backgroundColor: "#FDF8DC" }}>
-                <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "#7A6A00" }}>Customer Request</p>
+              <div className="rounded-lg border-l-4 border-[#F0DE36] bg-[#FDF8DC] px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-[#7A6A00]">Customer Request</p>
                 <p className="mt-0.5 text-sm text-slate-800">{account.requestReason}</p>
               </div>
             ) : null}
@@ -186,8 +186,7 @@ export default function CreditApprovalDialog({ account, onClose, onSaved }: {
             {error ? (
               <p
                 role="alert"
-                className="mr-auto flex items-center gap-2 text-sm font-semibold"
-                style={{ color: "#D71313" }}
+                className="mr-auto flex items-center gap-2 text-sm font-semibold text-[#D71313]"
               >
                 <FiX className="shrink-0" size={14} aria-hidden="true" />
                 {error}
@@ -235,7 +234,7 @@ function Field({ label, children, span2, required }: { label: string; children: 
     <label className={`block ${span2 ? "col-span-2 sm:col-span-3 lg:col-span-5" : ""}`}>
       <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
         {label}
-        {required ? <span className="ml-0.5" style={{ color: "#D71313" }}>*</span> : null}
+        {required ? <span className="ml-0.5 text-[#D71313]">*</span> : null}
       </span>
       {children}
     </label>

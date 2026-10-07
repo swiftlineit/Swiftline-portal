@@ -32,7 +32,7 @@ export default function RateCardRegionTiles({
             key={region.code}
             type="button"
             onClick={() => onSelect(region.code)}
-            className={`group flex flex-col justify-between gap-4 p-5 text-left transition duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_2px_6px_rgba(15,23,42,0.05),0_20px_44px_-22px_rgba(13,18,130,0.40)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 ${panelSurface}`}
+            className={`portal-theme-surface group flex flex-col justify-between gap-4 p-5 text-left transition duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_2px_6px_rgba(15,23,42,0.05),0_20px_44px_-22px_rgba(13,18,130,0.40)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 ${panelSurface}`}
           >
             <div className="flex items-start justify-between gap-3">
               <h3 className="text-base font-semibold text-slate-900 transition-colors duration-200 group-hover:text-[#0D1282]">

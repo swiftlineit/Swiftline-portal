@@ -50,6 +50,7 @@ import { readShipmentListScrollState, shipmentListAudienceForPath } from "@/lib/
 import { BsWhatsapp, BsCurrencyRupee } from "react-icons/bs";
 import OperationsCalendarIcon from "@/components/OperationsCalendarIcon";
 import { ShellPortalBackButton } from "@/components/PortalBackButton";
+import PortalThemeToggle from "@/components/PortalThemeToggle";
 
 export type ClientShellUser = {
   name?: string;
@@ -637,12 +638,12 @@ export function ClientDashboardShell({
   }
 
   return (
-    <div className="fixed inset-0 flex flex-col overflow-hidden bg-[#EEEDED]/60">
+    <div className="portal-theme-shell fixed inset-0 flex flex-col overflow-hidden bg-[#EEEDED]/60">
       {/* Mounted inside the shell so it only ever runs for a signed-in user. */}
       <SessionTimeoutGuard />
 
       {/* Thin Swiftline brand accent */}
-      <div className="h-1 shrink-0 bg-[#0D1282]" />
+      <div data-portal-theme-accent className="h-1 shrink-0 bg-[#0D1282]" />
 
       <div className="flex min-h-0 flex-1">
         <Sidebar
@@ -652,7 +653,7 @@ export function ClientDashboardShell({
         />
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <header className="flex h-16 shrink-0 items-center gap-2 border-b border-white/10 bg-[#12185A] px-4 lg:h-20 lg:gap-4 lg:px-8">
+          <header data-portal-theme-scope data-portal-theme-header className="flex h-16 shrink-0 items-center gap-2 border-b border-white/10 bg-[#12185A] px-4 lg:h-20 lg:gap-4 lg:px-8">
             <button
               type="button"
               onClick={() =>
@@ -682,6 +683,9 @@ export function ClientDashboardShell({
             <div className="min-w-0 flex-1 lg:hidden" />
 
             <div className="flex shrink-0 items-center gap-2 lg:gap-4">
+              <div className="hidden sm:block">
+                <PortalThemeToggle />
+              </div>
               {/* The name is the first thing to go when width is short: it is
                   the only item here that is not a control. */}
               <div className="hidden text-right md:block">
@@ -694,7 +698,7 @@ export function ClientDashboardShell({
                 </p>
               </div>
 
-              <div className="group relative">
+              <div className="group relative hidden sm:block">
                 <Link
                   href="/client/profile"
                   aria-label="My Profile"
@@ -749,18 +753,40 @@ export function ClientDashboardShell({
           {/* Below `lg` search gets its own row: keep it visually connected to
               the dark application header rather than creating a white strip. */}
           {searchAccountId ? (
-            <div className="shrink-0 border-b border-white/10 bg-[#12185A] px-4 pb-3 lg:hidden">
-              <GlobalSearch
-                businessAccountId={
-                  searchAccountId
-                }
-              />
+            <div data-portal-theme-scope data-portal-theme-header className="flex shrink-0 items-center gap-2 border-b border-white/10 bg-[#12185A] px-4 pb-3 lg:hidden">
+              <div className="min-w-0 flex-1">
+                <GlobalSearch businessAccountId={searchAccountId} />
+              </div>
+              <Link
+                href="/client/profile"
+                aria-label="My Profile"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/20 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 sm:hidden"
+              >
+                <FiUser aria-hidden="true" className="h-5 w-5" />
+              </Link>
+              <div className="sm:hidden">
+                <PortalThemeToggle />
+              </div>
             </div>
-          ) : null}
+          ) : (
+            <div data-portal-theme-header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-[#12185A] px-4 pb-2 sm:hidden">
+              <Link
+                href="/client/profile"
+                className="inline-flex h-10 items-center gap-2 rounded-lg px-2 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+              >
+                <FiUser aria-hidden="true" className="h-4 w-4" /> My Profile
+              </Link>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-[#AEB4D9]">Theme</span>
+                <PortalThemeToggle />
+              </div>
+            </div>
+          )}
 
           <div
             ref={contentScrollRef}
             data-dashboard-scroll
+            data-portal-theme-scope
             className="min-h-0 flex-1 overflow-y-auto px-4 py-4 [overflow-anchor:none] scrollbar-none [-ms-overflow-style:none] sm:px-6 lg:px-8 lg:py-6 [&::-webkit-scrollbar]:hidden"
           >
             <div className="mb-4 flex items-center">

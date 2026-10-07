@@ -133,7 +133,7 @@ export default function ClientRateCardPage() {
 
   return (
     <div className="mx-auto flex max-w-8xl flex-col gap-5">
-      <header className="rounded-xl border border-slate-200 bg-white">
+      <header className="portal-theme-surface rounded-xl border border-slate-200 bg-white">
         <div className="flex flex-col gap-4 px-5 py-5 sm:px-6 lg:flex-row lg:items-end lg:gap-8">
           <div className="order-1 min-w-0">
             {/* <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#0D1282]">
@@ -259,7 +259,7 @@ function totalRows(totals: { destinations: number; slabs: number; lowestRate: nu
 
 function StatsList({ rows }: { rows: Array<{ label: string; value: string }> }) {
   return (
-    <dl aria-label="Rate card summary" className="flex flex-col self-stretch rounded-xl border border-slate-200 bg-white px-5 py-2">
+    <dl aria-label="Rate card summary" className="portal-theme-surface flex flex-col self-stretch rounded-xl border border-slate-200 bg-white px-5 py-2">
       <div className="flex flex-1 flex-col divide-y divide-slate-100">
         {rows.map((row) => (
           <div key={row.label} className="flex flex-1 items-center justify-between gap-3 py-2.5">

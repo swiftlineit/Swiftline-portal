@@ -259,7 +259,7 @@ function NewSupportTicketForm() {
 
   if (loading || !user) return <ClientDashboardLoading />;
   return (
-      <div className="mx-auto max-w-5xl">
+      <div className="mx-auto max-w-8xl">
         <div className="mt-4">
           <h1 className="text-2xl font-semibold text-slate-950">
             Raise Support Ticket

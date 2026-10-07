@@ -31,6 +31,7 @@ export type ShipmentManifestSummary = {
 
 export type ShipmentManifestListItem = ShipmentManifestSummary & {
   generatedBy: string;
+  createdByRole: string;
   createdAt: string;
 };
 

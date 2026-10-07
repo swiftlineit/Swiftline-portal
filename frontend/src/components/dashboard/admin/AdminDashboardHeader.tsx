@@ -71,7 +71,8 @@ export default function AdminDashboardHeader({
 
   return (
     <section
-      className={`relative overflow-hidden ${panelSurface} !bg-[linear-gradient(135deg,#fbfcff_0%,#f6f8ff_52%,#eef2ff_100%)]`}
+      data-portal-theme-dashboard-hero
+      className={`relative overflow-hidden ${panelSurface}`}
     >
       {/* Shared background across the complete hero */}
       <div
@@ -128,6 +129,7 @@ export default function AdminDashboardHeader({
                   <Link
                     key={action.href}
                     href={action.href}
+                    data-portal-theme-dashboard-action={action.primary ? "primary" : "secondary"}
                     className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11 ${
                       action.primary
                         ? "bg-[#F0DE36] text-[#0D1282] shadow-sm border border-slate-300 hover:bg-[#e5d331]"

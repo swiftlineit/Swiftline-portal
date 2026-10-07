@@ -79,8 +79,7 @@ export default function CreditRowActions({ actions }: { actions: CreditRowAction
         onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="inline-flex h-8 items-center gap-1 rounded-4xl border px-2.5 text-[11px] font-semibold transition hover:bg-slate-50"
-        style={{ borderColor: "#0D1282", color: "#0D1282" }}
+        className="portal-theme-action inline-flex h-8 items-center gap-1 rounded-4xl border border-[#0D1282] px-2.5 text-[11px] font-semibold text-[#0D1282] transition hover:bg-slate-50"
       >
         <FiMoreHorizontal size={13} aria-hidden="true" />
         Actions

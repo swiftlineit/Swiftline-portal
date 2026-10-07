@@ -841,7 +841,7 @@ export default function AdminShipmentDetailsPage() {
         {needsCarrierDocumentReview ? (
           <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4">
             <div>
-              <h2 className="font-semibold text-amber-950">
+              <h2 className="font-semibold text-amber-950  ">
                 {canRequestDpdLabel ? "Internal labels ready; DPD label not generated" : "Carrier booking accepted, documents need review"}
               </h2>
               <p className="mt-1 max-w-3xl text-sm text-amber-800">
@@ -1025,10 +1025,9 @@ export default function AdminShipmentDetailsPage() {
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ">
                 <div className="flex items-center gap-2.5 border-b border-slate-100 px-5 py-4 rounded-2xl">
                   <span
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-                    style={{ backgroundColor: "#E8E9F6" }}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#E8E9F6]"
                   >
-                    <FiMapPin aria-hidden="true" className="h-4 w-4" style={{ color: "#0D1282" }} />
+                    <FiMapPin aria-hidden="true" className="h-4 w-4 text-[#0D1282]" />
                   </span>
                   <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Destination</h2>
                 </div>
@@ -1066,10 +1065,9 @@ export default function AdminShipmentDetailsPage() {
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex items-center gap-2.5 border-b border-slate-100 px-5 py-4">
                   <span
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-                    style={{ backgroundColor: "#E8E9F6" }}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#E8E9F6]"
                   >
-                    <FiClock aria-hidden="true" className="h-4 w-4" style={{ color: "#0D1282" }} />
+                    <FiClock aria-hidden="true" className="h-4 w-4 text-[#0D1282]" />
                   </span>
                   <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Shipment Timeline</h2>
                 </div>
