@@ -35,7 +35,7 @@ export type ShipmentListingFilter = {
   branchIds?: mongoose.Types.ObjectId[];
   status?: string;
   /**
-   * Free text over AWB, piece number, consignee, the consignee address
+   * Free text over AWB, piece number, consignor, consignee, the consignee address
    * (company/contact, town/city, county/state, postcode, address lines,
    * country name/code) and the customer's own reference. Applied in the
    * database rather than to the fetched page: this list is paginated, so
@@ -383,13 +383,19 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
         $or: [
           { swiftlineTrackingNumber: pattern },
           { dpdShipmentId: pattern },
-          { parcelNumbers: pattern }
+          { parcelNumbers: pattern },
+          { "currentShipmentSnapshot.consignor.companyName": pattern },
+          { "currentShipmentSnapshot.consignor.contactName": pattern },
+          { "bookingSnapshot.consignor.companyName": pattern },
+          { "bookingSnapshot.consignor.contactName": pattern }
         ]
       }).select("shipmentDraftId").lean().exec(),
       ShipmentDraft.find({
         ...draftFilter,
         _id: { $in: allowedDraftIds },
         $or: [
+          { "consignorAddress.companyName": pattern },
+          { "consignorAddress.contactName": pattern },
           { "consigneeEnteredAddress.companyName": pattern },
           { "consigneeEnteredAddress.contactName": pattern },
           { "consigneeEnteredAddress.townOrCity": pattern },

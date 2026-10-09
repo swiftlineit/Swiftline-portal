@@ -4,6 +4,7 @@ import { z } from "zod";
 import { buildClientOverview } from "../services/clientOverview.service.js";
 import { collectClientAttention } from "../services/clientAttention.service.js";
 import { searchClientRecords, searchStaffRecords } from "../services/clientSearch.service.js";
+import { allowedBranchIds } from "../middleware/branchAccess.middleware.js";
 import {
   ShipmentSupportingDocument,
   shipmentSupportingDocumentTypeValues
@@ -251,8 +252,8 @@ export async function searchStaff(request: Request, response: Response): Promise
     return response.status(400).json({ success: false, message: "Search term is too long." });
   }
 
-  const branchIds = (user.assignedBranches ?? [])
-    .map((branchId) => String(branchId))
+  const allowed = allowedBranchIds(request);
+  const branchIds = allowed === null ? undefined : allowed
     .filter((branchId) => mongoose.Types.ObjectId.isValid(branchId))
     .map((branchId) => new mongoose.Types.ObjectId(branchId));
 

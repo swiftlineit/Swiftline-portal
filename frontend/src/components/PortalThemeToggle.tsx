@@ -30,9 +30,10 @@ export default function PortalThemeToggle() {
         setTheme(next);
         savePortalTheme(next);
       }}
-      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/20 bg-white/[0.06] text-white transition-colors hover:border-white/40 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+      className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]"
     >
-      {dark ? <FiSun aria-hidden="true" className="h-5 w-5" /> : <FiMoon aria-hidden="true" className="h-5 w-5" />}
+      {dark ? <FiSun aria-hidden="true" className="h-4 w-4" /> : <FiMoon aria-hidden="true" className="h-4 w-4" />}
+      <span>{dark ? "Switch to light mode" : "Switch to dark mode"}</span>
     </button>
   );
 }

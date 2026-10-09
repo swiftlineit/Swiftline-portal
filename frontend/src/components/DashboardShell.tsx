@@ -23,7 +23,6 @@ import GlobalSearch from "@/components/client/GlobalSearch";
 import OperationsCalendarIcon from "@/components/OperationsCalendarIcon";
 import { loadProfileImageUrl } from "@/lib/profile";
 import { ShellPortalBackButton } from "@/components/PortalBackButton";
-import PortalThemeToggle from "@/components/PortalThemeToggle";
 
 // Shared chrome for every authenticated dashboard page: sidebar, header, and
 // scrollable content area.
@@ -160,9 +159,6 @@ export default function DashboardShell({
             {/* shrink-0 matters: without it the flexible search above squeezes
                 these controls until the logout button is off the edge. */}
             <div className="flex shrink-0 items-center gap-2 lg:gap-4">
-              <div className="hidden sm:block">
-                <PortalThemeToggle />
-              </div>
               {/* The only item here that is not a control, so it goes first when
                   width is short. */}
               <div className="hidden text-right md:block">
@@ -253,10 +249,6 @@ export default function DashboardShell({
             <Link href="/dashboard/profile" className="inline-flex h-10 items-center gap-2 rounded-lg px-2 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80">
               <FiUser aria-hidden="true" className="h-4 w-4" /> My Profile
             </Link>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-[#AEB4D9]">Theme</span>
-              <PortalThemeToggle />
-            </div>
           </div>
 
           <div

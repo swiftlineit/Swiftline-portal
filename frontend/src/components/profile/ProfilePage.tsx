@@ -1,12 +1,13 @@
 "use client";
 
-import { FormEvent, ReactNode, useCallback, useEffect, useId, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { FiBriefcase, FiCamera, FiChevronDown, FiEye, FiEyeOff, FiLock, FiMail, FiMapPin, FiPhone, FiTrash2, FiUser } from "react-icons/fi";
+import { FiBriefcase, FiCamera, FiChevronDown, FiEye, FiEyeOff, FiLock, FiMail, FiMapPin, FiPhone, FiTrash2, FiUser, FiX } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { BiSolidEdit } from "react-icons/bi";
 import { SearchableSelect } from "@/components/business-accounts/FormFieldControls";
+import PortalThemeToggle from "@/components/PortalThemeToggle";
 import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import {
   OTHER_JOB_TITLE,
@@ -87,7 +88,7 @@ function Section({
 /** A read-only value. `locked` marks fields held by KYC that nobody may edit here. */
 function ReadOnlyField({ label, value, locked = false }: { label: string; value: string; locked?: boolean }) {
   return (
-    <div className="bg-gray-100/50 p-3 rounded border border-slate-100">
+    <div className="rounded border border-slate-200 bg-slate-50 p-3">
       <dt className="flex items-center  gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
         {label}
         {locked}
@@ -345,6 +346,9 @@ export default function ProfilePage() {
   // Inline messages keyed by field, cleared whenever an edit starts.
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [profileImageUrl, setProfileImageUrl] = useState("");
+  const [profileImageVersion, setProfileImageVersion] = useState(0);
+  const [profilePhotoDialogOpen, setProfilePhotoDialogOpen] = useState(false);
+  const profilePhotoDialogRef = useRef<HTMLDialogElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -379,7 +383,14 @@ export default function ProfilePage() {
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [profile?.user.hasProfileImage]);
+  }, [profile?.user.hasProfileImage, profileImageVersion]);
+
+  useEffect(() => {
+    const dialog = profilePhotoDialogRef.current;
+    if (!dialog) return;
+    if (profilePhotoDialogOpen && !dialog.open) dialog.showModal();
+    if (!profilePhotoDialogOpen && dialog.open) dialog.close();
+  }, [profilePhotoDialogOpen]);
 
   async function handleProfileImage(file?: File) {
     if (!file) return;
@@ -391,6 +402,8 @@ export default function ProfilePage() {
     try {
       const result = await uploadProfileImage(file);
       setProfile((current) => current ? { ...current, user: { ...current.user, hasProfileImage: true } } : current);
+      setProfileImageVersion((version) => version + 1);
+      setProfilePhotoDialogOpen(false);
       window.dispatchEvent(new Event("profile-image-updated"));
       toast.success(result.message);
     } catch (caught) {
@@ -405,6 +418,8 @@ export default function ProfilePage() {
     try {
       const result = await deleteProfileImage();
       setProfile((current) => current ? { ...current, user: { ...current.user, hasProfileImage: false } } : current);
+      setProfileImageUrl("");
+      setProfilePhotoDialogOpen(false);
       window.dispatchEvent(new Event("profile-image-updated"));
       toast.success(result.message);
     } catch (caught) {
@@ -530,48 +545,36 @@ export default function ProfilePage() {
   return (
     <div className="mx-auto max-w-8xl space-y-5">
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-<div className="h-20 bg-linear-to-r from-blue-400 via-blue-300 to-blue-300" />
-        {/*
-          Stacks below `sm`, where a 320px screen cannot hold an avatar beside
-          a full name and email. Every level of this row carries `min-w-0`:
-          a flex item defaults to min-width:auto, so without it the name's
-          `truncate` never engages and a long email pushes the card sideways-
-          which is exactly what it did.
-        */}
-        <div className="flex flex-col gap-4 px-4 pb-5 sm:flex-row sm:items-end sm:justify-between sm:px-6">
-          <div className="flex min-w-0 flex-col items-start gap-3 sm:flex-row sm:items-end sm:gap-4">
+        <div data-profile-hero className="h-20 bg-linear-to-r from-blue-400 via-blue-300 to-blue-300" />
+        <div className="px-4 pb-5 sm:px-6">
+          <div className="flex min-w-0 items-center gap-4 sm:gap-6">
             <div className="-mt-10 shrink-0">
-              <span className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border-4 border-white bg-[#F0DE36] text-2xl font-bold text-[#0D1282] shadow-sm">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setProfilePhotoDialogOpen(true)}
+                aria-label="Open profile photo options"
+                className="group relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border-4 border-white bg-[#F0DE36] text-2xl font-bold text-[#0D1282] shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282] focus-visible:ring-offset-2 disabled:cursor-wait"
+              >
                 {profileImageUrl ? (
                   <Image src={profileImageUrl} alt={`${displayName} profile`} fill unoptimized className="object-cover" />
                 ) : initials(displayName, user.email)}
-              </span>
-              <div className="mt-2 flex justify-center gap-1.5">
-                <label className="inline-flex h-8 cursor-pointer items-center gap-1 rounded-full border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:border-[#0D1282] hover:text-[#0D1282]">
-                  <FiCamera aria-hidden="true" className="h-3.5 w-3.5" />
-                  {user.hasProfileImage ? "Change" : "Add photo"}
-                  <input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} className="sr-only" onChange={(event) => { void handleProfileImage(event.target.files?.[0]); event.currentTarget.value = ""; }} />
-                </label>
-                {user.hasProfileImage ? (
-                  <button type="button" disabled={busy} onClick={() => void handleProfileImageDelete()} aria-label="Remove profile image" className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-red-200 bg-white text-red-600 hover:bg-red-50">
-                    <FiTrash2 aria-hidden="true" className="h-3.5 w-3.5" />
-                  </button>
-                ) : null}
-              </div>
+                <span className="absolute inset-0 flex items-center justify-center bg-slate-950/55 text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                  <FiCamera aria-hidden="true" className="h-6 w-6" />
+                </span>
+              </button>
             </div>
-            <div className="min-w-0 flex-1 pb-1">
-              {/* Titled as well as truncated, so a clipped name is still
-                  readable on hover rather than simply lost. */}
+            <div className="min-w-0 flex-1 pb-1 text-right">
               <h1 className="truncate text-xl font-semibold text-slate-950 sm:text-2xl" title={displayName}>
                 {displayName}
               </h1>
-              <div className="mt-1 flex min-w-0 flex-col gap-1 text-sm text-slate-500 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4">
-                <span className="flex min-w-0 items-center gap-1.5 tracking-wide">
+              <div className="mt-1 flex min-w-0 flex-col items-end gap-1 text-sm text-slate-500">
+                <span className="flex max-w-full min-w-0 items-center justify-end gap-1.5 tracking-wide">
                   <FiMail aria-hidden="true" className="h-3.5 w-3.5 shrink-0 font-semibold text-slate-700" />
                   <span className="truncate" title={user.email}>{user.email}</span>
                 </span>
                 {user.phone ? (
-                  <span className="flex min-w-0 items-center gap-1.5 tracking-wide">
+                  <span className="flex max-w-full min-w-0 items-center justify-end gap-1.5 tracking-wide">
                     <FiPhone aria-hidden="true" className="h-3.5 w-3.5 shrink-0 font-semibold text-slate-700" />
                     <span className="truncate">{user.phone}</span>
                   </span>
@@ -579,9 +582,74 @@ export default function ProfilePage() {
               </div>
             </div>
           </div>
-        
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 pt-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Appearance</p>
+              <p className="mt-0.5 text-xs text-slate-500">Choose the theme for your dashboard.</p>
+            </div>
+            <PortalThemeToggle />
+          </div>
         </div>
       </section>
+
+      <dialog
+        ref={profilePhotoDialogRef}
+        data-profile-photo-dialog
+        aria-labelledby="profile-photo-dialog-title"
+        onClose={() => setProfilePhotoDialogOpen(false)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) setProfilePhotoDialogOpen(false);
+        }}
+        className="m-auto max-h-[calc(100%-2rem)] w-[calc(100%-2rem)] max-w-sm overflow-y-auto rounded-2xl border border-slate-200 bg-white p-0 text-slate-900 shadow-2xl"
+      >
+        <div className="p-5 sm:p-6">
+          <div className="flex items-center justify-between gap-4">
+            <h2 id="profile-photo-dialog-title" className="text-base font-semibold text-slate-950">Profile photo</h2>
+            <button
+              type="button"
+              autoFocus
+              onClick={() => setProfilePhotoDialogOpen(false)}
+              aria-label="Close profile photo options"
+              className="flex h-9 w-9 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]"
+            >
+              <FiX aria-hidden="true" className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="mt-5 flex justify-center">
+            <div className="relative flex h-36 w-36 items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-[#F0DE36] text-3xl font-bold text-[#0D1282]">
+              {profileImageUrl ? (
+                <Image src={profileImageUrl} alt={`${displayName} profile photo`} fill unoptimized className="object-cover" />
+              ) : initials(displayName, user.email)}
+            </div>
+          </div>
+          <p className="mt-3 truncate text-center text-sm font-medium text-slate-600" title={displayName}>{displayName}</p>
+          <div className="mt-5 grid gap-2 sm:grid-cols-2">
+            <label className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-xl bg-[#0D1282] px-4 text-sm font-semibold text-white transition hover:bg-[#0D1282]/90 focus-within:outline-none focus-within:ring-2 focus-within:ring-[#0D1282] focus-within:ring-offset-2 has-[:disabled]:cursor-wait has-[:disabled]:opacity-60">
+              <FiCamera aria-hidden="true" className="h-4 w-4" />
+              Change photo
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                disabled={busy}
+                className="sr-only"
+                onChange={(event) => {
+                  void handleProfileImage(event.target.files?.[0]);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={busy || !user.hasProfileImage}
+              onClick={() => void handleProfileImageDelete()}
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FiTrash2 aria-hidden="true" className="h-4 w-4" />
+              Delete photo
+            </button>
+          </div>
+        </div>
+      </dialog>
 
       <Section
         icon={FiUser}

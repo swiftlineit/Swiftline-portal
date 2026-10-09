@@ -133,7 +133,7 @@ export default function GlobalSearch({
           aria-expanded={showPanel}
           aria-controls={listId}
           aria-autocomplete="list"
-          placeholder="Search AWB, invoice, claim, manifest, pickup or ticket..."
+          placeholder="Search AWB, consignor, consignee, invoice, claim..."
           className="h-10 w-full rounded-xl border border-slate-300 bg-white pl-10 pr-9 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15"
         />
         {term ? (
@@ -162,7 +162,7 @@ export default function GlobalSearch({
             <div className="px-4 py-6 text-center">
               <p className="text-sm font-semibold text-slate-700">Nothing matched “{trimmed}”</p>
               <p className="mt-1 text-sm text-slate-500">
-                Try an AWB, your own reference, or an invoice, claim, manifest, pickup or ticket number.
+                Try an AWB, consignor or consignee name, your reference, or a document number.
               </p>
             </div>
           ) : (

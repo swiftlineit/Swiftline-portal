@@ -80,7 +80,7 @@ export async function searchClientRecords(input: {
   const pattern = containsPattern(term);
   const accountScope: Record<string, unknown> = {};
   if (input.businessAccountId) accountScope.businessAccountId = input.businessAccountId;
-  if (input.branchIds?.length) accountScope.branchId = { $in: input.branchIds };
+  if (input.branchIds !== undefined) accountScope.branchId = { $in: input.branchIds };
 
   // The account's drafts bound every shipment-shaped lookup below, so a hit can
   // never belong to another customer.
@@ -89,17 +89,30 @@ export async function searchClientRecords(input: {
     deletedAt: null,
   })
     .select(
-      "_id parcelList.shipmentReference1 parcelList.shipmentReference2 consigneeEnteredAddress.companyName consigneeEnteredAddress.contactName",
+      "_id parcelList.shipmentReference1 parcelList.shipmentReference2 consignorAddress.companyName consignorAddress.contactName consigneeEnteredAddress.companyName consigneeEnteredAddress.contactName consigneeValidatedAddress.companyName consigneeValidatedAddress.contactName consigneeSelectedAddress.companyName consigneeSelectedAddress.contactName",
     )
     .lean()
     .exec();
   const scopedDraftIds = scopedDrafts.map(
     (draft) => draft._id as mongoose.Types.ObjectId,
   );
+  const matchedByName = scopedDrafts.map((draft) => ({
+    draft,
+    consignor: [draft.consignorAddress?.companyName, draft.consignorAddress?.contactName]
+      .find((name) => pattern.test(name ?? "")),
+    consignee: [
+      draft.consigneeValidatedAddress?.companyName,
+      draft.consigneeValidatedAddress?.contactName,
+      draft.consigneeSelectedAddress?.companyName,
+      draft.consigneeSelectedAddress?.contactName,
+      draft.consigneeEnteredAddress?.companyName,
+      draft.consigneeEnteredAddress?.contactName
+    ].find((name) => pattern.test(name ?? ""))
+  })).filter(({ consignor, consignee }) => consignor || consignee);
 
   // An account with no shipments can still have tickets and claims, so only the
   // shipment-shaped lookups are skipped when there are no drafts to bound them.
-  const [shipments, invoices, manifests, pickups, claims, tickets] =
+  const [shipments, namedShipments, invoices, manifests, pickups, claims, tickets] =
     await Promise.all([
       scopedDraftIds.length
         ? DpdShipment.find({
@@ -113,6 +126,13 @@ export async function searchClientRecords(input: {
             .select(
               "shipmentDraftId swiftlineTrackingNumber dpdShipmentId parcelNumbers",
             )
+            .limit(PER_KIND_LIMIT)
+            .lean()
+            .exec()
+        : [],
+      matchedByName.length
+        ? DpdShipment.find({ shipmentDraftId: { $in: matchedByName.map(({ draft }) => draft._id) } })
+            .select("shipmentDraftId swiftlineTrackingNumber dpdShipmentId")
             .limit(PER_KIND_LIMIT)
             .lean()
             .exec()
@@ -166,6 +186,23 @@ export async function searchClientRecords(input: {
       subtitle: piece && piece !== awb ? `Piece ${piece}` : "Shipment",
       href: draftHref(shipment.shipmentDraftId, staff),
       matchedOn: piece && piece !== awb ? "Piece number" : "AWB",
+    });
+  }
+
+  const nameMatchByDraftId = new Map(matchedByName.map((match) => [String(match.draft._id), match]));
+  for (const shipment of namedShipments) {
+    const href = draftHref(shipment.shipmentDraftId, staff);
+    if (results.some((result) => result.href === href)) continue;
+    const match = nameMatchByDraftId.get(String(shipment.shipmentDraftId));
+    if (!match) continue;
+    const matchedOn = match.consignee ? "Consignee name" : "Consignor name";
+    const name = match.consignee || match.consignor || "";
+    results.push({
+      kind: "SHIPMENT",
+      title: shipment.swiftlineTrackingNumber || shipment.dpdShipmentId || "Shipment",
+      subtitle: `${matchedOn === "Consignee name" ? "Consignee" : "Consignor"}: ${name}`,
+      href,
+      matchedOn
     });
   }
 

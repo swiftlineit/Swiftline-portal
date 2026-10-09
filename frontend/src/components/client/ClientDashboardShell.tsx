@@ -50,7 +50,6 @@ import { readShipmentListScrollState, shipmentListAudienceForPath } from "@/lib/
 import { BsWhatsapp, BsCurrencyRupee } from "react-icons/bs";
 import OperationsCalendarIcon from "@/components/OperationsCalendarIcon";
 import { ShellPortalBackButton } from "@/components/PortalBackButton";
-import PortalThemeToggle from "@/components/PortalThemeToggle";
 
 export type ClientShellUser = {
   name?: string;
@@ -683,9 +682,6 @@ export function ClientDashboardShell({
             <div className="min-w-0 flex-1 lg:hidden" />
 
             <div className="flex shrink-0 items-center gap-2 lg:gap-4">
-              <div className="hidden sm:block">
-                <PortalThemeToggle />
-              </div>
               {/* The name is the first thing to go when width is short: it is
                   the only item here that is not a control. */}
               <div className="hidden text-right md:block">
@@ -764,9 +760,6 @@ export function ClientDashboardShell({
               >
                 <FiUser aria-hidden="true" className="h-5 w-5" />
               </Link>
-              <div className="sm:hidden">
-                <PortalThemeToggle />
-              </div>
             </div>
           ) : (
             <div data-portal-theme-header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-[#12185A] px-4 pb-2 sm:hidden">
@@ -776,10 +769,6 @@ export function ClientDashboardShell({
               >
                 <FiUser aria-hidden="true" className="h-4 w-4" /> My Profile
               </Link>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium text-[#AEB4D9]">Theme</span>
-                <PortalThemeToggle />
-              </div>
             </div>
           )}
 
