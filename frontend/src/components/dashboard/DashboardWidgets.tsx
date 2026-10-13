@@ -8,7 +8,7 @@ import { FiArrowDownRight, FiArrowRight, FiArrowUpRight, FiMinus } from "react-i
 // #EEEDED page plane plus a hairline ring, so cards read as raised without the
 // heavy inset/outset pairing of full neumorphism.
 export const panelSurface =
-"rounded-2xl bg-gradient-to-br from-white via-slate-50 to-slate-100 ring-1 ring-slate-900/[0.04] shadow border border-slate-100";
+"portal-theme-surface rounded-2xl bg-gradient-to-br from-white via-slate-50 to-slate-100 ring-1 ring-slate-900/[0.04] shadow border border-slate-100";
 export const panelLift =
   "transition duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_2px_6px_rgba(15,23,42,0.05),0_20px_44px_-22px_rgba(13,18,130,0.40)]";
 

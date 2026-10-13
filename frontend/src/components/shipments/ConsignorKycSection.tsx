@@ -1465,6 +1465,7 @@ function KycHelpTooltip({ title, text }: { title: string; text: string }) {
       {open && typeof document !== "undefined"
         ? createPortal(
             <span
+              data-portal-theme-scope
               ref={tooltipRef}
               id={tooltipId}
               role="tooltip"

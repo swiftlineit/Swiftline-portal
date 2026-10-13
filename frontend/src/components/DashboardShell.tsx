@@ -121,12 +121,12 @@ export default function DashboardShell({
   }
 
   return (
-    <div className="fixed inset-0 flex h-dvh max-h-dvh flex-col overflow-hidden overscroll-none bg-[#EEEDED]/60">
+    <div className="portal-theme-shell fixed inset-0 flex h-dvh max-h-dvh flex-col overflow-hidden overscroll-none bg-[#EEEDED]/60">
       {/* Mounted inside the shell so it only ever runs for a signed-in user. */}
       <SessionTimeoutGuard />
 
       {/* Subtle brand accent above the dark application shell */}
-      <div className="h-1 shrink-0 bg-[#0D1282]" />
+      <div data-portal-theme-accent className="h-1 shrink-0 bg-[#0D1282]" />
 
       <div className="flex min-h-0 flex-1">
         <Sidebar
@@ -136,7 +136,7 @@ export default function DashboardShell({
         />
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <header className="flex h-16 shrink-0 items-center gap-2 border-b border-white/10 bg-[#12185A] px-4 lg:h-20 lg:gap-4 lg:px-8">
+          <header data-portal-theme-scope data-portal-theme-header className="flex h-16 shrink-0 items-center gap-2 border-b border-white/10 bg-[#12185A] px-4 lg:h-20 lg:gap-4 lg:px-8">
             <button
               type="button"
               onClick={() => setMobileNavOpen(true)}
@@ -179,7 +179,7 @@ export default function DashboardShell({
                 </p>
               </div>
 
-              <div className="group relative">
+              <div className="group relative hidden sm:block">
                 <Link
                   href="/dashboard/profile"
                   aria-label="My Profile"
@@ -245,9 +245,16 @@ export default function DashboardShell({
             </div>
           </header>
 
+          <div data-portal-theme-header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-[#12185A] px-4 pb-2 sm:hidden">
+            <Link href="/dashboard/profile" className="inline-flex h-10 items-center gap-2 rounded-lg px-2 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80">
+              <FiUser aria-hidden="true" className="h-4 w-4" /> My Profile
+            </Link>
+          </div>
+
           <div
             ref={contentScrollRef}
             data-dashboard-scroll
+            data-portal-theme-scope
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 [overflow-anchor:none] scrollbar-none [-ms-overflow-style:none] sm:px-8 sm:py-6 [&::-webkit-scrollbar]:hidden"
           >
             <div className="mb-4 flex items-center">

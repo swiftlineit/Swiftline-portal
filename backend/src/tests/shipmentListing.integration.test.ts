@@ -12,6 +12,7 @@ import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { OperationsManifestConsignment } from "../models/operationsManifestConsignment.model.js";
 import { OperationsManifestScan } from "../models/operationsManifestScan.model.js";
 import { listDpdShipments as listDpdShipmentsController } from "../controllers/dpdShipment.controller.js";
+import { searchClientRecords, searchStaffRecords } from "../services/clientSearch.service.js";
 import {
   allShipmentStatuses,
   listBookedShipments
@@ -123,6 +124,47 @@ after(async () => {
 });
 
 describe("shipment listing read path", () => {
+  test("finds booked shipments by consignor and consignee names in list and global search", async () => {
+    const sender = await createBookedDraft(accountOneId, "NAME-SENDER");
+    const recipient = await createBookedDraft(accountOneId, "NAME-RECIPIENT");
+    await Promise.all([
+      ShipmentDraft.updateOne({ _id: sender.draft._id }, {
+        $set: {
+          "consignorAddress.companyName": "Vertex Sender Company",
+          "consignorAddress.contactName": "Nora Sender Contact"
+        }
+      }).exec(),
+      ShipmentDraft.updateOne({ _id: recipient.draft._id }, {
+        $set: { "consigneeEnteredAddress.companyName": "Helios Recipient Company" }
+      }).exec()
+    ]);
+
+    const base = {
+      page: 1,
+      limit: 20,
+      actorRole: "admin" as const,
+      bookingStatuses: allShipmentStatuses,
+      businessAccountIds: [accountOneId]
+    };
+    const senderList = await listBookedShipments({ ...base, search: "VERTEX SENDER" });
+    assert.deepEqual(senderList.shipments.map((item) => item.id), [String(sender.draft._id)]);
+    const contactList = await listBookedShipments({ ...base, search: "NORA SENDER" });
+    assert.deepEqual(contactList.shipments.map((item) => item.id), [String(sender.draft._id)]);
+    const recipientList = await listBookedShipments({ ...base, search: "HELIOS RECIPIENT" });
+    assert.deepEqual(recipientList.shipments.map((item) => item.id), [String(recipient.draft._id)]);
+
+    const senderGlobal = await searchClientRecords({ businessAccountId: accountOneId, term: "Nora Sender" });
+    assert.ok(senderGlobal.some((item) => item.href === `/client/shipments/${String(sender.draft._id)}`
+      && item.matchedOn === "Consignor name"));
+    const recipientGlobal = await searchStaffRecords({ term: "Helios Recipient", branchIds: [branchId] });
+    assert.ok(recipientGlobal.some((item) => item.href === `/dashboard/shipments/${String(recipient.draft._id)}`
+      && item.matchedOn === "Consignee name"));
+    const otherAccount = await searchClientRecords({ businessAccountId: accountTwoId, term: "Nora Sender" });
+    assert.ok(otherAccount.every((item) => item.kind !== "SHIPMENT"));
+    const noBranches = await searchStaffRecords({ term: "Nora Sender", branchIds: [] });
+    assert.ok(noBranches.every((item) => item.kind !== "SHIPMENT"));
+  });
+
   test("keeps account scope, latest status, attention and page clamping unchanged", async () => {
     const first = await createBookedDraft(accountOneId, "ACCOUNT-ONE");
     const other = await createBookedDraft(accountTwoId, "ACCOUNT-TWO");

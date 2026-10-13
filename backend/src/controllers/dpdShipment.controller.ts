@@ -165,13 +165,22 @@ const acceptedPricingSchema = z.object({
 });
 
 const reconcileAlsCarrierBookingSchema = z.object({
-  manifestId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid manifest."),
+  manifestId: z.preprocess(
+    (value) => typeof value === "string" && !value.trim() ? undefined : value,
+    z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid manifest.").optional()
+  ),
   carrierAwbNumber: z.string().trim().regex(/^\d{6,20}$/, "Enter the confirmed numeric ALS AWB."),
   carrierForwardingNumber: z.string().trim().min(1).max(120)
     .refine((value) => !/[\u0000-\u001F\u007F]/.test(value), "Enter a valid ALS forwarding number."),
   swiftlineTrackingNumber: z.string().trim().min(1).max(40),
-  originalAlsAttemptVoided: z.boolean().refine((value) => value, "Confirm the original uncertain ALS attempt was voided."),
-  replacementBookingVerified: z.boolean().refine((value) => value, "Confirm the replacement ALS booking matches this shipment."),
+  originalAlsAttemptVoided: z.preprocess(
+    (value) => value === "true" ? true : value === "false" ? false : value,
+    z.boolean().refine((value) => value, "Confirm the original uncertain ALS attempt was voided.")
+  ),
+  replacementBookingVerified: z.preprocess(
+    (value) => value === "true" ? true : value === "false" ? false : value,
+    z.boolean().refine((value) => value, "Confirm the replacement ALS booking matches this shipment.")
+  ),
   confirmationNote: z.string().trim().min(10).max(500)
 }).strict();
 
@@ -267,6 +276,7 @@ function serializeDpdShipment(shipment: {
   parcelNumbers: string[];
   serviceCode: string;
   status: string;
+  responseSnapshot?: Record<string, unknown>;
   snapshotRevision?: number;
   createdAt?: Date;
   updatedAt?: Date;
@@ -283,6 +293,7 @@ function serializeDpdShipment(shipment: {
     parcelNumbers: shipment.parcelNumbers,
     serviceCode: shipment.serviceCode,
     status: shipment.status,
+    manuallyReconciled: shipment.responseSnapshot?.manuallyReconciled === true,
     snapshotRevision: shipment.snapshotRevision ?? 1,
     createdAt: shipment.createdAt,
     updatedAt: shipment.updatedAt
@@ -877,15 +888,18 @@ export async function reconcileAlsCarrierBookingForDraft(request: Request, respo
     const result = await reconcileAlsCarrierBooking({
       shipmentDraftId,
       ...parsed.data,
+      labelHtml: request.file?.buffer,
       userId
     });
     return response.status(200).json({
       success: true,
       reused: result.reused,
-      message: "The replacement ALS booking is recorded. Its label remains in ALS and is not stored in the portal.",
+      message: request.file
+        ? "The ALS booking references and uploaded DPD label are reconciled."
+        : "The replacement ALS booking is recorded. Its label remains in ALS and is not stored in the portal.",
       dpdShipment: serializeDpdShipment(result.dpdShipment),
       carrierForwardingNumber: result.dpdShipment.forwardingNumber ?? "",
-      carrierLabelStatus: "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL"
+      carrierLabelStatus: request.file ? "UPLOADED" : "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL"
     });
   } catch (error) {
     if (error instanceof DpdShipmentServiceError) {
@@ -1187,7 +1201,7 @@ export async function listDpdShipments(request: Request, response: Response): Pr
       if (request.query.withEstimate === "1") {
         estimatesByDraftId.set(
           String(shipment.shipmentDraftId),
-          await buildDeliveryEstimate({ draft, events })
+          await buildDeliveryEstimate({ draft, events, bookingAt: shipment.createdAt })
         );
       }
     }));
@@ -1389,7 +1403,7 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
       events: normalizeVisibleTrackingHistory(events, journey)
         .map((event) => serializeShipmentEvent(event, journey)),
       trackingJourney: journey,
-      deliveryEstimate: await buildDeliveryEstimate({ draft, events }),
+      deliveryEstimate: await buildDeliveryEstimate({ draft, events, bookingAt: shipment.createdAt }),
       trackingSummary: buildTrackingSummary({ draft, dpdShipment: shipment, events }),
       trackingAttention: buildTrackingAttention(events),
       parcelActivities,

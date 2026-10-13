@@ -96,12 +96,20 @@ function orderedByTime(events: TrackingEvent[]) {
  * it late before the carrier ever touched it. Falls back to the booking date
  * for a shipment not yet collected, which is the only date there is.
  */
-function dispatchedAtFor(
+export function resolveShipmentTransitStart(
   draft: Pick<IShipmentDraft, "createdAt">,
-  events: TrackingEvent[]
+  events: TrackingEvent[],
+  bookingAt?: Date | string | null
 ) {
   const collected = orderedByTime(events).find((event) => event.status === "PARCEL_COLLECTED");
-  return collected ? new Date(collected.eventAt) : draft.createdAt;
+  if (collected) return new Date(collected.eventAt);
+
+  // Reused drafts may be much older than the actual booking. Use the carrier
+  // booking timestamp, then the booking milestone for legacy callers, before
+  // falling back to draft creation for records without either value.
+  if (bookingAt) return new Date(bookingAt);
+  const booked = orderedByTime(events).find((event) => event.status === "SHIPMENT_BOOKED");
+  return booked ? new Date(booked.eventAt) : draft.createdAt;
 }
 
 /**
@@ -114,6 +122,7 @@ function dispatchedAtFor(
 export async function buildDeliveryEstimate(input: {
   draft: Pick<IShipmentDraft, "consigneeEnteredAddress" | "serviceType" | "createdAt">;
   events: TrackingEvent[];
+  bookingAt?: Date | string | null;
   /** Pre-fetched by `buildDeliveryEstimates` so a page shares one lookup. */
   route?: ISwiftlineRoute | null;
   holidays?: Set<string>;
@@ -128,7 +137,7 @@ export async function buildDeliveryEstimate(input: {
   const estimate = await estimateRouteDelivery({
     destinationCountryCode,
     service: input.draft.serviceType === "CARGO" ? "CARGO" : "COURIER",
-    dispatchedAt: dispatchedAtFor(input.draft, input.events),
+    dispatchedAt: resolveShipmentTransitStart(input.draft, input.events, input.bookingAt),
     ...(input.route === undefined ? {} : { route: input.route }),
     ...(input.holidays === undefined ? {} : { holidays: input.holidays })
   });
@@ -172,7 +181,12 @@ export async function buildDeliveryEstimate(input: {
  * itself is then pure arithmetic per row.
  */
 export async function buildDeliveryEstimates<T>(
-  items: Array<{ key: T; draft: Pick<IShipmentDraft, "consigneeEnteredAddress" | "serviceType" | "createdAt">; events: TrackingEvent[] }>
+  items: Array<{
+    key: T;
+    draft: Pick<IShipmentDraft, "consigneeEnteredAddress" | "serviceType" | "createdAt">;
+    events: TrackingEvent[];
+    bookingAt?: Date | string | null;
+  }>
 ): Promise<Map<T, Awaited<ReturnType<typeof buildDeliveryEstimate>>>> {
   const results = new Map<T, Awaited<ReturnType<typeof buildDeliveryEstimate>>>();
   if (!items.length) return results;
@@ -194,7 +208,7 @@ export async function buildDeliveryEstimates<T>(
 
   // One holiday window per country, spanning every dispatch date on the page.
   const holidays = new Map<string, Set<string>>();
-  const dispatchDates = items.map((item) => dispatchedAtFor(item.draft, item.events).getTime());
+  const dispatchDates = items.map((item) => resolveShipmentTransitStart(item.draft, item.events, item.bookingAt).getTime());
   const earliest = new Date(Math.min(...dispatchDates));
   const latest = new Date(Math.max(...dispatchDates));
   await Promise.all([...new Set([...routes.values()]
@@ -217,6 +231,7 @@ export async function buildDeliveryEstimates<T>(
     results.set(item.key, await buildDeliveryEstimate({
       draft: item.draft,
       events: item.events,
+      bookingAt: item.bookingAt,
       route,
       holidays: route ? holidays.get(route.destinationCountryCode) : undefined
     }));

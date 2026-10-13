@@ -95,6 +95,7 @@ export type OperationsParcelDisposition =
 export type OperationsConsignment = {
   id: string;
   shipmentDraftId: string;
+  dpdShipmentId: string;
   bagId: string;
   bagIds: string[];
   bagNumbers: string[];
@@ -122,6 +123,8 @@ export type OperationsConsignment = {
   serviceInfo: string;
   goodsValueRequired: boolean;
   dpdWarning: string;
+  carrierReconciliationRequired: boolean;
+  carrierBookingReconciled: boolean;
   csbType: "CSB_IV" | "CSB_V";
 };
 export type OperationsScan = {

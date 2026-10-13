@@ -231,7 +231,7 @@ export async function listShipments(audience: ShipmentAudience, input: {
   attention?: boolean;
   bookedDate?: string;
   rebooked?: boolean;
-  /** Free text over AWB, piece number, consignee, consignee address (including destination country/county/postcode), and your own reference. */
+  /** Free text over AWB, piece number, consignor, consignee, consignee address, and your own reference. */
   search?: string;
   /** Staff tracking picker: search consignee names only. */
   consigneeName?: string;

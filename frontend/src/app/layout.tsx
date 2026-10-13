@@ -3,8 +3,20 @@ import "react-international-phone/style.css";
 import "react-toastify/dist/ReactToastify.css";
 import PortalToasts from "@/components/PortalToasts";
 import PortalHistoryTracker from "@/components/PortalHistoryTracker";
+import PortalThemeController from "@/components/PortalThemeController";
 import { SITE_URL } from "@/lib/siteUrl";
 import "./globals.css";
+import "./portal-theme.css";
+
+// Apply a saved portal choice before hydration so a dark page never paints light.
+// Public routes stay light even when this browser has a saved dark choice.
+const portalThemeBootstrap = `try {
+  var p = location.pathname;
+  if ((p === '/dashboard' || p.startsWith('/dashboard/') || p === '/client' || p.startsWith('/client/'))
+    && localStorage.getItem('swiftline-portal-theme') === 'dark') {
+    document.documentElement.dataset.portalTheme = 'dark';
+  }
+} catch (e) {}`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -27,9 +39,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="h-full antialiased">
+    <html lang="en" className="h-full antialiased" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: portalThemeBootstrap }} />
+      </head>
       <body className="min-h-full">
         {children}
+        <PortalThemeController />
         <PortalHistoryTracker />
         <PortalToasts />
       </body>

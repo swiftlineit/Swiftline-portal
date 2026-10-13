@@ -279,7 +279,12 @@ export async function trackPublicShipment(request: Request, response: Response):
     note: resolveShipmentEventNote(event.note, event.status)
   }));
 
-  const deliveryEstimate = await buildDeliveryEstimate({ draft, events: publicEvents, route });
+  const deliveryEstimate = await buildDeliveryEstimate({
+    draft,
+    events: publicEvents,
+    bookingAt: dpdShipment?.createdAt ?? null,
+    route
+  });
 
   const trackingNumber = dpdShipment?.swiftlineTrackingNumber
     || draft.allocatedTrackingNumber

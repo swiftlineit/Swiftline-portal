@@ -443,6 +443,7 @@ export type DpdShipmentHistoryItem = {
     parcelNumbers: string[];
     serviceCode: string;
     status: string;
+    manuallyReconciled?: boolean;
     createdAt?: string;
     updatedAt?: string;
   };
@@ -984,6 +985,15 @@ export type ManualAlsBookingReconciliationInput = {
   confirmationNote: string;
 };
 
+type AlsBookingReconciliationResponse = {
+  success: true;
+  reused: boolean;
+  message: string;
+  dpdShipment: DpdShipmentHistoryItem["dpdShipment"];
+  carrierForwardingNumber: string;
+  carrierLabelStatus: "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL" | "UPLOADED";
+};
+
 export async function reconcileManualAlsBooking(
   shipmentDraftId: string,
   input: ManualAlsBookingReconciliationInput
@@ -996,13 +1006,35 @@ export async function reconcileManualAlsBooking(
       body: JSON.stringify(input)
     }
   );
+  return parseApiResponse<AlsBookingReconciliationResponse>(response);
+}
 
-  return parseApiResponse<{
-    success: true;
-    reused: boolean;
-    message: string;
-    carrierLabelStatus: "AVAILABLE_IN_ALS_NOT_STORED_IN_PORTAL";
-  }>(response);
+export async function reconcileAlsCarrierBooking(input: {
+  shipmentDraftId: string;
+  manifestId?: string;
+  carrierAwbNumber: string;
+  carrierForwardingNumber: string;
+  swiftlineTrackingNumber: string;
+  originalAlsAttemptVoided: true;
+  replacementBookingVerified: true;
+  confirmationNote: string;
+  dpdLabel: File;
+}) {
+  const body = new FormData();
+  if (input.manifestId) body.set("manifestId", input.manifestId);
+  body.set("carrierAwbNumber", input.carrierAwbNumber);
+  body.set("carrierForwardingNumber", input.carrierForwardingNumber);
+  body.set("swiftlineTrackingNumber", input.swiftlineTrackingNumber);
+  body.set("originalAlsAttemptVoided", "true");
+  body.set("replacementBookingVerified", "true");
+  body.set("confirmationNote", input.confirmationNote);
+  body.set("dpdLabel", input.dpdLabel);
+
+  const response = await fetchWithAuth(
+    apiUrl(`/api/v1/dpd-shipments/drafts/${encodeURIComponent(input.shipmentDraftId)}/reconcile-als-booking`),
+    { method: "POST", body }
+  );
+  return parseApiResponse<AlsBookingReconciliationResponse>(response);
 }
 
 export async function refreshCarrierTracking(dpdShipmentId: string) {

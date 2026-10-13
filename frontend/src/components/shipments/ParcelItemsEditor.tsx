@@ -294,6 +294,7 @@ export function ParcelItemsEditor({
       {isOpen && typeof document !== "undefined"
         ? createPortal(
             <div
+              data-portal-theme-scope
               className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-950/50 p-0 backdrop-blur-[1px] sm:items-center sm:p-4"
               role="presentation"
               onMouseDown={(event) => {

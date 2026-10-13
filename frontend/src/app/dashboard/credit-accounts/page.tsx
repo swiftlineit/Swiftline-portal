@@ -122,11 +122,11 @@ export default function AdminCreditAccountsPage() {
 
   return (
     <>
-      <div className="mx-auto max-w-375 space-y-6" style={{ backgroundColor: "#EEEDED" }}>
+      <div className="mx-auto max-w-375 space-y-6">
         {/* Header */}
         <div className="flex flex-wrap items-start justify-between gap-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-black/5">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#0D1282" }}>
+            <p className="text-xs font-semibold uppercase tracking-wider text-[#0D1282]">
               Business Accounts
             </p>
             <h1 className="mt-1 text-2xl font-bold text-slate-900">Credit Accounts</h1>
@@ -195,8 +195,7 @@ export default function AdminCreditAccountsPage() {
                     <tr
                       key={account.businessAccountId}
                       id={`credit-account-${account.businessAccountId}`}
-                      className="border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50"
-                      style={{ backgroundColor: index % 2 === 0 ? "#FFFFFF" : "#FAFAFA" }}
+                      className={`border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50 ${index % 2 === 0 ? "bg-white" : "bg-[#FAFAFA]"}`}
                     >
                       <td className="px-4 py-4 text-left">
                         <p className="font-semibold text-slate-900 capitalize">{account.businessAccount?.companyName}</p>
@@ -295,10 +294,9 @@ export default function AdminCreditAccountsPage() {
           {!dataLoading && !accounts.length ? (
             <div className="flex flex-col items-center gap-2 p-14 text-center">
               <div
-                className="flex h-12 w-12 items-center justify-center rounded-full"
-                style={{ backgroundColor: "#EEEDED" }}
+                className="flex h-12 w-12 items-center justify-center rounded-full bg-[#EEEDED]"
               >
-                <FiFileText style={{ color: "#0D1282" }} />
+                <FiFileText className="text-[#0D1282]" />
               </div>
               <p className="text-sm font-medium text-slate-600">No approved business accounts are available.</p>
               <p className="text-xs text-slate-400">New credit requests will appear here once submitted.</p>
@@ -306,7 +304,7 @@ export default function AdminCreditAccountsPage() {
           ) : null}
           {dataLoading ? (
             <div className="flex items-center justify-center gap-2 p-10 text-sm text-slate-400">
-              <FiRefreshCw className="animate-spin" style={{ color: "#0D1282" }} />
+              <FiRefreshCw className="animate-spin text-[#0D1282]" />
               Loading credit accounts...
             </div>
           ) : null}

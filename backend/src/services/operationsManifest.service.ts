@@ -2629,15 +2629,23 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
         }).select("shipmentDraftId status").lean().exec()
       ])
     : [[], []];
-  const [shipmentDrafts, carrierShipments] = sealShipmentIds.length
+  const carrierShipmentIds = consignments.map((item) => item.dpdShipmentId);
+  const [shipmentDrafts, carrierShipments, carrierLabels] = sealShipmentIds.length
     ? await Promise.all([
         ShipmentDraft.find({ _id: { $in: sealShipmentIds } }).select("csbType").lean().exec(),
-        DpdShipment.find({ shipmentDraftId: { $in: sealShipmentIds } })
+        DpdShipment.find({ _id: { $in: carrierShipmentIds } })
           .select("shipmentDraftId status responseSnapshot")
           .lean()
-          .exec()
+          .exec(),
+        LabelDocument.find({
+          dpdShipmentId: { $in: carrierShipmentIds },
+          labelType: "DPD",
+          voidedAt: null
+        }).select("dpdShipmentId").lean().exec()
       ])
-    : [[], []];
+    : [[], [], []];
+  const carrierShipmentById = new Map(carrierShipments.map((shipment) => [String(shipment._id), shipment]));
+  const carrierLabelShipmentIds = new Set(carrierLabels.map((label) => String(label.dpdShipmentId)));
   const csbTypeByDraftId = new Map(shipmentDrafts.map((draft) => [String(draft._id), draft.csbType ?? "CSB_IV"]));
   const carrierStateByDraftId = new Map(carrierShipments.map((shipment) => {
     const stage = shipment.responseSnapshot?.stage;
@@ -2660,6 +2668,15 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
     bags: bags.map((bag) => ({ ...bag, id: String(bag._id), manifestId: String(bag.manifestId) })),
     consignments: consignments.map((item) => {
       const packedIn = bagIdsForConsignment(acceptedScans, item._id);
+      const carrierShipment = carrierShipmentById.get(String(item.dpdShipmentId));
+      const carrierStage = String(carrierShipment?.responseSnapshot?.stage ?? "");
+      const carrierReconciliationRequired = Boolean(
+        carrierShipment
+        && ["DPD_STATUS_UNKNOWN", "DPD_CREATED"].includes(carrierShipment.status)
+        && (["DPD_LABEL", "DPD_LABEL_ONLY"].includes(carrierStage)
+          || (carrierStage === "DPD_BOOKING" && carrierShipment.responseSnapshot?.localLabelError))
+        && !carrierLabelShipmentIds.has(String(item.dpdShipmentId))
+      );
       return {
         ...item,
         id: String(item._id),
@@ -2675,13 +2692,15 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
         dpdShipmentId: String(item.dpdShipmentId),
         dpdStatus: carrierStateByDraftId.get(String(item.shipmentDraftId))?.status ?? null,
         dpdStage: carrierStateByDraftId.get(String(item.shipmentDraftId))?.stage ?? null,
+        carrierBookingReconciled: carrierShipment?.responseSnapshot?.manuallyReconciled === true,
         csbType: csbTypeByDraftId.get(String(item.shipmentDraftId)) === "CSB_V" ? "CSB_V" : "CSB_IV",
         businessAccountId: String(item.businessAccountId),
         displayConsignmentNumber: formatManifestConsignmentNumber(item.consignmentNumber),
         // Goods value is entered per parcel; the consignment value is their sum.
         parcelValues: scannedParcelValues(item),
         goodsValueRequired: scannedParcelValues(item).some((parcel) => !parcel.valueMinor),
-        dpdWarning: item.dpdLabelGenerated ? "" : "Swiftline labels have not been generated for every parcel on this shipment."
+        dpdWarning: item.dpdLabelGenerated ? "" : "Swiftline labels have not been generated for every parcel on this shipment.",
+        carrierReconciliationRequired
       };
     }),
     scans: scans.map((scan) => ({ ...scan, id: String(scan._id), manifestId: String(scan.manifestId), bagId: scan.bagId ? String(scan.bagId) : null })),

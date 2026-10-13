@@ -332,7 +332,7 @@ export default function DashboardBannerManager() {
   return (
     <div className="space-y-5">
       {/* Page heading */}
-      <div className="flex flex-col gap-4 rounded-xl border border-[#0D1282]/10 bg-[linear-gradient(135deg,#ffffff_0%,#f7f8fd_100%)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+      <div data-portal-theme-advisory-heading className="flex flex-col gap-4 rounded-xl border border-[#0D1282]/10 bg-[linear-gradient(135deg,#ffffff_0%,#f7f8fd_100%)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div className="min-w-0">
           <p className="text-base font-semibold text-slate-950">
             Dashboard banner slides

@@ -23,7 +23,7 @@ export default function AdminPipelineCard({
   const manifests = overview?.manifests ?? null;
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-2">
+    <section className="portal-theme-surface overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-2">
       <div className="flex items-start justify-between gap-4 px-5 pb-2 pt-5 sm:px-6">
         <div>
           <h2 className="text-[15px] font-semibold tracking-[-0.02em] text-slate-900">
@@ -56,7 +56,7 @@ export default function AdminPipelineCard({
       </div>
 
       <div className="px-3 pb-4 pt-3 sm:px-5 sm:pb-5">
-        <div className="rounded-2xl bg-white px-3 pb-4 pt-5 sm:px-5 sm:pt-6">
+        <div className="portal-theme-surface rounded-2xl bg-white px-3 pb-4 pt-5 sm:px-5 sm:pt-6">
           {dataLoading ? (
             <BarsSkeleton rows={tracksShipments ? 8 : 6} />
           ) : null}

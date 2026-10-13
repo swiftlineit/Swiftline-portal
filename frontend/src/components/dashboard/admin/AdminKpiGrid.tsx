@@ -78,6 +78,7 @@ function KpiCard({
   return (
     <Link
       href={href}
+      data-portal-theme-kpi
       className={`group relative min-h-38.5 overflow-hidden rounded-2xl border p-5 transition-all duration-200 hover:-translate-y-px hover:shadow-[0_10px_26px_-14px_rgba(15,23,42,0.22)] ${styles.card}`}
     >
       {/* subtle decorative corner */}
@@ -126,7 +127,7 @@ function KpiCard({
 
 function KpiCardSkeleton() {
   return (
-    <div className="min-h-38.5 animate-pulse rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+    <div data-portal-theme-kpi className="min-h-38.5 animate-pulse rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
       <div className="h-2.5 w-24 rounded bg-slate-200" />
       <div className="mt-5 h-8 w-20 rounded bg-slate-200" />
       <div className="mt-6 h-2.5 w-full rounded bg-slate-200" />

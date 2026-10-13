@@ -242,10 +242,7 @@ export default function CounterSalesPage() {
                 payments.map((payment, index) => (
                   <tr
                     key={payment.id}
-                    className="border-b border-slate-100 last:border-0"
-                    style={{
-                      backgroundColor: index % 2 === 0 ? "#FFFFFF" : "#FAFAFA",
-                    }}
+                    className={`border-b border-slate-100 last:border-0 ${index % 2 === 0 ? "bg-white" : "bg-[#FAFAFA]"}`}
                   >
                     <td className="px-4 py-4 text-slate-600">
                       {formatDashboardDateTime(payment.recordedAt)}

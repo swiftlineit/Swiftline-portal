@@ -1,7 +1,8 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { FiAlertCircle, FiEdit3, FiPlus, FiPower, FiSave, FiTrash2 } from "react-icons/fi";
+import { toast } from "react-toastify";
 import {
   bookingPauseCountryOptions,
   type BookingPause,
@@ -12,6 +13,7 @@ import {
   formatPauseWindow,
   listBookingPauses,
   toggleBookingPause,
+  updateDpdBookingSetting,
   updateBookingPause
 } from "@/lib/bookingPause";
 
@@ -48,9 +50,12 @@ function toDateInput(value: string | null | undefined): string {
 
 export default function BookingPausesManager() {
   const [pauses, setPauses] = useState<BookingPause[]>([]);
+  const [dpdBookingEnabled, setDpdBookingEnabled] = useState(true);
+  const [dpdBookingSettingState, setDpdBookingSettingState] = useState<"loading" | "ready" | "error">("loading");
   const [form, setForm] = useState<FormState>(blankForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [dpdBookingSaving, setDpdBookingSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -61,9 +66,12 @@ export default function BookingPausesManager() {
         const data = await listBookingPauses();
         if (!active) return;
         setPauses(data.pauses);
+        setDpdBookingEnabled(data.dpdBookingEnabled);
+        setDpdBookingSettingState("ready");
       } catch (caught) {
         if (!active) return;
         setError(caught instanceof Error ? caught.message : "Unable to load booking pauses.");
+        setDpdBookingSettingState("error");
       }
     }
     void load();
@@ -73,6 +81,22 @@ export default function BookingPausesManager() {
   function updateField<K extends keyof FormState>(field: K, value: FormState[K]) {
     setForm((c) => ({ ...c, [field]: value }));
     setMessage("");
+  }
+
+  async function handleDpdBookingToggle() {
+    if (dpdBookingSettingState !== "ready" || dpdBookingSaving) return;
+    setDpdBookingSaving(true);
+    try {
+      const data = await updateDpdBookingSetting(!dpdBookingEnabled);
+      setDpdBookingEnabled(data.dpdBookingEnabled);
+      toast.success(data.dpdBookingEnabled
+        ? "Client DPD bookings enabled."
+        : "Client DPD bookings disabled. Clients can still create shipments without DPD labels.");
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : "Could not update DPD booking availability.");
+    } finally {
+      setDpdBookingSaving(false);
+    }
   }
 
   function handleCountryToggle(value: BookingPauseCountry) {
@@ -187,10 +211,62 @@ export default function BookingPausesManager() {
 
   const inputClass = "mt-2 h-10 w-full border border-slate-300 bg-white rounded-xl px-3 text-sm outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100";
   const labelClass = "text-xs font-semibold uppercase text-slate-500";
+  const clientDpdBookingEnabled = dpdBookingSettingState === "ready" && dpdBookingEnabled;
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_440px]">
       <form onSubmit={handleSubmit} className="h-fit border border-slate-200 bg-white rounded-2xl">
+        <section aria-labelledby="client-dpd-booking-heading" className="flex flex-col gap-4 border-b border-slate-200 bg-slate-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span
+              aria-hidden="true"
+              className={`mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl transition-colors duration-200 motion-reduce:transition-none ${
+                dpdBookingSettingState === "loading"
+                  ? "bg-white text-slate-500"
+                  : clientDpdBookingEnabled
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-white text-slate-500"
+              }`}
+            >
+              <FiPower className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <h2 id="client-dpd-booking-heading" className="text-sm font-semibold text-slate-950">
+                DPD bookings for clients
+              </h2>
+              <p
+                id="client-dpd-booking-description"
+                role="status"
+                aria-live="polite"
+                className="mt-1 max-w-2xl text-xs leading-5 text-slate-600"
+              >
+                {dpdBookingSettingState === "loading"
+                  ? "Loading current booking setting…"
+                  : dpdBookingSettingState === "error"
+                    ? "Could not load the current setting. Refresh this page to try again."
+                    : "When disabled, clients can create shipments without a DPD label. Staff booking actions remain available."}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={clientDpdBookingEnabled}
+            aria-labelledby="client-dpd-booking-heading"
+            aria-describedby="client-dpd-booking-description"
+            aria-busy={dpdBookingSaving || dpdBookingSettingState === "loading"}
+            onClick={() => void handleDpdBookingToggle()}
+            disabled={dpdBookingSaving || dpdBookingSettingState !== "ready"}
+            className="inline-flex h-11 w-16 shrink-0 items-center justify-center rounded-full transition-transform duration-150 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/40 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none"
+          >
+            <span className={`relative h-7 w-12 rounded-full transition-colors duration-200 ease-out motion-reduce:transition-none ${clientDpdBookingEnabled ? "bg-emerald-600" : "bg-slate-300"}`}>
+              <span
+                aria-hidden="true"
+                className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out motion-reduce:transition-none ${clientDpdBookingEnabled ? "translate-x-5" : "translate-x-0"}`}
+              />
+            </span>
+          </button>
+        </section>
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <h2 className="text-sm font-semibold uppercase text-slate-500">
             {editingId ? "Edit Booking Pause" : "Pause Bookings"}

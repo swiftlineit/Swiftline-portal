@@ -20,6 +20,7 @@ import {
 } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
+import AlsCarrierReconciliationForm from "@/components/shipments/AlsCarrierReconciliationForm";
 import {
   createOperationsBag,
   createDirectOperationsScanSession,
@@ -732,6 +733,8 @@ export default function OperationsManifestWorkspace() {
                 onRemove={requestParcelRemoval}
                 onDisposition={requestParcelDisposition}
                 onReconcileAlsBooking={setReconciliationTarget}
+                manifestId={manifestId}
+                onReconciled={load}
               />
             </div>
           </div>
@@ -744,6 +747,8 @@ export default function OperationsManifestWorkspace() {
             onRemove={requestParcelRemoval}
             onDisposition={requestParcelDisposition}
             onReconcileAlsBooking={setReconciliationTarget}
+            manifestId={manifestId}
+            onReconciled={load}
           />
         )}
 
@@ -1188,6 +1193,8 @@ function ConsignmentTable({
   onRemove,
   onDisposition,
   onReconcileAlsBooking,
+  manifestId,
+  onReconciled,
 }: {
   rows: OperationsConsignment[];
   canRemove: boolean;
@@ -1200,6 +1207,8 @@ function ConsignmentTable({
     disposition: OperationsParcelDisposition,
   ) => void;
   onReconcileAlsBooking: (consignment: OperationsConsignment) => void;
+  manifestId: string;
+  onReconciled: () => Promise<void>;
 }) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-[#EEEDED] bg-white shadow-sm">
@@ -1229,9 +1238,18 @@ function ConsignmentTable({
                   {item.serviceInfo}
                 </p>
                 {item.dpdWarning ? (
-                  <p className="mt-1 text-[11px] text-amber-700">
-                    No label
-                  </p>
+                  <p className="mt-1 text-[11px] text-amber-700">Swiftline label incomplete</p>
+                ) : null}
+                {canReconcileAlsBooking && item.carrierReconciliationRequired && item.dpdStatus === "DPD_CREATED" && item.carrierBookingReconciled ? (
+                  <>
+                    <p className="mt-1 text-[11px] font-semibold text-amber-800">DPD label missing</p>
+                    <AlsCarrierReconciliationForm
+                      shipmentDraftId={item.shipmentDraftId}
+                      swiftlineTrackingNumber={item.consignmentNumber}
+                      manifestId={manifestId}
+                      onComplete={onReconciled}
+                    />
+                  </>
                 ) : null}
                 {item.dpdStatus === "DPD_STATUS_UNKNOWN" ? (
                   <p className="mt-1 text-[11px] font-semibold text-amber-800">

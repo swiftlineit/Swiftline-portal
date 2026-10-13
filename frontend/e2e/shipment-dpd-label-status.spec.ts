@@ -110,6 +110,43 @@ test("shows route-aware DPD label status in the staff shipment table", async ({ 
   await expect(page.getByText("DPD label not applicable", { exact: true })).toBeVisible();
 });
 
+test("opens the available DPD label PDF while View Details keeps the shipment route", async ({ page }) => {
+  await mockShipmentListApis(page, "operations");
+  await page.route("http://localhost:5000/api/v1/dpd-shipments/drafts/001/details", (route) => route.fulfill({
+    json: {
+      success: true,
+      shipment: {
+        dpdShipment: { id: "booked-001" },
+        labels: [{ id: "dpd-label-001", labelType: "DPD" }]
+      }
+    }
+  }));
+  await page.route("http://localhost:5000/api/v1/dpd-shipments/booked-001/label-access?**", (route) => {
+    const url = new URL(route.request().url());
+    expect(url.searchParams.get("labelId")).toBe("dpd-label-001");
+    expect(url.searchParams.get("disposition")).toBe("inline");
+    return route.fulfill({
+      json: {
+        success: true,
+        url: "http://localhost:3000/api/v1/dpd-shipments/booked-001/label-file?token=test-signed&disposition=inline"
+      }
+    });
+  });
+  await page.context().route("http://localhost:3000/api/v1/dpd-shipments/booked-001/label-file?**", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: "DPD label preview"
+  }));
+
+  await page.goto("/dashboard/shipments");
+  await expect(page.getByRole("link", { name: "View Details" }).first()).toHaveAttribute("href", "/dashboard/shipments/001");
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "DPD label available" }).click();
+  const popup = await popupPromise;
+  await expect(popup).toHaveURL("http://localhost:3000/api/v1/dpd-shipments/booked-001/label-file?token=test-signed&disposition=inline");
+  await expect(page).toHaveURL(/\/dashboard\/shipments$/);
+});
+
 test("never renders internal DPD label status in the client shipment table", async ({ page }) => {
   await mockShipmentListApis(page, "client");
   await page.goto("/client/shipments");

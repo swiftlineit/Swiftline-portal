@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { roleValues, type Role } from "./user.model.js";
 
 export type ShipmentManifestActorRole = "admin" | "client";
 
@@ -59,6 +60,8 @@ export interface IShipmentManifest extends mongoose.Document {
   totalWeightKg: number;
   totalBags: number;
   createdBy: mongoose.Types.ObjectId;
+  /** Snapshot of the actual user role; optional for manifests created before this field existed. */
+  createdByRole?: Role;
   actorRole: ShipmentManifestActorRole;
   generatedAt: Date;
   createdAt: Date;
@@ -113,6 +116,7 @@ const shipmentManifestSchema = new mongoose.Schema<IShipmentManifest>({
   totalWeightKg: { type: Number, required: true, min: 0 },
   totalBags: { type: Number, required: true, min: 1 },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  createdByRole: { type: String, enum: roleValues },
   actorRole: { type: String, enum: ["admin", "client"], required: true },
   generatedAt: { type: Date, required: true, default: Date.now }
 }, { timestamps: true });

@@ -37,7 +37,7 @@ export default function UnsavedChangesDialog() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0D1282]/30 px-4 backdrop-blur-sm">
+    <div data-portal-theme-scope className="fixed inset-0 z-50 flex items-center justify-center bg-[#0D1282]/30 px-4 backdrop-blur-sm">
       <div
         ref={dialogRef}
         role="dialog"

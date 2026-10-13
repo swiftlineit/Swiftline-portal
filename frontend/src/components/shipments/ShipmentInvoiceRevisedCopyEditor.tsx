@@ -371,17 +371,17 @@ export default function ShipmentInvoiceRevisedCopyEditor({
         </div>
       ) : null}
 
-      <article className="revised-paper invoice-sheet mx-auto min-h-[297mm] max-w-[210mm] bg-white p-10 text-slate-950 shadow-xl">
-        <header className="flex items-start justify-between gap-8 border-b-2 border-slate-950 pb-4">
+      <article className="revised-paper invoice-sheet mx-auto min-h-[297mm] w-full max-w-[210mm] bg-white p-3 text-slate-950 shadow-xl sm:p-6 lg:p-10">
+        <header className="flex flex-col items-start justify-between gap-4 border-b-2 border-slate-950 pb-4 sm:flex-row sm:gap-8">
           <Image
             src="/swiftline-invoice-logo.png"
             alt="Swiftline Cargo and Express Logistics"
             width={180}
             height={120}
             priority
-            className="h-[120px] w-[180px] shrink-0 object-contain object-left"
+            className="h-[86px] w-[130px] shrink-0 object-contain object-left sm:h-[120px] sm:w-[180px]"
           />
-          <div className="min-w-0 pt-3 text-right">
+          <div className="min-w-0 pt-1 text-left sm:pt-3 sm:text-right">
             <h1 className="text-lg font-bold text-amber-800">REVISED DOCUMENT</h1>
             <p className="mt-3 text-xs">
               <strong>Invoice No:</strong>{" "}
@@ -415,7 +415,7 @@ export default function ShipmentInvoiceRevisedCopyEditor({
           </label>
         </div>
 
-        <section className="mt-5 grid grid-cols-2 gap-4">
+        <section className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
           <div className="min-h-36 border border-slate-300 p-4 text-xs">
             <p className="font-semibold uppercase text-slate-500">Supplier / Shipper Branch</p>
             <EditText value={supplier.legalName ?? ""} onChange={(value) => setSupplier((prev) => ({ ...prev, legalName: value }))} className="mt-3 text-sm font-bold" />
@@ -475,7 +475,7 @@ export default function ShipmentInvoiceRevisedCopyEditor({
           </div>
         </section>
 
-        <section className="mt-5 grid grid-cols-4 gap-3 text-xs">
+        <section className="mt-5 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
           <div className="border border-slate-300 p-3">
             <p className="font-semibold uppercase text-slate-500">Origin</p>
             <EditText value={origin} onChange={setOrigin} className="mt-2 font-semibold" />
@@ -514,7 +514,7 @@ export default function ShipmentInvoiceRevisedCopyEditor({
           </div>
         </details>
 
-        <section className="mt-5 overflow-hidden border border-slate-950">
+        <section className="invoice-line-items mt-5 overflow-x-auto border border-slate-950">
           <div className="grid grid-cols-[1.8fr_repeat(5,1fr)] bg-slate-100 text-center text-[10px] font-bold uppercase text-slate-700">
             <div className="border-r border-slate-950 px-3 py-2">Description</div>
             <div className="border-r border-slate-950 px-2 py-2">Actual KG</div>
@@ -651,7 +651,7 @@ export default function ShipmentInvoiceRevisedCopyEditor({
           </p>
         </div>
 
-        <section className="grid grid-cols-[1fr_280px] border-x border-b border-slate-950 text-xs">
+        <section className="grid grid-cols-1 border-x border-b border-slate-950 text-xs sm:grid-cols-[1fr_280px]">
           <div className="p-4">
             <p className="font-semibold uppercase text-slate-500">Delivery Address</p>
             <EditArea value={deliveryAddress} onChange={setDeliveryAddress} rows={3} className="mt-2 leading-5" />

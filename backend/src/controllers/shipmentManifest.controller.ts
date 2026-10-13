@@ -8,13 +8,14 @@ import { DpdShipment, type IDpdShipment } from "../models/dpdShipment.model.js";
 import { ShipmentDraft, type IShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import { ShipmentManifest, type IShipmentManifest } from "../models/shipmentManifest.model.js";
-import { User } from "../models/user.model.js";
+import { User, roleValues, type Role } from "../models/user.model.js";
 import { clientCanAccessShipmentDraft } from "../services/shipmentDraftPolicy.service.js";
 import { readShipmentBookingSnapshot, snapshotDeclaredGoodsValueMinor } from "../services/shipmentBookingSnapshot.service.js";
 import { notifyAdminsOfClientManifest } from "../services/shipmentManifestNotification.service.js";
 import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
 import { buildShipmentManifestPdf } from "../services/shipmentManifestPdf.service.js";
 import { dateRangeCondition, dateRangeParams } from "../utils/dateRangeFilter.js";
+import { normalizePortalRole } from "../utils/portalRole.js";
 import {
   allocateShipmentManifestNumber,
   buildHandoverManifestLine,
@@ -55,6 +56,13 @@ function getUserId(request: Request) {
   return value && mongoose.Types.ObjectId.isValid(String(value))
     ? new mongoose.Types.ObjectId(String(value))
     : null;
+}
+
+function getCreatorRole(request: Request): Role | null {
+  const role = (request as Request & { user?: { role?: unknown } }).user?.role;
+  if (typeof role !== "string") return null;
+  const normalizedRole = normalizePortalRole(role);
+  return roleValues.includes(normalizedRole) ? normalizedRole : null;
 }
 
 function getDraftId(request: Request) {
@@ -232,6 +240,8 @@ async function loadManifestContext(draftId: mongoose.Types.ObjectId, userId: mon
 async function createManifest(request: Request, response: Response, actorRole: "admin" | "client") {
   const userId = getUserId(request);
   if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  const createdByRole = getCreatorRole(request);
+  if (!createdByRole) return response.status(403).json({ success: false, message: "Unable to determine the manifest creator role." });
   let manifestInput: NormalizedManifestInput;
   if (actorRole === "client") {
     const parsed = createClientManifestSchema.safeParse(request.body);
@@ -354,6 +364,7 @@ async function createManifest(request: Request, response: Response, actorRole: "
       totalWeightKg: Number(lineSnapshots.reduce((sum, line) => sum + line.weightKg, 0).toFixed(3)),
       totalBags: new Set(lineSnapshots.map((line) => line.bagNumber)).size,
       createdBy: userId,
+      createdByRole,
       actorRole,
       generatedAt: new Date()
     });
@@ -473,7 +484,7 @@ async function clientBusinessAccountIds(userId: mongoose.Types.ObjectId) {
 
 async function serializeManifestList(manifests: IShipmentManifest[]) {
   const creatorIds = [...new Set(manifests.map((manifest) => String(manifest.createdBy)))];
-  const creators = await User.find({ _id: { $in: creatorIds } }).select("name email").lean().exec();
+  const creators = await User.find({ _id: { $in: creatorIds } }).select("name email role").lean().exec();
   const creatorById = new Map(creators.map((creator) => [String(creator._id), creator]));
 
   return manifests.map((manifest) => {
@@ -481,6 +492,8 @@ async function serializeManifestList(manifests: IShipmentManifest[]) {
     return {
       ...serializeShipmentManifest(manifest),
       generatedBy: creator?.name || creator?.email || "Not available",
+      // Old rows lack the snapshot; use the creator's current normalized role as a best available fallback.
+      createdByRole: manifest.createdByRole ?? (creator ? normalizePortalRole(creator.role) : manifest.actorRole),
       createdAt: manifest.createdAt
     };
   });
@@ -599,6 +612,8 @@ async function downloadManifestExcel(request: Request, response: Response, actor
 async function createBulkManifest(request: Request, response: Response, actorRole: "admin" | "client") {
   const userId = getUserId(request);
   if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  const createdByRole = getCreatorRole(request);
+  if (!createdByRole) return response.status(403).json({ success: false, message: "Unable to determine the manifest creator role." });
   const parsed = bulkManifestSchema.safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({
@@ -689,6 +704,7 @@ async function createBulkManifest(request: Request, response: Response, actorRol
       totalWeightKg: Number(lineSnapshots.reduce((sum, line) => sum + line.weightKg, 0).toFixed(3)),
       totalBags: 1,
       createdBy: userId,
+      createdByRole,
       actorRole,
       generatedAt: new Date()
     });

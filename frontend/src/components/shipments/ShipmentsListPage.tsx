@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FiAlertTriangle, FiArchive, FiArrowDown, FiExternalLink, FiFileText, FiPlus, FiSearch, FiTrash2, FiX } from "react-icons/fi";
+import { FiArchive, FiArrowDown, FiExternalLink, FiFileText, FiPlus, FiSearch, FiTrash2, FiX } from "react-icons/fi";
 import { BsArrowCounterclockwise } from "react-icons/bs";
 import { toast } from "react-toastify";
 import CreateManifestDialog, { type ManifestDialogValues } from "@/components/shipments/CreateManifestDialog";
@@ -20,6 +20,8 @@ import { createBulkShipmentManifest, manifestsHref } from "@/lib/shipmentManifes
 import { shipmentInvoicePageUrl } from "@/lib/shipmentInvoices";
 import {
   bulkUpdateDpdShipmentOperationalStatus,
+  getAdminShipmentDetails,
+  getDpdLabelAccessUrl,
   rebookShipmentDraft,
   shipmentOperationalStatusOptions,
   type BulkShipmentStatusResult,
@@ -174,17 +176,19 @@ const dpdLabelPresentation: Record<DpdLabelStatus, { label: string; className: s
   NOT_APPLICABLE: { label: "DPD label not applicable", className: "text-slate-500" }
 };
 
-function DpdLabelAvailability({ status, href }: { status: DpdLabelStatus; href?: string }) {
+function DpdLabelAvailability({ status, onOpen, opening }: { status: DpdLabelStatus; onOpen?: () => void; opening?: boolean }) {
   const presentation = dpdLabelPresentation[status];
   const label = presentation.label;
-  if (href) {
+  if (onOpen) {
     return (
-      <Link
-        href={href}
-        className={`mt-1 inline-flex text-[10px] font-semibold leading-4 underline underline-offset-2 transition-colors hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-1 ${presentation.className}`}
+      <button
+        type="button"
+        onClick={onOpen}
+        disabled={opening}
+        className={`mt-1 flex w-fit text-[10px] font-semibold leading-4 underline underline-offset-2 transition-colors hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-1 disabled:cursor-wait ${presentation.className}`}
       >
         {label}
-      </Link>
+      </button>
     );
   }
   return (
@@ -454,6 +458,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const [deleting, setDeleting] = useState(false);
   // Single rebook in flight - tracks which booked shipment is being cloned.
   const [rebookingId, setRebookingId] = useState<string | null>(null);
+  const [openingDpdLabelId, setOpeningDpdLabelId] = useState<string | null>(null);
   const [restoringView, setRestoringView] = useState(true);
   const restoredView = useRef(false);
   // List requests can overlap when a user pages, filters, or finishes a bulk
@@ -1111,6 +1116,30 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     }
   }
 
+  async function handleOpenDpdLabel(shipmentId: string) {
+    if (openingDpdLabelId) return;
+    const openedWindow = window.open("about:blank", "_blank");
+    if (!openedWindow) {
+      toast.error("Allow pop-ups to open the DPD label.");
+      return;
+    }
+    openedWindow.opener = null;
+    setOpeningDpdLabelId(shipmentId);
+
+    try {
+      const { shipment } = await getAdminShipmentDetails(shipmentId);
+      const label = shipment.labels.find((item) => item.labelType === "DPD");
+      if (!label) throw new Error("The DPD label is no longer available for this shipment.");
+      const access = await getDpdLabelAccessUrl(shipment.dpdShipment.id, label.id, "inline");
+      openedWindow.location.href = access.url;
+    } catch (caught) {
+      openedWindow.close();
+      toast.error(caught instanceof Error ? caught.message : "The DPD label could not be opened.");
+    } finally {
+      setOpeningDpdLabelId(null);
+    }
+  }
+
   async function handleDelete() {
     if (!pendingDelete) return;
     setDeleting(true);
@@ -1198,7 +1227,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     value={searchInput}
                     onChange={(event) => setSearchInput(event.target.value)}
                     maxLength={80}
-                    placeholder="Search AWB, consignee, destination, or reference"
+                    placeholder="Search AWB, consignor, consignee, destination, or reference"
                     className="h-11 w-full rounded-lg border border-slate-300 bg-white pl-10 pr-10 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 hover:border-slate-400 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/10"
                   />
 
@@ -1899,13 +1928,14 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   ) : null}
                   {shows("status") ? (
                   <td className="px-4 py-3">
-                    <span className="inline-flex py-1 text-xs font-semibold text-slate-700">
+                    <span className="block w-fit py-1 text-xs font-semibold text-slate-700">
                       {shipment.statusLabel}
                     </span>
                     {audience === "admin" && shipment.dpdLabelStatus ? (
                       <DpdLabelAvailability
                         status={shipment.dpdLabelStatus}
-                        href={shipment.dpdLabelStatus === "AVAILABLE" ? `/dashboard/dpd-labels/${shipment.id}` : undefined}
+                        onOpen={shipment.dpdLabelStatus === "AVAILABLE" ? () => void handleOpenDpdLabel(shipment.id) : undefined}
+                        opening={openingDpdLabelId === shipment.id}
                       />
                     ) : null}
                     {shipment.manifest ? (

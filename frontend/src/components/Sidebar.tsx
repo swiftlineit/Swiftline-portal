@@ -425,7 +425,7 @@ export default function Sidebar({
         />
       ) : null}
 
-      <aside className={asideClass}>
+      <aside data-portal-theme-sidebar className={asideClass}>
         <div
           className={`flex h-20 shrink-0 items-center border-b border-white/10 px-3 ${
             expanded ? "justify-between gap-3" : "justify-center"
