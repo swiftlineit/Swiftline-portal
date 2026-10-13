@@ -1,9 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ChangeEvent, type ReactNode, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { FiArrowLeft, FiMapPin, FiSave, FiSearch, FiTruck,FiPackage } from "react-icons/fi";
+import { FiMapPin, FiSave, FiSearch, FiTruck, FiPackage } from "react-icons/fi";
 import { FaRegWindowClose, FaWeight } from "react-icons/fa";
 import { toast } from "react-toastify";
 import { exceedsStandardParcelSize, standardParcelDimensionsLabel } from "@/lib/shipmentPricing";
@@ -459,6 +458,7 @@ export default function ClientDpdDraftReviewPage() {
   const [addressBusy, setAddressBusy] = useState(false);
   const [error, setError] = useState("");
   const [bookingPauses, setBookingPauses] = useState<BookingPause[]>([]);
+  const [dpdBookingEnabled, setDpdBookingEnabled] = useState(true);
   const [notice, setNotice] = useState("");
   const [, setReviewIssues] = useState<string[]>([]);
   const [submitAttempted, setSubmitAttempted] = useState(false);
@@ -850,6 +850,7 @@ export default function ClientDpdDraftReviewPage() {
         const data = await listClientBookingPauses();
         if (!active) return;
         setBookingPauses(data.pauses);
+        setDpdBookingEnabled(data.dpdBookingEnabled);
       } catch { /* non-blocking */ }
     }
     void loadPauses();
@@ -1107,6 +1108,7 @@ export default function ClientDpdDraftReviewPage() {
   const currentCountryCode = draft?.consigneeEnteredAddress?.countryCode || addressForm.countryCode || "";
   const isCurrentCountryPaused = isCountryPaused(currentCountryCode, bookingPauses);
   const dpdLabelDestination = isDpdLabelDestination(addressForm.countryCode);
+  const clientDpdBookingDisabled = dpdLabelDestination && !dpdBookingEnabled;
 
   async function handleCreateLabel(
     // Supplied when re-booking after the customer accepted a changed price.
@@ -1624,16 +1626,23 @@ export default function ClientDpdDraftReviewPage() {
                     Bookings for this destination are paused - booking is disabled.
                   </div>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={() => void handleCreateLabel()}
-                  disabled={busy || isCurrentCountryPaused}
-                  title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
-                  className="inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-                >
-                  <FiTruck aria-hidden="true" className="h-4 w-4" />
-                  {pendingAction === "BOOKING" ? "Processing..." : "Create Shipment"}
-                </button>
+                {clientDpdBookingDisabled ? (
+                  <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-950">
+                    DPD label booking is temporarily unavailable. You can still create this shipment without a DPD label.
+                  </div>
+                ) : null}
+                {!clientDpdBookingDisabled ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleCreateLabel()}
+                    disabled={busy || isCurrentCountryPaused}
+                    title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
+                    className="inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  >
+                    <FiTruck aria-hidden="true" className="h-4 w-4" />
+                    {pendingAction === "BOOKING" ? "Processing..." : "Create Shipment"}
+                  </button>
+                ) : null}
                 {/* Available as an explicit alternative for destinations where DPD labels apply. */}
                 {dpdLabelDestination ? (
                   <button

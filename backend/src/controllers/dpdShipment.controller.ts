@@ -165,7 +165,10 @@ const acceptedPricingSchema = z.object({
 });
 
 const reconcileAlsCarrierBookingSchema = z.object({
-  manifestId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid manifest."),
+  manifestId: z.preprocess(
+    (value) => typeof value === "string" && !value.trim() ? undefined : value,
+    z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid manifest.").optional()
+  ),
   carrierAwbNumber: z.string().trim().regex(/^\d{6,20}$/, "Enter the confirmed numeric ALS AWB."),
   carrierForwardingNumber: z.string().trim().min(1).max(120)
     .refine((value) => !/[\u0000-\u001F\u007F]/.test(value), "Enter a valid ALS forwarding number."),
@@ -875,15 +878,18 @@ export async function reconcileAlsCarrierBookingForDraft(request: Request, respo
     const result = await reconcileAlsCarrierBooking({
       shipmentDraftId,
       ...parsed.data,
+      labelHtml: request.file?.buffer,
       userId
     });
     return response.status(200).json({
       success: true,
       reused: result.reused,
-      message: "The confirmed ALS AWB and forwarding number are recorded. The carrier label remains missing; no label was created.",
+      message: request.file
+        ? "The ALS booking references and uploaded DPD label are reconciled."
+        : "The confirmed ALS AWB and forwarding number are recorded. Upload the DPD label before dispatch.",
       dpdShipment: serializeDpdShipment(result.dpdShipment),
       carrierForwardingNumber: result.dpdShipment.forwardingNumber ?? "",
-      carrierLabelStatus: "NOT_PROVIDED"
+      carrierLabelStatus: request.file ? "UPLOADED" : "NOT_PROVIDED"
     });
   } catch (error) {
     if (error instanceof DpdShipmentServiceError) {
@@ -1185,7 +1191,7 @@ export async function listDpdShipments(request: Request, response: Response): Pr
       if (request.query.withEstimate === "1") {
         estimatesByDraftId.set(
           String(shipment.shipmentDraftId),
-          await buildDeliveryEstimate({ draft, events })
+          await buildDeliveryEstimate({ draft, events, bookingAt: shipment.createdAt })
         );
       }
     }));
@@ -1387,7 +1393,7 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
       events: normalizeVisibleTrackingHistory(events, journey)
         .map((event) => serializeShipmentEvent(event, journey)),
       trackingJourney: journey,
-      deliveryEstimate: await buildDeliveryEstimate({ draft, events }),
+      deliveryEstimate: await buildDeliveryEstimate({ draft, events, bookingAt: shipment.createdAt }),
       trackingSummary: buildTrackingSummary({ draft, dpdShipment: shipment, events }),
       trackingAttention: buildTrackingAttention(events),
       parcelActivities,

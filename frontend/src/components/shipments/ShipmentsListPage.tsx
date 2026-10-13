@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FiAlertTriangle, FiArchive, FiArrowDown, FiExternalLink, FiFileText, FiPlus, FiSearch, FiTrash2, FiX } from "react-icons/fi";
+import { FiArchive, FiArrowDown, FiExternalLink, FiFileText, FiPlus, FiSearch, FiTrash2, FiX } from "react-icons/fi";
 import { BsArrowCounterclockwise } from "react-icons/bs";
 import { toast } from "react-toastify";
 import CreateManifestDialog, { type ManifestDialogValues } from "@/components/shipments/CreateManifestDialog";
@@ -185,7 +185,7 @@ function DpdLabelAvailability({ status, onOpen, opening }: { status: DpdLabelSta
         type="button"
         onClick={onOpen}
         disabled={opening}
-        className={`mt-1 inline-flex text-[10px] font-semibold leading-4 underline underline-offset-2 transition-colors hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-1 disabled:cursor-wait ${presentation.className}`}
+        className={`mt-1 flex w-fit text-[10px] font-semibold leading-4 underline underline-offset-2 transition-colors hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-1 disabled:cursor-wait ${presentation.className}`}
       >
         {label}
       </button>
@@ -1928,7 +1928,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   ) : null}
                   {shows("status") ? (
                   <td className="px-4 py-3">
-                    <span className="inline-flex py-1 text-xs font-semibold text-slate-700">
+                    <span className="block w-fit py-1 text-xs font-semibold text-slate-700">
                       {shipment.statusLabel}
                     </span>
                     {audience === "admin" && shipment.dpdLabelStatus ? (

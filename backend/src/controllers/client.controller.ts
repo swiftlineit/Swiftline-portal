@@ -81,6 +81,8 @@ import {
 } from "./customsInvoice.controller.js";
 import { normalizeParcelItems } from "../services/parcelItems.service.js";
 import { clientCanAccessShipmentDraft } from "../services/shipmentDraftPolicy.service.js";
+import { isDpdBookingEnabled } from "../services/bookingPause.service.js";
+import { isDpdLabelDestination } from "../services/als/alsPayload.service.js";
 import {
   readShipmentBookingSnapshot,
   serializeShipmentBookingConfirmation
@@ -159,6 +161,7 @@ type ClientDpdShipmentSnapshot = {
   swiftlineTrackingNumber?: string;
   parcelNumbers?: string[];
   status?: string;
+  createdAt?: Date;
   updatedAt?: Date;
 };
 
@@ -233,7 +236,7 @@ async function buildClientShipmentDashboard(accountId: string, branchIds: string
   const [dpdShipments, shipmentInvoices, latestEvents] = draftIds.length
     ? await Promise.all([
       DpdShipment.find({ shipmentDraftId: { $in: draftIds } })
-        .select("shipmentDraftId dpdShipmentId swiftlineTrackingNumber parcelNumbers status updatedAt")
+        .select("shipmentDraftId dpdShipmentId swiftlineTrackingNumber parcelNumbers status createdAt updatedAt")
         .lean<ClientDpdShipmentSnapshot[]>()
         .exec(),
       ShipmentInvoice.find({ shipmentDraftId: { $in: draftIds } })
@@ -320,7 +323,7 @@ async function buildClientShipmentDashboard(accountId: string, branchIds: string
           status: shipmentInvoice.status,
           revision: shipmentInvoice.revision
         } : null,
-        createdAt: draft.createdAt ?? null,
+        createdAt: dpdShipment?.createdAt ?? draft.createdAt ?? null,
         updatedAt: draft.updatedAt ?? null
       };
     })
@@ -1265,7 +1268,11 @@ export async function getClientShipmentDetails(request: Request, response: Respo
     events,
     originHubFallback: originBranch?.address?.city ? `${originBranch.address.city} Hub` : ""
   });
-  const deliveryEstimate = await buildDeliveryEstimate({ draft, events });
+  const deliveryEstimate = await buildDeliveryEstimate({
+    draft,
+    events,
+    bookingAt: dpdShipment?.createdAt ?? null
+  });
 
   return response.status(200).json({
     success: true,
@@ -1443,6 +1450,23 @@ export async function createClientShipment(
   }
 
   const acceptedPricing = clientAcceptedPricingSchema.safeParse(request.body ?? {});
+
+  const bookingDraft = await ShipmentDraft.findById(draftId)
+    .select("consigneeEnteredAddress.countryCode")
+    .lean()
+    .exec();
+  if (!bookingDraft) {
+    return response.status(404).json({ success: false, message: "Shipment draft not found" });
+  }
+  const requestsDpdLabel = isDpdLabelDestination(bookingDraft.consigneeEnteredAddress?.countryCode)
+    && !(acceptedPricing.success && acceptedPricing.data.skipDpdLabel === true);
+  if (requestsDpdLabel && !await isDpdBookingEnabled()) {
+    return response.status(423).json({
+      success: false,
+      code: "DPD_BOOKING_DISABLED",
+      message: "DPD label booking is temporarily unavailable. Create this shipment without a DPD label or try again later."
+    });
+  }
 
   try {
     const result = await createLabelForShipmentDraft(

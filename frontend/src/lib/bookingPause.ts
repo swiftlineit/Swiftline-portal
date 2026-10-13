@@ -115,13 +115,22 @@ export async function listBookingPauses(input: { active?: boolean; scope?: "live
   if (typeof input.active === "boolean") url.searchParams.set("active", String(input.active));
   if (input.scope === "live") url.searchParams.set("scope", "live");
   const res = await fetchWithAuth(url.toString());
-  return parseApiResponse<{ success: true; pauses: BookingPause[] }>(res);
+  return parseApiResponse<{ success: true; pauses: BookingPause[]; dpdBookingEnabled: boolean }>(res);
 }
 
 export async function listActiveBookingPauses() {
   const url = new URL(apiUrl("/api/v1/booking-pauses/active"));
   const res = await fetchWithAuth(url.toString());
-  return parseApiResponse<{ success: true; pauses: BookingPause[] }>(res);
+  return parseApiResponse<{ success: true; pauses: BookingPause[]; dpdBookingEnabled: boolean }>(res);
+}
+
+export async function updateDpdBookingSetting(enabled: boolean) {
+  const res = await fetchWithAuth(apiUrl("/api/v1/booking-pauses/dpd-booking"), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled })
+  });
+  return parseApiResponse<{ success: true; dpdBookingEnabled: boolean }>(res);
 }
 
 export async function createBookingPause(input: BookingPauseInput) {
@@ -155,5 +164,5 @@ export async function deleteBookingPause(id: string) {
 // ── Client (or any authenticated user needing live view) ──
 export async function listClientBookingPauses() {
   const res = await fetchWithAuth(apiUrl("/api/v1/client/booking-pauses"));
-  return parseApiResponse<{ success: true; pauses: BookingPause[] }>(res);
+  return parseApiResponse<{ success: true; pauses: BookingPause[]; dpdBookingEnabled: boolean }>(res);
 }

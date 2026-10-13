@@ -75,13 +75,11 @@ export type ShipmentListingFilter = {
 };
 
 /**
- * Columns this list can genuinely order by.
+ * Shipment columns this list can genuinely order by.
  *
- * The page is selected from `ShipmentDraft` before bookings, events, invoices
- * and branches are joined on, so only fields the draft itself holds can order
- * it. AWB, tracking status, weight and invoice are all assembled after the
- * page is chosen- sorting by them would order the twenty rows that happened to
- * be fetched and read as a broken sort on every other page.
+ * Booking date is ordered from the DPD booking record. Other supported fields
+ * live on the draft. AWB, tracking status, weight and invoice are assembled
+ * after the page is chosen and are not offered as sort keys.
  *
  * Consignee and destination are absent for a subtler reason: both are shown as
  * a fallback- company name or contact name, country name or country code-
@@ -105,9 +103,8 @@ export const shipmentSortFields: Record<string, string> = {
 function sortSpec(sort?: string): Record<string, 1 | -1> {
   const [field = "", direction = ""] = (sort ?? "").split(":");
   const path = shipmentSortFields[field];
-  // Newest booking first by default, matching the "Created" column the table
-  // shows. Sorting by updatedAt instead floated old shipments to the top
-  // whenever a tracking event or amendment touched them, which reads as broken.
+  // The fallback is used for other draft-backed sort fields. Booking date is
+  // sorted from DpdShipment in `loadPage` below.
   if (!path) return { createdAt: -1, _id: -1 };
   // `_id` breaks ties so paging never repeats or skips a row when many
   // shipments share a value- every consignee named the same, for instance.
@@ -346,9 +343,6 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   }
   const destinationCondition = shipmentDestinationRegionCondition(filter.destinationRegions ?? []);
   if (destinationCondition) Object.assign(draftFilter, destinationCondition);
-  const createdAt = dateRangeCondition(filter.dateFrom, filter.dateTo);
-  if (createdAt) draftFilter.createdAt = createdAt;
-
   if (filter.actorRole === "admin" && filter.operationsManifestId) {
     // Match the live accepted scans used by the staff Parcels column. A
     // consignment can remain stored after all of its scans were removed.
@@ -366,11 +360,18 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     draftFilter._id = { $in: manifestDraftIds };
   }
 
-  const bookingCreatedAt = indiaBookingDayCondition(filter.bookedDate);
-  let allowedDraftIds = await findBookedDraftIds(draftFilter, {
+  const bookingDateFilters = [
+    dateRangeCondition(filter.dateFrom, filter.dateTo),
+    indiaBookingDayCondition(filter.bookedDate)
+  ].filter((condition): condition is NonNullable<typeof condition> => Boolean(condition));
+  const bookingDateConstraint = bookingDateFilters.length
+    ? { $and: bookingDateFilters.map((condition) => ({ createdAt: condition })) }
+    : {};
+  const bookingFilter = {
     status: { $in: filter.bookingStatuses ?? bookedShipmentStatuses },
-    ...(bookingCreatedAt ? { createdAt: bookingCreatedAt } : {})
-  });
+    ...bookingDateConstraint
+  };
+  let allowedDraftIds = await findBookedDraftIds(draftFilter, bookingFilter);
 
   if (filter.search?.trim()) {
     // Escaped because these are identifiers people paste: a stray bracket from
@@ -495,6 +496,9 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
 
   const query = matchingIds ? { ...candidateFilter, _id: { $in: matchingIds } } : candidateFilter;
   const requestedPage = Math.max(1, filter.page);
+  const requestedSortField = (filter.sort ?? "").split(":")[0] ?? "";
+  const bookingDateSort = !shipmentSortFields[requestedSortField] || requestedSortField === "booked";
+  const bookingDateDirection = (filter.sort ?? "").split(":")[1] === "asc" ? 1 : -1;
   const draftProjection = [
     "businessAccountId",
     "branchId",
@@ -512,13 +516,37 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     "createdAt",
     "updatedAt"
   ].join(" ");
-  const loadPage = (pageNumber: number) => ShipmentDraft.find(query)
-    .select(draftProjection)
-    .sort(sortSpec(filter.sort))
-    .skip((pageNumber - 1) * filter.limit)
-    .limit(filter.limit)
-    .lean()
-    .exec();
+  const loadPage = async (pageNumber: number) => {
+    if (!bookingDateSort) {
+      return ShipmentDraft.find(query)
+        .select(draftProjection)
+        .sort(sortSpec(filter.sort))
+        .skip((pageNumber - 1) * filter.limit)
+        .limit(filter.limit)
+        .lean()
+        .exec();
+    }
+
+    const bookingPage = await DpdShipment.find({
+      ...bookingFilter,
+      shipmentDraftId: { $in: matchingIds ?? allowedDraftIds }
+    })
+      .select("shipmentDraftId")
+      .sort({ createdAt: bookingDateDirection, _id: -1 })
+      .skip((pageNumber - 1) * filter.limit)
+      .limit(filter.limit)
+      .lean()
+      .exec();
+    const pageIds = bookingPage.map((booking) => booking.shipmentDraftId);
+    if (!pageIds.length) return [];
+
+    const pageDrafts = await ShipmentDraft.find({ ...query, _id: { $in: pageIds } })
+      .select(draftProjection)
+      .lean()
+      .exec();
+    const draftById = new Map(pageDrafts.map((draft) => [String(draft._id), draft]));
+    return pageIds.map((id) => draftById.get(String(id))).filter((draft): draft is NonNullable<typeof draft> => Boolean(draft));
+  };
   const [total, requestedDrafts] = await Promise.all([
     ShipmentDraft.countDocuments(query).exec(),
     loadPage(requestedPage)
@@ -530,7 +558,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   const draftIds = drafts.map((draft) => draft._id);
   const [bookings, events, branches, accounts, manifests, invoices] = await Promise.all([
     DpdShipment.find({ shipmentDraftId: { $in: draftIds } })
-      .select("shipmentDraftId swiftlineTrackingNumber status currentShipmentSnapshot bookingSnapshot")
+      .select("shipmentDraftId swiftlineTrackingNumber status currentShipmentSnapshot bookingSnapshot createdAt")
       .lean()
       .exec(),
     ShipmentEvent.find({ shipmentDraftId: { $in: draftIds }, ...eventVisibilityFilter })
@@ -584,7 +612,8 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   const estimateByDraft = await buildDeliveryEstimates(drafts.map((draft) => ({
     key: String(draft._id),
     draft,
-    events: eventsByDraft.get(String(draft._id)) ?? []
+    events: eventsByDraft.get(String(draft._id)) ?? [],
+    bookingAt: bookingByDraft.get(String(draft._id))?.createdAt ?? null
   })));
   // A cancelled shipment keeps its label, so cancellation is what makes it
   // unmanifestable rather than the carrier status.
@@ -793,7 +822,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
           })
         }
         : {}),
-      createdAt: draft.createdAt ?? null,
+      createdAt: booking?.createdAt ?? draft.createdAt ?? null,
       updatedAt: draft.updatedAt ?? null
     };
   });

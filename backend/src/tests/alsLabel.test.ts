@@ -321,13 +321,15 @@ describe("ALS response handling", () => {
     assert.deepEqual(result.responseSnapshot, {
       provider: "ALS",
       outcome: "ACCEPTED",
+      stage: "DPD_BOOKING",
       docketId: "D-1",
       awbNumber: "1017351262",
       forwardingNumber: "F-9",
       entryNumber: "E-3",
       parcelNumbers: ["P1", "P2", "P3"],
       labelCount: 1,
-      labelFormats: ["HTML"]
+      labelFormats: ["HTML"],
+      carrierLabelStatus: "RECEIVED"
     });
     assert.ok(
       !JSON.stringify(result.responseSnapshot).includes("must-not-be-persisted"),
@@ -335,14 +337,16 @@ describe("ALS response handling", () => {
     );
   });
 
-  test("treats an accepted booking with no label as uncertain, not retryable", () => {
-    assert.throws(
-      () => parseAlsCreateDocketResponse(
-        { success: true, data: { awb_no: "1017351262" }, labels: [] },
-        {}
-      ),
-      (error: unknown) => error instanceof AlsUncertainError && /returned no label/.test(error.message)
+  test("preserves an accepted AWB with no label for manual reconciliation", () => {
+    const result = parseAlsCreateDocketResponse(
+      { success: true, data: { awb_no: "1017351262" }, labels: [] },
+      {}
     );
+    assert.equal(result.awbNumber, "1017351262");
+    assert.equal(result.labels.length, 0);
+    assert.equal(result.responseSnapshot.outcome, "ACCEPTED_WITHOUT_LABEL");
+    assert.equal(result.responseSnapshot.stage, "DPD_LABEL_ONLY");
+    assert.equal(result.responseSnapshot.carrierLabelStatus, "NOT_PROVIDED");
     assert.throws(
       () => parseAlsCreateDocketResponse(
         { success: true, data: {}, labels: [] },

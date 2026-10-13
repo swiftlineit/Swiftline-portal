@@ -289,7 +289,8 @@ export function parseAlsCreateDocketResponse(
   body: Record<string, unknown>,
   requestSnapshot: Record<string, unknown>
 ): AlsCreateDocketResult {
-  // The payload sits at the top level, not nested under `data` as the spec shows.
+  // Live replies have used both top-level arrays and the documented nested
+  // shape. Accept both without changing the request contract.
   const data = asRecord(body.data);
   const awbNumber = asString(data.awb_no);
   const docketId = asString(data.docket_id);
@@ -298,13 +299,18 @@ export function parseAlsCreateDocketResponse(
     throw new AlsUncertainError("DPD accepted the booking but returned no AWB number. Do not submit it again.");
   }
 
-  const parcels = Array.isArray(body.parcels) ? body.parcels : [];
+  const parcels = Array.isArray(body.parcels)
+    ? body.parcels
+    : Array.isArray(data.parcels) ? data.parcels : [];
   const parcelNumbers = parcels
     .map((parcel) => asString(asRecord(parcel).parcel_no))
     .filter(Boolean);
 
   const labels: AlsLabel[] = [];
-  for (const entry of Array.isArray(body.labels) ? body.labels : []) {
+  const responseLabels = Array.isArray(body.labels)
+    ? body.labels
+    : Array.isArray(data.labels) ? data.labels : [];
+  for (const entry of responseLabels) {
     const label = asRecord(entry);
     const value = asString(label.label);
     const format = labelFormat(asString(label.file_type) || "html");
@@ -317,24 +323,22 @@ export function parseAlsCreateDocketResponse(
     });
   }
 
-  if (!labels.length) {
-    throw new AlsUncertainError("DPD accepted the booking but returned no label. Do not submit it again.");
-  }
-
   // The carrier response can contain a complete HTML/base64 label for every
   // parcel. Persisting that response would duplicate the same document stored
   // in object storage and make each booking row unnecessarily large. Keep only
   // the identifiers and document metadata required for audit/reconciliation.
   const responseSnapshot = {
     provider: "ALS",
-    outcome: "ACCEPTED",
+    outcome: labels.length ? "ACCEPTED" : "ACCEPTED_WITHOUT_LABEL",
+    stage: labels.length ? "DPD_BOOKING" : "DPD_LABEL_ONLY",
     docketId,
     awbNumber,
     forwardingNumber: asString(data.forwording_no),
     entryNumber: asString(data.entry_number),
     parcelNumbers,
     labelCount: labels.length,
-    labelFormats: [...new Set(labels.map((label) => label.format))]
+    labelFormats: [...new Set(labels.map((label) => label.format))],
+    carrierLabelStatus: labels.length ? "RECEIVED" : "NOT_PROVIDED"
   };
 
   return {

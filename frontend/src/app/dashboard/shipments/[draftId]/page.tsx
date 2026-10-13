@@ -39,6 +39,7 @@ import {
   openShipmentParcelKycDocument,
   previewShipmentAmendment,
   reconcileDpdShipmentDocuments,
+  reconcileAlsCarrierBooking,
   refreshCarrierTracking,
   releaseDpdShipment,
   shipmentHoldReasonOptions,
@@ -245,6 +246,11 @@ export default function AdminShipmentDetailsPage() {
   const [cancellationError, setCancellationError] = useState("");
   const [rebooking, setRebooking] = useState(false);
   const [refreshingCarrier, setRefreshingCarrier] = useState(false);
+  const [reconciliationOpen, setReconciliationOpen] = useState(false);
+  const [carrierAwbNumber, setCarrierAwbNumber] = useState("");
+  const [carrierForwardingNumber, setCarrierForwardingNumber] = useState("");
+  const [reconciliationNote, setReconciliationNote] = useState("");
+  const [reconciliationLabel, setReconciliationLabel] = useState<File | null>(null);
 
   const totalWeight = useMemo(() => (
     draft?.parcelList.reduce((total, parcel) => total + (Number(parcel.weightKg) || 0), 0) ?? 0
@@ -258,6 +264,12 @@ export default function AdminShipmentDetailsPage() {
   const isUkRoute = draft?.consigneeEnteredAddress.countryCode?.toUpperCase() === "GB";
   const canManageDpdLabel = user?.role === "admin" || user?.role === "operations";
   const canRequestDpdLabel = canManageDpdLabel && isUkRoute && canGenerateDpdCarrierLabel(history);
+  const canReconcileCarrier = canManageDpdLabel
+    && isUkRoute
+    && Boolean(history)
+    && !hasDpdCarrierLabel(history)
+    && (history?.dpdShipment.status === "DPD_STATUS_UNKNOWN"
+      || (history?.dpdShipment.status === "DPD_CREATED" && Boolean(history.dpdShipment.dpdShipmentId?.trim())));
   const needsCarrierDocumentReview = canManageDpdLabel
     && (history?.dpdShipment.status === "DPD_CREATED" || canRequestDpdLabel);
   const arrivalEvent = useMemo(
@@ -430,6 +442,35 @@ export default function AdminShipmentDetailsPage() {
       const message = caughtError instanceof Error
         ? caughtError.message
         : "The DPD carrier label could not be generated. Check the shipment audit history before retrying.";
+      setActionFeedback({ message, tone: "error" });
+      toast.error(message);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function handleCarrierReconciliation() {
+    if (!draft || !history?.dpdShipment || !reconciliationLabel) return;
+    setActionBusy(true);
+    setActionFeedback(null);
+    try {
+      const result = await reconcileAlsCarrierBooking({
+        shipmentDraftId: draft._id,
+        carrierAwbNumber,
+        carrierForwardingNumber,
+        swiftlineTrackingNumber: history.dpdShipment.swiftlineTrackingNumber,
+        confirmationNote: reconciliationNote,
+        dpdLabel: reconciliationLabel
+      });
+      toast.success(result.message);
+      setReconciliationOpen(false);
+      setCarrierAwbNumber("");
+      setCarrierForwardingNumber("");
+      setReconciliationNote("");
+      setReconciliationLabel(null);
+      await loadShipment();
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "The ALS booking could not be reconciled.";
       setActionFeedback({ message, tone: "error" });
       toast.error(message);
     } finally {
@@ -875,10 +916,81 @@ export default function AdminShipmentDetailsPage() {
           </section>
         ) : null}
 
-        {history?.dpdShipment.status === "DPD_STATUS_UNKNOWN" ? (
-          <section className="border border-red-300 bg-red-50 rounded-2xl px-5 py-4">
-            <h2 className="font-semibold text-red-950">Carrier outcome requires confirmation</h2>
-            <p className="mt-1 text-sm text-red-800">Do not submit this shipment again. Confirm the booking with Swiftline Operations before releasing or completing it.</p>
+        {canReconcileCarrier ? (
+          <section className="rounded-2xl border border-red-300 bg-red-50 px-5 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="font-semibold text-red-950">
+                  {history?.dpdShipment.status === "DPD_STATUS_UNKNOWN"
+                    ? "Carrier outcome requires confirmation"
+                    : "Carrier label requires reconciliation"}
+                </h2>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-red-800">
+                  Do not submit the failed ALS booking again. If Operations created a replacement booking in ALS, record its new AWB and forwarding number and upload its HTML label here.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReconciliationOpen((current) => !current)}
+                className="h-10 rounded-xl bg-red-800 px-4 text-sm font-semibold text-white hover:bg-red-900 focus:outline-none focus:ring-2 focus:ring-red-800/30"
+              >
+                {reconciliationOpen ? "Close reconciliation" : "Reconcile ALS booking"}
+              </button>
+            </div>
+
+            {reconciliationOpen ? (
+              <div className="mt-4 grid gap-4 border-t border-red-200 pt-4 sm:grid-cols-2">
+                <label className="text-xs font-semibold text-red-950">
+                  Replacement ALS AWB
+                  <input
+                    value={carrierAwbNumber}
+                    onChange={(event) => setCarrierAwbNumber(event.target.value.replace(/\D/g, ""))}
+                    inputMode="numeric"
+                    maxLength={20}
+                    className="mt-2 h-10 w-full rounded-xl border border-red-200 bg-white px-3 text-sm font-normal text-slate-950 outline-none focus:border-red-700 focus:ring-2 focus:ring-red-100"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-red-950">
+                  Forwarding number
+                  <input
+                    value={carrierForwardingNumber}
+                    onChange={(event) => setCarrierForwardingNumber(event.target.value.toUpperCase())}
+                    maxLength={120}
+                    className="mt-2 h-10 w-full rounded-xl border border-red-200 bg-white px-3 text-sm font-normal text-slate-950 outline-none focus:border-red-700 focus:ring-2 focus:ring-red-100"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-red-950 sm:col-span-2">
+                  ALS DPD label HTML
+                  <input
+                    type="file"
+                    accept=".html,.htm,text/html,application/xhtml+xml"
+                    onChange={(event) => setReconciliationLabel(event.target.files?.[0] ?? null)}
+                    className="mt-2 block w-full rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-normal text-red-950 file:mr-3 file:rounded-lg file:border-0 file:bg-red-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-red-900"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-red-950 sm:col-span-2">
+                  Confirmation note
+                  <textarea
+                    value={reconciliationNote}
+                    onChange={(event) => setReconciliationNote(event.target.value)}
+                    maxLength={500}
+                    rows={3}
+                    placeholder="Record who confirmed the replacement ALS booking and that the original booking was voided."
+                    className="mt-2 w-full rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-normal text-slate-950 outline-none focus:border-red-700 focus:ring-2 focus:ring-red-100"
+                  />
+                </label>
+                <div className="sm:col-span-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleCarrierReconciliation()}
+                    disabled={actionBusy || carrierAwbNumber.length < 6 || !carrierForwardingNumber.trim() || reconciliationNote.trim().length < 10 || !reconciliationLabel}
+                    className="h-10 rounded-xl bg-red-800 px-4 text-sm font-semibold text-white hover:bg-red-900 disabled:cursor-not-allowed disabled:bg-red-300"
+                  >
+                    {actionBusy ? "Reconciling..." : "Save replacement booking and label"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
         ) : null}
 

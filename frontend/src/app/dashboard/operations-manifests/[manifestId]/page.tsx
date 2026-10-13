@@ -3,7 +3,6 @@
 import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import ParcelScanner from "@/components/driver/ParcelScanner";
 import {
   FiAlertTriangle,
   FiArchive,
@@ -21,6 +20,7 @@ import {
 } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
+import AlsCarrierReconciliationForm from "@/components/shipments/AlsCarrierReconciliationForm";
 import {
   createOperationsBag,
   createDirectOperationsScanSession,
@@ -711,6 +711,8 @@ export default function OperationsManifestWorkspace() {
                 canDecide={canEdit}
                 onRemove={requestParcelRemoval}
                 onDisposition={requestParcelDisposition}
+                manifestId={manifestId}
+                onReconciled={load}
               />
             </div>
           </div>
@@ -721,6 +723,8 @@ export default function OperationsManifestWorkspace() {
             canDecide={manifest.status === "SEALED"}
             onRemove={requestParcelRemoval}
             onDisposition={requestParcelDisposition}
+            manifestId={manifestId}
+            onReconciled={load}
           />
         )}
 
@@ -1155,6 +1159,8 @@ function ConsignmentTable({
   canDecide,
   onRemove,
   onDisposition,
+  manifestId,
+  onReconciled,
 }: {
   rows: OperationsConsignment[];
   canRemove: boolean;
@@ -1165,6 +1171,8 @@ function ConsignmentTable({
     parcel: string,
     disposition: OperationsParcelDisposition,
   ) => void;
+  manifestId: string;
+  onReconciled: () => Promise<void>;
 }) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-[#EEEDED] bg-white shadow-sm">
@@ -1194,9 +1202,18 @@ function ConsignmentTable({
                   {item.serviceInfo}
                 </p>
                 {item.dpdWarning ? (
-                  <p className="mt-1 text-[11px] text-amber-700">
-                    No label
-                  </p>
+                  <p className="mt-1 text-[11px] text-amber-700">Swiftline label incomplete</p>
+                ) : null}
+                {item.carrierReconciliationRequired ? (
+                  <>
+                    <p className="mt-1 text-[11px] font-semibold text-amber-800">DPD label missing</p>
+                    <AlsCarrierReconciliationForm
+                      shipmentDraftId={item.shipmentDraftId}
+                      swiftlineTrackingNumber={item.consignmentNumber}
+                      manifestId={manifestId}
+                      onComplete={onReconciled}
+                    />
+                  </>
                 ) : null}
               </td>
               <td className="max-w-50 whitespace-pre-line px-3 py-3 text-[11px] leading-4 text-slate-700">

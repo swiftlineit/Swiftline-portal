@@ -192,6 +192,12 @@ export async function markShipmentBookingChargeReviewRequired(input: {
 }) {
   const charge = await getReservedCharge(input.shipmentDraftId);
   if (!charge?.balanceReservationId) return null;
+  // Invoice/document recovery can run after the credit reservation has already
+  // been converted. Preserve that completed charge; only a still-held charge
+  // can transition to review-required.
+  if (charge.customerChargeStatus === "COMPLETED" || charge.customerChargeStatus === "REVERSED") {
+    return charge;
+  }
 
   await markBookingReservationReviewRequired({
     reservationId: charge.balanceReservationId,

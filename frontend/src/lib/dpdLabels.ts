@@ -974,6 +974,37 @@ export async function reconcileDpdShipmentDocuments(dpdShipmentId: string) {
   }>(response);
 }
 
+export async function reconcileAlsCarrierBooking(input: {
+  shipmentDraftId: string;
+  manifestId?: string;
+  carrierAwbNumber: string;
+  carrierForwardingNumber: string;
+  swiftlineTrackingNumber: string;
+  confirmationNote: string;
+  dpdLabel: File;
+}) {
+  const body = new FormData();
+  if (input.manifestId) body.set("manifestId", input.manifestId);
+  body.set("carrierAwbNumber", input.carrierAwbNumber);
+  body.set("carrierForwardingNumber", input.carrierForwardingNumber);
+  body.set("swiftlineTrackingNumber", input.swiftlineTrackingNumber);
+  body.set("confirmationNote", input.confirmationNote);
+  body.set("dpdLabel", input.dpdLabel);
+
+  const response = await fetchWithAuth(
+    apiUrl(`/api/v1/dpd-shipments/drafts/${input.shipmentDraftId}/reconcile-als-booking`),
+    { method: "POST", body }
+  );
+  return parseApiResponse<{
+    success: true;
+    reused: boolean;
+    message: string;
+    dpdShipment: DpdShipmentHistoryItem["dpdShipment"];
+    carrierForwardingNumber: string;
+    carrierLabelStatus: "UPLOADED";
+  }>(response);
+}
+
 export async function refreshCarrierTracking(dpdShipmentId: string) {
   const response = await fetchWithAuth(
     apiUrl(`/api/v1/dpd-shipments/${dpdShipmentId}/refresh-carrier-tracking`),

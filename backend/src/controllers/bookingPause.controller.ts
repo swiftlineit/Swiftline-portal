@@ -3,9 +3,12 @@ import mongoose from "mongoose";
 import { z } from "zod";
 import { AuditLog } from "../models/auditLog.model.js";
 import { BookingPause, bookingPauseCountryValues, deriveBookingPauseStatus } from "../models/bookingPause.model.js";
+import { DpdBookingSetting } from "../models/dpdBookingSetting.model.js";
+import { isDpdBookingEnabled } from "../services/bookingPause.service.js";
 import { BOOKING_PAUSE_COUNTRY_LABELS, EUROPE_COUNTRY_CODES } from "../services/reference/europeCountryCodes.js";
 
 const objectIdSchema = z.string().refine((v) => mongoose.Types.ObjectId.isValid(v), { message: "Invalid identifier" });
+const dpdBookingSettingSchema = z.object({ enabled: z.boolean() }).strict();
 
 const bookingPausePayloadSchema = z
   .object({
@@ -119,10 +122,14 @@ export async function listBookingPauses(request: Request, response: Response): P
     filters.countries = { $in: tokens };
   }
 
-  const pauses = await BookingPause.find(filters).sort({ startAt: -1 }).lean().exec();
+  const [pauses, dpdBookingEnabled] = await Promise.all([
+    BookingPause.find(filters).sort({ startAt: -1 }).lean().exec(),
+    isDpdBookingEnabled()
+  ]);
 
   return response.status(200).json({
     success: true,
+    dpdBookingEnabled,
     pauses: pauses.map((p) =>
       serializeBookingPause({
         _id: p._id,
@@ -225,17 +232,18 @@ export async function deleteBookingPause(request: Request, response: Response): 
 
 export async function listActiveBookingPauses(_request: Request, response: Response): Promise<Response> {
   const now = new Date();
-  const pauses = await BookingPause.find({
-    active: true,
-    startAt: { $lte: now },
-    endAt: { $gte: now }
-  })
-    .sort({ startAt: 1 })
-    .lean()
-    .exec();
+  const [pauses, dpdBookingEnabled] = await Promise.all([
+    BookingPause.find({
+      active: true,
+      startAt: { $lte: now },
+      endAt: { $gte: now }
+    }).sort({ startAt: 1 }).lean().exec(),
+    isDpdBookingEnabled()
+  ]);
 
   return response.status(200).json({
     success: true,
+    dpdBookingEnabled,
     pauses: pauses.map((p) =>
       serializeBookingPause({
         _id: p._id,
@@ -254,4 +262,31 @@ export async function listActiveBookingPauses(_request: Request, response: Respo
 
 export async function listClientBookingPauses(_request: Request, response: Response): Promise<Response> {
   return listActiveBookingPauses(_request, response);
+}
+
+export async function updateDpdBookingSetting(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+
+  const parsed = dpdBookingSettingSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return response.status(400).json({ success: false, message: "Choose whether DPD booking is enabled." });
+  }
+
+  const setting = await DpdBookingSetting.findOneAndUpdate(
+    { key: "GLOBAL" },
+    { $set: { enabled: parsed.data.enabled, updatedBy: userId } },
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+  ).exec();
+
+  await AuditLog.create({
+    action: "DPD_BOOKING_SETTING_UPDATED",
+    entityType: "DPD_BOOKING_SETTING",
+    entityId: setting._id,
+    performedBy: userId,
+    performedAt: new Date(),
+    metadata: { enabled: setting.enabled }
+  });
+
+  return response.status(200).json({ success: true, dpdBookingEnabled: setting.enabled });
 }
