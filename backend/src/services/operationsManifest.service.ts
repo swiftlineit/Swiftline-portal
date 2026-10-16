@@ -286,6 +286,40 @@ export function deferredParcelEligibility(parcelNumberValue: string, priorManife
   return { allowed: true as const, reason: "" };
 }
 
+/** A later shipment-wide milestone may belong to parcels that travelled earlier. */
+export function deferredParcelDispatchEligibility(input: {
+  scannedParcelNumbers: readonly string[];
+  priorManifests: PriorParcelManifest[];
+  carriedParcelNumbers: readonly string[];
+}) {
+  const scanned = input.scannedParcelNumbers.map((value) => value.trim().toUpperCase());
+  if (!scanned.length || scanned.some((value) => !value) || new Set(scanned).size !== scanned.length) return false;
+  const carried = new Set(input.carriedParcelNumbers.map((value) => value.trim().toUpperCase()));
+  return scanned.every((parcelNumber) =>
+    !carried.has(parcelNumber)
+      && input.priorManifests.some((prior) =>
+        prior.expectedParcelNumbers.some((expected) => expected.toUpperCase() === parcelNumber))
+      && deferredParcelEligibility(parcelNumber, input.priorManifests).allowed
+  );
+}
+
+export function isDeferredDispatchTimelineCandidate(input: {
+  events: Array<{ status: string; eventAt: Date; createdAt: Date }>;
+  sealedAt?: Date | null;
+}) {
+  const sealedAt = input.sealedAt;
+  if (!sealedAt) return false;
+  const later = input.events.filter((event) =>
+    findRecordedLaterMilestones("ORIGIN_HUB_DISPATCHED", [event.status]).length > 0);
+  return later.length > 0
+    && input.events.some((event) =>
+      event.status === "ORIGIN_HUB_DISPATCHED" && event.eventAt <= sealedAt && event.createdAt <= sealedAt)
+    && later.every((event) =>
+      (event.status === "IN_TRANSIT" || event.status === "DESTINATION_ARRIVED")
+        && event.eventAt <= sealedAt
+        && event.createdAt <= sealedAt);
+}
+
 type ParcelValueSnapshot = { parcelNumber: string; valueMinor?: number | null };
 
 function snapshotParcelValueMinor(parcel: ShipmentBookingSnapshot["parcels"][number]) {
@@ -1868,6 +1902,7 @@ export function buildManifestDispatchIssues(input: {
   consignments: Array<{ shipmentDraftId: unknown; consignmentNumber: string }>;
   events: Array<{ shipmentDraftId: unknown; status: string; eventAt: Date }>;
   cancellations?: Array<{ shipmentDraftId: unknown; status: string }>;
+  eligibleDeferredDraftIds?: ReadonlySet<string>;
 }): ManifestDispatchIssue[] {
   const statusesByDraft = new Map<string, Set<string>>();
   const latestByDraft = new Map<string, { status: string; eventAt: Date }>();
@@ -1909,7 +1944,9 @@ export function buildManifestDispatchIssues(input: {
       missingStatuses: missing
     }];
     const later = findRecordedLaterMilestones("ORIGIN_HUB_DISPATCHED", statusesByDraft.get(draftId) ?? []);
-    return later.length ? [{
+    const eligibleDeferredDispatch = input.eligibleDeferredDraftIds?.has(draftId)
+      && later.every((status) => status === "IN_TRANSIT" || status === "DESTINATION_ARRIVED");
+    return later.length && !eligibleDeferredDispatch ? [{
       shipmentDraftId: draftId,
       reference,
       reason: `A later milestone is already recorded: ${later.map(formatShipmentEventLabel).join(", ")}.`,
@@ -1919,23 +1956,83 @@ export function buildManifestDispatchIssues(input: {
 }
 
 async function loadManifestDispatchIssues(
-  consignments: Array<{ shipmentDraftId: mongoose.Types.ObjectId; consignmentNumber: string }>,
+  manifest: { _id: mongoose.Types.ObjectId; sealedAt?: Date | null },
+  consignments: Array<{ shipmentDraftId: mongoose.Types.ObjectId; consignmentNumber: string; scannedParcelNumbers?: string[] }>,
   session?: mongoose.ClientSession
 ) {
-  if (!consignments.length) return [];
+  if (!consignments.length) return { issues: [], deferredDispatches: [] };
   const shipmentDraftIds = consignments.map((item) => item.shipmentDraftId);
-  const [events, cancellations] = await Promise.all([
-    ShipmentEvent.find({ shipmentDraftId: { $in: shipmentDraftIds } })
-      .select("shipmentDraftId status eventAt")
-      .lean()
-      .session(session ?? null)
-      .exec(),
-    ShipmentCancellation.find({
-      shipmentDraftId: { $in: shipmentDraftIds },
-      status: { $in: ["REQUESTED", "COMPLETED"] }
-    }).select("shipmentDraftId status").lean().session(session ?? null).exec()
-  ]);
-  return buildManifestDispatchIssues({ consignments, events, cancellations });
+  // These reads also run inside the dispatch transaction, so keep them sequential.
+  const events = await ShipmentEvent.find({ shipmentDraftId: { $in: shipmentDraftIds } })
+    .select("shipmentDraftId status eventAt createdAt")
+    .lean()
+    .session(session ?? null)
+    .exec();
+  const cancellations = await ShipmentCancellation.find({
+    shipmentDraftId: { $in: shipmentDraftIds },
+    status: { $in: ["REQUESTED", "COMPLETED"] }
+  }).select("shipmentDraftId status").lean().session(session ?? null).exec();
+  const candidateConsignments = consignments.filter((consignment) => {
+    const recorded = events.filter((event) => String(event.shipmentDraftId) === String(consignment.shipmentDraftId));
+    return isDeferredDispatchTimelineCandidate({ events: recorded, sealedAt: manifest.sealedAt });
+  });
+  const previousConsignments = candidateConsignments.length
+    ? await OperationsManifestConsignment.find({
+        shipmentDraftId: { $in: candidateConsignments.map((item) => item.shipmentDraftId) },
+        manifestId: { $ne: manifest._id },
+        status: { $ne: "REMOVED" }
+      }).select("shipmentDraftId manifestId expectedParcelNumbers scannedParcelNumbers parcelDispositions").lean().session(session ?? null).exec()
+    : [];
+  const previousManifestIds = [...new Set(previousConsignments.map((item) => String(item.manifestId)))];
+  const previousManifests = previousManifestIds.length
+    ? await OperationsManifest.find({ _id: { $in: previousManifestIds } })
+      .select("manifestNumber status").lean().session(session ?? null).exec()
+    : [];
+  const previousManifestById = new Map(previousManifests.map((item) => [String(item._id), item]));
+  const carriedAllocations = candidateConsignments.length
+    ? await FlightShipmentAllocation.find({
+        shipmentDraftId: { $in: candidateConsignments.map((item) => item.shipmentDraftId) },
+        status: "CARRIED"
+      }).select("shipmentDraftId activeParcelNumbers").lean().session(session ?? null).exec()
+    : [];
+  const eligibleDeferredDraftIds = new Set<string>();
+  const deferredDispatches: Array<{ shipmentDraftId: string; parcelNumbers: string[]; priorManifestNumbers: string[] }> = [];
+  for (const consignment of candidateConsignments) {
+    const draftId = String(consignment.shipmentDraftId);
+    const scannedParcelNumbers = consignment.scannedParcelNumbers ?? [];
+    const history = previousConsignments
+      .filter((item) => String(item.shipmentDraftId) === draftId)
+      .map((item) => ({
+        manifestStatus: previousManifestById.get(String(item.manifestId))?.status ?? "UNKNOWN",
+        manifestNumber: previousManifestById.get(String(item.manifestId))?.manifestNumber,
+        expectedParcelNumbers: item.expectedParcelNumbers,
+        scannedParcelNumbers: item.scannedParcelNumbers,
+        parcelDispositions: item.parcelDispositions
+      }));
+    const previousCarriedAllocations = carriedAllocations.filter((item) => String(item.shipmentDraftId) === draftId);
+    // A legacy carried allocation without parcel numbers cannot prove this parcel never travelled.
+    if (previousCarriedAllocations.some((item) => !Array.isArray(item.activeParcelNumbers))) continue;
+    const carriedParcelNumbers = previousCarriedAllocations.flatMap((item) => item.activeParcelNumbers ?? []);
+    if (!deferredParcelDispatchEligibility({
+      scannedParcelNumbers,
+      priorManifests: history,
+      carriedParcelNumbers
+    })) continue;
+    eligibleDeferredDraftIds.add(draftId);
+    deferredDispatches.push({
+      shipmentDraftId: draftId,
+      parcelNumbers: scannedParcelNumbers,
+      priorManifestNumbers: [...new Set(history
+        .filter((item) => scannedParcelNumbers.some((parcelNumber) =>
+          item.expectedParcelNumbers.some((expected) => expected.toUpperCase() === parcelNumber.toUpperCase())))
+        .map((item) => item.manifestNumber)
+        .filter((value): value is string => Boolean(value)))]
+    });
+  }
+  return {
+    issues: buildManifestDispatchIssues({ consignments, events, cancellations, eligibleDeferredDraftIds }),
+    deferredDispatches
+  };
 }
 
 export function buildManifestDispatchTrackingEvent(input: {
@@ -2171,7 +2268,11 @@ export async function dispatchOperationsManifest(
         throw new OperationsManifestServiceError("Dispatch at least one scanned parcel. All manifest shipments are currently held or deferred.", 409);
       }
 
-      const dispatchIssues = await loadManifestDispatchIssues(movingConsignments, session);
+      const dispatchReadiness = await loadManifestDispatchIssues({
+        _id: manifest._id as mongoose.Types.ObjectId,
+        sealedAt: manifest.sealedAt
+      }, movingConsignments, session);
+      const dispatchIssues = dispatchReadiness.issues;
       if (dispatchIssues.length) {
         const visible = dispatchIssues.slice(0, 8).map((issue) => `${issue.reference}: ${issue.reason}`);
         const remainder = dispatchIssues.length - visible.length;
@@ -2204,6 +2305,9 @@ export async function dispatchOperationsManifest(
         // reporting zero matches and zero upserts while allowing the manifest
         // transaction to commit. A direct updateOne reliably performs the
         // idempotent upsert and keeps manifest dispatch and tracking atomic.
+        // A deferred parcel may have an earlier shipment-wide dispatch event.
+        // Keep that event; this manifest, its flight allocation and audit record
+        // capture the later parcel movement without rewriting prior tracking.
         for (const consignment of movingConsignments) {
           const result = await ShipmentEvent.updateOne(
             {
@@ -2246,6 +2350,7 @@ export async function dispatchOperationsManifest(
         {
           dispatchedAt,
           consignmentsChecked: movingConsignments.length,
+          deferredDispatches: dispatchReadiness.deferredDispatches,
           dispatchMethod,
           ...(dispatchMethod === "BARCODE_SCAN" ? { scannedBarcode: options.scannedBarcode?.trim().toUpperCase() } : {})
         },
@@ -2655,7 +2760,10 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
     }] as const;
   }));
   const dispatchIssues = manifest.status === "SEALED"
-    ? await loadManifestDispatchIssues(consignments)
+    ? (await loadManifestDispatchIssues({
+        _id: manifest._id as mongoose.Types.ObjectId,
+        sealedAt: manifest.sealedAt
+      }, consignments)).issues
     : [];
   const destinationSummary = summarizeManifestDestinations(consignments);
   const branch = await Branch.findById(manifest.branchId).select("name code address contact").lean().exec();

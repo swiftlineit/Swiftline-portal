@@ -2,6 +2,28 @@
    public pages retain their existing colors. These rules bridge the portal's
    established utility classes until individual screens adopt semantic colors. */
 @media screen {
+  [data-pickup-document-dropzone] {
+    background-color: #f8fafc;
+    border-color: #cbd5e1;
+  }
+
+  [data-pickup-document-dropzone]:not(:disabled):hover,
+  [data-pickup-document-dropzone][data-dragging="true"] {
+    background-color: #eff6ff;
+    border-color: #7890c4;
+  }
+
+  html[data-portal-theme="dark"] [data-pickup-document-dropzone] {
+    background-color: #152137;
+    border-color: #526889;
+  }
+
+  html[data-portal-theme="dark"] [data-pickup-document-dropzone]:not(:disabled):hover,
+  html[data-portal-theme="dark"] [data-pickup-document-dropzone][data-dragging="true"] {
+    background-color: #223653;
+    border-color: #9ab3d2;
+  }
+
   html[data-portal-theme="dark"] {
     color-scheme: dark;
   }
@@ -220,7 +242,7 @@
   }
 
   html[data-portal-theme="dark"] [data-portal-theme-scope] :is(
-    [class~="bg-blue-50"], [class~="bg-blue-50/70"], [class~="bg-blue-100"], [class~="bg-indigo-50"],
+    [class~="bg-blue-50"], [class~="bg-blue-50/50"], [class~="bg-blue-50/70"], [class~="bg-blue-100"], [class~="bg-indigo-50"], [class~="bg-indigo-50/50"],
     [class~="bg-[#0D1282]/3"], [class~="bg-[#0D1282]/4"], [class~="bg-[#0D1282]/5"],
     [class~="bg-[#0D1282]/6"], [class~="bg-[#0D1282]/8"], [class~="bg-[#0D1282]/10"],
     [class~="bg-[#0D1282]/15"], [class~="bg-[#0D1282]/30"],
@@ -232,7 +254,7 @@
   }
 
   html[data-portal-theme="dark"] [data-portal-theme-scope] :is(
-    [class~="border-blue-100"], [class~="border-blue-200"], [class~="border-blue-300"],
+    [class~="border-blue-100"], [class~="border-blue-200"], [class~="border-blue-300"], [class~="border-indigo-100"],
     [class~="border-blue-900"], [class~="border-[#0D1282]"], [class~="border-[#0D1282]/20"],
     [class~="border-[#0D1282]/25"], [class~="border-[#0D1282]/30"], [class~="border-[#C4C6EC]"]
   ) {
@@ -243,12 +265,12 @@
   html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="text-red-600"], [class~="text-red-700"], [class~="text-red-800"], [class~="text-red-900"], [class~="text-[#D71313]"], [class~="text-[#d71920]"], [class~="text-[#D81F26]"], [class~="text-[#991B1B]"], [class~="text-[#B91C1C]"], [class~="text-[#7F1D1D]"], [class~="text-[#B3121A]"], [class~="text-[#B30F0F]"]) { color: #ffafb9; }
   html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="border-red-200"], [class~="border-red-300"], [class~="border-[#D71313]"], [class~="border-[#FCA5A5]"]) { border-color: #a55767; }
 
-  html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="bg-amber-50"], [class~="bg-amber-100"], [class~="bg-yellow-50"], [class~="bg-[#FFF7ED]"], [class~="bg-[#FFF8EB]"], [class~="bg-[#FEF3C7]"], [class~="bg-[#FDF8DC]"]) { background-color: #3a3024; }
+  html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="bg-amber-50"], [class~="bg-amber-50/50"], [class~="bg-amber-100"], [class~="bg-yellow-50"], [class~="bg-[#FFF7ED]"], [class~="bg-[#FFF8EB]"], [class~="bg-[#FEF3C7]"], [class~="bg-[#FDF8DC]"]) { background-color: #3a3024; }
   html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="text-amber-700"], [class~="text-amber-800"], [class~="text-amber-900"], [class~="text-amber-950"], [class~="text-[#7a4f00]"], [class~="text-[#8a7a00]"], [class~="text-[#A16207]"], [class~="text-[#C2410C]"], [class~="text-[#7A6A00]"]) { color: #ffd591; }
-  html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="border-amber-200"], [class~="border-amber-300"], [class~="border-yellow-200"], [class~="border-[#FCD34D]"], [class~="border-[#FDBA74]"]) { border-color: #947347; }
+  html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="border-amber-100"], [class~="border-amber-200"], [class~="border-amber-300"], [class~="border-yellow-200"], [class~="border-[#FCD34D]"], [class~="border-[#FDBA74]"]) { border-color: #947347; }
 
   html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="bg-emerald-50"], [class~="bg-emerald-100"], [class~="bg-green-50"], [class~="bg-teal-50"], [class~="bg-[#DFF1F1]"], [class~="bg-[#F1F8F8]"], [class~="bg-[#EAF4F4]"], [class~="bg-[#EEF6F6]"], [class~="bg-[#F1FAF6]"], [class~="bg-[#DCFCE7]"]) { background-color: #1b3838; }
-  html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="text-emerald-700"], [class~="text-emerald-800"], [class~="text-emerald-900"], [class~="text-green-700"], [class~="text-green-800"], [class~="text-green-900"], [class~="text-teal-700"], [class~="text-teal-800"], [class~="text-teal-900"], [class~="text-[#15803D]"]) { color: #9de6c7; }
+  html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="text-emerald-700"], [class~="text-emerald-800"], [class~="text-emerald-900"], [class~="text-emerald-950"], [class~="text-green-700"], [class~="text-green-800"], [class~="text-green-900"], [class~="text-teal-700"], [class~="text-teal-800"], [class~="text-teal-900"], [class~="text-[#15803D]"]) { color: #9de6c7; }
   html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="border-emerald-200"], [class~="border-green-200"], [class~="border-teal-200"], [class~="border-[#86EFAC]"]) { border-color: #487c74; }
 
   html[data-portal-theme="dark"] [data-portal-theme-scope] :is([class~="bg-violet-50"], [class~="bg-purple-50"], [class~="bg-rose-50"]) { background-color: #332741; }

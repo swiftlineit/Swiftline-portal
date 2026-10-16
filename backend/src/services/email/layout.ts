@@ -20,6 +20,7 @@ export type EmailContent = {
   // back to the first words of the layout markup.
   preheader?: string;
   heading: string;
+  heroImage?: { url: string; alt: string };
   blocks: EmailBlock[];
 };
 
@@ -134,6 +135,7 @@ export function renderEmail(content: EmailContent, footerNote: string) {
         <span style="font-size:12px;color:#94a3b8;margin-left:8px;">Portal</span>
       </td></tr>
       <tr><td style="padding:28px;">
+        ${content.heroImage ? `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;border-collapse:collapse;background:#f0f7f5;border-radius:10px;"><tr><td align="center" style="padding:16px 12px;"><img src="${escapeHtml(content.heroImage.url)}" alt="${escapeHtml(content.heroImage.alt)}" width="180" style="display:block;width:180px;max-width:100%;height:auto;border:0;"></td></tr></table>` : ""}
         <h1 style="margin:0 0 18px;font-size:19px;line-height:26px;color:${palette.ink};font-weight:700;">${escapeHtml(content.heading)}</h1>
         ${content.blocks.map(renderBlockHtml).join("\n")}
       </td></tr>

@@ -8,15 +8,21 @@ import { DpdShipment } from "../models/dpdShipment.model.js";
 import { DriverProfile } from "../models/driverProfile.model.js";
 import { PickupAttempt } from "../models/pickupAttempt.model.js";
 import { PickupCounter } from "../models/pickupCounter.model.js";
+import { PickupCourierAddress } from "../models/pickupCourierAddress.model.js";
 import { PickupProof, PickupScan } from "../models/pickupEvidence.model.js";
-import { PickupRequest, reschedulablePickupStatuses } from "../models/pickupRequest.model.js";
+import { PickupRequest, pickupArrivalWindowValues, reschedulablePickupStatuses, type IPickupRequest, type PickupArrivalWindow } from "../models/pickupRequest.model.js";
 import { PickupRequestShipment } from "../models/pickupRequestShipment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent, type ShipmentEventStatus } from "../models/shipmentEvent.model.js";
+import { ShipmentOperationsParcelScan } from "../models/shipmentOperationsParcelScan.model.js";
 import { User } from "../models/user.model.js";
 import { sendPickupOtpEmail } from "./mail.service.js";
 import { markShipmentChargeFinalized } from "./shipmentInvoice.service.js";
-import { notifyBusinessShipmentMembers, notifyOperationsStaff, notifyPortalUsers } from "./portalNotification.service.js";
+import { resolveOperationsScanParcelNumbers } from "./shipmentOperationsScan.service.js";
+import { findRecordedLaterMilestones } from "./shipmentStatusSequence.service.js";
+import { notifyAssignedPickupBranchStaff, notifyPortalUsers } from "./portalNotification.service.js";
+import { deleteObject, pickupRequestDocumentKey, putObject } from "./storage/storage.service.js";
+import { matchesDeclaredType } from "./storage/fileSignature.js";
 
 const pickupBlockedStatuses: ShipmentEventStatus[] = [
   "SHIPMENT_CANCELLED", "PARCEL_COLLECTED", "WAREHOUSE_SCAN_IN", "ORIGIN_HUB_PROCESSED",
@@ -78,10 +84,142 @@ async function loadClientPickupAccess(userId: mongoose.Types.ObjectId) {
   return (draft: { businessAccountId: unknown; branchId: unknown }) => branchesByAccount.get(String(draft.businessAccountId))?.has(String(draft.branchId)) ?? false;
 }
 
+export async function getClientPickupFormContext(userId: mongoose.Types.ObjectId) {
+  const [memberships, user] = await Promise.all([
+    BusinessAccountMember.find({ user: userId, status: "active", role: { $in: shipmentBookingRoles } })
+      .select("businessAccount assignedBranches")
+      .lean()
+      .exec(),
+    User.findById(userId).select("firstName lastName name email phone").lean().exec()
+  ]);
+  const accountIds = memberships.map((membership) => membership.businessAccount);
+  const accounts = await BusinessAccount.find({
+    _id: { $in: accountIds },
+    status: "active",
+    assignedBranch: { $ne: null }
+  })
+    .select("accountId company.companyName assignedBranch contact")
+    .populate("assignedBranch", "name code")
+    .lean()
+    .exec();
+  const membershipsByAccount = new Map<string, typeof memberships>();
+  for (const membership of memberships) {
+    const key = String(membership.businessAccount);
+    const current = membershipsByAccount.get(key) ?? [];
+    current.push(membership);
+    membershipsByAccount.set(key, current);
+  }
+  const businesses = accounts.flatMap((account) => {
+    const branch = account.assignedBranch as unknown as { _id: mongoose.Types.ObjectId; name?: string; code?: string } | null;
+    const accountMemberships = membershipsByAccount.get(String(account._id)) ?? [];
+    if (!branch || !accountMemberships.length) return [];
+    const canRequestStandalone = accountMemberships.some((membership) => {
+      const assignedBranches = (membership.assignedBranches ?? []).map(String);
+      return assignedBranches.length === 0 || assignedBranches.includes(String(branch._id));
+    });
+    return [{
+      businessAccountId: String(account._id),
+      accountId: account.accountId,
+      companyName: account.company?.companyName?.trim() || account.accountId,
+      branchId: String(branch._id),
+      branchName: canRequestStandalone ? branch.name ?? "Assigned branch" : "Branch from linked shipment",
+      branchCode: canRequestStandalone ? branch.code ?? "" : "",
+      canRequestStandalone,
+      contact: {
+        name: `${account.contact?.firstName ?? ""} ${account.contact?.lastName ?? ""}`.trim(),
+        email: account.contact?.email ?? "",
+        phone: `${account.contact?.countryCode ?? ""}${account.contact?.mobileNumber ?? ""}`
+      }
+    }];
+  });
+  const activeAccountIds = new Set(accounts.map((account) => String(account._id)));
+  const allowedBranchIds = new Set<string>();
+  for (const membership of memberships) {
+    if (!activeAccountIds.has(String(membership.businessAccount))) continue;
+    const account = accounts.find((item) => String(item._id) === String(membership.businessAccount));
+    const branches = membership.assignedBranches?.length
+      ? membership.assignedBranches
+      : account?.assignedBranch ? [(account.assignedBranch as unknown as { _id: mongoose.Types.ObjectId })._id] : [];
+    for (const branch of branches) allowedBranchIds.add(String(branch));
+  }
+  const courierAddresses = await PickupCourierAddress.find({ branchId: { $in: [...allowedBranchIds] } })
+    .select("branchId companyName address contact")
+    .sort({ companyName: 1 })
+    .lean().exec();
+  return {
+    businesses,
+    courierAddresses: courierAddresses.map((profile) => ({
+      id: String(profile._id), branchId: String(profile.branchId), companyName: profile.companyName,
+      address: profile.address, contact: profile.contact
+    })),
+    requester: user ? {
+      name: user.name || `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim(),
+      email: user.email ?? "",
+      phone: user.phone ?? ""
+    } : { name: "", email: "", phone: "" }
+  };
+}
+
 export function pickupAddressFingerprint(address: Record<string, unknown>) {
   return ["countryCode", "postcode", "addressLine1", "addressLine2", "townOrCity", "county"]
     .map((field) => normalized(address[field]))
     .join("|");
+}
+
+export function pickupArrivalWindowBounds(window: PickupArrivalWindow) {
+  switch (window) {
+    case "MORNING": return { startMinute: 6 * 60, endMinute: 12 * 60 };
+    case "AFTERNOON": return { startMinute: 12 * 60, endMinute: 17 * 60 };
+    case "EVENING": return { startMinute: 17 * 60, endMinute: 22 * 60 };
+    case "EXACT": return null;
+  }
+}
+
+export function parsePickupDateInIndia(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new PickupServiceError("Choose a valid Delhi arrival date.");
+  const date = new Date(`${value}T00:00:00+05:30`);
+  if (!Number.isFinite(date.getTime())) throw new PickupServiceError("Choose a valid Delhi arrival date.");
+  const actual = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(date);
+  if (actual !== value) throw new PickupServiceError("Choose a valid Delhi arrival date.");
+  return date;
+}
+
+export function parsePickupDateTimeInIndia(date: string, time: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
+    throw new PickupServiceError("Choose a valid date and time in India.");
+  }
+  const parsed = new Date(`${date}T${time}:00+05:30`);
+  if (!Number.isFinite(parsed.getTime())) throw new PickupServiceError("Choose a valid date and time in India.");
+  const actualDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(parsed);
+  const actualTime = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).format(parsed);
+  if (actualDate !== date || actualTime !== time) {
+    throw new PickupServiceError("Choose a valid date and time in India.");
+  }
+  return parsed;
+}
+
+function referenceId(value: unknown) {
+  return String((value as { _id?: unknown } | null)?._id ?? value ?? "");
+}
+
+function safePickupDocuments(documents: IPickupRequest["documents"]) {
+  return documents.map((document) => ({
+    id: String(document._id),
+    originalName: document.originalName,
+    mimeType: document.mimeType,
+    size: document.size,
+    uploadedAt: document.uploadedAt
+  }));
+}
+
+function arrivalWindowEnd(date: Date, window: PickupArrivalWindow) {
+  const { endMinute } = pickupArrivalWindowBounds(window) ?? { endMinute: 0 };
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(date);
+  const hour = String(Math.floor(endMinute / 60)).padStart(2, "0");
+  const minute = String(endMinute % 60).padStart(2, "0");
+  return parsePickupDateTimeInIndia(day, `${hour}:${minute}`);
 }
 
 function indiaDateParts(date = new Date()) {
@@ -128,7 +266,7 @@ export async function listEligiblePickupShipments(userId: mongoose.Types.ObjectI
     .lean()
     .exec();
   const [activeLinks, events, canAccess] = await Promise.all([
-    PickupRequestShipment.find({ shipmentDraftId: { $in: drafts.map((draft) => draft._id) }, active: true }).select("shipmentDraftId").lean().exec(),
+    PickupRequestShipment.find({ shipmentDraftId: { $in: drafts.map((draft) => draft._id) }, $or: [{ active: true }, { hubReceiptRecordedAt: { $ne: null } }] }).select("shipmentDraftId").lean().exec(),
     latestBlockingEvents(drafts.map((draft) => draft._id)),
     loadClientPickupAccess(userId)
   ]);
@@ -164,106 +302,201 @@ export async function listEligiblePickupShipments(userId: mongoose.Types.ObjectI
   return result;
 }
 
+type PickupDocumentUpload = { originalName: string; mimetype: string; size: number; buffer: Buffer };
+
 export async function createClientPickup(input: {
   userId: mongoose.Types.ObjectId;
+  businessAccountId: string;
   shipmentDraftIds: string[];
-  requestedWindow: { startAt: Date; endAt: Date; timezone: string };
-  contact: { name: string; email?: string; phone: string };
+  dispatchAt: Date;
+  expectedDelhiArrival: { date: Date; window: PickupArrivalWindow; exactAt?: Date | null };
+  transportCompany: string;
+  contact: { name: string; phone: string };
   pickupAddress: PickupAddressInput;
-  instructions?: string;
+  totalBoxes?: number;
+  totalWeightKg?: number;
+  handlingRemarks?: string;
+  documents?: PickupDocumentUpload[];
 }) {
   const uniqueIds = [...new Set(input.shipmentDraftIds)];
-  if (!uniqueIds.length || uniqueIds.length > 100) throw new PickupServiceError("Select between 1 and 100 booked shipments.");
+  if (uniqueIds.length > 100) throw new PickupServiceError("Select no more than 100 booked shipments.");
+  if (!mongoose.Types.ObjectId.isValid(input.businessAccountId)) throw new PickupServiceError("Select an active business account.");
   if (uniqueIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) throw new PickupServiceError("One or more selected shipments are invalid.");
-  if (input.requestedWindow.startAt >= input.requestedWindow.endAt || input.requestedWindow.endAt <= new Date()) {
-    throw new PickupServiceError("Select a valid future pickup window.");
+  if (!Number.isFinite(input.dispatchAt.getTime()) || !Number.isFinite(input.expectedDelhiArrival.date.getTime()) ||
+    (input.expectedDelhiArrival.exactAt && !Number.isFinite(input.expectedDelhiArrival.exactAt.getTime()))) {
+    throw new PickupServiceError("Choose valid dispatch and Delhi arrival dates and times.");
   }
+  if (input.dispatchAt <= new Date()) throw new PickupServiceError("Choose a dispatch date and time in the future.");
+  if (!input.transportCompany.trim()) throw new PickupServiceError("Choose or enter a transport or courier company.");
+  if (!pickupArrivalWindowValues.includes(input.expectedDelhiArrival.window)) throw new PickupServiceError("Choose an expected Delhi arrival window.");
+  if (input.expectedDelhiArrival.window === "EXACT" && !input.expectedDelhiArrival.exactAt) throw new PickupServiceError("Choose the exact Delhi arrival time.");
+  if (input.expectedDelhiArrival.window !== "EXACT" && input.expectedDelhiArrival.exactAt) throw new PickupServiceError("An exact time is only used with the exact arrival option.");
+  const arrivalLatest = input.expectedDelhiArrival.window === "EXACT"
+    ? input.expectedDelhiArrival.exactAt!
+    : arrivalWindowEnd(input.expectedDelhiArrival.date, input.expectedDelhiArrival.window);
+  if (arrivalLatest <= input.dispatchAt) throw new PickupServiceError("Expected Delhi arrival must be after dispatch.");
+  if (input.documents && (input.documents.length > 5 || input.documents.some((file) =>
+    !["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(file.mimetype) ||
+    file.size > 8 * 1024 * 1024 || !matchesDeclaredType(file.buffer, file.mimetype)
+  ))) throw new PickupServiceError("Documents must be valid PDF, JPG, PNG, or WebP files, no larger than 8 MB each.");
 
+  const context = await getClientPickupFormContext(input.userId);
+  const verificationEmail = context.requester.email.trim().toLowerCase();
+  if (!verificationEmail) {
+    throw new PickupServiceError("Your account needs an email address for pickup verification.", 409);
+  }
+  const business = context.businesses.find((item) => item.businessAccountId === input.businessAccountId);
+  if (!business) throw new PickupServiceError("The selected business account is not available to your login.", 403);
   const ids = uniqueIds.map((id) => new mongoose.Types.ObjectId(id));
-  const drafts = await ShipmentDraft.find({ _id: { $in: ids }, bookingState: "BOOKED" }).exec();
-  if (drafts.length !== ids.length) throw new PickupServiceError("Every selected shipment must be fully booked before pickup can be requested.", 409);
-  const canAccess = await loadClientPickupAccess(input.userId);
-  if (drafts.some((draft) => !canAccess(draft))) throw new PickupServiceError("One or more selected shipments are not available to your login.", 403);
-  const accountIds = new Set(drafts.map((draft) => String(draft.businessAccountId)));
-  const branchIds = new Set(drafts.map((draft) => String(draft.branchId)));
-  if (accountIds.size !== 1 || branchIds.size !== 1) throw new PickupServiceError("A pickup request can contain shipments from one account and branch only.");
-
-  const bookings = await DpdShipment.find({ shipmentDraftId: { $in: ids }, status: "LABEL_RECEIVED" }).exec();
-  if (bookings.length !== ids.length || bookings.some((booking) => !booking.parcelNumbers.length)) {
-    throw new PickupServiceError("Every selected shipment needs current parcel labels before pickup can be requested.", 409);
+  if (ids.length === 0 && !business.canRequestStandalone) {
+    throw new PickupServiceError("Your account access does not include the business account's assigned branch. Link an eligible booked shipment to request pickup.", 403);
   }
-  const events = await latestBlockingEvents(ids);
-  if (ids.some((id) => {
-    const statuses = events.get(String(id)) ?? [];
-    return statuses.some((status) => pickupBlockedStatuses.includes(status)) || statuses[0] === "ON_HOLD";
-  })) throw new PickupServiceError("A selected shipment is cancelled, on hold, or has already entered operations.", 409);
+  let drafts: Array<InstanceType<typeof ShipmentDraft>> = [];
+  let bookings: Array<InstanceType<typeof DpdShipment>> = [];
+  if (ids.length) {
+    drafts = await ShipmentDraft.find({ _id: { $in: ids }, bookingState: "BOOKED" }).exec();
+    if (drafts.length !== ids.length) throw new PickupServiceError("Every selected shipment must be fully booked before pickup can be requested.", 409);
+    const canAccess = await loadClientPickupAccess(input.userId);
+    if (drafts.some((draft) => !canAccess(draft) || String(draft.businessAccountId) !== input.businessAccountId)) {
+      throw new PickupServiceError("One or more selected shipments are not available for this business account.", 403);
+    }
+    const branchIds = new Set(drafts.map((draft) => String(draft.branchId)));
+    if (branchIds.size !== 1) throw new PickupServiceError("A pickup request can contain shipments from one branch only.");
+    const branch = await Branch.findById(drafts[0]!.branchId).select("name code").lean().exec();
+    if (!branch) throw new PickupServiceError("The pickup branch was not found.", 409);
+    business.branchId = String(drafts[0]!.branchId);
+    business.branchName = branch.name ?? business.branchName;
+    business.branchCode = branch.code ?? business.branchCode;
 
-  const session = await mongoose.startSession();
-  let pickupId: mongoose.Types.ObjectId | null = null;
+    bookings = await DpdShipment.find({ shipmentDraftId: { $in: ids }, status: "LABEL_RECEIVED" }).exec();
+    if (bookings.length !== ids.length || bookings.some((booking) => !booking.parcelNumbers.length)) {
+      throw new PickupServiceError("Every selected shipment needs current parcel labels before pickup can be requested.", 409);
+    }
+    const events = await latestBlockingEvents(ids);
+    if (ids.some((id) => {
+      const statuses = events.get(String(id)) ?? [];
+      return statuses.some((status) => pickupBlockedStatuses.includes(status)) || statuses[0] === "ON_HOLD";
+    })) throw new PickupServiceError("A selected shipment is cancelled, on hold, or has already entered operations.", 409);
+  }
+
+  const shipmentCount = drafts.length;
+  const parcelCount = bookings.reduce((sum, booking) => sum + booking.parcelNumbers.length, 0);
+  const totalBoxes = ids.length ? parcelCount : Number(input.totalBoxes ?? 0);
+  const totalWeightKg = ids.length
+    ? drafts.reduce((sum, draft) => sum + draft.parcelList.reduce((parcelSum, parcel) => parcelSum + Number(parcel.weightKg || 0), 0), 0)
+    : Number(input.totalWeightKg ?? 0);
+  if (!Number.isInteger(totalBoxes) || totalBoxes < 1 || totalBoxes > 10000) throw new PickupServiceError("Enter a valid total number of boxes.");
+  if (!Number.isFinite(totalWeightKg) || totalWeightKg <= 0 || totalWeightKg > 100000) throw new PickupServiceError("Enter a valid total gross weight in kilograms.");
+
+  const pickupId = new mongoose.Types.ObjectId();
+  const storedKeys: string[] = [];
   try {
-    await session.withTransaction(async () => {
-      if (await PickupRequestShipment.exists({ shipmentDraftId: { $in: ids }, active: true }).session(session)) {
-        throw new PickupServiceError("A selected shipment already belongs to an active pickup request.", 409);
-      }
-      const branchId = drafts[0]!.branchId;
-      const requestNumber = await allocatePickupNumber(branchId, session);
-      const parcelCount = bookings.reduce((sum, booking) => sum + booking.parcelNumbers.length, 0);
-      const totalWeightKg = drafts.reduce((sum, draft) => sum + draft.parcelList.reduce((parcelSum, parcel) => parcelSum + Number(parcel.weightKg || 0), 0), 0);
-      const pickup = new PickupRequest({
-        requestNumber,
-        businessAccountId: drafts[0]!.businessAccountId,
-        branchId,
-        requestedBy: input.userId,
-        source: "CLIENT_PORTAL",
-        status: "REQUESTED",
-        addressFingerprint: pickupAddressFingerprint(input.pickupAddress),
-        pickupAddress: input.pickupAddress,
-        pickupContact: input.contact,
-        requestedWindow: input.requestedWindow,
-        instructions: input.instructions ?? "",
-        shipmentCount: drafts.length,
-        parcelCount,
-        totalWeightKg
+    const documents: IPickupRequest["documents"] = [];
+    for (const file of input.documents ?? []) {
+      const storageKey = pickupRequestDocumentKey(String(pickupId), file.originalName);
+      await putObject({ key: storageKey, body: file.buffer, contentType: file.mimetype, originalName: file.originalName });
+      storedKeys.push(storageKey);
+      documents.push({
+        _id: new mongoose.Types.ObjectId(),
+        originalName: file.originalName.slice(0, 200), storageKey, mimeType: file.mimetype, size: file.size,
+        uploadedAt: new Date(), uploadedBy: input.userId
       });
-      await pickup.save({ session });
-      pickupId = pickup._id as mongoose.Types.ObjectId;
-      const bookingByDraft = new Map(bookings.map((booking) => [String(booking.shipmentDraftId), booking]));
-      await PickupRequestShipment.insertMany(drafts.map((draft) => {
-        const booking = bookingByDraft.get(String(draft._id))!;
-        return {
-          pickupRequestId: pickup._id,
-          shipmentDraftId: draft._id,
-          dpdShipmentId: booking._id,
-          trackingNumber: booking.swiftlineTrackingNumber || booking.dpdShipmentId || String(booking._id),
-          snapshotRevision: booking.snapshotRevision || 1,
-          shipmentSnapshot: { consignorAddress: draft.consignorAddress, parcelList: draft.parcelList },
-          parcels: booking.parcelNumbers.map((parcelNumber, index) => ({
-            parcelNumber,
-            weightKg: Number(draft.parcelList[index]?.weightKg || 0),
-            status: "PENDING"
-          })),
-          status: "PENDING",
-          active: true
-        };
-      }), { session });
-      await AuditLog.create([{
-        action: "PICKUP_REQUEST_CREATED", entityType: "PICKUP_REQUEST", entityId: pickup._id,
-        performedBy: input.userId, performedAt: new Date(), metadata: { requestNumber, shipmentCount: drafts.length, parcelCount }
-      }], { session });
-    });
-  } finally {
-    await session.endSession();
+    }
+
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        if (ids.length && await PickupRequestShipment.exists({ shipmentDraftId: { $in: ids }, $or: [{ active: true }, { hubReceiptRecordedAt: { $ne: null } }] }).session(session)) {
+          throw new PickupServiceError("A selected shipment already has a pickup or a recorded hub receipt. Ask your branch to review any parcels still outstanding.", 409);
+        }
+        const branchId = new mongoose.Types.ObjectId(business.branchId);
+        const requestNumber = await allocatePickupNumber(branchId, session);
+        const dispatchWindow = { startAt: input.dispatchAt, endAt: new Date(input.dispatchAt.getTime() + 2 * 60 * 60 * 1000), timezone: "Asia/Kolkata" };
+        const pickup = new PickupRequest({
+          _id: pickupId,
+          requestNumber,
+          businessAccountId: new mongoose.Types.ObjectId(input.businessAccountId),
+          businessAccountName: business.companyName,
+          branchId,
+          requestedBy: input.userId,
+          source: "CLIENT_PORTAL",
+          status: "REQUESTED",
+          addressFingerprint: pickupAddressFingerprint(input.pickupAddress),
+          pickupAddress: input.pickupAddress,
+          pickupContact: { ...input.contact, email: verificationEmail },
+          requestedWindow: dispatchWindow,
+          dispatchAt: input.dispatchAt,
+          expectedDelhiArrival: { ...input.expectedDelhiArrival, timezone: "Asia/Kolkata" },
+          transportCompany: input.transportCompany.trim(),
+          handlingRemarks: input.handlingRemarks?.trim() ?? "",
+          documents,
+          instructions: input.handlingRemarks?.trim() ?? "",
+          shipmentCount,
+          totalBoxes,
+          parcelCount,
+          totalWeightKg
+        });
+        await pickup.save({ session });
+        if (drafts.length) {
+          const bookingByDraft = new Map(bookings.map((booking) => [String(booking.shipmentDraftId), booking]));
+          await PickupRequestShipment.insertMany(drafts.map((draft) => {
+            const booking = bookingByDraft.get(String(draft._id))!;
+            return {
+              pickupRequestId: pickup._id,
+              shipmentDraftId: draft._id,
+              dpdShipmentId: booking._id,
+              trackingNumber: booking.swiftlineTrackingNumber || booking.dpdShipmentId || String(booking._id),
+              snapshotRevision: booking.snapshotRevision || 1,
+              shipmentSnapshot: { consignorAddress: draft.consignorAddress, parcelList: draft.parcelList },
+              parcels: booking.parcelNumbers.map((parcelNumber, index) => ({
+                parcelNumber,
+                weightKg: Number(draft.parcelList[index]?.weightKg || 0),
+                status: "PENDING"
+              })),
+              status: "PENDING",
+              active: true
+            };
+          }), { session });
+        }
+        await AuditLog.create([{
+          action: "PICKUP_REQUEST_CREATED", entityType: "PICKUP_REQUEST", entityId: pickup._id,
+          performedBy: input.userId, performedAt: new Date(), metadata: { requestNumber, shipmentCount, parcelCount, totalBoxes, documentCount: documents.length }
+        }], { session });
+      });
+    } finally {
+      await session.endSession();
+    }
+  } catch (error) {
+    await Promise.all(storedKeys.map(async (key) => { try { await deleteObject(key); } catch (cleanupError) { console.error("Pickup document cleanup failed.", { message: cleanupError instanceof Error ? cleanupError.message : "Unknown error" }); } }));
+    throw error;
   }
-  if (!pickupId) throw new PickupServiceError("Pickup request could not be created.", 500);
+
   const detail = await getPickupDetail(String(pickupId));
-  await notifyPickupSafely(() => notifyOperationsStaff({
+  const emailPayload = pickupEmailPayload(detail);
+  const attachmentRefs = detail.documents.map((document) => ({
+    kind: "PICKUP_DOCUMENT" as const,
+    refId: pickupId,
+    documentId: new mongoose.Types.ObjectId(document.id)
+  }));
+  await notifyPickupSafely(() => notifyPortalUsers([input.userId], {
+    type: "PICKUP_REQUESTED",
+    title: "Pickup request received",
+    message: `${detail.requestNumber} has been submitted for review.`,
+    href: "/client/pickups",
+    idempotencyKey: `PICKUP_REQUESTED:${String(pickupId)}:CLIENT`,
+    businessAccountId: detail.businessAccountId,
+    metadata: { pickupRequestId: pickupId, branchId: detail.branchId },
+    email: { templateKey: "PICKUP_REQUESTED_CLIENT", payload: emailPayload, attachmentRefs }
+  }));
+  await notifyPickupSafely(() => notifyAssignedPickupBranchStaff(new mongoose.Types.ObjectId(business.branchId), {
     type: "PICKUP_REQUESTED",
     title: "New pickup request",
-    message: `${detail.requestNumber} contains ${detail.shipmentCount} shipment${detail.shipmentCount === 1 ? "" : "s"} and ${detail.parcelCount} parcel${detail.parcelCount === 1 ? "" : "s"}.`,
+    message: `${detail.requestNumber} from ${detail.businessAccountName} is awaiting review.`,
     href: "/dashboard/pickups",
     idempotencyKey: `PICKUP_REQUESTED:${String(pickupId)}:STAFF`,
     businessAccountId: detail.businessAccountId,
-    metadata: { pickupRequestId: pickupId, branchId: detail.branchId }
+    metadata: { pickupRequestId: pickupId, branchId: detail.branchId },
+    email: { templateKey: "PICKUP_REQUESTED_STAFF", payload: emailPayload, attachmentRefs }
   }));
   return detail;
 }
@@ -275,24 +508,79 @@ export async function getPickupDetail(id: string) {
     .lean()
     .exec();
   if (!request) throw new PickupServiceError("Pickup request was not found.", 404);
-  const [shipments, attempts, proofs] = await Promise.all([
+  const [shipments, attempts, proofs, requester] = await Promise.all([
     PickupRequestShipment.find({ pickupRequestId: request._id }).sort({ createdAt: 1 }).lean().exec(),
     PickupAttempt.find({ pickupRequestId: request._id }).sort({ sequence: -1 })
       .populate("assignedDriverProfileId", "deliverySubrole engagementType status")
       .populate("assignedDriverUserId", "firstName lastName name phone profileImage")
       .lean().exec(),
-    PickupProof.find({ pickupRequestId: request._id }).select("pickupAttemptId type originalName size capturedAt").lean().exec()
+    PickupProof.find({ pickupRequestId: request._id }).select("pickupAttemptId type source originalName size capturedAt").lean().exec(),
+    User.findById(request.requestedBy).select("name firstName lastName email").lean().exec()
   ]);
-  const proofsByAttempt = new Map<string, Array<{ id: string; type: string; originalName: string; size: number; capturedAt: Date }>>();
+  const receiveScans = shipments.length
+    ? await ShipmentOperationsParcelScan.find({ shipmentDraftId: { $in: shipments.map((item) => item.shipmentDraftId) }, action: "RECEIVE" })
+      .select("shipmentDraftId parcelNumber scannedAt").lean().exec()
+    : [];
+  const receivedAtByParcel = new Map(receiveScans.map((scan) => [`${scan.shipmentDraftId}:${scan.parcelNumber}`, scan.scannedAt]));
+  const proofsByAttempt = new Map<string, Array<{ id: string; type: string; source?: string; originalName: string; size: number; capturedAt: Date }>>();
   for (const proof of proofs) {
     const key = String(proof.pickupAttemptId);
-    proofsByAttempt.set(key, [...(proofsByAttempt.get(key) ?? []), { id: String(proof._id), type: proof.type, originalName: proof.originalName, size: proof.size, capturedAt: proof.capturedAt }]);
+    proofsByAttempt.set(key, [...(proofsByAttempt.get(key) ?? []), { id: String(proof._id), type: proof.type, source: proof.source, originalName: proof.originalName, size: proof.size, capturedAt: proof.capturedAt }]);
   }
   return {
     ...request,
     id: String(request._id),
-    shipments,
+    requester: requester ? { name: requester.name || `${requester.firstName ?? ""} ${requester.lastName ?? ""}`.trim(), email: requester.email ?? "" } : null,
+    documents: safePickupDocuments(request.documents ?? []),
+    shipments: shipments.map((shipment) => ({
+      ...shipment,
+      parcels: shipment.parcels.map((parcel) => ({
+        ...parcel,
+        hubReceivedAt: receivedAtByParcel.get(`${shipment.shipmentDraftId}:${normalized(parcel.parcelNumber)}`) ?? null
+      }))
+    })),
     attempts: attempts.map((attempt) => ({ ...attempt, proofs: proofsByAttempt.get(String(attempt._id)) ?? [] }))
+  };
+}
+
+function pickupEmailPayload(detail: Awaited<ReturnType<typeof getPickupDetail>>) {
+  const address = detail.pickupAddress ?? {};
+  const collectionAddress = ["addressLine1", "addressLine2", "townOrCity", "county", "postcode", "countryCode"]
+    .map((key) => address[key]).filter((value): value is string => typeof value === "string" && Boolean(value.trim())).join(", ");
+  const branch = detail.branchId as unknown as { name?: string };
+  const shipments = detail.shipments.map((shipment) => ({
+    trackingNumber: shipment.trackingNumber,
+    parcels: shipment.parcels.map((parcel) => ({
+      parcelNumber: parcel.parcelNumber,
+      hubReceiptOutcome: parcel.hubReceiptOutcome ?? null
+    }))
+  }));
+  const parcels = shipments.flatMap((shipment) => shipment.parcels);
+  return {
+    requestNumber: detail.requestNumber,
+    companyName: detail.businessAccountName,
+    branchName: branch.name ?? "Assigned branch",
+    transportCompany: detail.transportCompany ?? "",
+    dispatchAt: detail.dispatchAt ?? detail.requestedWindow.startAt,
+    arrivalDate: detail.expectedDelhiArrival?.date ?? null,
+    arrivalWindow: detail.expectedDelhiArrival?.window ?? "",
+    arrivalExactAt: detail.expectedDelhiArrival?.exactAt ?? null,
+    collectionAddress,
+    contactName: detail.pickupContact.name,
+    contactPhone: detail.pickupContact.phone,
+    requesterName: detail.requester?.name ?? "",
+    requesterEmail: detail.pickupContact.email ?? detail.requester?.email ?? "",
+    totalBoxes: detail.totalBoxes,
+    totalWeightKg: detail.totalWeightKg,
+    shipmentCount: detail.shipmentCount,
+    documentCount: detail.documents.length,
+    documentNames: detail.documents.map((document) => document.originalName),
+    handlingRemarks: detail.handlingRemarks || detail.instructions || "",
+    pickupPartnerInfo: detail.pickupPartnerInfo ?? "",
+    receivedAt: detail.receivedAtDelhiHubAt ?? null,
+    receivedParcelCount: parcels.filter((parcel) => parcel.hubReceiptOutcome === "RECEIVED").length,
+    missingParcelCount: parcels.filter((parcel) => parcel.hubReceiptOutcome === "NOT_RECEIVED").length,
+    shipments
   };
 }
 
@@ -301,7 +589,7 @@ export async function listPickupRequests(filter: Record<string, unknown>) {
     .populate("branchId", "name code labelCode")
     .populate("cancelledBy", "firstName lastName name role")
     .lean().exec();
-  return items.map((item) => ({ ...item, id: String(item._id) }));
+  return items.map((item) => ({ ...item, id: String(item._id), documents: safePickupDocuments(item.documents ?? []) }));
 }
 
 export async function cancelPickup(input: {
@@ -351,7 +639,7 @@ export async function cancelPickup(input: {
   } finally { await session.endSession(); }
 
   if (input.source === "CLIENT") {
-    await notifyPickupSafely(() => notifyOperationsStaff({
+    await notifyPickupSafely(() => notifyAssignedPickupBranchStaff(request.branchId, {
       type: "PICKUP_CANCELLED",
       title: "Pickup cancelled by client",
       message: `${request.requestNumber} was cancelled by the client.`,
@@ -361,7 +649,7 @@ export async function cancelPickup(input: {
       metadata: { pickupRequestId: request._id, cancellationSource: input.source }
     }));
   } else {
-    await notifyPickupSafely(() => notifyBusinessShipmentMembers(request.businessAccountId, {
+    await notifyPickupSafely(() => notifyPortalUsers([request.requestedBy], {
       type: "PICKUP_CANCELLED",
       title: "Pickup cancelled",
       message: `${request.requestNumber} was cancelled by Swiftline.`,
@@ -459,9 +747,18 @@ export async function reschedulePickup(input: {
   if (input.startAt.getTime() < Date.now()) {
     throw new PickupServiceError("Choose a pickup window in the future.", 400);
   }
+  if (request.expectedDelhiArrival) {
+    const expectedAt = request.expectedDelhiArrival.window === "EXACT" && request.expectedDelhiArrival.exactAt
+      ? request.expectedDelhiArrival.exactAt
+      : arrivalWindowEnd(request.expectedDelhiArrival.date, request.expectedDelhiArrival.window);
+    if (expectedAt <= input.startAt) throw new PickupServiceError("Expected Delhi arrival must be after dispatch.", 400);
+  }
 
   const previous = { ...request.requestedWindow };
   request.requestedWindow = { startAt: input.startAt, endAt: input.endAt, timezone: input.timezone };
+  request.dispatchAt = input.startAt;
+  request.dispatchReminderSentAt = null;
+  request.pickupStartedAt = null;
   request.confirmedWindow = null;
   request.status = "REQUESTED";
   request.version += 1;
@@ -490,29 +787,350 @@ export async function reschedulePickup(input: {
     }
   });
 
-  await notifyPickupSafely(() => notifyOperationsStaff({
-    type: "PICKUP_RESCHEDULED",
+  const recipients = input.source === "CLIENT" ? "STAFF" : "CLIENT";
+  const notification = {
+    type: "PICKUP_RESCHEDULED" as const,
     title: "Pickup rescheduled",
-    message: `${request.requestNumber} moved to a new window.`,
-    href: `/dashboard/pickups`,
-    idempotencyKey: `PICKUP_RESCHEDULED:${String(request._id)}:${request.version}`,
-    businessAccountId: request.businessAccountId
-  }));
+    message: `${request.requestNumber} has a new dispatch time.`,
+    href: input.source === "CLIENT" ? "/dashboard/pickups" : "/client/pickups",
+    idempotencyKey: `PICKUP_RESCHEDULED:${String(request._id)}:${request.version}:${recipients}`,
+    businessAccountId: request.businessAccountId,
+    metadata: { pickupRequestId: request._id, branchId: request.branchId }
+  };
+  if (input.source === "CLIENT") await notifyPickupSafely(() => notifyAssignedPickupBranchStaff(request.branchId, notification));
+  else await notifyPickupSafely(() => notifyPortalUsers([request.requestedBy], notification));
 
   return getPickupDetail(input.pickupId);
 }
 
+export async function markPickupStarted(input: { pickupId: string; actorId: mongoose.Types.ObjectId; source: "ADMIN" | "DRIVER" }) {
+  const request = await PickupRequest.findById(asObjectId(input.pickupId, "Pickup request")).exec();
+  if (!request) throw new PickupServiceError("Pickup request was not found.", 404);
+  if (request.pickupStartedAt) return getPickupDetail(input.pickupId);
+  if (!["CONFIRMED", "DRIVER_ASSIGNED", "ACTION_REQUIRED"].includes(request.status)) {
+    throw new PickupServiceError("Approve or schedule the pickup before marking it started.", 409);
+  }
+
+  const now = new Date();
+  request.status = "IN_PROGRESS";
+  request.pickupStartedAt = now;
+  request.version += 1;
+  await request.save();
+  await AuditLog.create({
+    action: "PICKUP_REQUEST_UPDATED",
+    entityType: "PICKUP_REQUEST",
+    entityId: request._id,
+    performedBy: input.actorId,
+    performedAt: now,
+    metadata: { status: "IN_PROGRESS", source: input.source }
+  });
+  const detail = await getPickupDetail(input.pickupId);
+  const message = `${detail.requestNumber} pickup has started.`;
+  const emailPayload = pickupEmailPayload(detail);
+  await notifyPickupSafely(() => notifyPortalUsers([detail.requestedBy], {
+    type: "PICKUP_EN_ROUTE",
+    title: "Pickup started",
+    message,
+    href: "/client/pickups",
+    idempotencyKey: `PICKUP_EN_ROUTE:${String(detail._id)}`,
+    businessAccountId: detail.businessAccountId,
+    metadata: { pickupRequestId: detail._id, branchId: detail.branchId },
+    email: { templateKey: "PICKUP_STARTED_CLIENT", payload: emailPayload }
+  }));
+  await notifyPickupSafely(() => notifyAssignedPickupBranchStaff(new mongoose.Types.ObjectId(referenceId(detail.branchId)), {
+    type: "PICKUP_EN_ROUTE",
+    title: "Pickup started",
+    message,
+    href: "/dashboard/pickups",
+    idempotencyKey: `PICKUP_EN_ROUTE:${String(detail._id)}:STAFF`,
+    businessAccountId: detail.businessAccountId,
+    metadata: { pickupRequestId: detail._id, branchId: detail.branchId },
+    email: { templateKey: "PICKUP_STARTED_STAFF", payload: emailPayload }
+  }));
+  return detail;
+}
+
+export async function markPickupReceivedAtDelhiHub(input: {
+  pickupId: string;
+  actorId: mongoose.Types.ObjectId;
+  receivedParcels: Array<{ shipmentDraftId: string; parcelNumber: string }>;
+}) {
+  const requestId = asObjectId(input.pickupId, "Pickup request");
+  const session = await mongoose.startSession();
+  let branchId: mongoose.Types.ObjectId | null = null;
+  let businessAccountId: mongoose.Types.ObjectId | null = null;
+  let receivedAt = new Date();
+  let missingParcelNumbers: string[] = [];
+  let receivedParcelCount = 0;
+  try {
+    await session.withTransaction(async () => {
+      branchId = null;
+      businessAccountId = null;
+      missingParcelNumbers = [];
+      receivedParcelCount = 0;
+      const request = await PickupRequest.findById(requestId).session(session).exec();
+      if (!request) throw new PickupServiceError("Pickup request was not found.", 404);
+      if (["RECEIVED_AT_DELHI_HUB", "COMPLETED_WITH_MISSING_PARCELS"].includes(request.status)) return;
+      if (!["IN_PROGRESS", "COLLECTED", "PARTIALLY_COLLECTED"].includes(request.status)) {
+        throw new PickupServiceError("Start the pickup before recording Delhi hub receipt.", 409);
+      }
+      const activeAttempt = request.currentAttemptId
+        ? await PickupAttempt.findById(request.currentAttemptId).session(session).exec()
+        : null;
+      if (activeAttempt && ["EN_ROUTE", "ARRIVED", "COLLECTING"].includes(activeAttempt.status)) {
+        throw new PickupServiceError("The assigned driver must finish the active collection before hub receipt can be recorded.", 409);
+      }
+      if (activeAttempt && ["SCHEDULED", "ASSIGNED"].includes(activeAttempt.status)) {
+        activeAttempt.status = "CANCELLED";
+        await activeAttempt.save({ session });
+      }
+
+      receivedAt = new Date();
+      const links = await PickupRequestShipment.find({ pickupRequestId: request._id }).session(session).exec();
+      const expected = new Set(links.flatMap((link) => link.parcels.map((parcel) => `${link.shipmentDraftId}:${normalized(parcel.parcelNumber)}`)));
+      const selected = new Set(input.receivedParcels.map((parcel) => `${parcel.shipmentDraftId}:${normalized(parcel.parcelNumber)}`));
+      if (selected.size !== input.receivedParcels.length || [...selected].some((key) => !expected.has(key))) {
+        throw new PickupServiceError("The selected parcels do not match this pickup. Refresh and review the parcel list.", 409);
+      }
+      const draftIds = links.map((link) => link.shipmentDraftId);
+      const [bookings, scans, events] = await Promise.all([
+        DpdShipment.find({ _id: { $in: links.map((link) => link.dpdShipmentId) } }).session(session).exec(),
+        ShipmentOperationsParcelScan.find({ shipmentDraftId: { $in: draftIds }, action: "RECEIVE" }).session(session).exec(),
+        ShipmentEvent.find({ shipmentDraftId: { $in: draftIds } }).select("shipmentDraftId status eventAt").sort({ eventAt: -1, createdAt: -1 }).session(session).lean().exec()
+      ]);
+      const bookingById = new Map(bookings.map((booking) => [String(booking._id), booking]));
+      const alreadyReceived = new Set(scans.map((scan) => `${scan.shipmentDraftId}:${normalized(scan.parcelNumber)}`));
+      const eventsByDraft = new Map<string, Set<string>>();
+      const latestStatusByDraft = new Map<string, string>();
+      for (const event of events) {
+        const key = String(event.shipmentDraftId);
+        if (!latestStatusByDraft.has(key)) latestStatusByDraft.set(key, event.status);
+        const statuses = eventsByDraft.get(key) ?? new Set<string>();
+        statuses.add(event.status);
+        eventsByDraft.set(key, statuses);
+      }
+      const newScans: Array<{
+        shipmentDraftId: mongoose.Types.ObjectId; dpdShipmentId: mongoose.Types.ObjectId;
+        action: "RECEIVE"; parcelNumber: string; location: string; deviceId: string;
+        scanRequestId: string; scannedBy: mongoose.Types.ObjectId; scannedAt: Date;
+      }> = [];
+      const newEvents: Array<{
+        shipmentDraftId: mongoose.Types.ObjectId; dpdShipmentId: mongoose.Types.ObjectId;
+        status: "PARCEL_COLLECTED" | "WAREHOUSE_SCAN_IN"; note: string; location?: string;
+        customerVisible: true; source: "PICKUP"; sourceReference: string;
+        createdBy: mongoose.Types.ObjectId; eventAt: Date;
+      }> = [];
+      const finalizedDraftIds = new Set<string>();
+      for (const link of links) {
+        const draftId = String(link.shipmentDraftId);
+        const booking = bookingById.get(String(link.dpdShipmentId));
+        if (!booking || String(booking.shipmentDraftId) !== draftId || booking.status !== "LABEL_RECEIVED") {
+          throw new PickupServiceError("A linked shipment has changed. Ask Operations to review it before closing the pickup.", 409);
+        }
+        const expectedNumbers = resolveOperationsScanParcelNumbers({
+          currentShipmentSnapshot: booking.currentShipmentSnapshot,
+          bookingSnapshot: booking.bookingSnapshot,
+          parcelNumbers: booking.parcelNumbers
+        });
+        const linkedNumbers = link.parcels.map((parcel) => normalized(parcel.parcelNumber));
+        if (expectedNumbers.length !== linkedNumbers.length || expectedNumbers.some((number) => !linkedNumbers.includes(number))) {
+          throw new PickupServiceError("A linked shipment's parcel labels have changed. Ask Operations to review it before closing the pickup.", 409);
+        }
+        const statuses = eventsByDraft.get(draftId) ?? new Set<string>();
+        if (statuses.has("SHIPMENT_CANCELLED") || latestStatusByDraft.get(draftId) === "ON_HOLD") {
+          throw new PickupServiceError("Resolve the linked shipment's cancellation or hold before recording hub receipt.", 409);
+        }
+        const selectedForShipment = linkedNumbers.filter((number) => selected.has(`${draftId}:${number}`));
+        const allReceived = selectedForShipment.length === linkedNumbers.length;
+        if (!allReceived && statuses.has("WAREHOUSE_SCAN_IN")) {
+          throw new PickupServiceError("A linked shipment is already marked received at origin. Review its parcel scans before reporting a parcel missing.", 409);
+        }
+        if (allReceived && !statuses.has("WAREHOUSE_SCAN_IN") && findRecordedLaterMilestones("WAREHOUSE_SCAN_IN", statuses).length) {
+          throw new PickupServiceError("A linked shipment has already moved beyond origin receipt. Ask Operations to reconcile its history before closing the pickup.", 409);
+        }
+        link.parcels.forEach((parcel, index) => {
+          const number = normalized(parcel.parcelNumber);
+          const key = `${draftId}:${number}`;
+          const atHub = selected.has(key);
+          if (!atHub && alreadyReceived.has(key)) {
+            throw new PickupServiceError(`${number} was already received at the origin facility. Keep it selected.`, 409);
+          }
+          parcel.hubReceiptOutcome = atHub ? "RECEIVED" : "NOT_RECEIVED";
+          if (atHub) {
+            receivedParcelCount += 1;
+            if (parcel.status !== "COLLECTED") {
+              parcel.status = "COLLECTED";
+              parcel.collectedAt = receivedAt;
+            }
+            if (!alreadyReceived.has(key)) {
+              newScans.push({
+                shipmentDraftId: link.shipmentDraftId, dpdShipmentId: link.dpdShipmentId,
+                action: "RECEIVE", parcelNumber: number, location: "Delhi hub",
+                deviceId: "PICKUP_HUB_RECEIPT", scanRequestId: `PICKUP:${link._id}:${index}`,
+                scannedBy: input.actorId, scannedAt: receivedAt
+              });
+              alreadyReceived.add(key);
+            }
+          } else {
+            missingParcelNumbers.push(number);
+          }
+        });
+        link.status = link.parcels.every((parcel) => parcel.status === "COLLECTED")
+          ? "COLLECTED" : link.parcels.some((parcel) => parcel.status === "COLLECTED") ? "PARTIAL" : link.status;
+        link.hubReceiptRecordedAt = receivedAt;
+        link.active = false;
+        await link.save({ session });
+        if (allReceived && link.parcels.every((parcel) => parcel.status === "COLLECTED") && !statuses.has("PARCEL_COLLECTED")) {
+          newEvents.push({
+            shipmentDraftId: link.shipmentDraftId, dpdShipmentId: link.dpdShipmentId,
+            status: "PARCEL_COLLECTED", note: `Collected under pickup ${request.requestNumber}.`,
+            customerVisible: true, source: "PICKUP", sourceReference: String(request._id),
+            createdBy: input.actorId, eventAt: receivedAt
+          });
+          finalizedDraftIds.add(draftId);
+        }
+        if (allReceived && !statuses.has("WAREHOUSE_SCAN_IN")) {
+          newEvents.push({
+            shipmentDraftId: link.shipmentDraftId, dpdShipmentId: link.dpdShipmentId,
+            status: "WAREHOUSE_SCAN_IN", note: `All parcels received at Delhi hub under pickup ${request.requestNumber}.`,
+            location: "Delhi hub", customerVisible: true, source: "PICKUP",
+            sourceReference: String(request._id), createdBy: input.actorId, eventAt: receivedAt
+          });
+          finalizedDraftIds.add(draftId);
+        }
+      }
+      if (newScans.length) await ShipmentOperationsParcelScan.insertMany(newScans, { session });
+      if (newEvents.length) await ShipmentEvent.insertMany(newEvents, { session });
+      for (const draftId of finalizedDraftIds) {
+        await markShipmentChargeFinalized({ shipmentDraftId: new mongoose.Types.ObjectId(draftId), finalizedAt: receivedAt, session });
+      }
+      request.status = missingParcelNumbers.length ? "COMPLETED_WITH_MISSING_PARCELS" : "RECEIVED_AT_DELHI_HUB";
+      request.receivedAtDelhiHubAt = receivedAt;
+      request.version += 1;
+      await request.save({ session });
+      branchId = request.branchId;
+      businessAccountId = request.businessAccountId;
+      await AuditLog.create([{
+        action: "PICKUP_RECEIVED_AT_DELHI_HUB",
+        entityType: "PICKUP_REQUEST",
+        entityId: request._id,
+        performedBy: input.actorId,
+        performedAt: receivedAt,
+        metadata: { status: request.status, receivedParcels: receivedParcelCount, notReceivedParcels: missingParcelNumbers.length, attemptId: request.currentAttemptId ?? null }
+      }], { session });
+    });
+  } finally {
+    await session.endSession();
+  }
+  const detail = await getPickupDetail(input.pickupId);
+  if (["RECEIVED_AT_DELHI_HUB", "COMPLETED_WITH_MISSING_PARCELS"].includes(detail.status) && branchId && businessAccountId) {
+    const emailPayload = pickupEmailPayload(detail);
+    const branch = await Branch.findById(branchId).select("name").lean().exec();
+    const missingList = missingParcelNumbers.slice(0, 30).join(", ");
+    const remaining = missingParcelNumbers.length - 30;
+    const message = missingParcelNumbers.length
+      ? `${detail.requestNumber} is completed at ${branch?.name ?? "the Delhi hub"}. ${receivedParcelCount} parcels received; ${missingParcelNumbers.length} not received at the hub: ${missingList}${remaining > 0 ? `, and ${remaining} more` : ""}. Open the pickup for the full list.`
+      : `${detail.requestNumber} has been received at ${branch?.name ?? "the Delhi hub"}.`;
+    const title = missingParcelNumbers.length ? "Pickup completed - parcels not received" : "Pickup received at Delhi hub";
+    await notifyPickupSafely(() => notifyPortalUsers([detail.requestedBy], {
+      type: "PICKUP_COMPLETED",
+      title,
+      message,
+      href: "/client/pickups",
+      idempotencyKey: `PICKUP_COMPLETED:${String(detail._id)}`,
+      businessAccountId,
+      metadata: { pickupRequestId: detail._id, branchId, receivedAtDelhiHubAt: receivedAt },
+      email: { templateKey: "PICKUP_COMPLETED_CLIENT", payload: emailPayload }
+    }));
+    await notifyPickupSafely(() => notifyAssignedPickupBranchStaff(branchId!, {
+      type: "PICKUP_COMPLETED",
+      title,
+      message,
+      href: "/dashboard/pickups",
+      idempotencyKey: `PICKUP_COMPLETED:${String(detail._id)}:STAFF`,
+      businessAccountId,
+      metadata: { pickupRequestId: detail._id, branchId, receivedAtDelhiHubAt: receivedAt },
+      email: { templateKey: "PICKUP_COMPLETED_STAFF", payload: emailPayload }
+    }));
+  }
+  return detail;
+}
+
+export async function updatePickupPartnerInfo(input: { pickupId: string; actorId: mongoose.Types.ObjectId; information: string }) {
+  const request = await PickupRequest.findById(asObjectId(input.pickupId, "Pickup request")).exec();
+  if (!request) throw new PickupServiceError("Pickup request was not found.", 404);
+  const before = request.pickupPartnerInfo ?? "";
+  request.pickupPartnerInfo = input.information.trim();
+  request.version += 1;
+  await request.save();
+  await AuditLog.create({
+    action: "PICKUP_REQUEST_UPDATED",
+    entityType: "PICKUP_REQUEST",
+    entityId: request._id,
+    performedBy: input.actorId,
+    performedAt: new Date(),
+    metadata: { field: "pickupPartnerInfo", previousValue: before, value: request.pickupPartnerInfo }
+  });
+  return getPickupDetail(input.pickupId);
+}
+
+export async function runPickupDispatchReminderSweep(now = new Date()) {
+  const due = await PickupRequest.find({
+    dispatchAt: { $lte: now },
+    dispatchReminderSentAt: null,
+    status: { $in: ["REQUESTED", "CONFIRMED", "DRIVER_ASSIGNED", "ACTION_REQUIRED", "IN_PROGRESS"] }
+  }).select("_id requestNumber businessAccountId branchId dispatchAt").sort({ dispatchAt: 1 }).limit(500).lean().exec();
+
+  let sent = 0;
+  const notifiedPickupIds: string[] = [];
+  for (const candidate of due) {
+    const session = await mongoose.startSession();
+    try {
+      const notified = await session.withTransaction(async () => {
+        const request = await PickupRequest.findOneAndUpdate({
+          _id: candidate._id,
+          dispatchReminderSentAt: null,
+          dispatchAt: { $lte: now },
+          status: { $in: ["REQUESTED", "CONFIRMED", "DRIVER_ASSIGNED", "ACTION_REQUIRED", "IN_PROGRESS"] }
+        }, { $set: { dispatchReminderSentAt: now } }, { returnDocument: "after", session }).lean().exec();
+        if (!request) return false;
+        await notifyAssignedPickupBranchStaff(request.branchId, {
+          type: "PICKUP_DISPATCH_REMINDER",
+          title: "Pickup dispatch time reached",
+          message: `${request.requestNumber} is scheduled to dispatch now.`,
+          href: "/dashboard/pickups",
+          idempotencyKey: `PICKUP_DISPATCH_REMINDER:${String(request._id)}`,
+          businessAccountId: request.businessAccountId,
+          metadata: { pickupRequestId: request._id, branchId: request.branchId, dispatchAt: request.dispatchAt }
+        }, session);
+        return true;
+      });
+      if (notified) {
+        sent += 1;
+        notifiedPickupIds.push(String(candidate._id));
+      }
+    } finally {
+      await session.endSession();
+    }
+  }
+  return { due: due.length, sent, notifiedPickupIds };
+}
+
 export async function confirmPickup(input: {
   pickupId: string; actorId: mongoose.Types.ObjectId;
-  scheduledWindow: { startAt: Date; endAt: Date; timezone: string };
 }) {
-  if (input.scheduledWindow.startAt >= input.scheduledWindow.endAt || input.scheduledWindow.endAt <= new Date()) throw new PickupServiceError("Select a valid future pickup window.");
   const session = await mongoose.startSession();
   let attemptId: mongoose.Types.ObjectId | null = null;
   try {
     await session.withTransaction(async () => {
       const request = await PickupRequest.findOne({ _id: asObjectId(input.pickupId, "Pickup request"), status: { $in: ["REQUESTED", "ACTION_REQUIRED", "PARTIALLY_COLLECTED"] } }).session(session).exec();
       if (!request) throw new PickupServiceError("This pickup cannot be scheduled in its current status.", 409);
+      const scheduledStart = request.dispatchAt ?? request.requestedWindow.startAt;
+      const scheduledWindow = {
+        startAt: scheduledStart,
+        endAt: request.dispatchAt ? new Date(scheduledStart.getTime() + 2 * 60 * 60 * 1000) : request.requestedWindow.endAt,
+        timezone: "Asia/Kolkata"
+      };
       if (request.status === "PARTIALLY_COLLECTED") {
         const remainingLinks = await PickupRequestShipment.find({ pickupRequestId: request._id, active: true }).session(session).exec();
         for (const link of remainingLinks) {
@@ -528,11 +1146,11 @@ export async function confirmPickup(input: {
       }
       const sequence = await PickupAttempt.countDocuments({ pickupRequestId: request._id }).session(session) + 1;
       const [attempt] = await PickupAttempt.create([{
-        pickupRequestId: request._id, sequence, status: "SCHEDULED", scheduledWindow: input.scheduledWindow
+        pickupRequestId: request._id, sequence, status: "SCHEDULED", scheduledWindow
       }], { session });
       if (!attempt) throw new PickupServiceError("Pickup attempt could not be scheduled.", 500);
       attemptId = attempt._id as mongoose.Types.ObjectId;
-      request.confirmedWindow = input.scheduledWindow;
+      request.confirmedWindow = scheduledWindow;
       request.currentAttemptId = attempt._id as mongoose.Types.ObjectId;
       request.status = "CONFIRMED";
       request.version += 1;
@@ -541,12 +1159,12 @@ export async function confirmPickup(input: {
     });
   } finally { await session.endSession(); }
   const detail = await getPickupDetail(input.pickupId);
-  await notifyPickupSafely(() => notifyBusinessShipmentMembers(detail.businessAccountId, {
+  await notifyPickupSafely(() => notifyPortalUsers([detail.requestedBy], {
     type: "PICKUP_CONFIRMED",
     title: "Pickup confirmed",
-    message: `${detail.requestNumber} is confirmed for ${input.scheduledWindow.startAt.toLocaleString("en-IN", { timeZone: input.scheduledWindow.timezone })}.`,
+    message: `${detail.requestNumber} is approved for dispatch at ${(detail.dispatchAt ?? detail.requestedWindow.startAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}.`,
     href: "/client/pickups",
-    idempotencyKey: `PICKUP_CONFIRMED:${String(attemptId)}`,
+    idempotencyKey: `PICKUP_CONFIRMED:${String(detail._id)}:${detail.version}`,
     businessAccountId: detail.businessAccountId,
     metadata: { pickupRequestId: detail._id, attemptId }
   }));
@@ -612,19 +1230,16 @@ export async function transitionDriverAttempt(input: { attemptId: string; driver
   }
   if (input.status === "COLLECTING") attempt.collectionStartedAt = now;
   await attempt.save();
-  if (["EN_ROUTE", "ARRIVED", "COLLECTING"].includes(input.status)) await PickupRequest.findByIdAndUpdate(attempt.pickupRequestId, { $set: { status: "IN_PROGRESS" }, $inc: { version: 1 } }).exec();
+  if (input.status === "EN_ROUTE") {
+    await markPickupStarted({ pickupId: String(attempt.pickupRequestId), actorId: input.driverUserId, source: "DRIVER" });
+  } else if (["ARRIVED", "COLLECTING"].includes(input.status)) {
+    await PickupRequest.findOneAndUpdate(
+      { _id: attempt.pickupRequestId, status: { $nin: ["RECEIVED_AT_DELHI_HUB", "COMPLETED_WITH_MISSING_PARCELS", "CANCELLED", "CLOSED_UNSUCCESSFUL"] } },
+      { $set: { status: "IN_PROGRESS" }, $inc: { version: 1 } }
+    ).exec();
+  }
   await AuditLog.create({ action: "PICKUP_ATTEMPT_STATUS_UPDATED", entityType: "PICKUP_ATTEMPT", entityId: attempt._id, performedBy: input.driverUserId, performedAt: now, metadata: { status: input.status } });
   if (input.status === "EN_ROUTE") {
-    const request = await PickupRequest.findById(attempt.pickupRequestId).select("businessAccountId requestNumber").lean().exec();
-    if (request) await notifyPickupSafely(() => notifyBusinessShipmentMembers(request.businessAccountId, {
-      type: "PICKUP_EN_ROUTE",
-      title: "Driver en route",
-      message: `The driver is on the way for ${request.requestNumber}.`,
-      href: "/client/pickups",
-      idempotencyKey: `PICKUP_EN_ROUTE:${String(attempt._id)}`,
-      businessAccountId: request.businessAccountId,
-      metadata: { pickupRequestId: request._id, attemptId: attempt._id }
-    }));
   }
   return getPickupDetail(String(attempt.pickupRequestId));
 }
@@ -634,7 +1249,11 @@ export async function sendPickupOtp(input: { attemptId: string; driverUserId: mo
   if (!attempt) throw new PickupServiceError("Arrive at the assigned pickup before requesting the verification code.", 409);
   if (attempt.otpSentAt && Date.now() - attempt.otpSentAt.getTime() < 60_000) throw new PickupServiceError("Wait one minute before requesting another code.", 429);
   const request = await PickupRequest.findById(attempt.pickupRequestId).exec();
-  if (!request?.pickupContact.email) throw new PickupServiceError("The pickup contact does not have an email address. Request a supervisor-approved OTP exception.", 409);
+  if (!request?.pickupContact.email) throw new PickupServiceError("The pickup requester does not have an account email for verification. Request a supervisor-approved OTP exception.", 409);
+  const requester = await User.findById(request.requestedBy).select("name firstName lastName").lean().exec();
+  const recipientName = requester?.name?.trim() ||
+    [requester?.firstName, requester?.lastName].filter(Boolean).join(" ") ||
+    "Client";
   const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
   const expiresAt = new Date(Date.now() + 10 * 60_000);
   attempt.otpHash = crypto.createHash("sha256").update(code).digest("hex");
@@ -642,7 +1261,7 @@ export async function sendPickupOtp(input: { attemptId: string; driverUserId: mo
   attempt.otpAttempts = 0;
   attempt.otpSentAt = new Date();
   await attempt.save();
-  const delivery = await sendPickupOtpEmail({ to: request.pickupContact.email, name: request.pickupContact.name, code, requestNumber: request.requestNumber, expiresAt });
+  const delivery = await sendPickupOtpEmail({ to: request.pickupContact.email, name: recipientName, code, requestNumber: request.requestNumber, expiresAt });
   return { sent: delivery.sent, skipped: delivery.skipped, expiresAt };
 }
 
@@ -690,8 +1309,8 @@ export async function requestPickupOtpException(input: { attemptId: string; driv
     performedAt: now,
     metadata: { status: attempt.status, otpExceptionRequested: true, reason: attempt.otpExceptionReason }
   });
-  const request = await PickupRequest.findById(attempt.pickupRequestId).select("businessAccountId requestNumber").lean().exec();
-  if (request) await notifyPickupSafely(() => notifyOperationsStaff({
+  const request = await PickupRequest.findById(attempt.pickupRequestId).select("businessAccountId branchId requestNumber").lean().exec();
+  if (request) await notifyPickupSafely(() => notifyAssignedPickupBranchStaff(request.branchId, {
     type: "PICKUP_ACTION_REQUIRED",
     title: "Pickup OTP exception",
     message: `${request.requestNumber} needs an OTP exception decision.`,
@@ -788,7 +1407,7 @@ export async function completePickupAttempt(input: { attemptId: string; driverUs
   const attempt = await PickupAttempt.findOne({ _id: asObjectId(input.attemptId, "Pickup attempt"), assignedDriverUserId: input.driverUserId, status: "COLLECTING" }).exec();
   if (!attempt) throw new PickupServiceError("Active pickup attempt was not found.", 409);
   if (!attempt.otpVerifiedAt && !attempt.otpExceptionApprovedBy) throw new PickupServiceError("Verify the pickup OTP before completing collection.", 409);
-  const proofs = await PickupProof.find({ pickupAttemptId: attempt._id }).select("type").lean().exec();
+  const proofs = await PickupProof.find({ pickupAttemptId: attempt._id, source: { $ne: "STAFF" } }).select("type").lean().exec();
   const proofTypes = new Set(proofs.map((proof) => proof.type));
   if (!proofTypes.has("SIGNATURE")) throw new PickupServiceError("Capture the customer signature before completing pickup.", 409);
   if (!proofTypes.has("PHOTO")) throw new PickupServiceError("Capture at least one pickup photograph before completing pickup.", 409);
@@ -839,17 +1458,7 @@ export async function completePickupAttempt(input: { attemptId: string; driverUs
       await AuditLog.create([{ action: "PICKUP_COMPLETED", entityType: "PICKUP_REQUEST", entityId: request._id, performedBy: input.driverUserId, performedAt: now, metadata: { attemptId: attempt._id, collectedShipments: collectedLinks.length, totalShipments: links.length } }], { session });
     });
   } finally { await session.endSession(); }
-  const detail = await getPickupDetail(String(attempt.pickupRequestId));
-  await notifyPickupSafely(() => notifyBusinessShipmentMembers(detail.businessAccountId, {
-    type: "PICKUP_COMPLETED",
-    title: "Pickup completed",
-    message: `${detail.requestNumber} is ${detail.status === "COLLECTED" ? "fully collected" : "partially collected"}.`,
-    href: "/client/pickups",
-    idempotencyKey: `PICKUP_COMPLETED:${String(attempt._id)}`,
-    businessAccountId: detail.businessAccountId,
-    metadata: { pickupRequestId: detail._id, attemptId: attempt._id, status: detail.status }
-  }));
-  return detail;
+  return getPickupDetail(String(attempt.pickupRequestId));
 }
 
 export async function driverPickupAttempts(driverUserId: mongoose.Types.ObjectId) {

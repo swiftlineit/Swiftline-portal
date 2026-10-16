@@ -50,6 +50,8 @@ import {
   type ShipmentListPagination
 } from "@/lib/shipmentsList";
 
+type ShipmentWeightRange = "lt10" | "gt10";
+
 const emptyPagination: ShipmentListPagination = { page: 1, limit: 20, total: 0, totalPages: 1 };
 const REBOOKED_FILTER_VALUE = "__REBOOKED__";
 const INDIVIDUAL_BOOKINGS_FILTER_VALUE = "__INDIVIDUAL_BOOKINGS__";
@@ -70,6 +72,7 @@ const shipmentViewQueryKeys = [
   "creationSource",
   "destinationRegions",
   "operationsManifestId",
+  "weightRange",
   "view",
   "page",
   "limit",
@@ -87,6 +90,7 @@ type ShipmentViewState = {
   individualBookings: boolean;
   destinationRegions: ShipmentDestinationRegionCode[];
   operationsManifestId: string;
+  weightRange: ShipmentWeightRange | "";
   page: number;
   limit: number;
   sort: string;
@@ -130,6 +134,7 @@ function readShipmentViewState(value: string | null): ShipmentViewState | null {
         )
         : [],
       operationsManifestId: typeof parsed.operationsManifestId === "string" ? parsed.operationsManifestId : "",
+      weightRange: parsed.weightRange === "lt10" || parsed.weightRange === "gt10" ? parsed.weightRange : "",
       page: typeof parsed.page === "number" && Number.isInteger(parsed.page) && parsed.page > 0 ? parsed.page : 1,
       limit: typeof parsed.limit === "number" && defaultPageSizeOptions.includes(parsed.limit)
         ? parsed.limit
@@ -380,6 +385,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     || searchParams.get("creationSource") === LEGACY_PUBLIC_BOOKING_SOURCE;
   const destinationRegionsFromQuery = parseShipmentDestinationRegions(searchParams.get("destinationRegions"));
   const operationsManifestFromQuery = audience === "admin" ? searchParams.get("operationsManifestId") ?? "" : "";
+  const weightRangeFromQuery = audience === "admin" && (searchParams.get("weightRange") === "lt10" || searchParams.get("weightRange") === "gt10")
+    ? searchParams.get("weightRange") as ShipmentWeightRange : "";
   const allShipmentsViewFromQuery = searchParams.get("view") === "all";
   const pageFromQuery = parsePositiveInteger(searchParams.get("page"), 1);
   const limitFromQuery = parsePageSize(searchParams.get("limit"));
@@ -405,6 +412,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const [individualBookings, setIndividualBookings] = useState(individualBookingsFromQuery);
   const [destinationRegions, setDestinationRegions] = useState<ShipmentDestinationRegionCode[]>(destinationRegionsFromQuery);
   const [operationsManifestId, setOperationsManifestId] = useState(operationsManifestFromQuery);
+  const [weightRange, setWeightRange] = useState<ShipmentWeightRange | "">(weightRangeFromQuery);
   const [operationsManifests, setOperationsManifests] = useState<Array<{ id: string; manifestNumber: string; status: string }>>([]);
   const [operationsManifestOptionsLoaded, setOperationsManifestOptionsLoaded] = useState(false);
   const [operationsManifestOptionsError, setOperationsManifestOptionsError] = useState("");
@@ -510,6 +518,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     dateTo: dateRange.to,
     destinationRegions: [...destinationRegions].sort(),
     operationsManifestId,
+    weightRange,
     rebookedOnly,
     search,
     sort,
@@ -583,6 +592,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         individualBookings: audience === "admin" ? individualBookings : false,
         destinationRegions: audience === "admin" ? destinationRegions : [],
         operationsManifestId: audience === "admin" ? operationsManifestId : "",
+        weightRange: audience === "admin" ? weightRange || undefined : undefined,
         sort,
         attention: attentionOnly
       });
@@ -617,7 +627,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         setLoading(false);
       }
     }
-  }, [attentionOnly, audience, bookedDate, businessAccountId, dateRange, destinationRegions, individualBookings, operationsManifestId, limit, page, rebookedOnly, search, sort, status]);
+  }, [attentionOnly, audience, bookedDate, businessAccountId, dateRange, destinationRegions, individualBookings, operationsManifestId, weightRange, limit, page, rebookedOnly, search, sort, status]);
 
   // The URL wins when it contains a dashboard drill-down or an explicit
   // filter. Otherwise restore only this audience's last view from the tab
@@ -666,6 +676,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         setIndividualBookings(audience === "admin" && saved.individualBookings);
         setDestinationRegions(audience === "admin" ? saved.destinationRegions : []);
         setOperationsManifestId(audience === "admin" ? saved.operationsManifestId : "");
+        setWeightRange(audience === "admin" ? saved.weightRange : "");
         setPage(saved.page);
         setLimit(saved.limit);
         setSort(saved.sort);
@@ -705,6 +716,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       setIndividualBookings(false);
       setDestinationRegions([]);
       setOperationsManifestId("");
+      setWeightRange("");
       setPage(1);
       setLimit(defaultPageSizeOptions[0]);
       setSort("booked:desc");
@@ -835,6 +847,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       individualBookings: audience === "admin" && individualBookings,
       destinationRegions: audience === "admin" ? destinationRegions : [],
       operationsManifestId: audience === "admin" ? operationsManifestId : "",
+      weightRange: audience === "admin" ? weightRange : "",
       page,
       limit,
       sort
@@ -866,6 +879,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     }
     if (audience === "admin" && destinationRegions.length) params.set("destinationRegions", destinationRegions.join(","));
     if (audience === "admin" && operationsManifestId) params.set("operationsManifestId", operationsManifestId);
+    if (audience === "admin" && weightRange) params.set("weightRange", weightRange);
     if (page > 1) params.set("page", String(page));
     if (limit !== defaultPageSizeOptions[0]) params.set("limit", String(limit));
     if (sort !== "booked:desc") params.set("sort", sort);
@@ -877,7 +891,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         { scroll: false }
       );
     }
-  }, [allShipmentsViewFromQuery, attentionOnly, audience, bookedDate, businessAccountId, dateRange.from, dateRange.to, destinationRegions, individualBookings, operationsManifestId, limit, page, rebookedOnly, restoringView, router, search, sort, status]);
+  }, [allShipmentsViewFromQuery, attentionOnly, audience, bookedDate, businessAccountId, dateRange.from, dateRange.to, destinationRegions, individualBookings, operationsManifestId, weightRange, limit, page, rebookedOnly, restoringView, router, search, sort, status]);
 
   useEffect(() => {
     if (previousSelectionScope.current === selectionScope) return;
@@ -1173,9 +1187,17 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
               {attentionOnly ? (
               <span className="ml-4 inline-flex items-center gap-2 rounded-full bg-amber-50 px-2.5 py-1 text-sm font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
                 Attention needed only
-                <Link href={`${audience === "client" ? "/client/shipments" : "/dashboard/shipments"}?attention=0`} aria-label="Clear attention filter" className="rounded-full p-0.5 hover:bg-amber-100">
+                <button
+                  type="button"
+                  aria-label="Clear attention filter"
+                  onClick={() => {
+                    setAttentionOnly(false);
+                    setPage(1);
+                  }}
+                  className="rounded-full p-0.5 hover:bg-amber-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700"
+                >
                   <FiX aria-hidden="true" className="h-3 w-3" />
-                </Link>
+                </button>
               </span>
             ) : null}
             </h1>
@@ -1762,6 +1784,29 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
               );
             })}
 
+            <div role="group" aria-label="Shipment weight" className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-300 bg-slate-50 p-1">
+              {([
+                { value: "lt10", label: "< 10 kg", accessibleLabel: "Less than 10 kg" },
+                { value: "gt10", label: "> 10 kg", accessibleLabel: "Greater than 10 kg" }
+              ] as const).map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-label={option.accessibleLabel}
+                  aria-pressed={weightRange === option.value}
+                  onClick={() => {
+                    setWeightRange((current) => current === option.value ? "" : option.value);
+                    setPage(1);
+                  }}
+                  className={`h-7 whitespace-nowrap rounded-md px-2.5 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282] ${weightRange === option.value
+                    ? "bg-[#0D1282] text-white shadow-sm"
+                    : "text-slate-600 hover:bg-white hover:text-[#0D1282]"}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+
             {destinationRegions.length ? (
               <button
                 type="button"
@@ -1782,6 +1827,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
         <div className="flex justify-end">
           <TableToolbar
           exportPath={shipmentListPath(audience)}
+          compactExportButtons={audience === "admin"}
           exportParams={shipmentListParams({
             status,
             search,
@@ -1792,6 +1838,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
             individualBookings: audience === "admin" ? individualBookings : false,
             destinationRegions: audience === "admin" ? destinationRegions : [],
             operationsManifestId: audience === "admin" ? operationsManifestId : "",
+            weightRange: audience === "admin" ? weightRange || undefined : undefined,
             sort,
             attention: attentionOnly
           })}
@@ -1857,7 +1904,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     if (node) rowRefs.current.set(shipment.id, node);
                     else rowRefs.current.delete(shipment.id);
                   }}
-                  className={`border-b border-slate-100 transition hover:bg-slate-50/70 last:border-b-0${restoredRowId === shipment.id ? " bg-[#0D1282]/5" : ""}`}
+                  className={`border-b border-slate-100 transition last:border-b-0 ${shipment.status === "SHIPMENT_CANCELLED"
+                    ? "bg-red-100 hover:bg-red-200/70"
+                    : restoredRowId === shipment.id
+                      ? "bg-[#0D1282]/5 hover:bg-slate-50/70"
+                      : "hover:bg-slate-50/70"}`}
                 >
                   <td className="px-4 py-3">
                     <input
@@ -1962,9 +2013,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                               ?? shipment.deliveryEstimate.estimatedDeliveryAt
                             )}
                           </p>
-                          <div className="mt-1">
-                            <ScheduleChip estimate={shipment.deliveryEstimate} />
-                          </div>
+                          {shipment.status !== "SHIPMENT_CANCELLED" ? (
+                            <div className="mt-1">
+                              <ScheduleChip estimate={shipment.deliveryEstimate} />
+                            </div>
+                          ) : null}
                         </>
                       ) : (
                         // No route configured for this lane, so no date is

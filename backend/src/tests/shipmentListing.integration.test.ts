@@ -124,6 +124,44 @@ after(async () => {
 });
 
 describe("shipment listing read path", () => {
+  test("filters staff shipments by displayed weight before pagination, with strict 10 kg boundaries", async () => {
+    const light = await createBookedDraft(accountOneId, "WEIGHT-FILTER-LIGHT");
+    const boundary = await createBookedDraft(accountOneId, "WEIGHT-FILTER-BOUNDARY");
+    const heavy = await createBookedDraft(accountOneId, "WEIGHT-FILTER-HEAVY");
+    const otherAccount = await createBookedDraft(accountTwoId, "WEIGHT-FILTER-OTHER");
+    const snapshot = (actualWeightKg: number) => ({
+      version: 1, source: { shipmentReference: "" }, tracking: { swiftlineTrackingNumber: "" },
+      payment: { currency: "INR" }, pricing: { baseAmount: 0 }, parcels: [{ actualWeightKg }]
+    });
+    await Promise.all([
+      ShipmentDraft.updateOne({ _id: light.draft._id }, { $set: { "parcelList.0.weightKg": 8 } }).exec(),
+      ShipmentDraft.updateOne({ _id: boundary.draft._id }, { $set: { "parcelList.0.weightKg": 10 } }).exec(),
+      DpdShipment.updateOne({ _id: heavy.booking._id }, {
+        $set: { bookingSnapshot: snapshot(8), currentShipmentSnapshot: snapshot(12) }
+      }).exec(),
+      ShipmentDraft.updateOne({ _id: otherAccount.draft._id }, { $set: { "parcelList.0.weightKg": 14 } }).exec()
+    ]);
+
+    const base = {
+      page: 1, limit: 1, actorRole: "admin" as const,
+      bookingStatuses: allShipmentStatuses,
+      businessAccountIds: [accountOneId], search: "WEIGHT-FILTER"
+    };
+    const below = await listBookedShipments({ ...base, weightRange: "lt10" });
+    assert.equal(below.pagination.total, 1);
+    assert.deepEqual(below.shipments.map((item) => item.id), [String(light.draft._id)]);
+    assert.equal(below.shipments[0]?.weightKg, 8);
+
+    const above = await listBookedShipments({ ...base, weightRange: "gt10", page: 3 });
+    assert.equal(above.pagination.total, 1);
+    assert.equal(above.pagination.page, 1);
+    assert.deepEqual(above.shipments.map((item) => item.id), [String(heavy.draft._id)]);
+    assert.equal(above.shipments[0]?.weightKg, 12);
+
+    const client = await listBookedShipments({ ...base, actorRole: "client", weightRange: "gt10", limit: 20 });
+    assert.equal(client.pagination.total, 3, "the staff-only filter must not affect client lists");
+  });
+
   test("finds booked shipments by consignor and consignee names in list and global search", async () => {
     const sender = await createBookedDraft(accountOneId, "NAME-SENDER");
     const recipient = await createBookedDraft(accountOneId, "NAME-RECIPIENT");

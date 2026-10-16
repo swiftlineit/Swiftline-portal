@@ -36,11 +36,13 @@ import {
   chooseOperationsBagForParcel,
   createOperationsManifestWithFlight,
   deferredParcelEligibility,
+  deferredParcelDispatchEligibility,
   deleteOperationsManifest,
   formatOperationsBagNumber,
   formatOperationsManifestNumber,
   isOperationsBagWeightAllowed,
   isOperationsManifestNumberReusable,
+  isDeferredDispatchTimelineCandidate,
   movingManifestConsignments,
   operationsManifestSearchConditions,
   sealedManifestDeletionBlockReason,
@@ -99,6 +101,32 @@ describe("operations manifest omitted parcels", () => {
     };
     assert.equal(deferredParcelEligibility("P02", [prior]).allowed, true);
     assert.equal(deferredParcelEligibility("P02", [{ ...prior, manifestStatus: "SEALED" }]).allowed, false);
+  });
+
+  it("recognizes only untravelled parcels released by a dispatched manifest", () => {
+    const prior = {
+      manifestStatus: "DISPATCHED",
+      manifestNumber: "SLC032",
+      expectedParcelNumbers: ["P01", "P02"],
+      scannedParcelNumbers: ["P01"],
+      parcelDispositions: [{ parcelNumber: "P02", disposition: "DEFERRED_TO_NEXT_MANIFEST" as const }]
+    };
+    const input = { scannedParcelNumbers: ["P02"], priorManifests: [prior], carriedParcelNumbers: ["P01"] };
+    assert.equal(deferredParcelDispatchEligibility(input), true);
+    assert.equal(deferredParcelDispatchEligibility({ ...input, priorManifests: [{
+      ...prior,
+      parcelDispositions: [{ parcelNumber: "P02", disposition: "HELD" as const }]
+    }] }), true);
+    assert.equal(deferredParcelDispatchEligibility({ ...input, priorManifests: [] }), false);
+    assert.equal(deferredParcelDispatchEligibility({ ...input, carriedParcelNumbers: ["P01", "P02"] }), false);
+    assert.equal(deferredParcelDispatchEligibility({ ...input, scannedParcelNumbers: ["P01"] }), false);
+    assert.equal(deferredParcelDispatchEligibility({ ...input, scannedParcelNumbers: ["P02", "P03"] }), false);
+    assert.equal(deferredParcelDispatchEligibility({ ...input, scannedParcelNumbers: ["P02", "P02"] }), false);
+    assert.equal(deferredParcelDispatchEligibility({ ...input, priorManifests: [{ ...prior, manifestStatus: "SEALED" }] }), false);
+    assert.equal(deferredParcelDispatchEligibility({ ...input, priorManifests: [{
+      ...prior,
+      parcelDispositions: [{ parcelNumber: "P02", disposition: "CANCELLED" as const }]
+    }] }), false);
   });
 
   it("never releases a parcel cancelled on an earlier manifest", () => {
@@ -309,6 +337,51 @@ describe("operations manifest dispatch readiness", () => {
     }), []);
   });
 
+  it("allows a verified deferred parcel despite the earlier parcel's transit milestones", () => {
+    const events = eventsFor(firstDraftId, [
+      ...readyStatuses, "ORIGIN_HUB_DISPATCHED", "IN_TRANSIT", "DESTINATION_ARRIVED"
+    ]);
+    const input = {
+      consignments: [{ shipmentDraftId: firstDraftId, consignmentNumber: "SLCDEL061026011" }],
+      events
+    };
+    assert.match(buildManifestDispatchIssues(input)[0]?.reason ?? "", /later milestone/);
+    assert.deepEqual(buildManifestDispatchIssues({
+      ...input,
+      eligibleDeferredDraftIds: new Set([String(firstDraftId)])
+    }), []);
+    assert.match(buildManifestDispatchIssues({
+      ...input,
+      events: [...events, ...eventsFor(firstDraftId, ["DELIVERED"])],
+      eligibleDeferredDraftIds: new Set([String(firstDraftId)])
+    })[0]?.reason ?? "", /later milestone/);
+  });
+
+  it("only treats pre-seal transit history as a deferred dispatch candidate", () => {
+    const sealedAt = new Date("2026-10-16T11:16:33.692Z");
+    const recordedAt = new Date("2026-10-08T12:20:25.023Z");
+    const events = ["ORIGIN_HUB_DISPATCHED", "IN_TRANSIT", "DESTINATION_ARRIVED"].map((status) => ({
+      status,
+      eventAt: recordedAt,
+      createdAt: recordedAt
+    }));
+    assert.equal(isDeferredDispatchTimelineCandidate({ events, sealedAt }), true);
+    assert.equal(isDeferredDispatchTimelineCandidate({ events, sealedAt: null }), false);
+    assert.equal(isDeferredDispatchTimelineCandidate({ events: events.slice(1), sealedAt }), false);
+    assert.equal(isDeferredDispatchTimelineCandidate({
+      events: [{ ...events[0]!, createdAt: new Date("2026-10-16T12:00:00Z") }, ...events.slice(1)],
+      sealedAt
+    }), false);
+    assert.equal(isDeferredDispatchTimelineCandidate({
+      events: [...events, { status: "DESTINATION_ARRIVED", eventAt: recordedAt, createdAt: new Date("2026-10-16T12:00:00Z") }],
+      sealedAt
+    }), false);
+    assert.equal(isDeferredDispatchTimelineCandidate({
+      events: [...events, { status: "DELIVERED", eventAt: recordedAt, createdAt: recordedAt }],
+      sealedAt
+    }), false);
+  });
+
   it("blocks the entire dispatch and names each shipment with missing milestones", () => {
     const issues = buildManifestDispatchIssues({
       consignments: [
@@ -336,7 +409,8 @@ describe("operations manifest dispatch readiness", () => {
         { shipmentDraftId: firstDraftId, status: "ON_HOLD", eventAt: new Date(2026, 7, 22, 9) },
         ...eventsFor(secondDraftId, readyStatuses)
       ],
-      cancellations: [{ shipmentDraftId: secondDraftId, status: "COMPLETED" }]
+      cancellations: [{ shipmentDraftId: secondDraftId, status: "COMPLETED" }],
+      eligibleDeferredDraftIds: new Set([String(firstDraftId), String(secondDraftId)])
     });
     assert.match(issues.find((issue) => issue.reference === "SLC-HOLD-01")?.reason ?? "", /on hold/);
     assert.match(issues.find((issue) => issue.reference === "SLC-CANCEL-02")?.reason ?? "", /cancelled/);
@@ -702,6 +776,34 @@ describe("operations manifest safeguards", () => {
     assert.equal(sheet.getCell("H14").value, "Value *");
     assert.equal(sheet.getCell("L14").value, null);
     assert.ok((sheet.getRow(15).height ?? 0) > 26, "the description row must grow with wrapped content");
+  });
+
+  it("expands the entire address continuation row for a long consignee address", async () => {
+    const manifest = sealedManifest();
+    const snapshot = manifest.sealedSnapshot as Record<string, unknown>;
+    const consignments = snapshot.consignments as Array<Record<string, unknown>>;
+    const address = "UNIT 12-13, 160 BELGRAVE COMMERCIAL CENTRE, BELGRAVE ROAD, WOLVERHAMPTON, WEST MIDLANDS";
+    consignments[0]!.consigneeSnapshot = {
+      formatted: "Asha Patel\n" + address,
+      party: {
+        contactName: "Asha Patel",
+        addressLine1: address,
+        addressLine2: "Short Road",
+        city: "Wolverhampton",
+        state: "West Midlands",
+        postcode: "WV1 1AA",
+        countryCode: "GB",
+        phone: ""
+      }
+    };
+
+    const sheet = await manifestSheetRows(manifest);
+    assert.equal(sheet.getCell("F16").value, address);
+    assert.ok((sheet.getRow(16).height ?? 0) >= 40, "the long consignee address must fit in the whole row");
+    assert.equal(sheet.getRow(15).height, 26, "the name and description row keeps its existing height");
+    assert.equal(sheet.getRow(17).height, 18, "a short address row keeps its existing height");
+    assert.equal(sheet.getRow(24).height, 18, "the blank closing row keeps its existing height");
+    assert.equal(sheet.getCell("G16").value, null, "the description column stays in place");
   });
 
   it("prints every item from a parcel instead of the bounded summary", async () => {

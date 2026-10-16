@@ -75,6 +75,7 @@ import {
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
+import { loadShipmentHubReceipt } from "../services/shipmentHubReceipt.service.js";
 import { resolveTrackingGatewayCode } from "../services/shipmentGateway.service.js";
 import {
   loadShipmentParcelActivities,
@@ -1344,7 +1345,7 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
     return response.status(404).json({ success: false, message: "Booked shipment not found" });
   }
 
-  const [labels, events, branch, shipmentInvoice, parcelActivities, parcelProgress, carrierTrackingReviews] = await Promise.all([
+  const [labels, events, branch, shipmentInvoice, parcelActivities, parcelProgress, hubReceipt, carrierTrackingReviews] = await Promise.all([
     LabelDocument.find({
       dpdShipmentId: shipment._id,
       labelVersion: shipment.snapshotRevision || 1
@@ -1360,6 +1361,7 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
       .exec(),
     loadShipmentParcelActivities(shipmentDraftId),
     loadShipmentParcelProgress(shipmentDraftId),
+    loadShipmentHubReceipt(shipmentDraftId),
     CarrierTrackingEvent.find({ shipmentDraftId, processingStatus: "REVIEW_REQUIRED" })
       .select("carrierAwbNumber eventState description location eventAt processingNote receivedAt")
       .sort({ eventAt: -1, receivedAt: -1 })
@@ -1408,6 +1410,7 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
       trackingAttention: buildTrackingAttention(events),
       parcelActivities,
       parcelProgress,
+      hubReceipt,
       carrierTrackingReviews: carrierTrackingReviews.map((event) => ({
         id: String(event._id),
         carrierAwbNumber: event.carrierAwbNumber,
@@ -1688,6 +1691,12 @@ export async function updateDpdShipmentOperationalStatus(request: Request, respo
       message: describeRecordedLaterMilestones(parsed.data.status, recordedLaterMilestones),
       laterStatuses: recordedLaterMilestones
     });
+  }
+  if (parsed.data.status === "WAREHOUSE_SCAN_IN") {
+    const hubReceipt = await loadShipmentHubReceipt(shipment.shipmentDraftId);
+    if (hubReceipt?.notReceivedParcelNumbers.length) {
+      return response.status(409).json({ success: false, message: `${hubReceipt.notReceivedParcelNumbers.length} parcel(s) have not been received at the origin facility. Record their receipt before advancing this shipment.` });
+    }
   }
 
   let event;

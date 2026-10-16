@@ -3,6 +3,7 @@ import { LabelDocument } from "../../models/labelDocument.model.js";
 import { RateCardShare } from "../../models/rateCardShare.model.js";
 import { ShipmentInvoice } from "../../models/shipmentInvoice.model.js";
 import { ShipmentManifest } from "../../models/shipmentManifest.model.js";
+import { PickupRequest } from "../../models/pickupRequest.model.js";
 import type { EmailAttachmentKind, IEmailAttachmentRef } from "../../models/emailOutbox.model.js";
 import { resolveShareRecipientLabel, shareDocumentBasename } from "../rateCardShare.service.js";
 import { createRateCardSharePdf } from "../rateCardSharePdf.service.js";
@@ -116,12 +117,26 @@ async function resolveRateCardShareWorkbook(ref: IEmailAttachmentRef): Promise<R
   };
 }
 
+async function resolvePickupDocument(ref: IEmailAttachmentRef): Promise<ResolvedAttachment | null> {
+  if (!ref.documentId) return null;
+  const pickup = await PickupRequest.findById(ref.refId).select("documents").lean().exec();
+  const document = pickup?.documents.find((item) => String(item._id) === String(ref.documentId));
+  if (!document || !["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(document.mimeType)) return null;
+  return {
+    kind: "PICKUP_DOCUMENT",
+    filename: safeFilename(document.originalName),
+    content: await getObjectBuffer(document.storageKey),
+    contentType: document.mimeType
+  };
+}
+
 const resolvers: Partial<Record<EmailAttachmentKind, (ref: IEmailAttachmentRef) => Promise<ResolvedAttachment | null>>> = {
   SHIPMENT_INVOICE_PDF: resolveShipmentInvoicePdf,
   LABEL_DOCUMENT: resolveLabelDocument,
   SHIPMENT_MANIFEST_PDF: resolveShipmentManifestPdf,
   RATE_CARD_SHARE_PDF: resolveRateCardSharePdf,
-  RATE_CARD_SHARE_XLSX: resolveRateCardShareWorkbook
+  RATE_CARD_SHARE_XLSX: resolveRateCardShareWorkbook,
+  PICKUP_DOCUMENT: resolvePickupDocument
 };
 
 /**

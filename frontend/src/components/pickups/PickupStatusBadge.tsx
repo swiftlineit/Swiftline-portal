@@ -18,6 +18,8 @@ const statusStyles: Record<string, string> = {
   PROOF_REVIEW_REQUIRED: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800",
   PARTIALLY_COLLECTED: "border-yellow-200 bg-yellow-50 text-yellow-900",
   COLLECTED: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  RECEIVED_AT_DELHI_HUB: "border-teal-200 bg-teal-50 text-teal-800",
+  COMPLETED_WITH_MISSING_PARCELS: "border-amber-300 bg-amber-50 text-amber-900",
   COMPLETED: "border-emerald-200 bg-emerald-50 text-emerald-800",
   CANCELLED: "border-slate-300 bg-slate-100 text-slate-700",
   FAILED: "border-red-200 bg-red-50 text-red-800",

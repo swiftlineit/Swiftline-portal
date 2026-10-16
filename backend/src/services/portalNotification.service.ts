@@ -235,6 +235,28 @@ export async function notifyFlightOperationsStaff(
 /** Branch-owned operational events such as public bookings and payment holds. */
 export const notifyBranchOperationsStaff = notifyFlightOperationsStaff;
 
+/**
+ * Pickup notifications are intentionally narrower than the general branch
+ * audience: only active admin and operations users explicitly assigned to this
+ * branch receive the in-app notification and its email.
+ */
+export async function notifyAssignedPickupBranchStaff(
+  branchId: mongoose.Types.ObjectId,
+  input: NotificationInput,
+  session?: mongoose.ClientSession
+) {
+  const staff = await User.find({
+    userStatus: "active",
+    role: { $in: ["admin", "operations"] },
+    assignedBranches: branchId
+  })
+    .select("_id")
+    .session(session ?? null)
+    .lean()
+    .exec();
+  await insertNotifications(staff.map((member) => member._id), input, session);
+}
+
 export function serializePortalNotification(notification: InstanceType<typeof PortalNotification>) {
   return {
     id: String(notification._id),

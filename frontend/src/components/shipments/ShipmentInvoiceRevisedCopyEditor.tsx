@@ -9,6 +9,13 @@ import {
   type ShipmentInvoice,
 } from "@/lib/shipmentInvoices";
 import type { ShipmentChargeLine } from "@/lib/shipmentCostEstimate";
+import {
+  revisedAutomaticBoxAmounts,
+  revisedChargeableKg,
+  revisedTaxableFromRows,
+  revisedTaxTotals,
+  revisedVolumetricKg,
+} from "@/lib/revisedInvoiceCalculations";
 
 /**
  * WYSIWYG editor for a document-only revised copy of a tax invoice.
@@ -34,12 +41,17 @@ type ParcelDraft = {
   chargeable: string;
   rate: string;
   amount: string;
+  amountManual: boolean;
   len: string;
   wid: string;
   hei: string;
 };
 
-type LineDraft = { label: string; amount: string; kind: "CHARGE" | "DEDUCTION" };
+type LineDraft = {
+  label: string;
+  amount: string;
+  kind: "CHARGE" | "DEDUCTION";
+};
 
 function str(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -56,19 +68,13 @@ function toMinor(value: string) {
   return Math.round(parseNum(value) * 100);
 }
 
-function splitTax(taxableMinor: number, gstRatePercent: number, taxType: "CGST_SGST" | "IGST") {
-  const rate = Number.isFinite(gstRatePercent) && gstRatePercent > 0 ? gstRatePercent : 0;
-  const taxMinor = Math.round((taxableMinor * rate) / 100);
-  if (taxType === "CGST_SGST") {
-    const cgst = Math.floor(taxMinor / 2);
-    return { cgst, sgst: taxMinor - cgst, igst: 0, taxMinor };
-  }
-  return { cgst: 0, sgst: 0, igst: taxMinor, taxMinor };
-}
-
 function safeMoney(minor: number, currency: string) {
   try {
-    return new Intl.NumberFormat("en-IN", { style: "currency", currency, minimumFractionDigits: 2 }).format(minor / 100);
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+    }).format(minor / 100);
   } catch {
     return `${(minor / 100).toFixed(2)} ${currency}`;
   }
@@ -77,13 +83,19 @@ function safeMoney(minor: number, currency: string) {
 function formatDate(value: string) {
   const time = new Date(value).getTime();
   if (Number.isNaN(time)) return value;
-  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  })
     .format(new Date(value))
     .replaceAll("/", "-");
 }
 
 function stringifyRecord(record: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(record).map(([key, val]) => [key, str(val)])) as Record<string, string>;
+  return Object.fromEntries(
+    Object.entries(record).map(([key, val]) => [key, str(val)]),
+  ) as Record<string, string>;
 }
 
 function initParcels(invoice: ShipmentInvoice): ParcelDraft[] {
@@ -95,6 +107,7 @@ function initParcels(invoice: ShipmentInvoice): ParcelDraft[] {
     chargeable: str(parcel.chargeableWeightKg),
     rate: parcel.chargesPerKg === null ? "" : str(parcel.chargesPerKg),
     amount: str(parcel.baseAmount),
+    amountManual: false,
     len: parcel.lengthCm === null ? "" : str(parcel.lengthCm),
     wid: parcel.widthCm === null ? "" : str(parcel.widthCm),
     hei: parcel.heightCm === null ? "" : str(parcel.heightCm),
@@ -119,7 +132,11 @@ export default function ShipmentInvoiceRevisedCopyEditor({
   initial: ShipmentInvoice;
   copyId?: string;
   saving?: boolean;
-  onSave: (invoice: ShipmentInvoice, copyId: string | undefined, changeReason: string) => Promise<void>;
+  onSave: (
+    invoice: ShipmentInvoice,
+    copyId: string | undefined,
+    changeReason: string,
+  ) => Promise<void>;
   onCancel: () => void;
 }) {
   const [invoiceNumber, setInvoiceNumber] = useState(initial.invoiceNumber);
@@ -127,29 +144,51 @@ export default function ShipmentInvoiceRevisedCopyEditor({
   const [currency, setCurrency] = useState(initial.currency);
   const [sacCode, setSacCode] = useState(initial.sacCode);
   const [description, setDescription] = useState(initial.description);
-  const [supplier, setSupplier] = useState<Record<string, string>>(() => stringifyRecord(initial.supplier));
-  const [customer, setCustomer] = useState<Record<string, string>>(() => stringifyRecord(initial.customer));
+  const [supplier, setSupplier] = useState<Record<string, string>>(() =>
+    stringifyRecord(initial.supplier),
+  );
+  const [customer, setCustomer] = useState<Record<string, string>>(() =>
+    stringifyRecord(initial.customer),
+  );
   const [origin, setOrigin] = useState(str(initial.shipment.origin));
-  const [destination, setDestination] = useState(str(initial.shipment.destination));
-  const [deliveryAddress, setDeliveryAddress] = useState(str(initial.shipment.deliveryAddress));
-  const [consigneeName, setConsigneeName] = useState(str(initial.shipment.consigneeName));
-  const [customerReference, setCustomerReference] = useState(str(initial.shipment.customerReference));
-  const [sourceInvoiceNumber, setSourceInvoiceNumber] = useState(str(initial.shipment.sourceInvoiceNumber));
-  const [serviceType, setServiceType] = useState(str(initial.shipment.serviceType));
-  const [serviceCode, setServiceCode] = useState(str(initial.shipment.serviceCode));
-  const [parcels, setParcels] = useState<ParcelDraft[]>(() => initParcels(initial));
+  const [destination, setDestination] = useState(
+    str(initial.shipment.destination),
+  );
+  const [deliveryAddress, setDeliveryAddress] = useState(
+    str(initial.shipment.deliveryAddress),
+  );
+  const [consigneeName, setConsigneeName] = useState(
+    str(initial.shipment.consigneeName),
+  );
+  const [customerReference, setCustomerReference] = useState(
+    str(initial.shipment.customerReference),
+  );
+  const [sourceInvoiceNumber, setSourceInvoiceNumber] = useState(
+    str(initial.shipment.sourceInvoiceNumber),
+  );
+  const [serviceType, setServiceType] = useState(
+    str(initial.shipment.serviceType),
+  );
+  const [serviceCode, setServiceCode] = useState(
+    str(initial.shipment.serviceCode),
+  );
+  const [parcels, setParcels] = useState<ParcelDraft[]>(() =>
+    initParcels(initial),
+  );
   const [lines, setLines] = useState<LineDraft[]>(() => initLines(initial));
-  const [taxable, setTaxable] = useState((initial.taxableValueMinor / 100).toFixed(2));
+  const [taxableOverride, setTaxableOverride] = useState<string | null>(
+    (initial.taxableValueMinor / 100).toFixed(2),
+  );
   const [gstRate, setGstRate] = useState(String(initial.gstRatePercent));
   const [taxType, setTaxType] = useState<"CGST_SGST" | "IGST">(initial.taxType);
   const [changeReason, setChangeReason] = useState("");
   const [error, setError] = useState("");
 
-  const totals = useMemo(() => {
-    const taxableMinor = toMinor(taxable);
-    const split = splitTax(taxableMinor, parseNum(gstRate), taxType);
-    return { taxableMinor, ...split, totalMinor: taxableMinor + split.taxMinor };
-  }, [taxable, gstRate, taxType]);
+  const taxable = taxableOverride ?? revisedTaxableFromRows(parcels, lines);
+  const totals = useMemo(
+    () => revisedTaxTotals(toMinor(taxable), parseNum(gstRate), taxType),
+    [taxable, gstRate, taxType],
+  );
 
   const noGst = parseNum(gstRate) === 0;
 
@@ -170,16 +209,48 @@ export default function ShipmentInvoiceRevisedCopyEditor({
   }
 
   function patchParcel(index: number, patch: Partial<ParcelDraft>) {
-    setParcels((prev) => prev.map((parcel, i) => (i === index ? { ...parcel, ...patch } : parcel)));
+    const dimensionsChanged = patch.len !== undefined || patch.wid !== undefined || patch.hei !== undefined;
+    const weightChanged = dimensionsChanged || patch.actual !== undefined || patch.volumetric !== undefined;
+    const amountChanged = weightChanged || patch.chargeable !== undefined || patch.rate !== undefined;
+    setParcels((prev) => {
+      const nextParcels = prev.map((parcel, i) => {
+        if (i !== index) return parcel;
+        const next = { ...parcel, ...patch };
+        if (dimensionsChanged) next.volumetric = revisedVolumetricKg(next, serviceType) ?? "";
+        if (weightChanged) next.chargeable = revisedChargeableKg(next.actual, next.volumetric);
+        if (amountChanged) next.amountManual = false;
+        if (patch.amount !== undefined) next.amountManual = true;
+        return next;
+      });
+      return amountChanged ? revisedAutomaticBoxAmounts(nextParcels, parseNum(gstRate)) : nextParcels;
+    });
+    if (amountChanged || patch.amount !== undefined) setTaxableOverride(null);
+  }
+
+  function updateServiceType(value: string) {
+    setServiceType(value);
+    setParcels((prev) => revisedAutomaticBoxAmounts(prev.map((parcel) => {
+      const volumetric = revisedVolumetricKg(parcel, value);
+      if (volumetric === null) return parcel;
+      const chargeable = revisedChargeableKg(parcel.actual, volumetric);
+      return { ...parcel, volumetric, chargeable, amountManual: false };
+    }), parseNum(gstRate)));
+    setTaxableOverride(null);
+  }
+
+  function updateGstRate(value: string) {
+    setGstRate(value);
+    setParcels((prev) => revisedAutomaticBoxAmounts(prev, parseNum(value)));
+    setTaxableOverride(null);
+  }
+
+  function updateLines(updater: (current: LineDraft[]) => LineDraft[]) {
+    setLines(updater);
+    setTaxableOverride(null);
   }
 
   function recalcFromRows() {
-    const boxesTotal = parcels.reduce((sum, parcel) => sum + parseNum(parcel.amount), 0);
-    const linesTotal = lines.reduce(
-      (sum, line) => sum + (line.kind === "DEDUCTION" ? -parseNum(line.amount) : parseNum(line.amount)),
-      0,
-    );
-    setTaxable((boxesTotal + linesTotal).toFixed(2));
+    setTaxableOverride(null);
   }
 
   function handleSave() {
@@ -194,31 +265,50 @@ export default function ShipmentInvoiceRevisedCopyEditor({
     }
     const taxableMinor = toMinor(taxable);
     const rate = parseNum(gstRate);
-    if (taxableMinor < 0 || rate < 0) {
-      setError("Taxable value and GST rate must be zero or more.");
+    if (taxableMinor < 0 || rate < 0 || rate > 100) {
+      setError("Taxable value must be zero or more and GST rate must be between zero and 100 percent.");
       return;
     }
-    const rowTaxableMinor = parcels.reduce((sum, parcel) => sum + toMinor(parcel.amount), 0)
-      + lines.reduce(
-        (sum, line) => sum + (line.kind === "DEDUCTION" ? -toMinor(line.amount) : toMinor(line.amount)),
+    if (lines.some((line) => !line.label.trim() && toMinor(line.amount) !== 0)) {
+      setError("Enter a label for every charge or deduction amount before saving.");
+      return;
+    }
+    const rowTaxableMinor =
+      parcels.reduce((sum, parcel) => sum + toMinor(parcel.amount), 0) +
+      lines.reduce(
+        (sum, line) =>
+          sum +
+          (line.kind === "DEDUCTION"
+            ? -toMinor(line.amount)
+            : toMinor(line.amount)),
         0,
       );
     if (taxableMinor !== rowTaxableMinor) {
-      setError("Taxable value must match the box and charge rows. Use Recalculate taxable from rows before saving.");
+      setError(
+        "Taxable value must match the box and charge rows. Use Recalculate taxable from rows before saving.",
+      );
       return;
     }
-    const split = splitTax(taxableMinor, rate, taxType);
+    const split = revisedTaxTotals(taxableMinor, rate, taxType);
 
     const sourceParcels = initial.shipment.parcels ?? [];
     const editedParcels = parcels.map((parcel) => {
-      const source = sourceParcels.find((candidate) => candidate.sequence === parcel.sequence)
-        ?? ({} as (typeof sourceParcels)[number]);
+      const source =
+        sourceParcels.find(
+          (candidate) => candidate.sequence === parcel.sequence,
+        ) ?? ({} as (typeof sourceParcels)[number]);
       // The preview shows one description line per box. Split it back onto the
       // stored items so HSN / quantity / rate details survive the round trip.
-      const parts = parcel.description.split(",").map((part) => part.trim()).filter(Boolean);
+      const parts = parcel.description
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
       const sourceItems = source.items ?? [];
       const items = parts.length
-        ? parts.map((part, itemIndex) => ({ ...(sourceItems[itemIndex] ?? {}), description: part }))
+        ? parts.map((part, itemIndex) => ({
+            ...(sourceItems[itemIndex] ?? {}),
+            description: part,
+          }))
         : (source.items ?? []);
       return {
         ...source,
@@ -239,13 +329,18 @@ export default function ShipmentInvoiceRevisedCopyEditor({
     // Keep original FREIGHT/GST pricing entries untouched; only the rows the
     // preview shows are rebuilt from the edited lines.
     const originalLines = initial.pricingSnapshot?.lines ?? [];
-    const kept = originalLines.filter((line) => line.code === "FREIGHT" || line.code === "GST");
+    const kept = originalLines.filter(
+      (line) => line.code === "FREIGHT" || line.code === "GST",
+    );
     const edited: ShipmentChargeLine[] = lines
       .filter((line) => line.label.trim())
       .map((line, index) => ({
         code: `CHARGE_${index + 1}` as ShipmentChargeLine["code"],
         label: line.label.trim(),
-        kind: line.kind === "DEDUCTION" ? ("DEDUCTION" as const) : ("CHARGE" as const),
+        kind:
+          line.kind === "DEDUCTION"
+            ? ("DEDUCTION" as const)
+            : ("CHARGE" as const),
         amount: parseNum(line.amount),
         amountMinor: toMinor(line.amount),
         basis: "Edited on the revised document copy",
@@ -254,7 +349,9 @@ export default function ShipmentInvoiceRevisedCopyEditor({
     const next: ShipmentInvoice = {
       ...initial,
       invoiceNumber: invoiceNumber.trim(),
-      issuedAt: issuedAt ? new Date(`${issuedAt}T00:00:00`).toISOString() : initial.issuedAt,
+      issuedAt: issuedAt
+        ? new Date(`${issuedAt}T00:00:00`).toISOString()
+        : initial.issuedAt,
       currency: currency.trim() || initial.currency,
       supplier: { ...initial.supplier, ...supplier },
       customer: { ...initial.customer, ...customer },
@@ -294,7 +391,11 @@ export default function ShipmentInvoiceRevisedCopyEditor({
       try {
         await onSave(next, copyId, changeReason.trim());
       } catch (caughtError) {
-        setError(caughtError instanceof Error ? caughtError.message : "Unable to save the revised copy.");
+        setError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Unable to save the revised copy.",
+        );
       }
     })();
   }
@@ -303,10 +404,13 @@ export default function ShipmentInvoiceRevisedCopyEditor({
     <div className="revised-copy-editor fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 p-4">
       <div className="no-print mx-auto mb-4 flex max-w-[210mm] flex-wrap items-center justify-between gap-3 rounded-2xl bg-white px-5 py-4 shadow-xl">
         <div>
-          <h2 className="text-base font-bold text-slate-950">Editing revised copy</h2>
+          <h2 className="text-base font-bold text-slate-950">
+            Editing revised copy
+          </h2>
           <p className="mt-1 text-xs font-medium text-slate-500">
-            Click any value on the invoice below and type — what you see is what the saved document looks like.
-            Document only: the real invoice is never changed. Logo and tracking number stay locked.
+            Click any value on the invoice below and type - what you see is what
+            the saved document looks like. Document only: the real invoice is
+            never changed. Logo and tracking number stay locked.
           </p>
         </div>
         <div className="flex gap-2">
@@ -339,7 +443,10 @@ export default function ShipmentInvoiceRevisedCopyEditor({
       </div>
 
       <div className="no-print mx-auto mb-4 max-w-[210mm] rounded-2xl bg-white px-5 py-4 shadow-xl">
-        <label htmlFor="revised-copy-reason" className="block text-sm font-bold text-slate-950">
+        <label
+          htmlFor="revised-copy-reason"
+          className="block text-sm font-bold text-slate-950"
+        >
           Reason for this revision
         </label>
         <textarea
@@ -382,10 +489,17 @@ export default function ShipmentInvoiceRevisedCopyEditor({
             className="h-[86px] w-[130px] shrink-0 object-contain object-left sm:h-[120px] sm:w-[180px]"
           />
           <div className="min-w-0 pt-1 text-left sm:pt-3 sm:text-right">
-            <h1 className="text-lg font-bold text-amber-800">REVISED DOCUMENT</h1>
+            <h1 className="text-lg font-bold text-amber-800">
+              REVISED DOCUMENT
+            </h1>
             <p className="mt-3 text-xs">
               <strong>Invoice No:</strong>{" "}
-              <EditText value={invoiceNumber} onChange={setInvoiceNumber} align="right" className="w-44 font-semibold" />
+              <EditText
+                value={invoiceNumber}
+                onChange={setInvoiceNumber}
+                align="right"
+                className="w-44 font-semibold"
+              />
             </p>
             <p className="mt-1 text-xs">
               <strong>Date:</strong>{" "}
@@ -395,10 +509,19 @@ export default function ShipmentInvoiceRevisedCopyEditor({
                 onChange={(event) => setIssuedAt(event.target.value)}
                 className="rounded border border-transparent px-1 text-right text-xs outline-none hover:border-blue-300 focus:border-blue-600 focus:bg-blue-50/40"
               />{" "}
-              <span className="text-slate-400">({formatDate(issuedAt ? new Date(`${issuedAt}T00:00:00`).toISOString() : initial.issuedAt)})</span>
+              <span className="text-slate-400">
+                (
+                {formatDate(
+                  issuedAt
+                    ? new Date(`${issuedAt}T00:00:00`).toISOString()
+                    : initial.issuedAt,
+                )}
+                )
+              </span>
             </p>
             <p className="mt-1 text-xs">
-              <strong>AWB / Tracking No.:</strong> {str(initial.shipment.shipmentReference) || "Not provided"}{" "}
+              <strong>AWB / Tracking No.:</strong>{" "}
+              {str(initial.shipment.shipmentReference) || "Not provided"}{" "}
               <span className="text-slate-400">(locked)</span>
             </p>
           </div>
@@ -410,64 +533,156 @@ export default function ShipmentInvoiceRevisedCopyEditor({
             <EditText value={sacCode} onChange={setSacCode} className="w-24" />
           </label>
           <label className="inline-flex min-w-0 flex-1 items-center gap-1">
-            <span className="shrink-0 font-semibold text-slate-500">Description:</span>
-            <EditText value={description} onChange={setDescription} className="min-w-0 flex-1" />
+            <span className="shrink-0 font-semibold text-slate-500">
+              Description:
+            </span>
+            <EditText
+              value={description}
+              onChange={setDescription}
+              className="min-w-0 flex-1"
+            />
           </label>
         </div>
 
         <section className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
           <div className="min-h-36 border border-slate-300 p-4 text-xs">
-            <p className="font-semibold uppercase text-slate-500">Supplier / Shipper Branch</p>
-            <EditText value={supplier.legalName ?? ""} onChange={(value) => setSupplier((prev) => ({ ...prev, legalName: value }))} className="mt-3 text-sm font-bold" />
-            <EditArea value={supplier.address ?? ""} onChange={(value) => setSupplier((prev) => ({ ...prev, address: value }))} rows={2} className="mt-2 leading-5" />
+            <p className="font-semibold uppercase text-slate-500">
+              Supplier / Shipper Branch
+            </p>
+            <EditText
+              value={supplier.legalName ?? ""}
+              onChange={(value) =>
+                setSupplier((prev) => ({ ...prev, legalName: value }))
+              }
+              className="mt-3 text-sm font-bold"
+            />
+            <EditArea
+              value={supplier.address ?? ""}
+              onChange={(value) =>
+                setSupplier((prev) => ({ ...prev, address: value }))
+              }
+              rows={2}
+              className="mt-2 leading-5"
+            />
             <p className="mt-2 font-semibold">
               GSTIN:{" "}
-              <EditText value={supplier.gstin ?? ""} onChange={(value) => setSupplier((prev) => ({ ...prev, gstin: value }))} className="w-40 tracking-wider" />
+              <EditText
+                value={supplier.gstin ?? ""}
+                onChange={(value) =>
+                  setSupplier((prev) => ({ ...prev, gstin: value }))
+                }
+                className="w-40 tracking-wider"
+              />
             </p>
             <p className="mt-1 flex items-center gap-1 text-slate-600">
-              <EditText value={supplier.email ?? ""} onChange={(value) => setSupplier((prev) => ({ ...prev, email: value }))} className="min-w-0 flex-1" />
+              <EditText
+                value={supplier.email ?? ""}
+                onChange={(value) =>
+                  setSupplier((prev) => ({ ...prev, email: value }))
+                }
+                className="min-w-0 flex-1"
+              />
               <span>|</span>
-              <EditText value={supplier.phone ?? ""} onChange={(value) => setSupplier((prev) => ({ ...prev, phone: value }))} className="w-28" />
+              <EditText
+                value={supplier.phone ?? ""}
+                onChange={(value) =>
+                  setSupplier((prev) => ({ ...prev, phone: value }))
+                }
+                className="w-28"
+              />
             </p>
             <details className="no-print mt-2">
-              <summary className="cursor-pointer text-[11px] font-semibold text-blue-900">More supplier fields</summary>
+              <summary className="cursor-pointer text-[11px] font-semibold text-blue-900">
+                More supplier fields
+              </summary>
               <div className="mt-2 grid gap-1">
                 {[
                   ["branchName", "Branch name"],
                   ["branchCode", "Branch code"],
                   ["state", "State"],
                 ].map(([key, label]) => (
-                  <label key={key} className="grid grid-cols-[110px_1fr] items-center gap-1">
+                  <label
+                    key={key}
+                    className="grid grid-cols-[110px_1fr] items-center gap-1"
+                  >
                     <span className="text-[11px] text-slate-500">{label}</span>
-                    <EditText value={supplier[key] ?? ""} onChange={(value) => setSupplier((prev) => ({ ...prev, [key]: value }))} />
+                    <EditText
+                      value={supplier[key] ?? ""}
+                      onChange={(value) =>
+                        setSupplier((prev) => ({ ...prev, [key]: value }))
+                      }
+                    />
                   </label>
                 ))}
               </div>
             </details>
           </div>
           <div className="min-h-36 border border-slate-300 p-4 text-xs">
-            <p className="font-semibold uppercase text-slate-500">Bill To / Customer</p>
-            <EditText value={customer.companyName ?? ""} onChange={(value) => setCustomer((prev) => ({ ...prev, companyName: value }))} className="mt-3 text-sm font-bold" />
-            <EditArea value={customer.billingAddress ?? ""} onChange={(value) => setCustomer((prev) => ({ ...prev, billingAddress: value }))} rows={2} className="mt-2 leading-5" />
+            <p className="font-semibold uppercase text-slate-500">
+              Bill To / Customer
+            </p>
+            <EditText
+              value={customer.companyName ?? ""}
+              onChange={(value) =>
+                setCustomer((prev) => ({ ...prev, companyName: value }))
+              }
+              className="mt-3 text-sm font-bold"
+            />
+            <EditArea
+              value={customer.billingAddress ?? ""}
+              onChange={(value) =>
+                setCustomer((prev) => ({ ...prev, billingAddress: value }))
+              }
+              rows={2}
+              className="mt-2 leading-5"
+            />
             <p className="mt-2 font-semibold">
               GSTIN:{" "}
-              <EditText value={customer.gstin ?? ""} onChange={(value) => setCustomer((prev) => ({ ...prev, gstin: value }))} className="w-40 tracking-wider" />
+              <EditText
+                value={customer.gstin ?? ""}
+                onChange={(value) =>
+                  setCustomer((prev) => ({ ...prev, gstin: value }))
+                }
+                className="w-40 tracking-wider"
+              />
             </p>
             <p className="mt-1 flex items-center gap-1 text-slate-600">
-              <EditText value={customer.email ?? ""} onChange={(value) => setCustomer((prev) => ({ ...prev, email: value }))} className="min-w-0 flex-1" />
+              <EditText
+                value={customer.email ?? ""}
+                onChange={(value) =>
+                  setCustomer((prev) => ({ ...prev, email: value }))
+                }
+                className="min-w-0 flex-1"
+              />
               <span>|</span>
-              <EditText value={customer.phone ?? ""} onChange={(value) => setCustomer((prev) => ({ ...prev, phone: value }))} className="w-28" />
+              <EditText
+                value={customer.phone ?? ""}
+                onChange={(value) =>
+                  setCustomer((prev) => ({ ...prev, phone: value }))
+                }
+                className="w-28"
+              />
             </p>
             <details className="no-print mt-2">
-              <summary className="cursor-pointer text-[11px] font-semibold text-blue-900">More customer fields</summary>
+              <summary className="cursor-pointer text-[11px] font-semibold text-blue-900">
+                More customer fields
+              </summary>
               <div className="mt-2 grid gap-1">
                 {[
                   ["contactName", "Contact name"],
                   ["state", "State"],
                 ].map(([key, label]) => (
-                  <label key={key} className="grid grid-cols-[110px_1fr] items-center gap-1">
+                  <label
+                    key={key}
+                    className="grid grid-cols-[110px_1fr] items-center gap-1"
+                  >
                     <span className="text-[11px] text-slate-500">{label}</span>
-                    <EditText value={customer[key] ?? ""} onChange={(value) => setCustomer((prev) => ({ ...prev, [key]: value }))} />
+                    <EditText
+                      value={customer[key] ?? ""}
+                      onChange={(value) =>
+                        setCustomer((prev) => ({ ...prev, [key]: value }))
+                      }
+                    />
                   </label>
                 ))}
               </div>
@@ -478,15 +693,29 @@ export default function ShipmentInvoiceRevisedCopyEditor({
         <section className="mt-5 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
           <div className="border border-slate-300 p-3">
             <p className="font-semibold uppercase text-slate-500">Origin</p>
-            <EditText value={origin} onChange={setOrigin} className="mt-2 font-semibold" />
+            <EditText
+              value={origin}
+              onChange={setOrigin}
+              className="mt-2 font-semibold"
+            />
           </div>
           <div className="border border-slate-300 p-3">
-            <p className="font-semibold uppercase text-slate-500">Destination</p>
-            <EditText value={destination} onChange={setDestination} className="mt-2 font-semibold" />
+            <p className="font-semibold uppercase text-slate-500">
+              Destination
+            </p>
+            <EditText
+              value={destination}
+              onChange={setDestination}
+              className="mt-2 font-semibold"
+            />
           </div>
           <div className="border border-slate-300 p-3">
             <p className="font-semibold uppercase text-slate-500">Currency</p>
-            <EditText value={currency} onChange={setCurrency} className="mt-2 font-semibold" />
+            <EditText
+              value={currency}
+              onChange={setCurrency}
+              className="mt-2 font-semibold"
+            />
           </div>
           <div className="border border-slate-300 p-3">
             <p className="font-semibold uppercase text-slate-500">Boxes</p>
@@ -495,18 +724,27 @@ export default function ShipmentInvoiceRevisedCopyEditor({
         </section>
 
         <details className="no-print mt-3 text-xs">
-          <summary className="cursor-pointer font-semibold text-blue-900">More shipment fields</summary>
+          <summary className="cursor-pointer font-semibold text-blue-900">
+            More shipment fields
+          </summary>
           <div className="mt-2 grid gap-1 sm:grid-cols-2">
             {(
               [
                 [consigneeName, setConsigneeName, "Consignee name"],
                 [customerReference, setCustomerReference, "Customer reference"],
-                [sourceInvoiceNumber, setSourceInvoiceNumber, "Source invoice no."],
-                [serviceType, setServiceType, "Service type"],
+                [
+                  sourceInvoiceNumber,
+                  setSourceInvoiceNumber,
+                  "Source invoice no.",
+                ],
+                [serviceType, updateServiceType, "Service type"],
                 [serviceCode, setServiceCode, "Service code"],
               ] as Array<[string, (value: string) => void, string]>
             ).map(([val, set, label]) => (
-              <label key={label} className="grid grid-cols-[140px_1fr] items-center gap-1">
+              <label
+                key={label}
+                className="grid grid-cols-[140px_1fr] items-center gap-1"
+              >
                 <span className="text-[11px] text-slate-500">{label}</span>
                 <EditText value={val} onChange={set} />
               </label>
@@ -516,10 +754,16 @@ export default function ShipmentInvoiceRevisedCopyEditor({
 
         <section className="invoice-line-items mt-5 overflow-x-auto border border-slate-950">
           <div className="grid grid-cols-[1.8fr_repeat(5,1fr)] bg-slate-100 text-center text-[10px] font-bold uppercase text-slate-700">
-            <div className="border-r border-slate-950 px-3 py-2">Description</div>
+            <div className="border-r border-slate-950 px-3 py-2">
+              Description
+            </div>
             <div className="border-r border-slate-950 px-2 py-2">Actual KG</div>
-            <div className="border-r border-slate-950 px-2 py-2">Volumetric KG</div>
-            <div className="border-r border-slate-950 px-2 py-2">Chargeable KG</div>
+            <div className="border-r border-slate-950 px-2 py-2">
+              Volumetric KG
+            </div>
+            <div className="border-r border-slate-950 px-2 py-2">
+              Chargeable KG
+            </div>
             <div className="border-r border-slate-950 px-2 py-2">Rate / KG</div>
             <div className="px-3 py-2">Amount</div>
           </div>
@@ -527,15 +771,33 @@ export default function ShipmentInvoiceRevisedCopyEditor({
             <div key={parcel.sequence} className="border-t border-slate-950">
               <div className="flex items-center justify-center gap-1 bg-white px-3 py-2 text-center text-[11px] font-bold uppercase">
                 <span>Box {parcel.sequence} | Dimensions(CM):</span>
-                <EditNum value={parcel.len} onChange={(value) => patchParcel(index, { len: value })} className="w-14 text-center" placeholder="L" />
+                <EditNum
+                  value={parcel.len}
+                  onChange={(value) => patchParcel(index, { len: value })}
+                  className="w-14 text-center"
+                  placeholder="L"
+                />
                 <span>x</span>
-                <EditNum value={parcel.wid} onChange={(value) => patchParcel(index, { wid: value })} className="w-14 text-center" placeholder="W" />
+                <EditNum
+                  value={parcel.wid}
+                  onChange={(value) => patchParcel(index, { wid: value })}
+                  className="w-14 text-center"
+                  placeholder="W"
+                />
                 <span>x</span>
-                <EditNum value={parcel.hei} onChange={(value) => patchParcel(index, { hei: value })} className="w-14 text-center" placeholder="H" />
+                <EditNum
+                  value={parcel.hei}
+                  onChange={(value) => patchParcel(index, { hei: value })}
+                  className="w-14 text-center"
+                  placeholder="H"
+                />
                 <button
                   type="button"
                   title={`Remove Box ${parcel.sequence}`}
-                  onClick={() => setParcels((prev) => prev.filter((_, i) => i !== index))}
+                  onClick={() => {
+                    setParcels((prev) => prev.filter((_, i) => i !== index));
+                    setTaxableOverride(null);
+                  }}
                   className="no-print ml-2 rounded border border-slate-300 px-1.5 text-xs font-bold text-red-700 hover:border-red-500"
                 >
                   ×
@@ -543,28 +805,61 @@ export default function ShipmentInvoiceRevisedCopyEditor({
               </div>
               <div className="grid grid-cols-[1.8fr_repeat(5,1fr)] border-t border-slate-950 text-center text-[11px]">
                 <div className="border-r border-slate-950 px-3 py-3 font-semibold uppercase">
-                  <EditText value={parcel.description} onChange={(value) => patchParcel(index, { description: value })} align="center" />
+                  <EditText
+                    value={parcel.description}
+                    onChange={(value) =>
+                      patchParcel(index, { description: value })
+                    }
+                    align="center"
+                  />
                 </div>
                 <div className="border-r border-slate-950 px-2 py-3">
-                  <EditNum value={parcel.actual} onChange={(value) => patchParcel(index, { actual: value })} className="text-center" />
+                  <EditNum
+                    value={parcel.actual}
+                    onChange={(value) => patchParcel(index, { actual: value })}
+                    className="text-center"
+                  />
                 </div>
                 <div className="border-r border-slate-950 px-2 py-3">
-                  <EditNum value={parcel.volumetric} onChange={(value) => patchParcel(index, { volumetric: value })} className="text-center" />
+                  <EditNum
+                    value={parcel.volumetric}
+                    onChange={(value) =>
+                      patchParcel(index, { volumetric: value })
+                    }
+                    className="text-center"
+                  />
                 </div>
                 <div className="border-r border-slate-950 px-2 py-3 font-semibold">
-                  <EditNum value={parcel.chargeable} onChange={(value) => patchParcel(index, { chargeable: value })} className="text-center font-semibold" />
+                  <EditNum
+                    value={parcel.chargeable}
+                    onChange={(value) =>
+                      patchParcel(index, { chargeable: value })
+                    }
+                    className="text-center font-semibold"
+                  />
                 </div>
                 <div className="border-r border-slate-950 px-2 py-3">
-                  <EditNum value={parcel.rate} onChange={(value) => patchParcel(index, { rate: value })} className="text-center" placeholder="—" />
+                  <EditNum
+                    value={parcel.rate}
+                    onChange={(value) => patchParcel(index, { rate: value })}
+                    className="text-center"
+                    placeholder="-"
+                  />
                 </div>
                 <div className="px-3 py-3 font-semibold">
-                  <EditNum value={parcel.amount} onChange={(value) => patchParcel(index, { amount: value })} className="text-center font-semibold" />
+                  <EditNum
+                    value={parcel.amount}
+                    onChange={(value) => patchParcel(index, { amount: value })}
+                    className="text-center font-semibold"
+                  />
                 </div>
               </div>
             </div>
           ))}
           {parcels.length === 0 ? (
-            <p className="border-t border-slate-950 px-3 py-3 text-center text-[11px] text-slate-500">No boxes — use “Add box” below.</p>
+            <p className="border-t border-slate-950 px-3 py-3 text-center text-[11px] text-slate-500">
+              No boxes - use “Add box” below.
+            </p>
           ) : null}
           {lines.map((line, index) => (
             <div
@@ -574,15 +869,28 @@ export default function ShipmentInvoiceRevisedCopyEditor({
               <div className="flex items-center gap-1 border-r border-slate-950 px-3 py-3 text-left font-bold uppercase">
                 <EditText
                   value={line.label}
-                  onChange={(value) => setLines((prev) => prev.map((entry, i) => (i === index ? { ...entry, label: value } : entry)))}
+                  onChange={(value) =>
+                    setLines((prev) =>
+                      prev.map((entry, i) =>
+                        i === index ? { ...entry, label: value } : entry,
+                      ),
+                    )
+                  }
                   placeholder="Charge label"
                 />
                 <select
                   value={line.kind}
                   title="Charge or discount"
                   onChange={(event) =>
-                    setLines((prev) =>
-                      prev.map((entry, i) => (i === index ? { ...entry, kind: event.target.value as LineDraft["kind"] } : entry)),
+                    updateLines((prev) =>
+                      prev.map((entry, i) =>
+                        i === index
+                          ? {
+                              ...entry,
+                              kind: event.target.value as LineDraft["kind"],
+                            }
+                          : entry,
+                      ),
                     )
                   }
                   className="no-print shrink-0 rounded border border-slate-300 bg-white text-[10px] font-semibold normal-case"
@@ -593,7 +901,7 @@ export default function ShipmentInvoiceRevisedCopyEditor({
                 <button
                   type="button"
                   title="Remove charge"
-                  onClick={() => setLines((prev) => prev.filter((_, i) => i !== index))}
+                  onClick={() => updateLines((prev) => prev.filter((_, i) => i !== index))}
                   className="no-print shrink-0 rounded border border-slate-300 px-1.5 text-xs font-bold text-red-700 hover:border-red-500"
                 >
                   ×
@@ -607,7 +915,13 @@ export default function ShipmentInvoiceRevisedCopyEditor({
                 <span>{line.kind === "DEDUCTION" ? "-" : ""}</span>
                 <EditNum
                   value={line.amount}
-                  onChange={(value) => setLines((prev) => prev.map((entry, i) => (i === index ? { ...entry, amount: value } : entry)))}
+                  onChange={(value) =>
+                    updateLines((prev) =>
+                      prev.map((entry, i) =>
+                        i === index ? { ...entry, amount: value } : entry,
+                      ),
+                    )
+                  }
                   className="inline-block w-20 text-center font-semibold"
                 />
               </div>
@@ -618,30 +932,40 @@ export default function ShipmentInvoiceRevisedCopyEditor({
         <div className="no-print mt-2 flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() =>
+            onClick={() => {
               setParcels((prev) => [
                 ...prev,
                 {
-                  sequence: (prev.length ? Math.max(...prev.map((parcel) => parcel.sequence)) : 0) + 1,
+                  sequence:
+                    (prev.length
+                      ? Math.max(...prev.map((parcel) => parcel.sequence))
+                      : 0) + 1,
                   description: "",
                   actual: "",
                   volumetric: "",
                   chargeable: "",
                   rate: "",
                   amount: "",
+                  amountManual: false,
                   len: "",
                   wid: "",
                   hei: "",
                 },
-              ])
-            }
+              ]);
+              setTaxableOverride(null);
+            }}
             className="h-9 rounded-xl border border-slate-300 px-3 text-xs font-semibold text-slate-700 hover:border-slate-500"
           >
             + Add box
           </button>
           <button
             type="button"
-            onClick={() => setLines((prev) => [...prev, { label: "", amount: "", kind: "CHARGE" }])}
+            onClick={() =>
+              updateLines((prev) => [
+                ...prev,
+                { label: "", amount: "", kind: "CHARGE" },
+              ])
+            }
             className="h-9 rounded-xl border border-slate-300 px-3 text-xs font-semibold text-slate-700 hover:border-slate-500"
           >
             + Add charge
@@ -653,23 +977,36 @@ export default function ShipmentInvoiceRevisedCopyEditor({
 
         <section className="grid grid-cols-1 border-x border-b border-slate-950 text-xs sm:grid-cols-[1fr_280px]">
           <div className="p-4">
-            <p className="font-semibold uppercase text-slate-500">Delivery Address</p>
-            <EditArea value={deliveryAddress} onChange={setDeliveryAddress} rows={3} className="mt-2 leading-5" />
+            <p className="font-semibold uppercase text-slate-500">
+              Delivery Address
+            </p>
+            <EditArea
+              value={deliveryAddress}
+              onChange={setDeliveryAddress}
+              rows={3}
+              className="mt-2 leading-5"
+            />
           </div>
           <div className="border-l border-slate-950">
             <div className="flex items-center justify-between gap-3 border-b border-slate-300 px-4 py-3">
               <span>Taxable Value</span>
-              <EditNum value={taxable} onChange={setTaxable} className="w-24 text-right font-semibold" />
+              <span className="w-24 text-right font-semibold">{taxable}</span>
             </div>
             <div className="flex items-center justify-between gap-2 border-b border-slate-300 px-4 py-2 text-[11px]">
               <span className="flex items-center gap-1">
                 GST
-                <EditNum value={gstRate} onChange={setGstRate} className="w-12 text-right" />
+                <EditNum
+                  value={gstRate}
+                  onChange={updateGstRate}
+                  className="w-12 text-right"
+                />
                 %
               </span>
               <select
                 value={taxType}
-                onChange={(event) => setTaxType(event.target.value as "CGST_SGST" | "IGST")}
+                onChange={(event) =>
+                  setTaxType(event.target.value as "CGST_SGST" | "IGST")
+                }
                 className="rounded border border-transparent bg-transparent text-[11px] font-semibold outline-none hover:border-blue-300 focus:border-blue-600"
               >
                 <option value="CGST_SGST">CGST+SGST</option>
@@ -679,18 +1016,28 @@ export default function ShipmentInvoiceRevisedCopyEditor({
             {taxType === "CGST_SGST" ? (
               <>
                 <div className="flex justify-between gap-3 border-b border-slate-300 px-4 py-3">
-                  <span>{noGst ? "CGST" : `CGST ${parseNum(gstRate) / 2}%`}</span>
-                  <span>{noGst ? "-" : safeMoney(totals.cgst, currency || "INR")}</span>
+                  <span>
+                    {noGst ? "CGST" : `CGST ${parseNum(gstRate) / 2}%`}
+                  </span>
+                  <span>
+                    {noGst ? "-" : safeMoney(totals.cgst, currency || "INR")}
+                  </span>
                 </div>
                 <div className="flex justify-between gap-3 border-b border-slate-300 px-4 py-3">
-                  <span>{noGst ? "SGST" : `SGST ${parseNum(gstRate) / 2}%`}</span>
-                  <span>{noGst ? "-" : safeMoney(totals.sgst, currency || "INR")}</span>
+                  <span>
+                    {noGst ? "SGST" : `SGST ${parseNum(gstRate) / 2}%`}
+                  </span>
+                  <span>
+                    {noGst ? "-" : safeMoney(totals.sgst, currency || "INR")}
+                  </span>
                 </div>
               </>
             ) : (
               <div className="flex justify-between gap-3 border-b border-slate-300 px-4 py-3">
                 <span>{noGst ? "IGST" : `IGST ${gstRate}%`}</span>
-                <span>{noGst ? "-" : safeMoney(totals.igst, currency || "INR")}</span>
+                <span>
+                  {noGst ? "-" : safeMoney(totals.igst, currency || "INR")}
+                </span>
               </div>
             )}
             <div className="flex justify-between gap-3 bg-slate-100 px-4 py-3 text-sm font-bold">
@@ -712,12 +1059,17 @@ export default function ShipmentInvoiceRevisedCopyEditor({
           <div className="max-w-sm">
             <p className="font-semibold">Declaration</p>
             <p className="mt-2 leading-5 text-slate-600">
-              We declare that this invoice records the shipment charges and applicable taxes shown above.
+              We declare that this invoice records the shipment charges and
+              applicable taxes shown above.
             </p>
           </div>
           <div className="text-right">
-            <p className="font-semibold">For Swiftline Cargo and Express Logistics Pvt. Ltd.</p>
-            <p className="mt-10 border-t border-slate-500 pt-2">Authorised Signatory</p>
+            <p className="font-semibold">
+              For Swiftline Cargo and Express Logistics Pvt. Ltd.
+            </p>
+            <p className="mt-10 border-t border-slate-500 pt-2">
+              Authorised Signatory
+            </p>
           </div>
         </footer>
         <p className="mt-8 border-t border-slate-300 pt-3 text-center text-[10px] font-semibold text-slate-500">
@@ -818,7 +1170,7 @@ function EditText({
 
 /**
  * Inline-editable numeric value kept as a raw string, so it can be cleared
- * and retyped freely — never coercing "" back to 0 mid-edit.
+ * and retyped freely - never coercing "" back to 0 mid-edit.
  */
 function EditNum({
   value,
@@ -841,7 +1193,8 @@ function EditNum({
       placeholder={placeholder}
       onChange={(event) => {
         // Allow an in-progress number: digits, one dot, one leading minus.
-        if (/^-?\d*\.?\d*$/.test(event.target.value)) onChange(event.target.value);
+        if (/^-?\d*\.?\d*$/.test(event.target.value))
+          onChange(event.target.value);
       }}
       className={`${editCls} ${className}`}
     />

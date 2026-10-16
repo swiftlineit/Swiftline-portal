@@ -32,6 +32,7 @@ import {
   FiUsers,
 } from "react-icons/fi";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import type { IconType } from "react-icons";
 import Sidebar, {
@@ -49,6 +50,7 @@ import { getClientDashboard } from "@/lib/clientDashboard";
 import { readShipmentListScrollState, shipmentListAudienceForPath } from "@/lib/shipmentsList";
 import { BsWhatsapp, BsCurrencyRupee } from "react-icons/bs";
 import OperationsCalendarIcon from "@/components/OperationsCalendarIcon";
+import { loadProfileImageUrl } from "@/lib/profile";
 import { ShellPortalBackButton } from "@/components/PortalBackButton";
 
 export type ClientShellUser = {
@@ -284,6 +286,40 @@ export function ClientDashboardShell({
   const router = useRouter();
   const pathname = usePathname();
   const contentScrollRef = useRef<HTMLDivElement>(null);
+  const [profileImageUrl, setProfileImageUrl] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    let requestId = 0;
+    let objectUrl = "";
+
+    async function refreshProfileImage() {
+      const currentRequest = ++requestId;
+      try {
+        const url = await loadProfileImageUrl();
+        if (!active || currentRequest !== requestId) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = url;
+        setProfileImageUrl(url);
+      } catch {
+        if (!active || currentRequest !== requestId) return;
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = "";
+        setProfileImageUrl("");
+      }
+    }
+
+    void refreshProfileImage();
+    window.addEventListener("profile-image-updated", refreshProfileImage);
+    return () => {
+      active = false;
+      window.removeEventListener("profile-image-updated", refreshProfileImage);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, []);
 
   // The permission-gated links depend on an API call, so the whole list stays
   // empty until it settles and every link then appears in one paint.
@@ -698,12 +734,13 @@ export function ClientDashboardShell({
                 <Link
                   href="/client/profile"
                   aria-label="My Profile"
-                  className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-white/25"
+                  className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-white transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-white/25"
                 >
-                  <FiUser
-                    aria-hidden="true"
-                    className="h-5 w-5"
-                  />
+                  {profileImageUrl ? (
+                    <Image src={profileImageUrl} alt={`${user.name || "User"} profile`} width={40} height={40} unoptimized className="h-full w-full rounded-full object-cover" />
+                  ) : (
+                    <FiUser aria-hidden="true" className="h-5 w-5" />
+                  )}
                 </Link>
 
                 <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-[#05072B] px-3 py-2 text-xs font-medium text-white opacity-0 shadow-lg transition-all duration-200 group-hover:translate-y-1 group-hover:opacity-100">
@@ -756,9 +793,13 @@ export function ClientDashboardShell({
               <Link
                 href="/client/profile"
                 aria-label="My Profile"
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/20 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 sm:hidden"
+                className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/20 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 sm:hidden"
               >
-                <FiUser aria-hidden="true" className="h-5 w-5" />
+                {profileImageUrl ? (
+                  <Image src={profileImageUrl} alt={`${user.name || "User"} profile`} width={40} height={40} unoptimized className="h-full w-full rounded-full object-cover" />
+                ) : (
+                  <FiUser aria-hidden="true" className="h-5 w-5" />
+                )}
               </Link>
             </div>
           ) : (
@@ -767,7 +808,11 @@ export function ClientDashboardShell({
                 href="/client/profile"
                 className="inline-flex h-10 items-center gap-2 rounded-lg px-2 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
               >
-                <FiUser aria-hidden="true" className="h-4 w-4" /> My Profile
+                {profileImageUrl ? (
+                  <Image src={profileImageUrl} alt="" width={20} height={20} unoptimized className="h-5 w-5 rounded-full object-cover" />
+                ) : (
+                  <FiUser aria-hidden="true" className="h-4 w-4" />
+                )} My Profile
               </Link>
             </div>
           )}

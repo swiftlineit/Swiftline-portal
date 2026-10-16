@@ -57,6 +57,8 @@ export type ShipmentListingFilter = {
   destinationRegions?: ShipmentDestinationRegionCode[];
   /** Staff-only current parcel membership in an operations manifest. */
   operationsManifestId?: mongoose.Types.ObjectId;
+  /** Staff-only total shipment weight, using the same booked weight shown in the list. */
+  weightRange?: "lt10" | "gt10";
   page: number;
   limit: number;
   /** Manifest assignments are per actor role, so eligibility is role-scoped. */
@@ -447,6 +449,47 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
       { "consigneeSelectedAddress.companyName": pattern },
       { "consigneeSelectedAddress.contactName": pattern }
     ];
+  }
+
+  if (filter.actorRole === "admin" && filter.weightRange && allowedDraftIds.length) {
+    const bookings = await DpdShipment.find({ shipmentDraftId: { $in: allowedDraftIds } })
+      .select([
+        "shipmentDraftId",
+        ...["currentShipmentSnapshot", "bookingSnapshot"].flatMap((field) => [
+          `${field}.version`, `${field}.source`, `${field}.tracking`,
+          `${field}.payment`, `${field}.pricing`, `${field}.parcels.actualWeightKg`
+        ])
+      ].join(" "))
+      .lean()
+      .exec();
+    const weights = new Map<string, number>();
+    const fallbackIds: mongoose.Types.ObjectId[] = [];
+    for (const booking of bookings) {
+      const snapshot = readShipmentBookingSnapshot(booking.currentShipmentSnapshot)
+        ?? readShipmentBookingSnapshot(booking.bookingSnapshot);
+      if (snapshot?.parcels.length) {
+        weights.set(String(booking.shipmentDraftId), Number(snapshot.parcels.reduce(
+          (sum, parcel) => sum + parcel.actualWeightKg, 0
+        ).toFixed(3)));
+      } else {
+        fallbackIds.push(booking.shipmentDraftId);
+      }
+    }
+    if (fallbackIds.length) {
+      const drafts = await ShipmentDraft.find({ _id: { $in: fallbackIds } })
+        .select("parcelList.weightKg")
+        .lean()
+        .exec();
+      for (const draft of drafts) {
+        weights.set(String(draft._id), Number(draft.parcelList.reduce(
+          (sum, parcel) => sum + (parcel.weightKg || 0), 0
+        ).toFixed(3)));
+      }
+    }
+    allowedDraftIds = allowedDraftIds.filter((id) => {
+      const weight = weights.get(String(id));
+      return weight !== undefined && (filter.weightRange === "lt10" ? weight < 10 : weight > 10);
+    });
   }
 
   const candidateFilter = { ...draftFilter, _id: { $in: allowedDraftIds } };

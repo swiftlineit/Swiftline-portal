@@ -12,6 +12,7 @@ import ShipmentInvoiceHistory from "@/components/shipments/ShipmentInvoiceHistor
 import CustomsInvoiceCard from "@/components/shipments/CustomsInvoiceCard";
 import ShipmentManifestPanel from "@/components/shipments/ShipmentManifestPanel";
 import ParcelActivityPanel from "@/components/shipments/ParcelActivityPanel";
+import HubReceiptPanel from "@/components/shipments/HubReceiptPanel";
 import ShipmentCancellationPanel from "@/components/shipments/ShipmentCancellationPanel";
 import { ShipmentLabelsPanel } from "@/components/shipments/ShipmentLabelsPanel";
 import ShipmentKycDocumentsPanel, { collectShipmentKycDocuments } from "@/components/shipments/ShipmentKycDocumentsPanel";
@@ -482,6 +483,7 @@ export default function ClientShipmentDetailsPage() {
             />
             </div>
 
+            <HubReceiptPanel receipt={shipment.hubReceipt} />
             <ParcelActivityPanel
               activities={shipment.parcelActivities}
               progress={shipment.parcelProgress}

@@ -48,6 +48,10 @@ MAILTO=""
 # and can be completed with the manual Depart action.
 * * * * *     ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:flight:auto-depart
 
+# Check each minute so reminders are queued when dispatch time is reached.
+# The request stamp and notification idempotency key make retries safe.
+* * * * *     ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:pickups:dispatch-reminders
+
 # Mark due-passed statements overdue, expire credit facilities past their
 # validity window, and send utilisation warnings.
 # Note: overdue *blocking* is computed live at booking time and does not depend

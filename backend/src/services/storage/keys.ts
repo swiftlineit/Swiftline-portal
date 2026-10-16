@@ -157,6 +157,10 @@ export function pickupProofKey(pickupRequestId: string, originalName: string) {
   return joinKey(storageModules.pickup, pickupRequestId, "proof", generatedFilename(originalName));
 }
 
+export function pickupRequestDocumentKey(pickupRequestId: string, originalName: string) {
+  return joinKey(storageModules.pickup, pickupRequestId, "documents", generatedFilename(originalName));
+}
+
 export function staffDocumentKey(userId: string, originalName: string) {
   return joinKey(storageModules.staff, userId, "documents", generatedFilename(originalName));
 }

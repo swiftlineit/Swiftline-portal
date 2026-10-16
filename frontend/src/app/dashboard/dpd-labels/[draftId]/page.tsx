@@ -1803,6 +1803,29 @@ export default function DpdLabelDraftPage() {
                   {pendingAction === "BOOKING_NO_DPD" ? "Creating..." : "Create Shipment Without DPD Label"}
                 </button>
               ) : null}
+              {result ? draft.customerType === "INDIVIDUAL" ? (
+                <Link
+                  href="/dashboard/dpd-labels"
+                  className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-xl border border-emerald-300 bg-emerald-50 px-4 text-sm font-semibold text-emerald-800 transition hover:border-emerald-600 hover:bg-emerald-100"
+                >
+                  Create New Shipment
+                </Link>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleCreateNewShipment()}
+                    disabled={busy || creatingNewShipment}
+                    title="Create a blank shipment for the same business account and sender branch"
+                    className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-xl border border-emerald-300 bg-emerald-50 px-4 text-sm font-semibold text-emerald-800 transition hover:border-emerald-600 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+                  >
+                    {creatingNewShipment ? "Creating..." : "Create New Shipment"}
+                  </button>
+                  <p className="mt-2 text-center text-xs text-slate-600">
+                    The new blank draft will use this shipment&apos;s business account and sender branch.
+                  </p>
+                </>
+              ) : null}
               {/* Sits with the booking action rather than in its own bar: this is
                   where the operator already looks to finish the shipment, and
                   saving for later is the alternative to booking it now. */}
@@ -1879,12 +1902,7 @@ export default function DpdLabelDraftPage() {
                     getAccessUrl={(labelId, disposition) => getDpdLabelAccessUrl(result.dpdShipment.id, labelId, disposition)}
                   />
                 </div>
-                {draft.customerType === "INDIVIDUAL" ? null : (
-                  <p className="border-t border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-900">
-                    The next shipment will use this shipment&apos;s same business account and sender branch.
-                  </p>
-                )}
-                <div className="grid gap-2 border-t border-emerald-200 p-4 sm:grid-cols-3">
+                <div className="grid gap-2 border-t border-emerald-200 p-4 sm:grid-cols-2">
                   <Link
                     href={`/dashboard/shipments/${draft._id}`}
                     className="inline-flex h-11 items-center justify-center text-center gap-2 rounded-xl border border-emerald-300 bg-white px-3 text-xs py-1 font-semibold text-emerald-800 transition hover:border-emerald-600"
@@ -1899,24 +1917,6 @@ export default function DpdLabelDraftPage() {
                       View Invoice
                     </Link>
                   ) : null}
-                  {draft.customerType === "INDIVIDUAL" ? (
-                    <Link
-                      href="/dashboard/dpd-labels"
-                      className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-3 text-xs py-1 font-semibold text-emerald-800 transition hover:border-emerald-600"
-                    >
-                      Create New Shipment
-                    </Link>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => void handleCreateNewShipment()}
-                      disabled={busy || creatingNewShipment}
-                      title="Create a blank shipment for the same business account and sender branch"
-                      className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-white px-3 py-1 text-xs font-semibold text-emerald-800 transition hover:border-emerald-600 disabled:cursor-not-allowed disabled:border-emerald-200 disabled:text-emerald-400"
-                    >
-                      {creatingNewShipment ? "Creating..." : "Create New Shipment"}
-                    </button>
-                  )}
                 </div>
               </section>
             ) : null}

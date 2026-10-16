@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import MailComposer from "nodemailer/lib/mail-composer/index.js";
+import { resolveInlineEmailImages } from "../services/email/inlineImages.js";
 import { renderEmail } from "../services/email/layout.js";
 import { getEmailTemplate, hasEmailTemplate } from "../services/email/templates/index.js";
 
@@ -102,6 +104,103 @@ test("generic template covers any notification type without a bespoke file", () 
   assert.match(html, /Operations replied to your ticket/);
   assert.match(html, /https:\/\/portal\.swiftline\.example\/client\/tickets\/abc#ticket-conversation/);
   assert.match(text, /Operations replied to your ticket/);
+});
+
+const pickupPayload = {
+  requestNumber: "SLPDEL151026001",
+  companyName: "Northline Exports",
+  branchName: "Delhi",
+  requesterName: "Priya Raman",
+  requesterEmail: "priya@example.test",
+  transportCompany: "FedEx",
+  dispatchAt: "2026-10-16T04:00:00.000Z",
+  arrivalDate: "2026-10-17T00:00:00.000Z",
+  arrivalWindow: "MORNING",
+  collectionAddress: "1 Market Road, New Delhi, 110001, IN",
+  contactName: "Courier Desk",
+  contactPhone: "+919876543210",
+  totalBoxes: 2,
+  totalWeightKg: 6.8,
+  shipmentCount: 1,
+  documentCount: 1,
+  documentNames: ["collection-note.pdf"],
+  handlingRemarks: "Use loading bay 2",
+  receivedAt: "2026-10-17T06:00:00.000Z",
+  receivedParcelCount: 1,
+  missingParcelCount: 1,
+  shipments: [{ trackingNumber: "SLCDEL0001", parcels: [
+    { parcelNumber: "SLCDEL0001-1", hubReceiptOutcome: "RECEIVED" },
+    { parcelNumber: "SLCDEL0001-2", hubReceiptOutcome: "NOT_RECEIVED" }
+  ] }]
+};
+
+test("pickup request and start emails show full operational details for both audiences", () => {
+  for (const key of ["PICKUP_REQUESTED_CLIENT", "PICKUP_REQUESTED_STAFF", "PICKUP_STARTED_CLIENT", "PICKUP_STARTED_STAFF"]) {
+    const { html, text } = render(key, pickupPayload);
+    assert.match(html, /cid:pickup-parcel@swiftline/);
+    assert.match(html, /Northline Exports/);
+    assert.match(html, /FedEx/);
+    assert.match(text, /priya@example\.test/);
+    assert.match(text, /Courier collection contact/);
+    assert.match(html, /Morning/);
+    assert.match(html, /SLCDEL0001/);
+    assert.match(html, /Use loading bay 2/);
+    assert.match(html, /collection-note\.pdf/);
+    assert.match(text, /1 Market Road/);
+    assert.match(html, key.endsWith("STAFF") ? /dashboard\/pickups/ : /client\/pickups/);
+  }
+});
+
+test("pickup request email says whether supporting files were attached", () => {
+  const attached = render("PICKUP_REQUESTED_CLIENT", { ...pickupPayload, pickupDocumentsAttached: 1 });
+  assert.match(attached.text, /All 1 supporting document is attached/);
+  const oversized = render("PICKUP_REQUESTED_STAFF", { ...pickupPayload, pickupDocumentsAttached: 0, attachmentsDropped: true });
+  assert.match(oversized.text, /0 of 1 supporting documents attached/);
+  assert.match(oversized.text, /portal to view every document securely/);
+});
+
+test("pickup illustration is embedded as an inline MIME image", async () => {
+  const { content, html, text } = render("PICKUP_REQUESTED_CLIENT", pickupPayload);
+  const attachments = await resolveInlineEmailImages(content);
+  assert.equal(attachments.length, 1);
+  assert.equal(attachments[0]?.cid, "pickup-parcel@swiftline");
+  assert.equal(attachments[0]?.contentDisposition, "inline");
+  assert.equal(attachments[0]?.content.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  const raw = await new Promise<Buffer>((resolve, reject) => {
+    new MailComposer({ from: "test@swiftline.example", to: "client@example.test", subject: content.subject, html, text, attachments })
+      .compile().build((error, message) => error ? reject(error) : resolve(message));
+  });
+  assert.match(raw.toString(), /Content-ID: <pickup-parcel@swiftline>/i);
+  assert.match(raw.toString(), /Content-Disposition: inline/i);
+  assert.match(raw.toString(), /cid:pickup-parcel@swiftline/);
+});
+
+test("pickup completion emails list every parcel not received at the hub", () => {
+  for (const key of ["PICKUP_COMPLETED_CLIENT", "PICKUP_COMPLETED_STAFF"]) {
+    const { content, html, text } = render(key, pickupPayload);
+    assert.match(content.subject, /1 parcel not received/);
+    assert.match(html, /1 of 2/);
+    assert.match(html, /SLCDEL0001-2/);
+    assert.match(text, /SLCDEL0001-2/);
+    assert.match(html, /will remain short of full origin receipt|will show full origin receipt only after/);
+  }
+  const allReceived = render("PICKUP_COMPLETED_CLIENT", {
+    ...pickupPayload,
+    receivedParcelCount: 2,
+    missingParcelCount: 0,
+    shipments: [{ trackingNumber: "SLCDEL0001", parcels: pickupPayload.shipments[0]!.parcels.map((parcel) => ({ ...parcel, hubReceiptOutcome: "RECEIVED" })) }]
+  });
+  assert.match(allReceived.content.subject, /received at Delhi hub/);
+  assert.match(allReceived.html, /2 of 2/);
+  assert.doesNotMatch(allReceived.html, /listed as not received/);
+});
+
+test("pickup completion without linked shipments does not claim parcel receipt", () => {
+  const { html } = render("PICKUP_COMPLETED_CLIENT", {
+    ...pickupPayload, shipmentCount: 0, receivedParcelCount: 0, missingParcelCount: 0, shipments: []
+  });
+  assert.match(html, /No booked shipments were linked/);
+  assert.doesNotMatch(html, /0 parcels recorded/);
 });
 
 test("payload values are HTML escaped", () => {

@@ -13,6 +13,7 @@ import ShipmentInvoiceHistory from "@/components/shipments/ShipmentInvoiceHistor
 import CustomsInvoiceCard from "@/components/shipments/CustomsInvoiceCard";
 import ShipmentManifestPanel from "@/components/shipments/ShipmentManifestPanel";
 import ParcelActivityPanel from "@/components/shipments/ParcelActivityPanel";
+import HubReceiptPanel from "@/components/shipments/HubReceiptPanel";
 import ShipmentKycDocumentsPanel, { collectShipmentKycDocuments } from "@/components/shipments/ShipmentKycDocumentsPanel";
 import StaffSupportingDocuments from "@/components/shipments/StaffSupportingDocuments";
 import { ShipmentLabelsPanel } from "@/components/shipments/ShipmentLabelsPanel";
@@ -1141,6 +1142,7 @@ export default function AdminShipmentDetailsPage() {
             </section>
           ) : null}
 
+          <HubReceiptPanel receipt={history?.hubReceipt} />
           <ParcelActivityPanel
             activities={history?.parcelActivities}
             progress={history?.parcelProgress}

@@ -25,6 +25,7 @@ import {
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
+import { loadShipmentHubReceipt } from "../services/shipmentHubReceipt.service.js";
 import {
   loadShipmentParcelActivities,
   loadShipmentParcelProgress
@@ -1232,7 +1233,7 @@ export async function getClientShipmentDetails(request: Request, response: Respo
     });
   }
 
-  const [labels, events, currentInvoice, originBranch, parcelActivities, parcelProgress] = await Promise.all([
+  const [labels, events, currentInvoice, originBranch, parcelActivities, parcelProgress, hubReceipt] = await Promise.all([
     dpdShipment
       ? LabelDocument.find({
           dpdShipmentId: dpdShipment._id,
@@ -1249,7 +1250,8 @@ export async function getClientShipmentDetails(request: Request, response: Respo
       ? Branch.findById(draft.branchId).select("address.city").lean().exec()
       : Promise.resolve(null),
     loadShipmentParcelActivities(draft._id),
-    loadShipmentParcelProgress(draft._id)
+    loadShipmentParcelProgress(draft._id),
+    loadShipmentHubReceipt(draft._id)
   ]);
 
   /**
@@ -1301,6 +1303,7 @@ export async function getClientShipmentDetails(request: Request, response: Respo
         message: activity.customerMessage
       })),
       parcelProgress,
+      hubReceipt,
       trackingPosition: buildTrackingPosition({
         events: events.filter((event) => event.status !== "PARCEL_COLLECTED"),
         journey,

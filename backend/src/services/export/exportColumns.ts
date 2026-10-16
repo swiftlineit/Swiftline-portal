@@ -221,8 +221,11 @@ type PickupRow = {
   pickupContact?: { name: string; phone: string } | null;
   pickupAddress?: Record<string, unknown> | null;
   requestedWindow: { startAt: string | Date; endAt: string | Date } | null;
-  confirmedWindow?: { startAt: string | Date; endAt: string | Date } | null;
+  dispatchAt?: string | Date | null;
+  expectedDelhiArrival?: { date: string | Date; window: string; exactAt?: string | Date | null } | null;
+  transportCompany?: string;
   shipmentCount: number;
+  totalBoxes?: number;
   parcelCount: number;
   totalWeightKg: number;
   createdAt: string | Date;
@@ -245,12 +248,12 @@ export const pickupExportColumns: Array<ExportColumn<PickupRow>> = [
   { header: "Contact", value: (row) => row.pickupContact?.name ?? "", width: 22 },
   { header: "Phone", value: (row) => row.pickupContact?.phone ?? "", width: 18 },
   { header: "Pickup address", value: (row) => addressLine(row.pickupAddress), width: 40 },
-  { header: "Requested from", value: (row) => asDate(row.requestedWindow?.startAt ?? null), width: 20 },
-  { header: "Requested to", value: (row) => asDate(row.requestedWindow?.endAt ?? null), width: 20 },
-  { header: "Confirmed from", value: (row) => asDate(row.confirmedWindow?.startAt ?? null), width: 20 },
-  { header: "Confirmed to", value: (row) => asDate(row.confirmedWindow?.endAt ?? null), width: 20 },
+  { header: "Dispatch at", value: (row) => asDate(row.dispatchAt ?? row.requestedWindow?.startAt ?? null), width: 20 },
+  { header: "Transport / courier", value: (row) => row.transportCompany ?? "", width: 22 },
+  { header: "Expected Delhi arrival", value: (row) => asDate(row.expectedDelhiArrival?.date ?? null), width: 22 },
+  { header: "Arrival window", value: (row) => row.expectedDelhiArrival?.window === "EXACT" ? `Exact ${asDate(row.expectedDelhiArrival.exactAt ?? null) ?? ""}` : row.expectedDelhiArrival?.window ?? "", width: 24 },
   { header: "Shipments", value: (row) => row.shipmentCount, width: 12 },
-  { header: "Parcels", value: (row) => row.parcelCount, width: 10 },
+  { header: "Boxes", value: (row) => row.totalBoxes ?? row.parcelCount, width: 10 },
   { header: "Weight (kg)", value: (row) => row.totalWeightKg, width: 12 },
   { header: "Raised", value: (row) => asDate(row.createdAt), width: 20 }
 ];

@@ -9,6 +9,11 @@ import { rateCardSharedTemplate } from "./rateCardShared.js";
 import { claimDecisionTemplate } from "./claimDecision.js";
 import { businessAccountOtpTemplate } from "./businessAccountOtp.js";
 import { publicShipmentBookedTemplate } from "./publicShipmentBooked.js";
+import {
+  pickupRequestedClientTemplate, pickupRequestedStaffTemplate,
+  pickupStartedClientTemplate, pickupStartedStaffTemplate,
+  pickupCompletedClientTemplate, pickupCompletedStaffTemplate
+} from "./pickupUpdates.js";
 
 export type EmailTemplateContext = {
   recipientName: string;
@@ -52,6 +57,12 @@ const registry: Record<string, EmailTemplate> = {
   LOGIN_OTP: loginOtpTemplate,
   BUSINESS_ACCOUNT_EMAIL_OTP: businessAccountOtpTemplate,
   PICKUP_OTP: pickupOtpTemplate,
+  PICKUP_REQUESTED_CLIENT: pickupRequestedClientTemplate,
+  PICKUP_REQUESTED_STAFF: pickupRequestedStaffTemplate,
+  PICKUP_STARTED_CLIENT: pickupStartedClientTemplate,
+  PICKUP_STARTED_STAFF: pickupStartedStaffTemplate,
+  PICKUP_COMPLETED_CLIENT: pickupCompletedClientTemplate,
+  PICKUP_COMPLETED_STAFF: pickupCompletedStaffTemplate,
   RATE_CARD_SHARED: rateCardSharedTemplate,
   // Every other claim notification renders through the generic template; only
   // the decision needs to carry arithmetic and an appeal deadline.

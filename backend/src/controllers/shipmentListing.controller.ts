@@ -66,6 +66,11 @@ function individualBookingsParam(request: Request): boolean {
     || request.query.creationSource === "PUBLIC_ONLINE";
 }
 
+function weightRangeParam(request: Request): "lt10" | "gt10" | undefined {
+  return request.query.weightRange === "lt10" || request.query.weightRange === "gt10"
+    ? request.query.weightRange : undefined;
+}
+
 function pagination(request: Request) {
   return {
     page: Math.max(1, Number.parseInt(String(request.query.page ?? "1"), 10) || 1),
@@ -85,7 +90,8 @@ function sendShipmentExport(
   format: TableExportFormat,
   shipments: unknown[],
   accountLabel: string,
-  operationsManifestNumber?: string
+  operationsManifestNumber?: string,
+  weightRange?: "lt10" | "gt10"
 ) {
   return sendTableExport(response, format, {
     title: "Shipments",
@@ -99,6 +105,8 @@ function sendShipmentExport(
       To: request.query.dateTo,
       Rebooked: request.query.rebooked === "1" || request.query.rebooked === "true" ? "Yes" : undefined,
       "Customer type": individualBookingsParam(request) ? "Individual bookings" : undefined,
+      Weight: weightRange === "lt10" ? "Less than 10 kg"
+        : weightRange === "gt10" ? "Greater than 10 kg" : undefined,
       "Operations manifest": operationsManifestNumber
     })
   });
@@ -152,6 +160,7 @@ export async function listAdminBookedShipments(request: Request, response: Respo
     destinationRegions: destinationRegionsParam(request),
     individualBookings: individualBookingsParam(request),
     operationsManifestId: operationsManifest ? operationsManifest._id : undefined,
+    weightRange: weightRangeParam(request),
     ...dateRangeParams(request.query),
     businessAccountIds: businessAccountId ? [businessAccountId] : undefined,
     branchIds: staffBranchIds(request, branchId),
@@ -160,7 +169,7 @@ export async function listAdminBookedShipments(request: Request, response: Respo
     bookingStatuses: allShipmentStatuses
   });
 
-  if (format) return sendShipmentExport(request, response, format, result.shipments, "Swiftline staff", operationsManifest?.manifestNumber);
+  if (format) return sendShipmentExport(request, response, format, result.shipments, "Swiftline staff", operationsManifest?.manifestNumber, weightRangeParam(request));
   return response.status(200).json({ success: true, ...result });
 }
 

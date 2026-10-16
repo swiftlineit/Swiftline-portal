@@ -132,7 +132,7 @@ export function ukDateTimeLocalToIso(value: string) {
 
 export function formatUkDateTime(value: string) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleString("en-GB", {
     timeZone: UK_TIME_ZONE,
     day: "numeric",
@@ -171,6 +171,6 @@ export function flightArrivalDateTimeLocalToIso(value: string, destinationIataCo
 export function formatFlightArrivalDateTime(value: string, destinationIataCode: string | null | undefined) {
   if (isUkFlightDestination(destinationIataCode)) return formatUkDateTime(value);
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }

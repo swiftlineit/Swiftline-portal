@@ -203,6 +203,8 @@ export function shipmentListParams(input: {
   destinationRegions?: ShipmentDestinationRegionCode[];
   /** Staff-only operations manifest with a live scanned parcel. */
   operationsManifestId?: string;
+  /** Staff-only total booked weight. */
+  weightRange?: "lt10" | "gt10";
 } = {}) {
   const params = new URLSearchParams();
   params.set("page", String(input.page ?? 1));
@@ -221,6 +223,7 @@ export function shipmentListParams(input: {
   if (input.sort) params.set("sort", input.sort);
   if (input.destinationRegions?.length) params.set("destinationRegions", input.destinationRegions.join(","));
   if (input.operationsManifestId) params.set("operationsManifestId", input.operationsManifestId);
+  if (input.weightRange) params.set("weightRange", input.weightRange);
   return params;
 }
 
@@ -248,6 +251,7 @@ export async function listShipments(audience: ShipmentAudience, input: {
   /** Staff-only destination groups. */
   destinationRegions?: ShipmentDestinationRegionCode[];
   operationsManifestId?: string;
+  weightRange?: "lt10" | "gt10";
 } = {}) {
   const params = shipmentListParams(input);
   const base = shipmentListPath(audience);

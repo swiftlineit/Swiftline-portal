@@ -33,6 +33,7 @@ export function TableToolbar({
   exportPath,
   exportParams,
   exportName,
+  compactExportButtons = false,
   columns,
   hiddenColumns,
   onHiddenColumnsChange,
@@ -46,6 +47,8 @@ export function TableToolbar({
   exportPath?: string;
   exportParams?: URLSearchParams;
   exportName?: string;
+  /** Show download icons with file extensions in space-constrained tables. */
+  compactExportButtons?: boolean;
   columns?: TableColumnOption[];
   hiddenColumns?: Set<string>;
   onHiddenColumnsChange?: (next: Set<string>) => void;
@@ -172,20 +175,24 @@ export function TableToolbar({
             <button
               type="button"
               disabled={busy !== null}
+              aria-label={compactExportButtons ? (busy === "xlsx" ? "Preparing .xlsx download" : "Download .xlsx") : undefined}
               onClick={() => void runExport("xlsx")}
               className="inline-flex h-10 items-center gap-2 rounded-4xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
             >
               <FiDownload aria-hidden="true" className="h-4 w-4" />
-              {busy === "xlsx" ? "Preparing…" : "Export Excel"}
+              {busy === "xlsx" ? "Preparing…" : compactExportButtons ? ".xlsx" : "Export Excel"}
             </button>
             <button
               type="button"
               disabled={busy !== null}
+              aria-label={compactExportButtons ? (busy === "pdf" ? "Preparing .pdf download" : "Download .pdf") : undefined}
               onClick={() => void runExport("pdf")}
               className="inline-flex h-10 items-center gap-2 rounded-4xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
             >
-              <FiFileText aria-hidden="true" className="h-4 w-4" />
-              {busy === "pdf" ? "Preparing…" : "Download PDF"}
+              {compactExportButtons
+                ? <FiDownload aria-hidden="true" className="h-4 w-4" />
+                : <FiFileText aria-hidden="true" className="h-4 w-4" />}
+              {busy === "pdf" ? "Preparing…" : compactExportButtons ? ".pdf" : "Download PDF"}
             </button>
           </>
         ) : null}

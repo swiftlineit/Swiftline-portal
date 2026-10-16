@@ -2,13 +2,16 @@ import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import { z } from "zod";
 import { AuditLog } from "../models/auditLog.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
+import { Branch } from "../models/branch.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { DriverProfile } from "../models/driverProfile.model.js";
 import { PickupAttempt } from "../models/pickupAttempt.model.js";
+import { PickupCourierAddress } from "../models/pickupCourierAddress.model.js";
 import { PickupProof, pickupProofTypeValues } from "../models/pickupEvidence.model.js";
 import { PickupRequest } from "../models/pickupRequest.model.js";
 import { User } from "../models/user.model.js";
-import { isSupportedImage } from "../services/storage/fileSignature.js";
+import { isSupportedImage, matchesDeclaredType } from "../services/storage/fileSignature.js";
 import {
   StorageObjectNotFoundError,
   deleteObject,
@@ -19,27 +22,17 @@ import {
 import { resolveEvidenceKey } from "../services/storage/legacyKeys.js";
 import {
   PickupServiceError, assignPickupDriver, cancelPickup, completePickupAttempt, confirmPickup,
-  createClientPickup, driverPickupAttempts, getDriverPickupAttempt, getPickupDetail, listEligiblePickupShipments,
-  listPickupRequests, markPickupMissed, recordPickupParcelException, reschedulePickup, scanPickupParcel, sendPickupOtp,
-  requestPickupOtpException, reviewPickupOtpException, transitionDriverAttempt, verifyPickupOtp
+  createClientPickup, driverPickupAttempts, getClientPickupFormContext, getDriverPickupAttempt, getPickupDetail, listEligiblePickupShipments,
+  listPickupRequests, markPickupMissed, markPickupReceivedAtDelhiHub, markPickupStarted, recordPickupParcelException, reschedulePickup, scanPickupParcel, sendPickupOtp,
+  requestPickupOtpException, reviewPickupOtpException, transitionDriverAttempt, updatePickupPartnerInfo, verifyPickupOtp
 } from "../services/pickup.service.js";
-import { emailValidationMessage, isValidBusinessContactEmail } from "../services/businessAccountRules.js";
+import { parsePickupDateInIndia, parsePickupDateTimeInIndia } from "../services/pickup.service.js";
 import { operationsBranchIds } from "../middleware/operationsBranchAccess.middleware.js";
 import { pickupRequestStatusValues } from "../models/pickupRequest.model.js";
 import { pickupExportColumns } from "../services/export/exportColumns.js";
 import { describeFilters, exportFormat, sendTableExport, type TableExportFormat } from "../services/export/tableExportHttp.js";
 
-const windowSchema = z.object({
-  startAt: z.coerce.date(), endAt: z.coerce.date(), timezone: z.string().trim().min(1).max(80).default("Asia/Kolkata")
-});
-const createSchema = z.object({
-  shipmentDraftIds: z.array(z.string()).min(1).max(100), requestedWindow: windowSchema,
-  contact: z.object({
-    name: z.string().trim().min(1).max(120),
-    email: z.string().trim().email().toLowerCase().refine(isValidBusinessContactEmail, emailValidationMessage),
-    phone: z.string().trim().min(6).max(30)
-  }),
-  pickupAddress: z.object({
+const pickupAddressSchema = z.object({
     addressLine1: z.string().trim().min(3).max(180),
     addressLine2: z.string().trim().max(180).optional().default(""),
     townOrCity: z.string().trim().min(2).max(100),
@@ -48,11 +41,41 @@ const createSchema = z.object({
     countryCode: z.string().trim().length(2).transform((value) => value.toUpperCase()),
     countryName: z.string().trim().max(100).optional().default(""),
     googlePlaceId: z.string().trim().max(300).optional().default("")
+  });
+const createSchema = z.object({
+  businessAccountId: z.string().min(1),
+  shipmentDraftIds: z.array(z.string()).max(100).default([]),
+  dispatchDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  dispatchTime: z.string().regex(/^\d{2}:\d{2}$/),
+  expectedDelhiArrival: z.object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    window: z.enum(["MORNING", "AFTERNOON", "EVENING", "EXACT"]),
+    exactTime: z.string().optional().default("").refine((value) => !value || /^\d{2}:\d{2}$/.test(value))
+  }).superRefine((value, context) => {
+    if (value.window === "EXACT" && !value.exactTime) context.addIssue({ code: "custom", path: ["exactTime"], message: "Choose the exact Delhi arrival time." });
+    if (value.window !== "EXACT" && value.exactTime) context.addIssue({ code: "custom", path: ["exactTime"], message: "Clear the exact time or choose Exact time." });
   }),
-  instructions: z.string().trim().max(500).optional().default("")
+  transportCompany: z.string().trim().min(1).max(120),
+  contact: z.object({
+    name: z.string().trim().min(1).max(120),
+    phone: z.string().trim().regex(/^\d{6,30}$/, "Enter a phone number using 6 to 30 digits only.")
+  }),
+  pickupAddress: pickupAddressSchema,
+  totalBoxes: z.coerce.number().int().positive().max(10000).optional(),
+  totalWeightKg: z.coerce.number().positive().max(100000).optional(),
+  handlingRemarks: z.string().trim().max(500).optional().default("")
+});
+const courierAddressSchema = z.object({
+  branchId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value)),
+  companyName: z.string().trim().min(2).max(120).refine((value) => value.toUpperCase() !== "OTHER", "Enter the courier's actual company name."),
+  address: pickupAddressSchema,
+  contact: z.object({
+    name: z.string().trim().min(1).max(120),
+    phone: z.string().trim().regex(/^\d{6,30}$/, "Enter a phone number using 6 to 30 digits only.")
+  })
 });
 const cancellationSchema = z.object({ reason: z.string().trim().min(3).max(500) });
-const confirmSchema = z.object({ scheduledWindow: windowSchema });
+const confirmSchema = z.object({});
 const assignSchema = z.object({
   attemptId: z.string(), driverProfileId: z.string(),
   vehicle: z.object({ source: z.enum(["COMPANY_OWNED", "DRIVER_OWNED", "HIRED", "VENDOR_OWNED"]).optional(), type: z.string().trim().max(60).optional(), registrationNumber: z.string().trim().max(30).optional() }).default({})
@@ -79,14 +102,34 @@ function refId(value: unknown) {
   return String((value as { _id?: unknown } | null)?._id ?? value);
 }
 
+async function loadClientPickupBranchAccess(userId: mongoose.Types.ObjectId) {
+  const memberships = await BusinessAccountMember.find({ user: userId, status: "active" })
+    .select("businessAccount assignedBranches")
+    .lean()
+    .exec();
+  const accounts = await BusinessAccount.find({ _id: { $in: memberships.map((item) => item.businessAccount) } })
+    .select("assignedBranch")
+    .lean()
+    .exec();
+  const defaultBranchByAccount = new Map(accounts.map((account) => [String(account._id), account.assignedBranch ? refId(account.assignedBranch) : ""]));
+  const branchesByAccount = new Map<string, Set<string>>();
+  for (const membership of memberships) {
+    const accountId = String(membership.businessAccount);
+    const assignedBranches = (membership.assignedBranches ?? []).map(String);
+    const accessibleBranches = assignedBranches.length ? assignedBranches : [defaultBranchByAccount.get(accountId) ?? ""];
+    const branches = branchesByAccount.get(accountId) ?? new Set<string>();
+    for (const branchId of accessibleBranches) if (branchId) branches.add(branchId);
+    branchesByAccount.set(accountId, branches);
+  }
+  return branchesByAccount;
+}
+
 async function clientCanAccessPickup(
   userId: mongoose.Types.ObjectId,
   pickup: { businessAccountId: unknown; branchId: unknown }
 ) {
-  const membership = await BusinessAccountMember.findOne({ user: userId, businessAccount: refId(pickup.businessAccountId), status: "active" }).select("assignedBranches").lean().exec();
-  if (!membership) return false;
-  const assignedBranches = membership.assignedBranches ?? [];
-  return !assignedBranches.length || assignedBranches.some((id) => String(id) === refId(pickup.branchId));
+  const branchesByAccount = await loadClientPickupBranchAccess(userId);
+  return branchesByAccount.get(refId(pickup.businessAccountId))?.has(refId(pickup.branchId)) ?? false;
 }
 
 function handle(error: unknown, response: Response, next: NextFunction) {
@@ -101,12 +144,85 @@ export async function listClientEligiblePickups(request: Request, response: Resp
   } catch (error) { return handle(error, response, next); }
 }
 
+export async function getClientPickupForm(request: Request, response: Response, next: NextFunction) {
+  try {
+    const user = actor(request); if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
+    return response.status(200).json({ success: true, ...(await getClientPickupFormContext(user.id)) });
+  } catch (error) { return handle(error, response, next); }
+}
+
+export async function listPickupCourierAddresses(request: Request, response: Response, next: NextFunction) {
+  try {
+    const allowed = operationsBranchIds(request);
+    const branches = await Branch.find({
+      status: "ACTIVE",
+      ...(allowed === null ? {} : { _id: { $in: allowed } })
+    }).select("name code").sort({ name: 1 }).lean().exec();
+    const profiles = await PickupCourierAddress.find({ branchId: { $in: branches.map((branch) => branch._id) } })
+      .select("branchId companyName address contact updatedAt")
+      .sort({ companyName: 1 }).lean().exec();
+    return response.status(200).json({ success: true, branches: branches.map((branch) => ({ id: String(branch._id), name: branch.name, code: branch.code })),
+      courierAddresses: profiles.map((profile) => ({ id: String(profile._id), branchId: String(profile.branchId), companyName: profile.companyName,
+        address: profile.address, contact: profile.contact, updatedAt: profile.updatedAt })) });
+  } catch (error) { return handle(error, response, next); }
+}
+
+export async function savePickupCourierAddress(request: Request, response: Response, next: NextFunction) {
+  try {
+    const user = actor(request);
+    if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
+    const parsed = courierAddressSchema.safeParse(request.body);
+    if (!parsed.success) return response.status(400).json({ success: false, message: parsed.error.issues[0]?.message ?? "Check the courier address." });
+    const { branchId, companyName, address, contact } = parsed.data;
+    const allowed = operationsBranchIds(request);
+    if (allowed !== null && !allowed.includes(branchId)) return response.status(403).json({ success: false, message: "You do not have access to this branch." });
+    if (!await Branch.exists({ _id: branchId, status: "ACTIVE" })) return response.status(400).json({ success: false, message: "Choose an active branch." });
+    const companyKey = companyName.replace(/\s+/g, " ").toUpperCase();
+    const profileId = String(request.params.profileId ?? "");
+    if (profileId && !mongoose.Types.ObjectId.isValid(profileId)) return response.status(404).json({ success: false, message: "Courier address was not found." });
+    if (profileId) {
+      const existing = await PickupCourierAddress.findById(profileId).select("branchId").lean().exec();
+      if (!existing || (allowed !== null && !allowed.includes(String(existing.branchId)))) return response.status(404).json({ success: false, message: "Courier address was not found." });
+    }
+    const duplicate = await PickupCourierAddress.exists({ branchId, companyKey, ...(profileId ? { _id: { $ne: profileId } } : {}) });
+    if (duplicate) return response.status(409).json({ success: false, message: "This courier already has an address for the selected branch." });
+    const values = { branchId, companyName: companyName.replace(/\s+/g, " "), companyKey, address, contact, updatedBy: user.id };
+    const profile = profileId
+      ? await PickupCourierAddress.findByIdAndUpdate(profileId, { $set: values }, { new: true, runValidators: true }).lean().exec()
+      : await PickupCourierAddress.create({ ...values, createdBy: user.id });
+    return response.status(profileId ? 200 : 201).json({ success: true, courierAddress: profile });
+  } catch (error) {
+    if (error instanceof mongoose.mongo.MongoServerError && error.code === 11000) return response.status(409).json({ success: false, message: "This courier already has an address for the selected branch." });
+    return handle(error, response, next);
+  }
+}
+
+function pickupCreatePayload(request: Request) {
+  const raw = (request.body as { request?: unknown } | undefined)?.request;
+  if (typeof raw !== "string") return request.body;
+  try { return JSON.parse(raw) as unknown; }
+  catch { throw new PickupServiceError("Pickup details could not be read. Review the form and try again."); }
+}
+
 export async function createClientPickupRequest(request: Request, response: Response, next: NextFunction) {
   try {
     const user = actor(request); if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
-    const parsed = createSchema.safeParse(request.body);
+    const parsed = createSchema.safeParse(pickupCreatePayload(request));
     if (!parsed.success) return response.status(400).json({ success: false, message: parsed.error.issues[0]?.message ?? "Check the pickup details." });
-    const pickup = await createClientPickup({ userId: user.id, ...parsed.data });
+    const uploads = (request.files as Record<string, Express.Multer.File[]> | undefined)?.documents ?? [];
+    const pickup = await createClientPickup({
+      userId: user.id,
+      ...parsed.data,
+      dispatchAt: parsePickupDateTimeInIndia(parsed.data.dispatchDate, parsed.data.dispatchTime),
+      expectedDelhiArrival: {
+        date: parsePickupDateInIndia(parsed.data.expectedDelhiArrival.date),
+        window: parsed.data.expectedDelhiArrival.window,
+        exactAt: parsed.data.expectedDelhiArrival.window === "EXACT"
+          ? parsePickupDateTimeInIndia(parsed.data.expectedDelhiArrival.date, parsed.data.expectedDelhiArrival.exactTime)
+          : null
+      },
+      documents: uploads.map((file) => ({ originalName: file.originalname, mimetype: file.mimetype, size: file.size, buffer: file.buffer }))
+    });
     return response.status(201).json({ success: true, message: "Pickup request submitted.", pickup });
   } catch (error) { return handle(error, response, next); }
 }
@@ -151,9 +267,15 @@ function sendPickupExport(request: Request, response: Response, format: TableExp
 export async function listClientPickupRequests(request: Request, response: Response, next: NextFunction) {
   try {
     const user = actor(request); if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
-    const memberships = await BusinessAccountMember.find({ user: user.id, status: "active" }).select("businessAccount").lean().exec();
+    const branchesByAccount = await loadClientPickupBranchAccess(user.id);
+    const scopeClauses = [...branchesByAccount.entries()]
+      .filter(([, branchIds]) => branchIds.size > 0)
+      .map(([businessAccountId, branchIds]) => ({
+        businessAccountId: new mongoose.Types.ObjectId(businessAccountId),
+        branchId: { $in: [...branchIds].map((branchId) => new mongoose.Types.ObjectId(branchId)) }
+      }));
     const pickups = await listPickupRequests({
-      businessAccountId: { $in: memberships.map((item) => item.businessAccount) },
+      ...(scopeClauses.length ? { $or: scopeClauses } : { businessAccountId: { $in: [] } }),
       ...pickupQueryFilters(request)
     });
     const format = exportFormat(request);
@@ -167,6 +289,10 @@ const rescheduleSchema = z.object({
   endAt: z.coerce.date(),
   timezone: z.string().trim().min(1).max(80).default("Asia/Kolkata")
 });
+const clientRescheduleSchema = z.object({
+  dispatchDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  dispatchTime: z.string().regex(/^\d{2}:\d{2}$/)
+});
 
 export async function rescheduleClientPickupRequest(request: Request, response: Response, next: NextFunction) {
   try {
@@ -176,12 +302,13 @@ export async function rescheduleClientPickupRequest(request: Request, response: 
     if (!pickup || !await clientCanAccessPickup(user.id, pickup)) {
       return response.status(404).json({ success: false, message: "Pickup request was not found." });
     }
-    const parsed = rescheduleSchema.safeParse(request.body);
+    const parsed = clientRescheduleSchema.safeParse(request.body);
     if (!parsed.success) return response.status(400).json({ success: false, message: "Choose a valid pickup window." });
+    const startAt = parsePickupDateTimeInIndia(parsed.data.dispatchDate, parsed.data.dispatchTime);
     return response.status(200).json({
       success: true,
       message: "Pickup rescheduled.",
-      pickup: await reschedulePickup({ pickupId, actorId: user.id, source: "CLIENT", ...parsed.data })
+      pickup: await reschedulePickup({ pickupId, actorId: user.id, source: "CLIENT", startAt, endAt: new Date(startAt.getTime() + 2 * 60 * 60 * 1000), timezone: "Asia/Kolkata" })
     });
   } catch (error) { return handle(error, response, next); }
 }
@@ -297,10 +424,44 @@ export async function confirmPickupRequest(request: Request, response: Response,
     const user = actor(request); if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
     const pickupId = String(request.params.pickupId ?? "");
     if (!mongoose.Types.ObjectId.isValid(pickupId) || !await internalPickupAccess(request, pickupId)) return response.status(404).json({ success: false, message: "Pickup request was not found." });
-    const parsed = confirmSchema.safeParse(request.body);
-    if (!parsed.success) return response.status(400).json({ success: false, message: "Select a valid confirmed pickup window." });
-    const result = await confirmPickup({ pickupId, actorId: user.id, ...parsed.data });
-    return response.status(200).json({ success: true, message: "Pickup confirmed and attempt scheduled.", pickup: result.detail, attemptId: result.attemptId });
+    const parsed = confirmSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return response.status(400).json({ success: false, message: "Pickup approval request is invalid." });
+    const result = await confirmPickup({ pickupId, actorId: user.id });
+    return response.status(200).json({ success: true, message: "Pickup approved and driver assignment is available.", pickup: result.detail, attemptId: result.attemptId });
+  } catch (error) { return handle(error, response, next); }
+}
+
+export async function updateInternalPickupStatus(request: Request, response: Response, next: NextFunction) {
+  try {
+    const user = actor(request); if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
+    const pickupId = String(request.params.pickupId ?? "");
+    if (!mongoose.Types.ObjectId.isValid(pickupId) || !await internalPickupAccess(request, pickupId)) return response.status(404).json({ success: false, message: "Pickup request was not found." });
+    const parsed = z.object({
+      status: z.enum(["IN_PROGRESS", "RECEIVED_AT_DELHI_HUB"]),
+      receivedParcels: z.array(z.object({
+        shipmentDraftId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value)),
+        parcelNumber: z.string().trim().min(1).max(80)
+      })).max(10000).optional()
+    }).safeParse(request.body);
+    if (!parsed.success) return response.status(400).json({ success: false, message: "Select a valid pickup status." });
+    if (parsed.data.status === "RECEIVED_AT_DELHI_HUB" && !parsed.data.receivedParcels) {
+      return response.status(400).json({ success: false, message: "Review the linked parcels before closing the pickup." });
+    }
+    const pickup = parsed.data.status === "IN_PROGRESS"
+      ? await markPickupStarted({ pickupId, actorId: user.id, source: "ADMIN" })
+      : await markPickupReceivedAtDelhiHub({ pickupId, actorId: user.id, receivedParcels: parsed.data.receivedParcels ?? [] });
+    return response.status(200).json({ success: true, message: "Pickup status updated.", pickup });
+  } catch (error) { return handle(error, response, next); }
+}
+
+export async function updateInternalPickupPartnerInfo(request: Request, response: Response, next: NextFunction) {
+  try {
+    const user = actor(request); if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
+    const pickupId = String(request.params.pickupId ?? "");
+    if (!mongoose.Types.ObjectId.isValid(pickupId) || !await internalPickupAccess(request, pickupId)) return response.status(404).json({ success: false, message: "Pickup request was not found." });
+    const parsed = z.object({ information: z.string().trim().max(500) }).safeParse(request.body);
+    if (!parsed.success) return response.status(400).json({ success: false, message: "Pickup partner information must be 500 characters or less." });
+    return response.status(200).json({ success: true, message: "Pickup partner information saved.", pickup: await updatePickupPartnerInfo({ pickupId, actorId: user.id, information: parsed.data.information }) });
   } catch (error) { return handle(error, response, next); }
 }
 
@@ -351,13 +512,56 @@ async function sendProofFile(proofId: string, pickupId: string, response: Respon
   }
 }
 
+async function sendPickupDocument(documentId: string, pickupId: string, response: Response) {
+  if (!mongoose.Types.ObjectId.isValid(documentId)) throw new PickupServiceError("Pickup document was not found.", 404);
+  const pickup = await PickupRequest.findById(pickupId).select("documents").lean().exec();
+  const document = pickup?.documents.find((item) => String(item._id) === documentId);
+  if (!document) throw new PickupServiceError("Pickup document was not found.", 404);
+  try {
+    return await streamObjectToResponse({
+      response,
+      key: document.storageKey,
+      contentType: document.mimeType,
+      filename: document.originalName,
+      disposition: "attachment"
+    });
+  } catch (error) {
+    if (error instanceof StorageObjectNotFoundError) throw new PickupServiceError("Pickup document file was not found.", 404);
+    throw error;
+  }
+}
+
+export async function viewClientPickupDocument(request: Request, response: Response, next: NextFunction) {
+  try {
+    const user = actor(request); if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
+    const pickupId = String(request.params.pickupId ?? "");
+    if (!mongoose.Types.ObjectId.isValid(pickupId)) return response.status(404).json({ success: false, message: "Pickup document was not found." });
+    const pickup = await PickupRequest.findById(pickupId).select("businessAccountId branchId").lean().exec();
+    if (!pickup || !await clientCanAccessPickup(user.id, pickup)) return response.status(404).json({ success: false, message: "Pickup document was not found." });
+    return await sendPickupDocument(String(request.params.documentId ?? ""), pickupId, response);
+  } catch (error) { return handle(error, response, next); }
+}
+
+export async function viewInternalPickupDocument(request: Request, response: Response, next: NextFunction) {
+  try {
+    const pickupId = String(request.params.pickupId ?? "");
+    if (!mongoose.Types.ObjectId.isValid(pickupId) || !await internalPickupAccess(request, pickupId)) return response.status(404).json({ success: false, message: "Pickup document was not found." });
+    return await sendPickupDocument(String(request.params.documentId ?? ""), pickupId, response);
+  } catch (error) { return handle(error, response, next); }
+}
+
 export async function viewClientPickupProof(request: Request, response: Response, next: NextFunction) {
   try {
     const user = actor(request); if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
-    if (!mongoose.Types.ObjectId.isValid(String(request.params.pickupId ?? ""))) return response.status(404).json({ success: false, message: "Pickup proof was not found." });
-    const pickup = await PickupRequest.findById(request.params.pickupId).select("businessAccountId branchId status").lean().exec();
-    if (!pickup || !["COLLECTED", "PARTIALLY_COLLECTED"].includes(pickup.status) || !await clientCanAccessPickup(user.id, pickup)) return response.status(404).json({ success: false, message: "Pickup proof was not found." });
-    return await sendProofFile(String(request.params.proofId ?? ""), String(pickup._id), response);
+    const proofId = String(request.params.proofId ?? "");
+    if (!mongoose.Types.ObjectId.isValid(String(request.params.pickupId ?? "")) || !mongoose.Types.ObjectId.isValid(proofId)) return response.status(404).json({ success: false, message: "Pickup proof was not found." });
+    const pickup = await PickupRequest.findById(request.params.pickupId).select("businessAccountId branchId status pickupStartedAt").lean().exec();
+    if (!pickup || (!pickup.pickupStartedAt && !["COLLECTED", "PARTIALLY_COLLECTED", "RECEIVED_AT_DELHI_HUB", "COMPLETED_WITH_MISSING_PARCELS"].includes(pickup.status)) || pickup.status === "CANCELLED" || !await clientCanAccessPickup(user.id, pickup)) return response.status(404).json({ success: false, message: "Pickup proof was not found." });
+    if (!["COLLECTED", "PARTIALLY_COLLECTED", "RECEIVED_AT_DELHI_HUB", "COMPLETED_WITH_MISSING_PARCELS"].includes(pickup.status)) {
+      const staffProof = await PickupProof.exists({ _id: proofId, pickupRequestId: pickup._id, source: "STAFF" });
+      if (!staffProof) return response.status(404).json({ success: false, message: "Pickup proof was not found." });
+    }
+    return await sendProofFile(proofId, String(pickup._id), response);
   } catch (error) { return handle(error, response, next); }
 }
 
@@ -367,6 +571,46 @@ export async function viewInternalPickupProof(request: Request, response: Respon
     if (!mongoose.Types.ObjectId.isValid(pickupId) || !await internalPickupAccess(request, pickupId)) return response.status(404).json({ success: false, message: "Pickup proof was not found." });
     return await sendProofFile(String(request.params.proofId ?? ""), pickupId, response);
   } catch (error) { return handle(error, response, next); }
+}
+
+export async function uploadInternalPickupProof(request: Request, response: Response, next: NextFunction) {
+  let storedKey = "";
+  try {
+    const user = actor(request);
+    if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
+    const pickupId = String(request.params.pickupId ?? "");
+    if (!mongoose.Types.ObjectId.isValid(pickupId) || !await internalPickupAccess(request, pickupId)) {
+      return response.status(404).json({ success: false, message: "Pickup request was not found." });
+    }
+    const file = request.file;
+    if (!file) throw new PickupServiceError("Choose a pickup photo.");
+    if (!matchesDeclaredType(file.buffer, file.mimetype)) throw new PickupServiceError("The pickup photo is not a valid JPG, PNG, or WebP image.");
+    const pickup = await PickupRequest.findById(pickupId).select("currentAttemptId pickupStartedAt status").lean().exec();
+    if (!pickup || !pickup.currentAttemptId ||
+      ((!pickup.pickupStartedAt && !["COLLECTED", "PARTIALLY_COLLECTED", "RECEIVED_AT_DELHI_HUB", "COMPLETED_WITH_MISSING_PARCELS"].includes(pickup.status)) || pickup.status === "CANCELLED")) {
+      throw new PickupServiceError("Start the pickup before adding a proof photo.", 409);
+    }
+    const attempt = await PickupAttempt.findOne({ _id: pickup.currentAttemptId, pickupRequestId: pickup._id }).select("_id").lean().exec();
+    if (!attempt) throw new PickupServiceError("The pickup attempt was not found.", 409);
+
+    storedKey = pickupProofKey(pickupId, file.originalname);
+    await putObject({ key: storedKey, body: file.buffer, contentType: file.mimetype, originalName: file.originalname });
+    const proof = new PickupProof({ pickupRequestId: pickup._id, pickupAttemptId: attempt._id, type: "PHOTO", source: "STAFF",
+      originalName: file.originalname, storageKey: storedKey, mimeType: file.mimetype, size: file.size, capturedBy: user.id });
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await proof.save({ session });
+        await AuditLog.create([{ action: "PICKUP_PROOF_CAPTURED", entityType: "PICKUP_ATTEMPT", entityId: attempt._id,
+          performedBy: user.id, performedAt: new Date(), metadata: { type: "PHOTO", source: "STAFF", proofId: proof._id } }], { session });
+      });
+    } finally { await session.endSession(); }
+    storedKey = "";
+    return response.status(201).json({ success: true, message: "Pickup photo saved.", pickup: await getPickupDetail(pickupId) });
+  } catch (error) {
+    if (storedKey) await deleteObject(storedKey).catch(() => undefined);
+    return handle(error, response, next);
+  }
 }
 
 export async function viewMyPickupProof(request: Request, response: Response, next: NextFunction) {

@@ -4,6 +4,7 @@ import { EmailPreference } from "../../models/emailPreference.model.js";
 import { EmailSuppression } from "../../models/emailSuppression.model.js";
 import { resolveAttachments } from "./attachments.js";
 import { renderEmail } from "./layout.js";
+import { resolveInlineEmailImages } from "./inlineImages.js";
 import { getEmailTemplate } from "./templates/index.js";
 import { EmailSendError, getEmailTransport, isMailConfigured } from "./transport.js";
 
@@ -133,11 +134,18 @@ async function deliver(row: IEmailOutbox) {
     payload: {
       ...row.payload,
       labelsAttached: resolution.attachments.some((attachment) => attachment.kind === "LABEL_DOCUMENT"),
+      pickupDocumentsAttached: resolution.attachments.filter((attachment) => attachment.kind === "PICKUP_DOCUMENT").length,
       attachmentsDropped: resolution.dropped
     },
     appUrl: env.CLIENT_URL
   });
 
+  const inlineImages = await resolveInlineEmailImages(content).catch((error: unknown) => {
+    // A missing illustration must not suppress a transactional pickup update.
+    content.heroImage = undefined;
+    console.error("Pickup email illustration could not be loaded.", error instanceof Error ? error.message : error);
+    return [];
+  });
   const { html, text } = renderEmail(content, footerNoteFor(row));
   const headers: Record<string, string> = {};
   if (row.category !== "TRANSACTIONAL" && env.MAIL_REPLY_TO) {
@@ -150,7 +158,7 @@ async function deliver(row: IEmailOutbox) {
     subject: content.subject,
     html,
     text,
-    attachments: resolution.attachments,
+    attachments: [...resolution.attachments, ...inlineImages],
     headers
   });
 

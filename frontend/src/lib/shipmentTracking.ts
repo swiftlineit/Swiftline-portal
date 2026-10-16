@@ -52,3 +52,10 @@ export type ParcelProgress = {
   totalParcels: number;
   isPartial: boolean;
 };
+
+export type ShipmentHubReceipt = {
+  receivedParcels: number;
+  totalParcels: number;
+  receivedParcelNumbers: string[];
+  notReceivedParcelNumbers: string[];
+};

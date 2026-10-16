@@ -34,6 +34,7 @@ export interface IPickupProof extends mongoose.Document {
   pickupRequestId: mongoose.Types.ObjectId;
   pickupAttemptId: mongoose.Types.ObjectId;
   type: (typeof pickupProofTypeValues)[number];
+  source?: "DRIVER" | "STAFF";
   originalName: string;
   /** Storage service key, resolved through storage.service.ts. Never a path. */
   storageKey: string;
@@ -47,6 +48,7 @@ const pickupProofSchema = new mongoose.Schema<IPickupProof>({
   pickupRequestId: { type: mongoose.Schema.Types.ObjectId, ref: "PickupRequest", required: true, index: true },
   pickupAttemptId: { type: mongoose.Schema.Types.ObjectId, ref: "PickupAttempt", required: true, index: true },
   type: { type: String, enum: pickupProofTypeValues, required: true, index: true },
+  source: { type: String, enum: ["DRIVER", "STAFF"], default: "DRIVER" },
   originalName: { type: String, required: true },
   storageKey: { type: String, required: true, maxlength: 1024 },
   mimeType: { type: String, required: true },

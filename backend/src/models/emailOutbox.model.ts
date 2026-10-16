@@ -29,13 +29,15 @@ export const emailAttachmentKindValues = [
   "CREDIT_AGREEMENT_PDF",
   "CANCELLATION_DOCUMENT_PDF",
   "RATE_CARD_SHARE_PDF",
-  "RATE_CARD_SHARE_XLSX"
+  "RATE_CARD_SHARE_XLSX",
+  "PICKUP_DOCUMENT"
 ] as const;
 export type EmailAttachmentKind = (typeof emailAttachmentKindValues)[number];
 
 export interface IEmailAttachmentRef {
   kind: EmailAttachmentKind;
   refId: mongoose.Types.ObjectId;
+  documentId?: mongoose.Types.ObjectId | null;
   revision?: number | null;
   filename?: string;
 }
@@ -68,6 +70,7 @@ const emailAttachmentRefSchema = new mongoose.Schema<IEmailAttachmentRef>(
   {
     kind: { type: String, enum: emailAttachmentKindValues, required: true },
     refId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    documentId: { type: mongoose.Schema.Types.ObjectId, default: null },
     revision: { type: Number, default: null },
     filename: { type: String, trim: true, maxlength: 200, default: "" }
   },

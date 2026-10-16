@@ -123,7 +123,8 @@ import {
   listClientServiceDisruptions
 } from "../controllers/operationsAdvisory.controller.js";
 import { listClientBookingPauses } from "../controllers/bookingPause.controller.js";
-import { cancelClientPickupRequest, createClientPickupRequest, rescheduleClientPickupRequest, getClientPickupRequest, listClientEligiblePickups, listClientPickupRequests, viewClientPickupProof } from "../controllers/pickup.controller.js";
+import { cancelClientPickupRequest, createClientPickupRequest, getClientPickupForm, rescheduleClientPickupRequest, getClientPickupRequest, listClientEligiblePickups, listClientPickupRequests, viewClientPickupDocument, viewClientPickupProof } from "../controllers/pickup.controller.js";
+import { pickupDocumentUpload } from "../middleware/pickupDocumentUpload.middleware.js";
 import { checkClientServiceability } from "../controllers/serviceability.controller.js";
 import { getClientCustomsKyc } from "../controllers/customsKyc.controller.js";
 import { getClientActivity } from "../controllers/clientActivity.controller.js";
@@ -228,12 +229,14 @@ clientRouter.get("/dpd-labels/drafts/:id/parcels/:sequence/kyc-documents/:type",
 clientRouter.post("/dpd-labels/drafts/:id/create-shipment", createClientShipment);
 clientRouter.get("/shipments", listClientShipments);
 clientRouter.get("/booked-shipments", listClientBookedShipments);
+clientRouter.get("/pickups/form-context", getClientPickupForm);
 clientRouter.get("/pickups/eligible-shipments", listClientEligiblePickups);
-clientRouter.post("/pickups", createClientPickupRequest);
+clientRouter.post("/pickups", pickupDocumentUpload, createClientPickupRequest);
 clientRouter.get("/pickups", listClientPickupRequests);
 clientRouter.get("/pickups/:pickupId", getClientPickupRequest);
 clientRouter.post("/pickups/:pickupId/cancel", cancelClientPickupRequest);
 clientRouter.post("/pickups/:pickupId/reschedule", rescheduleClientPickupRequest);
+clientRouter.get("/pickups/:pickupId/documents/:documentId", viewClientPickupDocument);
 clientRouter.get("/pickups/:pickupId/proofs/:proofId", viewClientPickupProof);
 clientRouter.get("/shipments/:shipmentId/pod", getClientPod);
 clientRouter.post("/shipments/:shipmentId/pod/disputes", createPodDispute);

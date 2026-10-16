@@ -501,6 +501,7 @@ export type DpdShipmentHistoryItem = {
   trackingPosition?: import("@/lib/shipmentTracking").TrackingPosition | null;
   parcelActivities?: import("@/lib/shipmentTracking").ParcelActivity[];
   parcelProgress?: import("@/lib/shipmentTracking").ParcelProgress | null;
+  hubReceipt?: import("@/lib/shipmentTracking").ShipmentHubReceipt | null;
   carrierTrackingReviews?: Array<{
     id: string;
     carrierAwbNumber: string;

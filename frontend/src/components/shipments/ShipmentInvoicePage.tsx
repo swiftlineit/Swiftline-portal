@@ -64,7 +64,7 @@ export default function ShipmentInvoicePage({
   const [downloading, setDownloading] = useState(false);
   // Document-only revised copy id from `?revised=`. When set, the page renders
   // the stored edited document instead of the real backend invoice. The real
-  // invoice is never read for writing here — only displayed or revised.
+  // invoice is never read for writing here - only displayed or revised.
   const [revisedId, setRevisedId] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorSaving, setEditorSaving] = useState(false);

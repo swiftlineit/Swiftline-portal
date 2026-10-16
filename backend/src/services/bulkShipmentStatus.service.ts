@@ -21,6 +21,7 @@ import {
 } from "./shipmentStatusSequence.service.js";
 import { resolveBulkTrackingGatewayCode } from "./shipmentGateway.service.js";
 import { formatShipmentStatusLabel } from "./shipmentListing.service.js";
+import { loadShipmentHubReceiptsByDraftIds } from "./shipmentHubReceipt.service.js";
 
 export type BulkStatusSkip = {
   shipmentDraftId: string;
@@ -279,6 +280,9 @@ export async function bulkRecordOperationalStatus(input: {
     timings.readMs = roundedDuration(readStartedAt);
 
     const validationStartedAt = performance.now();
+    const hubReceipts = input.status === "WAREHOUSE_SCAN_IN"
+      ? await loadShipmentHubReceiptsByDraftIds(draftObjectIds)
+      : new Map();
     const shipmentByDraft = new Map(shipments.map((shipment) => [String(shipment.shipmentDraftId), shipment]));
 
     const cancellationByDraft = new Map<string, string>(
@@ -354,6 +358,11 @@ export async function bulkRecordOperationalStatus(input: {
       const shipment = shipmentByDraft.get(draftId);
       if (!shipment) {
         skipped.push({ shipmentDraftId: draftId, reason: "Shipment is not booked." });
+        continue;
+      }
+      const hubReceipt = hubReceipts.get(draftId);
+      if (hubReceipt?.notReceivedParcelNumbers.length) {
+        skipped.push({ shipmentDraftId: draftId, swiftlineTrackingNumber: shipment.swiftlineTrackingNumber, reason: `${hubReceipt.notReceivedParcelNumbers.length} parcel(s) have not been received at the origin facility.` });
         continue;
       }
 

@@ -577,6 +577,7 @@ function manifestBodyRowHeight(values: unknown[], minimum: number, columnWidths 
     ),
     1,
   );
+  if (wrappedLines === 1) return minimum;
   // 18 points matches the existing address-row rhythm, with a small amount of
   // breathing room so the last wrapped line is not clipped by Excel.
   return Math.max(minimum, wrappedLines * 18 + 4);
@@ -830,7 +831,11 @@ export async function buildShipmentManifestWorkbook(
       } else {
         row.getCell(fromColumn).value = consignorLines[offset] ?? "";
         row.getCell(toColumn).value = consigneeLines[offset] ?? "";
-        row.height = 18;
+        row.height = manifestBodyRowHeight(
+          [row.getCell(fromColumn).value, row.getCell(toColumn).value],
+          18,
+          [columnWidths[fromColumn - 1] ?? 44, columnWidths[toColumn - 1] ?? 44]
+        );
       }
 
       for (let column = 1; column <= totalColumns; column += 1) {

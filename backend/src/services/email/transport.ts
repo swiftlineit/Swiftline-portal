@@ -8,6 +8,8 @@ export type OutboundAttachment = {
   filename: string;
   content: Buffer;
   contentType: string;
+  cid?: string;
+  contentDisposition?: "inline" | "attachment";
 };
 
 export type OutboundEmail = {

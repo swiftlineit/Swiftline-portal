@@ -128,7 +128,20 @@ const catalog: Record<string, CatalogEntry> = {
   // watching a countdown, so this must overtake every queued invoice and digest.
   LOGIN_OTP: { category: "TRANSACTIONAL", priority: 99 },
   BUSINESS_ACCOUNT_EMAIL_OTP: { category: "TRANSACTIONAL", priority: 99 },
-  PICKUP_OTP: { category: "TRANSACTIONAL", priority: 98 }
+  PICKUP_OTP: { category: "TRANSACTIONAL", priority: 98 },
+
+  // Pickup requests and milestones are operationally time-bound commitments;
+  // they go to the requester and the pickup branch's assigned team.
+  PICKUP_REQUESTED: { category: "TRANSACTIONAL", priority: 75 },
+  PICKUP_CONFIRMED: { category: "TRANSACTIONAL", priority: 75 },
+  PICKUP_ASSIGNED: { category: "TRANSACTIONAL", priority: 75 },
+  PICKUP_EN_ROUTE: { category: "TRANSACTIONAL", priority: 80 },
+  PICKUP_COMPLETED: { category: "TRANSACTIONAL", priority: 85 },
+  PICKUP_CANCELLED: { category: "TRANSACTIONAL", priority: 75 },
+  PICKUP_ACTION_REQUIRED: { category: "TRANSACTIONAL", priority: 75 },
+  PICKUP_MISSED: { category: "TRANSACTIONAL", priority: 75 },
+  PICKUP_RESCHEDULED: { category: "TRANSACTIONAL", priority: 75 },
+  PICKUP_DISPATCH_REMINDER: { category: "TRANSACTIONAL", priority: 80 }
 };
 
 export function getEmailPolicy(notificationType: string): CatalogEntry | null {

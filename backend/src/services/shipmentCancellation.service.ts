@@ -14,6 +14,7 @@ import { ShipmentCreditNote } from "../models/shipmentCreditNote.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent, type ShipmentEventStatus } from "../models/shipmentEvent.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
+import { ShipmentOperationsParcelScan } from "../models/shipmentOperationsParcelScan.model.js";
 import { appendCreditLedgerEntry } from "./creditAccount.service.js";
 import { notifyActiveAdmins, notifyBusinessFinancialMembers } from "./portalNotification.service.js";
 
@@ -127,17 +128,16 @@ async function cancellationGate(
   requesterType: "CLIENT" | "ADMIN",
   session?: mongoose.ClientSession
 ) {
-  const events = await ShipmentEvent.find({ shipmentDraftId })
-    .select("status")
-    .session(session ?? null)
-    .lean()
-    .exec();
+  const [events, receivedParcel] = await Promise.all([
+    ShipmentEvent.find({ shipmentDraftId }).select("status").session(session ?? null).lean().exec(),
+    ShipmentOperationsParcelScan.exists({ shipmentDraftId, action: "RECEIVE" }).session(session ?? null).exec()
+  ]);
   const statuses = new Set(events.map((event) => event.status));
   return getCancellationEligibility({
     requesterType,
     hasBooked: statuses.has("SHIPMENT_BOOKED"),
-    hasParcelCollectedOrLater: afterBookingStatuses.some((status) => statuses.has(status)),
-    hasWarehouseScanOrLater: warehouseAndLaterStatuses.some((status) => statuses.has(status)),
+    hasParcelCollectedOrLater: Boolean(receivedParcel) || afterBookingStatuses.some((status) => statuses.has(status)),
+    hasWarehouseScanOrLater: Boolean(receivedParcel) || warehouseAndLaterStatuses.some((status) => statuses.has(status)),
     alreadyCancelled: statuses.has("SHIPMENT_CANCELLED")
   });
 }

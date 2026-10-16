@@ -13,7 +13,8 @@ export interface IPickupRequestShipment extends mongoose.Document {
   trackingNumber: string;
   snapshotRevision: number;
   shipmentSnapshot: Record<string, unknown>;
-  parcels: Array<{ parcelNumber: string; weightKg: number; status: (typeof pickupParcelStatusValues)[number]; exceptionReason?: string; collectedAt?: Date | null }>;
+  parcels: Array<{ parcelNumber: string; weightKg: number; status: (typeof pickupParcelStatusValues)[number]; exceptionReason?: string; collectedAt?: Date | null; hubReceiptOutcome?: "RECEIVED" | "NOT_RECEIVED" | null }>;
+  hubReceiptRecordedAt?: Date | null;
   status: (typeof pickupShipmentStatusValues)[number];
   active: boolean;
   createdAt: Date;
@@ -33,8 +34,10 @@ const pickupRequestShipmentSchema = new mongoose.Schema<IPickupRequestShipment>(
       weightKg: { type: Number, min: 0, required: true },
       status: { type: String, enum: pickupParcelStatusValues, default: "PENDING", required: true },
       exceptionReason: { type: String, trim: true, maxlength: 500, default: "" },
-      collectedAt: { type: Date, default: null }
+      collectedAt: { type: Date, default: null },
+      hubReceiptOutcome: { type: String, enum: ["RECEIVED", "NOT_RECEIVED", null], default: null }
     }],
+    hubReceiptRecordedAt: { type: Date, default: null },
     status: { type: String, enum: pickupShipmentStatusValues, default: "PENDING", required: true, index: true },
     active: { type: Boolean, default: true, required: true, index: true }
   },
