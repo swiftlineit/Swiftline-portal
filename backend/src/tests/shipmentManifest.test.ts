@@ -18,7 +18,17 @@ import {
   type ManifestPartySnapshot
 } from "../services/shipmentManifest.service.js";
 import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
-import { buildShipmentManifestPdf, manifestRows } from "../services/shipmentManifestPdf.service.js";
+import {
+  shipmentManifestAssignmentAvailability,
+  shipmentManifestAssignmentClaimFilter,
+  shipmentManifestAssignmentSlot
+} from "../services/shipmentManifestMembership.service.js";
+import {
+  buildShipmentManifestPdf,
+  manifestRows,
+  shipmentManifestDeclaration,
+  shipmentManifestSections
+} from "../services/shipmentManifestPdf.service.js";
 import type { ShipmentBookingSnapshot } from "../services/shipmentBookingSnapshot.service.js";
 
 describe("shipment manifest identifiers and search", () => {
@@ -33,7 +43,7 @@ describe("shipment manifest identifiers and search", () => {
 
   it("treats manifest search input literally and searches manifest/account/shipment references", () => {
     const conditions = shipmentManifestSearchConditions("AIC.001");
-    assert.equal(conditions.length, 7);
+    assert.equal(conditions.length, 8);
     const numberPattern = conditions[0]?.manifestNumber as RegExp;
     assert.equal(numberPattern.test("AIC.001"), true);
     assert.equal(numberPattern.test("AICx001"), false);
@@ -96,6 +106,64 @@ describe("shipment manifest identifiers and search", () => {
       (ShipmentManifestCounter as any).updateOne = originals.counterUpdateOne;
       (ShipmentManifest as any).find = originals.manifestFind;
     }
+  });
+});
+
+describe("shipment manifest membership rules", () => {
+  it("keeps client manifests exclusive while allowing staff account and combined reuse", () => {
+    const clientAssignment = { clientAccountManifestId: new mongoose.Types.ObjectId() };
+    assert.deepEqual(shipmentManifestAssignmentAvailability(clientAssignment, "client"), {
+      hasAny: true,
+      hasClientAccount: true,
+      hasStaffAccount: false,
+      hasStaffCombined: false,
+      canCreateAccount: false,
+      canCreateCombined: false
+    });
+    assert.equal(shipmentManifestAssignmentAvailability(clientAssignment, "admin").canCreateAccount, true);
+    assert.equal(shipmentManifestAssignmentAvailability(clientAssignment, "admin").canCreateCombined, true);
+
+    const staffAccountAssignment = { staffAccountManifestId: new mongoose.Types.ObjectId() };
+    assert.equal(shipmentManifestAssignmentAvailability(staffAccountAssignment, "client").canCreateAccount, true);
+
+    const staffCombinedAssignment = { staffCombinedManifestId: new mongoose.Types.ObjectId() };
+    assert.equal(shipmentManifestAssignmentAvailability(staffCombinedAssignment, "client").canCreateAccount, true);
+  });
+
+  it("keeps staff account and combined eligibility separate", () => {
+    const staffAccountAssignment = { staffAccountManifestId: new mongoose.Types.ObjectId() };
+    assert.equal(shipmentManifestAssignmentAvailability(staffAccountAssignment, "admin").canCreateAccount, false);
+    assert.equal(shipmentManifestAssignmentAvailability(staffAccountAssignment, "admin").canCreateCombined, true);
+
+    const staffCombinedAssignment = { staffCombinedManifestId: new mongoose.Types.ObjectId() };
+    assert.equal(shipmentManifestAssignmentAvailability(staffCombinedAssignment, "admin").canCreateAccount, false);
+    assert.equal(shipmentManifestAssignmentAvailability(staffCombinedAssignment, "admin").canCreateCombined, false);
+
+    const clientAndStaffAssignments = {
+      clientAccountManifestId: new mongoose.Types.ObjectId(),
+      staffAccountManifestId: new mongoose.Types.ObjectId(),
+      staffCombinedManifestId: new mongoose.Types.ObjectId()
+    };
+    assert.equal(shipmentManifestAssignmentAvailability(clientAndStaffAssignments, "client").canCreateAccount, false);
+  });
+
+  it("claims only the assignment slots each manifest policy requires", () => {
+    const shipmentDraftId = new mongoose.Types.ObjectId();
+    assert.deepEqual(shipmentManifestAssignmentClaimFilter(shipmentDraftId, "CLIENT_ACCOUNT"), {
+      _id: shipmentDraftId,
+      "shipmentManifestAssignments.clientAccountManifestId": null
+    });
+    assert.deepEqual(shipmentManifestAssignmentClaimFilter(shipmentDraftId, "STAFF_ACCOUNT"), {
+      _id: shipmentDraftId,
+      "shipmentManifestAssignments.staffAccountManifestId": null,
+      "shipmentManifestAssignments.staffCombinedManifestId": null
+    });
+    assert.deepEqual(shipmentManifestAssignmentClaimFilter(shipmentDraftId, "STAFF_COMBINED"), {
+      _id: shipmentDraftId,
+      "shipmentManifestAssignments.staffCombinedManifestId": null
+    });
+    assert.equal(shipmentManifestAssignmentSlot("admin", "COMBINED"), "STAFF_COMBINED");
+    assert.throws(() => shipmentManifestAssignmentSlot("client", "COMBINED"));
   });
 });
 
@@ -372,6 +440,63 @@ function handoverManifest(lines: ShipmentManifestLineSnapshot[]): IShipmentManif
 }
 
 describe("handover manifest", () => {
+  it("groups combined documents by account or individual customer and uses a neutral declaration", async () => {
+    const firstLine = {
+      ...buildHandoverManifestLine({
+        shipmentDraftId: new mongoose.Types.ObjectId(),
+        dpdShipmentId: new mongoose.Types.ObjectId(),
+        snapshot: bookingSnapshot(),
+        declaredValueMinor: 0,
+        bagNumber: "1"
+      }),
+      sectionKey: "business:account-a",
+      sectionLabel: "Business Account A",
+      sectionKind: "BUSINESS_ACCOUNT" as const
+    };
+    const secondLine = {
+      ...buildHandoverManifestLine({
+        shipmentDraftId: new mongoose.Types.ObjectId(),
+        dpdShipmentId: new mongoose.Types.ObjectId(),
+        snapshot: bookingSnapshot(),
+        declaredValueMinor: 0,
+        bagNumber: "1"
+      }),
+      sectionKey: "individual:customer-b",
+      sectionLabel: "Individual - Customer B",
+      sectionKind: "INDIVIDUAL" as const
+    };
+    const manifest = handoverManifest([firstLine, secondLine]);
+    manifest.manifestType = "COMBINED";
+    manifest.businessAccountId = undefined;
+
+    assert.deepEqual(shipmentManifestSections(manifest).map((section) => [section.label, section.lines.length]), [
+      ["Business Account A", 1],
+      ["Individual - Customer B", 1]
+    ]);
+    assert.match(shipmentManifestDeclaration(manifest), /Swiftline Cargo and Express Logistics/);
+    assert.match(shipmentManifestDeclaration(handoverManifest([firstLine])), /Example Exporter/);
+
+    const workbook = new ExcelJS.Workbook();
+    const bytes = await buildShipmentManifestHandoverWorkbook(manifest);
+    await workbook.xlsx.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+    const sheet = workbook.getWorksheet("Manifest");
+    assert.ok(sheet);
+    assert.equal(sheet.getCell("A11").value, "Business Account A");
+    assert.equal(sheet.getCell("A12").value, 1);
+    assert.equal(sheet.getCell("A13").value, 2);
+    assert.equal(sheet.getCell("A14").value, null);
+    assert.equal(sheet.getCell("A15").value, "Individual - Customer B");
+    assert.equal(sheet.getCell("A16").value, 3);
+    assert.equal(sheet.getCell("A17").value, 4);
+    assert.match(String(sheet.getCell("A19").value), /Swiftline Cargo and Express Logistics/);
+    assert.equal(sheet.getCell("I4").value, "TOTAL PCS : 4");
+    assert.equal(sheet.getCell("I5").value, "TOTAL WEIGHT: 20.00");
+
+    const pdf = await buildShipmentManifestPdf(manifest);
+    assert.equal(pdf.subarray(0, 5).toString("ascii"), "%PDF-");
+    assert.ok(pdf.length > 1000);
+  });
+
   it("keeps every parcel's own barcode, forwarding number, weight and product", () => {
     const line = buildHandoverManifestLine({
       shipmentDraftId: new mongoose.Types.ObjectId(),

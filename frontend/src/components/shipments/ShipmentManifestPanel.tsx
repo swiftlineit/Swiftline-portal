@@ -218,7 +218,9 @@ export default function ShipmentManifestPanel({
                     <p className="font-semibold text-slate-950">{manifest.manifestNumber}</p>
                     {audience === "admin" ? (
                       <span className="border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-600">
-                        {manifest.actorRole === "client" ? "Client Manifest" : "Admin Manifest"}
+                        {manifest.manifestType === "COMBINED"
+                          ? "Staff Combined Manifest"
+                          : manifest.actorRole === "client" ? "Client Account Manifest" : "Staff Account Manifest"}
                       </span>
                     ) : null}
                   </div>
@@ -240,7 +242,9 @@ export default function ShipmentManifestPanel({
         </div>
       ) : !showForm ? (
         <p className="px-5 py-4 text-sm text-slate-500">
-          {context?.canCreate
+          {context?.currentShipmentAlreadyManifested && audience === "client"
+            ? "This shipment is already included in a manifest and cannot be added to another client manifest."
+            : context?.canCreate
             ? currentShipmentEligible
               ? "No manifest has been generated for this shipment."
               : "Manifest creation becomes available after shipment booking and label generation are complete."

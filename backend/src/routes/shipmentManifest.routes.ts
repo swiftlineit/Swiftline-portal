@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   createAdminBulkShipmentManifest,
+  createAdminCombinedShipmentManifest,
   createAdminShipmentManifest,
   deleteAdminBulkShipmentManifests,
   deleteAdminShipmentManifest,
@@ -20,6 +21,7 @@ shipmentManifestRouter.get("/", listAdminShipmentManifests);
 shipmentManifestRouter.get("/drafts/:draftId/context", getAdminShipmentManifestContext);
 shipmentManifestRouter.post("/", createAdminShipmentManifest);
 shipmentManifestRouter.post("/bulk", createAdminBulkShipmentManifest);
+shipmentManifestRouter.post("/combined", createAdminCombinedShipmentManifest);
 shipmentManifestRouter.post("/bulk-delete", deleteAdminBulkShipmentManifests);
 shipmentManifestRouter.get("/:manifestId/download", downloadAdminShipmentManifest);
 shipmentManifestRouter.get("/:manifestId/xlsx", downloadAdminShipmentManifestExcel);

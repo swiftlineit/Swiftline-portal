@@ -7,7 +7,9 @@ export type ShipmentManifestAudience = "admin" | "client";
 export type ShipmentManifestSummary = {
   id: string;
   manifestNumber: string;
+  manifestType: "ACCOUNT" | "COMBINED";
   businessAccountId: string;
+  businessAccountIds: string[];
   branchId: string;
   shipmentDraftIds: string[];
   destinationAgent: string;
@@ -59,6 +61,8 @@ export type ManifestEligibleShipment = {
 export type ShipmentManifestContext = {
   canCreate: boolean;
   currentShipmentDraftId: string;
+  /** Generic membership signal for client routes; it never exposes staff manifest details. */
+  currentShipmentAlreadyManifested: boolean;
   existingManifests: ShipmentManifestSummary[];
   eligibleShipments: ManifestEligibleShipment[];
 };
@@ -143,6 +147,15 @@ export async function createBulkShipmentManifest(
   audience: ShipmentManifestAudience
 ) {
   const response = await fetchWithAuth(apiUrl(paths(audience).createBulk), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  return readJson<{ success: true; manifest: ShipmentManifestSummary }>(response);
+}
+
+export async function createCombinedShipmentManifest(input: CreateBulkShipmentManifestInput) {
+  const response = await fetchWithAuth(apiUrl("/api/v1/shipment-manifests/combined"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)

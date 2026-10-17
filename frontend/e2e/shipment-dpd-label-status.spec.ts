@@ -40,7 +40,11 @@ function shipment(id: string, dpdLabelStatus: DpdLabelStatus) {
   };
 }
 
-async function mockShipmentListApis(page: Page, role: "operations" | "client") {
+async function mockShipmentListApis(
+  page: Page,
+  role: "operations" | "client",
+  shipmentOverrides?: Record<string, unknown>[]
+) {
   await page.route("http://localhost:5000/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
 
@@ -83,11 +87,11 @@ async function mockShipmentListApis(page: Page, role: "operations" | "client") {
       return route.fulfill({ json: { success: true, manifests: [] } });
     }
     if (path.endsWith("/shipments") || path.endsWith("/client/booked-shipments")) {
-      const shipments = role === "operations"
+      const shipments = shipmentOverrides ?? (role === "operations"
         ? [shipment("001", "AVAILABLE"), shipment("002", "NOT_AVAILABLE"), shipment("003", "NOT_APPLICABLE")]
         // Include the internal field deliberately: the client component must
         // remain safe even while frontend and backend versions overlap.
-        : [shipment("004", "AVAILABLE")];
+        : [shipment("004", "AVAILABLE")]);
       return route.fulfill({
         json: {
           success: true,
@@ -153,6 +157,82 @@ test("never renders internal DPD label status in the client shipment table", asy
 
   await expect(page.getByText("SLCDEL090926004", { exact: true })).toBeVisible();
   await expect(page.getByText(/DPD label/i)).toHaveCount(0);
+});
+
+test("highlights only staff-relevant manifest memberships while manifest selection is active", async ({ page }) => {
+  const staffAccountShipment = {
+    ...shipment("STAFF-ACCOUNT", "NOT_APPLICABLE"),
+    manifest: { id: "staff-account-manifest", manifestNumber: "STAFF-001" },
+    manifestEligible: false,
+    combinedManifestEligible: true,
+    manifestMembership: {
+      hasAny: true,
+      account: [{ id: "staff-account-manifest", manifestNumber: "STAFF-001", actorRole: "admin" }],
+      combined: []
+    }
+  };
+  const clientAccountShipment = {
+    ...shipment("CLIENT-ACCOUNT", "NOT_APPLICABLE"),
+    manifest: null,
+    manifestEligible: true,
+    combinedManifestEligible: true,
+    manifestMembership: {
+      hasAny: true,
+      account: [{ id: "client-account-manifest", manifestNumber: "CLIENT-001", actorRole: "client" }],
+      combined: []
+    }
+  };
+  await mockShipmentListApis(page, "operations", [staffAccountShipment, clientAccountShipment]);
+  await page.goto("/dashboard/shipments");
+
+  const staffCheckbox = page.getByRole("checkbox", { name: "Select shipment SLCDEL090926STAFF-ACCOUNT" });
+  const clientCheckbox = page.getByRole("checkbox", { name: "Select shipment SLCDEL090926CLIENT-ACCOUNT" });
+  await expect(staffCheckbox).not.toHaveClass(/ring-/);
+  await expect(clientCheckbox).not.toHaveClass(/ring-/);
+
+  await page.getByRole("button", { name: "Create Manifest", exact: true }).first().click();
+  await expect(staffCheckbox).toHaveClass(/ring-amber-400/);
+  await expect(staffCheckbox).toHaveClass(/rounded-sm/);
+  await expect(clientCheckbox).not.toHaveClass(/ring-/);
+  await staffCheckbox.check();
+  await clientCheckbox.check();
+  await expect(page.getByText(
+    "1 selected shipment already has a manifest; only eligible shipments will be added.",
+    { exact: true }
+  )).toBeVisible();
+});
+
+test("client manifest status and checkbox highlight only reflect that client's account manifest", async ({ page }) => {
+  const staffCombinedShipment = {
+    ...shipment("STAFF-COMBINED", "NOT_APPLICABLE"),
+    manifest: null,
+    manifestEligible: true,
+    manifestMembership: { hasAny: false, account: [], combined: [] }
+  };
+  const clientAccountShipment = {
+    ...shipment("CLIENT-ACCOUNT", "NOT_APPLICABLE"),
+    manifest: { id: "client-account-manifest", manifestNumber: "CLIENT-002" },
+    manifestEligible: false,
+    manifestMembership: {
+      hasAny: true,
+      account: [{ id: "client-account-manifest", manifestNumber: "CLIENT-002", actorRole: "client" }],
+      combined: []
+    }
+  };
+  await mockShipmentListApis(page, "client", [staffCombinedShipment, clientAccountShipment]);
+  await page.goto("/client/shipments");
+
+  const staffCombinedCheckbox = page.getByRole("checkbox", { name: "Select shipment SLCDEL090926STAFF-COMBINED" });
+  const clientManifestCheckbox = page.getByRole("checkbox", { name: "Select shipment SLCDEL090926CLIENT-ACCOUNT" });
+  await expect(staffCombinedCheckbox).toBeEnabled();
+  await expect(staffCombinedCheckbox).not.toHaveClass(/ring-/);
+  await expect(page.getByText("Already in a manifest", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Manifest: CLIENT-002", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Create Manifest", exact: true }).first().click();
+  await expect(staffCombinedCheckbox).not.toHaveClass(/ring-/);
+  await expect(clientManifestCheckbox).toHaveClass(/ring-red-400/);
+  await expect(clientManifestCheckbox).toBeDisabled();
 });
 
 test("keeps the latest shipment query when a delayed page response arrives", async ({ page }) => {

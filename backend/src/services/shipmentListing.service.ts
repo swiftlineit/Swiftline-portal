@@ -614,8 +614,8 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
       .select("accountId company.companyName")
       .lean()
       .exec(),
-    ShipmentManifest.find({ shipmentDraftIds: { $in: draftIds }, actorRole: filter.actorRole })
-      .select("manifestNumber shipmentDraftIds")
+    ShipmentManifest.find({ shipmentDraftIds: { $in: draftIds } })
+      .select("manifestNumber manifestType actorRole shipmentDraftIds")
       .lean()
       .exec(),
     ShipmentInvoice.find({ shipmentDraftId: { $in: draftIds } })
@@ -628,9 +628,14 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
   const branchById = new Map(branches.map((branch) => [String(branch._id), branch]));
   const accountById = new Map(accounts.map((account) => [String(account._id), account]));
   const invoiceByDraft = new Map(invoices.map((invoice) => [String(invoice.shipmentDraftId), invoice]));
-  const manifestByDraft = new Map<string, (typeof manifests)[number]>();
+  const manifestsByDraft = new Map<string, (typeof manifests)[number][]>();
   for (const manifest of manifests) {
-    for (const draftId of manifest.shipmentDraftIds) manifestByDraft.set(String(draftId), manifest);
+    for (const draftId of manifest.shipmentDraftIds) {
+      const key = String(draftId);
+      const assignedManifests = manifestsByDraft.get(key);
+      if (assignedManifests) assignedManifests.push(manifest);
+      else manifestsByDraft.set(key, [manifest]);
+    }
   }
 
   // Every event for a draft, oldest last, so the estimate can find collection
@@ -748,7 +753,25 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     const account = accountById.get(String(draft.businessAccountId));
     const currentEvent = currentEventByDraft.get(draftId);
     const currentStatus = canonicalShipmentStatus(currentEvent?.status) || "SHIPMENT_BOOKED";
-    const manifest = manifestByDraft.get(draftId);
+    const assignedManifests = manifestsByDraft.get(draftId) ?? [];
+    const accountManifests = assignedManifests.filter((item) => item.manifestType !== "COMBINED");
+    const combinedManifests = assignedManifests.filter((item) => item.manifestType === "COMBINED");
+    const visibleAccountManifests = filter.actorRole === "client"
+      ? accountManifests.filter((item) => item.actorRole === "client")
+      : accountManifests;
+    const manifest = accountManifests.find((item) => item.actorRole === filter.actorRole);
+    const hasManifestMembership = filter.actorRole === "client"
+      ? visibleAccountManifests.length > 0
+      : assignedManifests.length > 0;
+    const baseManifestEligible = booking?.status === "LABEL_RECEIVED"
+      && Boolean(snapshot)
+      && cancelledDraftIds.has(draftId) === false;
+    const manifestEligible = baseManifestEligible && (filter.actorRole === "client"
+      ? !accountManifests.some((item) => item.actorRole === "client")
+      : !accountManifests.some((item) => item.actorRole === "admin") && !combinedManifests.some((item) => item.actorRole === "admin"));
+    const combinedManifestEligible = filter.actorRole === "admin"
+      && baseManifestEligible
+      && !combinedManifests.some((item) => item.actorRole === "admin");
     const consignee = draft.consigneeValidatedAddress ?? draft.consigneeEnteredAddress;
     const parcels = snapshot?.parcels ?? [];
 
@@ -822,12 +845,21 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
       bookingStatus: booking?.status ?? "DPD_CREATING",
       bookingStatusLabel: formatBookingStatusLabel(booking?.status ?? "DPD_CREATING"),
       manifest: manifest ? { id: String(manifest._id), manifestNumber: manifest.manifestNumber } : null,
+      manifestMembership: {
+        hasAny: hasManifestMembership,
+        account: visibleAccountManifests.map((item) => ({
+          id: String(item._id),
+          manifestNumber: item.manifestNumber,
+          actorRole: item.actorRole
+        })),
+        combined: filter.actorRole === "admin"
+          ? combinedManifests.map((item) => ({ id: String(item._id), manifestNumber: item.manifestNumber }))
+          : []
+      },
       // Only a completed booking can be manifested: an unreconciled one has no
       // final label set to hand over.
-      manifestEligible: !manifest
-        && booking?.status === "LABEL_RECEIVED"
-        && Boolean(snapshot)
-        && cancelledDraftIds.has(draftId) === false,
+      manifestEligible,
+      ...(filter.actorRole === "admin" ? { combinedManifestEligible } : {}),
       ...(filter.actorRole === "admin"
         ? {
           dpdLabelStatus: isDpdLabelDestination(consignee?.countryCode)

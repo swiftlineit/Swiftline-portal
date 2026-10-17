@@ -66,7 +66,15 @@ export type ShipmentListItem = {
   bookingStatus: "LABEL_RECEIVED" | "DPD_CREATED" | "DPD_STATUS_UNKNOWN" | "DPD_CREATING" | "DPD_REJECTED";
   bookingStatusLabel: string;
   manifest: { id: string; manifestNumber: string } | null;
+  /** Shipment manifest membership visible to this audience. Clients receive only their own account-manifest memberships. */
+  manifestMembership?: {
+    hasAny: boolean;
+    account: Array<{ id: string; manifestNumber: string; actorRole: "admin" | "client" }>;
+    combined: Array<{ id: string; manifestNumber: string }>;
+  };
   manifestEligible: boolean;
+  /** Staff-only eligibility for the combined handover manifest flow. */
+  combinedManifestEligible?: boolean;
   /**
    * Per-parcel operational manifest scan state, staff list only. `SCANNED`
    * carries the owning manifest run; `AWAITING_SCAN` means no live scan owns

@@ -16,7 +16,7 @@ import GatewayIataInput, { isValidGatewayIata } from "@/components/shipments/Gat
 import { emptyDateRange, type DateRange } from "@/lib/dateRange";
 import { currentDateTimeLocal, dateTimeLocalToIso, formatDashboardDate, formatDashboardDateTime } from "@/lib/dateFormat";
 import { formatCsbType } from "@/lib/csbType";
-import { createBulkShipmentManifest, manifestsHref } from "@/lib/shipmentManifests";
+import { createBulkShipmentManifest, createCombinedShipmentManifest, manifestsHref } from "@/lib/shipmentManifests";
 import { shipmentInvoicePageUrl } from "@/lib/shipmentInvoices";
 import {
   bulkUpdateDpdShipmentOperationalStatus,
@@ -108,6 +108,15 @@ function parsePageSize(value: string | null) {
 
 function parseShipmentSort(value: string | null) {
   return value === "booked:asc" || value === "booked:desc" ? value : "booked:desc";
+}
+
+function hasRelevantManifestMembership(shipment: ShipmentListItem, audience: ShipmentAudience) {
+  const membership = shipment.manifestMembership;
+  if (!membership) return shipment.manifest !== null;
+  if (audience === "client") {
+    return membership.account.some((manifest) => manifest.actorRole === "client");
+  }
+  return membership.account.some((manifest) => manifest.actorRole === "admin") || membership.combined.length > 0;
 }
 
 function readShipmentViewState(value: string | null): ShipmentViewState | null {
@@ -458,6 +467,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [manifestDialogMode, setManifestDialogMode] = useState<"ACCOUNT" | "COMBINED">("ACCOUNT");
   const [error, setError] = useState("");
   const [lastManifestNumber, setLastManifestNumber] = useState("");
   // The row awaiting delete confirmation. Held rather than a bare id so the
@@ -937,24 +947,35 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     return () => window.clearTimeout(timer);
   }, [restoringView, searchInput]);
 
-  // A row already inside a shipment manifest stays checkable for stats only
-  // (count/pieces/weight). It never flows into `manifestSelection`, so the
-  // create-manifest API can never receive it. Rows ineligible for every reason
-  // (e.g. booking incomplete, no snapshot) stay disabled to avoid implying
-  // they can be acted on.
+  // Staff can keep manifested rows checked for totals and the combined flow.
+  // Client rows with any manifest membership stay disabled because clients can
+  // create account-specific manifests only.
   const isRowCheckable = useCallback((shipment: ShipmentListItem) => (
     shipment.manifestEligible
-    || shipment.manifest !== null
-    || (audience === "admin" && isStatusUpdateEligible(shipment))
+    || (audience === "admin" && (
+      shipment.combinedManifestEligible
+      || shipment.manifestMembership?.hasAny
+      || shipment.manifest !== null
+      || isStatusUpdateEligible(shipment)
+    ))
   ), [audience]);
-  // Header select-all covers every checkable row on the page, including
-  // already-manifested rows, so one click gives full pcs/weight stats. The
-  // manifest/status actions still consume only their eligible subsets below.
+  // Header select-all covers staff rows that already have membership so they
+  // remain available for the combined flow and selection totals.
   const selectable = useMemo(() => shipments.filter(isRowCheckable), [shipments, isRowCheckable]);
   const selectedList = useMemo(() => [...selected.values()], [selected]);
-  // Each flow works from the subset of the selection it can actually act on, so
-  // a mixed selection never sends an ineligible row to the other flow's API.
-  const manifestSelection = useMemo(() => selectedList.filter((shipment) => shipment.manifestEligible), [selectedList]);
+  // Account and combined manifests have different membership rules. Keep their
+  // eligible subsets separate so neither action sends rows the server rejects.
+  const accountManifestSelection = useMemo(
+    () => selectedList.filter((shipment) => shipment.manifestEligible),
+    [selectedList]
+  );
+  const combinedManifestSelection = useMemo(
+    () => selectedList.filter((shipment) => shipment.combinedManifestEligible),
+    [selectedList]
+  );
+  const manifestSelection = manifestDialogMode === "COMBINED"
+    ? combinedManifestSelection
+    : accountManifestSelection;
   const statusSelection = useMemo(() => selectedList.filter(isStatusUpdateEligible), [selectedList]);
   const manifestTotals = useMemo(() => ({
     pieces: manifestSelection.reduce((sum, shipment) => sum + shipment.pieces, 0),
@@ -967,19 +988,25 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     weightKg: selectedList.reduce((sum, shipment) => sum + shipment.weightKg, 0)
   }), [selectedList]);
   const inManifestCount = useMemo(
-    () => selectedList.filter((shipment) => shipment.manifest !== null).length,
-    [selectedList]
+    () => selectedList.filter((shipment) => hasRelevantManifestMembership(shipment, audience)).length,
+    [audience, selectedList]
   );
   const otherIneligibleCount = useMemo(
-    () => selectedList.filter((shipment) => !shipment.manifestEligible && shipment.manifest === null).length,
-    [selectedList]
+    () => selectedList.filter((shipment) => !shipment.manifestEligible
+      && !shipment.combinedManifestEligible
+      && !hasRelevantManifestMembership(shipment, audience)).length,
+    [audience, selectedList]
   );
 
   // A manifest covers one business account and branch, so a mixed selection
   // cannot become one document.
-  const mixedSelection = manifestSelection.length > 1 && manifestSelection.some((shipment) =>
-    shipment.businessAccountId !== manifestSelection[0]?.businessAccountId
-    || shipment.branchId !== manifestSelection[0]?.branchId);
+  const mixedSelection = accountManifestSelection.length > 1 && accountManifestSelection.some((shipment) =>
+    shipment.businessAccountId !== accountManifestSelection[0]?.businessAccountId
+    || shipment.branchId !== accountManifestSelection[0]?.branchId);
+  const combinedBranchMismatch = combinedManifestSelection.length > 1 && combinedManifestSelection.some((shipment) =>
+    shipment.branchId !== combinedManifestSelection[0]?.branchId);
+  const canCreateCombinedManifest = audience === "admin"
+    && (role === "admin" || role === "operations");
 
   /**
    * The distinct stages the status selection spans.
@@ -1041,12 +1068,15 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   async function handleCreate(values: ManifestDialogValues) {
     const shipmentDraftIds = manifestSelection.map((shipment) => shipment.id);
     if (!shipmentDraftIds.length) {
-      toast.error("Select at least one shipment that is eligible for a manifest.");
+      toast.error(`Select at least one shipment eligible for a ${manifestDialogMode === "COMBINED" ? "combined " : "account-specific "}manifest.`);
       return;
     }
     setCreating(true);
     try {
-      const result = await createBulkShipmentManifest({ shipmentDraftIds, ...values }, audience);
+      const input = { shipmentDraftIds, ...values };
+      const result = manifestDialogMode === "COMBINED"
+        ? await createCombinedShipmentManifest(input)
+        : await createBulkShipmentManifest(input, audience);
       toast.success(`Manifest ${result.manifest.manifestNumber} generated with ${shipmentDraftIds.length} `
         + `${shipmentDraftIds.length === 1 ? "shipment" : "shipments"}.`);
       setLastManifestNumber(result.manifest.manifestNumber);
@@ -1482,16 +1512,21 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   {selectedList.length} {selectedList.length === 1 ? "shipment" : "shipments"} selected
                   {" · "}{selectionTotals.pieces} pcs · {selectionTotals.weightKg.toFixed(2)} kg
                 </p>
-                {manifestSelection.length > 0 && manifestSelection.length < selectedList.length ? (
+                {accountManifestSelection.length > 0 && accountManifestSelection.length < selectedList.length ? (
                   <p className="mt-1 text-xs font-semibold text-[#0D1282]/80">
-                    {manifestSelection.length} eligible for new manifest
-                    {" · "}{manifestTotals.pieces} pcs · {manifestTotals.weightKg.toFixed(2)} kg
+                    {accountManifestSelection.length} eligible for an account-specific manifest
+                  </p>
+                ) : null}
+                {audience === "admin" && combinedManifestSelection.length > 0 ? (
+                  <p className="mt-1 text-xs font-semibold text-[#0D1282]/80">
+                    {combinedManifestSelection.length} eligible for a combined manifest
                   </p>
                 ) : null}
                 {inManifestCount > 0 ? (
-                  <p className="mt-1 text-xs font-semibold text-slate-600">
-                    {inManifestCount} {inManifestCount === 1 ? "shipment is" : "shipments are"} already
-                    inside a shipment manifest and will be left out.
+                  <p className={`mt-1 text-xs font-semibold ${audience === "client" ? "text-red-700" : "text-amber-800"}`}>
+                    {audience === "client"
+                      ? `${inManifestCount} ${inManifestCount === 1 ? "shipment is" : "shipments are"} already in a manifest and cannot be added to another client manifest.`
+                    : `${inManifestCount} selected ${inManifestCount === 1 ? "shipment already has" : "shipments already have"} a manifest; only eligible shipments will be added.`}
                   </p>
                 ) : null}
                 {otherIneligibleCount > 0 ? (
@@ -1500,19 +1535,24 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     manifest-eligible and will be left out.
                   </p>
                 ) : null}
-                {!manifestSelection.length ? (
+                {!accountManifestSelection.length && !(audience === "admin" && combinedManifestSelection.length) ? (
                   <p className="mt-1 text-xs font-semibold text-amber-700">
-                    None of the selected shipments can go into a new manifest. Clear the selection
-                    and choose shipments that are not already manifested.
+                    None of the selected shipments is eligible for a new manifest. Clear the selection
+                    and choose shipments that meet the manifest rules.
                   </p>
                 ) : null}
                 {mixedSelection ? (
                   <p className="mt-1 text-xs font-semibold text-amber-700">
-                    A manifest covers one business account and branch. Narrow the selection to continue.
+                    A standard manifest covers one business account and branch. Use the combined manifest option for multiple accounts.
+                  </p>
+                ) : null}
+                {combinedBranchMismatch ? (
+                  <p className="mt-1 text-xs font-semibold text-amber-700">
+                    A combined manifest can include shipments from one branch only. Narrow the selection to continue.
                   </p>
                 ) : null}
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => setSelected(new Map())}
@@ -1522,13 +1562,30 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDialogOpen(true)}
-                  disabled={mixedSelection || !manifestSelection.length}
-                  title={!manifestSelection.length ? "Selected shipments are already in a manifest or not manifest-eligible" : undefined}
+                  onClick={() => {
+                    setManifestDialogMode("ACCOUNT");
+                    setDialogOpen(true);
+                  }}
+                  disabled={mixedSelection || !accountManifestSelection.length}
+                  title={!accountManifestSelection.length ? "No selected shipment is eligible for an account-specific manifest" : undefined}
                   className="h-9 rounded-4xl bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
                   Create Manifest
                 </button>
+                {canCreateCombinedManifest ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManifestDialogMode("COMBINED");
+                      setDialogOpen(true);
+                    }}
+                    disabled={!combinedManifestSelection.length || combinedBranchMismatch}
+                    title={combinedBranchMismatch ? "Combined manifests can include shipments from one branch only" : undefined}
+                    className="h-9 rounded-4xl border border-[#0D1282] bg-white px-4 text-sm font-semibold text-[#0D1282] hover:bg-[#0D1282]/5 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+                  >
+                    Create Combined Manifest
+                  </button>
+                ) : null}
               </div>
             </>
           ) : (
@@ -1897,7 +1954,11 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
               </tr>
             </thead>
             <tbody>
-              {shipments.map((shipment) => (
+              {shipments.map((shipment) => {
+                const relevantManifestMembership = hasRelevantManifestMembership(shipment, audience);
+                const showManifestHighlight = activeFlow === "manifest" && relevantManifestMembership;
+                const clientAccountManifest = shipment.manifestMembership?.account.find((manifest) => manifest.actorRole === "client");
+                return (
                 <tr
                   key={shipment.id}
                   ref={(node) => {
@@ -1917,7 +1978,16 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                       onChange={() => toggleOne(shipment)}
                       disabled={!isRowCheckable(shipment)}
                       aria-label={`Select shipment ${shipment.swiftlineTrackingNumber || shipment.id}`}
-                      className="h-4 w-4 accent-[#0D1282] disabled:opacity-40"
+                      title={showManifestHighlight && audience === "client"
+                        ? "This shipment is already in a manifest and cannot be added again"
+                        : showManifestHighlight && audience === "admin"
+                          ? "Already assigned; check eligibility before creating an account or combined manifest"
+                          : undefined}
+                      className={`h-4 w-4 rounded-sm ${showManifestHighlight && audience === "client"
+                        ? "accent-red-600 ring-2 ring-red-400 ring-offset-1 disabled:opacity-100"
+                        : showManifestHighlight && audience === "admin"
+                          ? "accent-amber-500 ring-2 ring-amber-400 ring-offset-1"
+                          : "accent-[#0D1282] disabled:opacity-40"}`}
                     />
                   </td>
                   <td className="w-56 max-w-56 px-4 py-3 align-middle">
@@ -1989,7 +2059,22 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                         opening={openingDpdLabelId === shipment.id}
                       />
                     ) : null}
-                    {shipment.manifest ? (
+                    {audience === "admin" && shipment.manifestMembership?.hasAny ? (
+                      <div className="mt-1 space-y-0.5 text-[10px] font-semibold leading-4 text-amber-800">
+                        {shipment.manifestMembership.account.map((manifest) => (
+                          <p key={`${manifest.actorRole}-${manifest.id}`}>
+                            {manifest.actorRole === "client" ? "Client account" : "Staff account"} manifest: {manifest.manifestNumber}
+                          </p>
+                        ))}
+                        {shipment.manifestMembership.combined.map((manifest) => (
+                          <p key={`combined-${manifest.id}`}>Staff combined manifest: {manifest.manifestNumber}</p>
+                        ))}
+                      </div>
+                    ) : audience === "client" && clientAccountManifest ? (
+                      <p className="mt-1 text-[10px] font-semibold leading-4 text-red-700">
+                        Manifest: {clientAccountManifest.manifestNumber}
+                      </p>
+                    ) : shipment.manifest ? (
                       <p className="mt-1 text-[10px] font-semibold leading-4 text-slate-500">
                         Manifest: {shipment.manifest.manifestNumber}
                       </p>
@@ -2077,7 +2162,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {!loading && !shipments.length ? (
                 <tr>
                   {/* Counted rather than fixed at 8: hiding a column would
@@ -2120,6 +2206,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
       {dialogOpen ? (
         <CreateManifestDialog
+          title={manifestDialogMode === "COMBINED" ? "Create Combined Manifest" : "Create Manifest"}
           shipmentCount={manifestSelection.length}
           totalPieces={manifestTotals.pieces}
           totalWeightKg={manifestTotals.weightKg}

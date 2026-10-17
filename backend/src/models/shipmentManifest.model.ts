@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { roleValues, type Role } from "./user.model.js";
 
 export type ShipmentManifestActorRole = "admin" | "client";
+export type ShipmentManifestType = "ACCOUNT" | "COMBINED";
 
 export interface ShipmentManifestLineSnapshot {
   shipmentDraftId: mongoose.Types.ObjectId;
@@ -30,6 +31,10 @@ export interface ShipmentManifestLineSnapshot {
   receiverName?: string;
   product?: string;
   remark?: string;
+  /** Section grouping captured for staff-created combined manifests. */
+  sectionKey?: string;
+  sectionLabel?: string;
+  sectionKind?: "BUSINESS_ACCOUNT" | "INDIVIDUAL";
   /** The Swiftline service the customer bought: COURIER or CARGO. */
   service?: string;
   /**
@@ -51,7 +56,11 @@ export interface ShipmentManifestParcelSnapshot {
 
 export interface IShipmentManifest extends mongoose.Document {
   manifestNumber: string;
-  businessAccountId: mongoose.Types.ObjectId;
+  manifestType: ShipmentManifestType;
+  /** Primary account for an account-specific manifest; absent on combined manifests. */
+  businessAccountId?: mongoose.Types.ObjectId;
+  /** Accounts represented in a staff-created combined manifest. */
+  businessAccountIds?: mongoose.Types.ObjectId[];
   branchId: mongoose.Types.ObjectId;
   shipmentDraftIds: mongoose.Types.ObjectId[];
   headerSnapshot: Record<string, unknown>;
@@ -89,6 +98,9 @@ const manifestLineSchema = new mongoose.Schema<ShipmentManifestLineSnapshot>({
   receiverName: { type: String, trim: true, maxlength: 200 },
   product: { type: String, trim: true, maxlength: 60 },
   remark: { type: String, trim: true, maxlength: 120 },
+  sectionKey: { type: String, trim: true, maxlength: 180 },
+  sectionLabel: { type: String, trim: true, maxlength: 180 },
+  sectionKind: { type: String, enum: ["BUSINESS_ACCOUNT", "INDIVIDUAL"] },
   service: { type: String, trim: true, maxlength: 40 },
   parcels: {
     type: [new mongoose.Schema<ShipmentManifestParcelSnapshot>({
@@ -107,7 +119,9 @@ const shipmentManifestSchema = new mongoose.Schema<IShipmentManifest>({
   // Existing manifest numbers are unchanged; the larger limit accommodates a
   // maximum-length company name plus its sequence suffix.
   manifestNumber: { type: String, required: true, unique: true, index: true, trim: true, maxlength: 140 },
-  businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, index: true },
+  manifestType: { type: String, enum: ["ACCOUNT", "COMBINED"], default: "ACCOUNT", index: true },
+  businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", index: true },
+  businessAccountIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount" }],
   branchId: { type: mongoose.Schema.Types.ObjectId, ref: "Branch", required: true, index: true },
   shipmentDraftIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "ShipmentDraft", required: true }],
   headerSnapshot: { type: mongoose.Schema.Types.Mixed, required: true },
@@ -122,10 +136,11 @@ const shipmentManifestSchema = new mongoose.Schema<IShipmentManifest>({
 }, { timestamps: true });
 
 shipmentManifestSchema.index({ businessAccountId: 1, branchId: 1, generatedAt: -1 });
+shipmentManifestSchema.index({ businessAccountIds: 1, generatedAt: -1 });
 shipmentManifestSchema.index({ "lineSnapshots.shipmentDraftId": 1, generatedAt: -1 });
 shipmentManifestSchema.index(
-  { shipmentDraftIds: 1, actorRole: 1 },
-  { unique: true, name: "shipmentDraftIds_1_actorRole_1" }
+  { shipmentDraftIds: 1, actorRole: 1, manifestType: 1 },
+  { unique: true, name: "shipmentDraftIds_1_actorRole_1_manifestType_1" }
 );
 
 export const ShipmentManifest = mongoose.model<IShipmentManifest>(

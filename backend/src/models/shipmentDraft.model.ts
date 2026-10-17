@@ -47,6 +47,11 @@ export type ShipmentDraftStatus = (typeof shipmentDraftStatusValues)[number];
 export type ShipmentDraftBookingState =
   (typeof shipmentDraftBookingStateValues)[number];
 export type ShipmentDraftSource = (typeof shipmentDraftSourceValues)[number];
+export interface ShipmentManifestAssignments {
+  clientAccountManifestId?: mongoose.Types.ObjectId;
+  staffAccountManifestId?: mongoose.Types.ObjectId;
+  staffCombinedManifestId?: mongoose.Types.ObjectId;
+}
 export const shipmentContentTypeValues = [
   "DOCUMENTS",
   "PARCEL",
@@ -170,6 +175,8 @@ export interface IShipmentDraft extends mongoose.Document {
   /** Request key used to make one rebook request safe to retry. */
   rebookIdempotencyKey?: string | null;
   businessAccountId: mongoose.Types.ObjectId;
+  /** Internal manifest membership slots; hidden from ordinary shipment reads. */
+  shipmentManifestAssignments?: ShipmentManifestAssignments;
   /**
    * INDIVIDUAL marks a walk-in shipment booked at the counter. Those drafts point
    * `businessAccountId` at the system sentinel rather than a real customer, and
@@ -364,6 +371,15 @@ const kycDocumentSchema = new mongoose.Schema<ShipmentKycDocument>(
   { _id: false },
 );
 
+const shipmentManifestAssignmentsSchema = new mongoose.Schema<ShipmentManifestAssignments>(
+  {
+    clientAccountManifestId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentManifest" },
+    staffAccountManifestId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentManifest" },
+    staffCombinedManifestId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentManifest" },
+  },
+  { _id: false, versionKey: false },
+);
+
 const parcelItemSchema = new mongoose.Schema<ShipmentParcelItem>(
   {
     description: { type: String, uppercase: true, trim: true, maxlength: 120, default: "" },
@@ -466,6 +482,10 @@ const shipmentDraftSchema = new mongoose.Schema<IShipmentDraft>(
       ref: "BusinessAccount",
       required: true,
       index: true,
+    },
+    shipmentManifestAssignments: {
+      type: shipmentManifestAssignmentsSchema,
+      select: false,
     },
     // Defaults to BUSINESS so every existing draft keeps its meaning untouched.
     customerType: {

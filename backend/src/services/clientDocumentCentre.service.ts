@@ -216,7 +216,7 @@ function shippingLabelPipeline(scope: SuccessfulClientScope) {
 
 function manifestPipeline(scope: SuccessfulClientScope) {
   return [
-    { $match: scopeMatch(scope) },
+    { $match: { ...scopeMatch(scope), manifestType: { $ne: "COMBINED" } } },
     {
       $project: {
         _id: { $concat: ["MANIFEST:", { $toString: "$_id" }] },

@@ -331,7 +331,12 @@ export default function ManifestsListPage({
                     </td>
                   ) : null}
                   <td className="px-4 py-3 font-semibold text-[#0D1282]">
-                    {manifest.manifestNumber}
+                    <span>{manifest.manifestNumber}</span>
+                    {manifest.manifestType === "COMBINED" ? (
+                      <span className="mt-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        Combined
+                      </span>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3 text-slate-800">
                     {manifest.origin || manifest.destination
@@ -357,52 +362,48 @@ export default function ManifestsListPage({
                     {formatDashboardDateTime(manifest.generatedAt)}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex flex-col items-end gap-2">
-                      <div className="flex items-center justify-end gap-3">
+                    <div className="flex flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap sm:gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleExcel(manifest)}
+                        disabled={busyId === manifest.id}
+                        aria-label={`Download Excel for manifest ${manifest.manifestNumber}`}
+                        className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
+                      >
+                        <FiDownload aria-hidden="true" className="h-4 w-4" />
+                        {busyId === manifest.id && busyFormat === "xlsx" ? "Preparing..." : "Excel"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handlePdf(manifest, false)}
+                        disabled={busyId === manifest.id}
+                        aria-label={`Download PDF for manifest ${manifest.manifestNumber}`}
+                        className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
+                      >
+                        <FiDownload aria-hidden="true" className="h-4 w-4" />
+                        {busyId === manifest.id && busyFormat === "pdf" ? "Preparing..." : "PDF"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handlePdf(manifest, true)}
+                        disabled={busyId === manifest.id}
+                        aria-label={`Preview manifest ${manifest.manifestNumber}`}
+                        title={`Preview ${manifest.manifestNumber}`}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg font-semibold text-[#0D1282] transition hover:bg-[#0D1282]/5 hover:text-blue-700 disabled:opacity-50"
+                      >
+                        <FiEye aria-hidden="true" className="h-4 w-4" />
+                      </button>
+                      {canDelete ? (
                         <button
                           type="button"
-                          onClick={() => void handleExcel(manifest)}
-                          disabled={busyId === manifest.id}
-                          aria-label={`Download Excel for manifest ${manifest.manifestNumber}`}
-                          className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
+                          onClick={() => setPendingDelete(manifest)}
+                          aria-label={`Delete manifest ${manifest.manifestNumber}`}
+                          title={`Delete ${manifest.manifestNumber}`}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 text-red-700 transition hover:border-red-600 hover:bg-red-50"
                         >
-                          <FiDownload aria-hidden="true" className="h-4 w-4" />
-                          {busyId === manifest.id && busyFormat === "xlsx" ? "Preparing..." : "Excel"}
+                          <FiTrash2 aria-hidden="true" className="h-4 w-4" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => void handlePdf(manifest, false)}
-                          disabled={busyId === manifest.id}
-                          aria-label={`Download PDF for manifest ${manifest.manifestNumber}`}
-                          className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
-                        >
-                          <FiDownload aria-hidden="true" className="h-4 w-4" />
-                          {busyId === manifest.id && busyFormat === "pdf" ? "Preparing..." : "PDF"}
-                        </button>
-                      </div>
-                      <div className="flex items-center justify-end gap-3">
-                        <button
-                          type="button"
-                          onClick={() => void handlePdf(manifest, true)}
-                          disabled={busyId === manifest.id}
-                          aria-label={`Preview manifest ${manifest.manifestNumber}`}
-                          title={`Preview ${manifest.manifestNumber}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg font-semibold text-[#0D1282] transition hover:bg-[#0D1282]/5 hover:text-blue-700 disabled:opacity-50"
-                        >
-                          <FiEye aria-hidden="true" className="h-4 w-4" />
-                        </button>
-                        {canDelete ? (
-                          <button
-                            type="button"
-                            onClick={() => setPendingDelete(manifest)}
-                            aria-label={`Delete manifest ${manifest.manifestNumber}`}
-                            title={`Delete ${manifest.manifestNumber}`}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 text-red-700 transition hover:border-red-600 hover:bg-red-50"
-                          >
-                            <FiTrash2 aria-hidden="true" className="h-4 w-4" />
-                          </button>
-                        ) : null}
-                      </div>
+                      ) : null}
                     </div>
                   </td>
                 </tr>

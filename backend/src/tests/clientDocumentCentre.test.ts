@@ -82,6 +82,18 @@ before(async () => {
     createdAt: now,
     updatedAt: now
   });
+  await ShipmentManifest.collection.insertOne({
+    _id: new mongoose.Types.ObjectId(),
+    manifestNumber: "SLC-001",
+    manifestType: "COMBINED",
+    businessAccountId: accountId,
+    businessAccountIds: [accountId],
+    branchId,
+    lineSnapshots: [{ consignmentNumber: "SLCDEL130826002", destination: "Paris", sectionLabel: "Business Account A" }],
+    generatedAt: now,
+    createdAt: now,
+    updatedAt: now
+  });
   await ShipmentInvoice.collection.insertOne({
     _id: new mongoose.Types.ObjectId(),
     invoiceNumber: "INV-001",

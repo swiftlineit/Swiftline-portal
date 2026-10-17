@@ -432,6 +432,7 @@ export function shipmentManifestSearchConditions(searchValue: string) {
     { "headerSnapshot.businessAccountName": pattern },
     { "headerSnapshot.flightNumber": pattern },
     { "headerSnapshot.mawbNumber": pattern },
+    { "lineSnapshots.sectionLabel": pattern },
     { "lineSnapshots.consignmentNumber": pattern },
     { "lineSnapshots.awbNumbers": pattern },
     { "lineSnapshots.forwardingNumbers": pattern }
@@ -503,7 +504,9 @@ export function serializeShipmentManifest(manifest: IShipmentManifest) {
   return {
     id: String(manifest._id),
     manifestNumber: manifest.manifestNumber,
-    businessAccountId: String(manifest.businessAccountId),
+    manifestType: manifest.manifestType ?? "ACCOUNT",
+    businessAccountId: manifest.businessAccountId ? String(manifest.businessAccountId) : "",
+    businessAccountIds: (manifest.businessAccountIds ?? []).map(String),
     branchId: String(manifest.branchId),
     shipmentDraftIds: manifest.shipmentDraftIds.map(String),
     destinationAgent: text(header.destinationAgent),

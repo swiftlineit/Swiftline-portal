@@ -23,6 +23,12 @@ export const shipmentManifestTableHeadings = [
   "Remark"
 ];
 
+export type ShipmentManifestSection = {
+  key: string;
+  label: string;
+  lines: ShipmentManifestLineSnapshot[];
+};
+
 const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0);
 
 function text(value: unknown) {
@@ -59,7 +65,7 @@ function manifestDate(value: Date) {
  * total only on its first parcel row (like goods value elsewhere), never
  * repeated as if every parcel weighed that much.
  */
-export function manifestRows(lines: ShipmentManifestLineSnapshot[]) {
+export function manifestRows(lines: ShipmentManifestLineSnapshot[], startIndex = 0) {
   return lines.flatMap((line) => {
     const consigneeParty = partyOf(line.consignee);
     const shared = {
@@ -102,7 +108,42 @@ export function manifestRows(lines: ShipmentManifestLineSnapshot[]) {
       lineChargeableKg.toFixed(2),
       shared.remark
     ]];
-  }).map((values, index) => [String(index + 1), ...values]);
+  }).map((values, index) => [String(startIndex + index + 1), ...values]);
+}
+
+export function shipmentManifestSections(manifest: IShipmentManifest): ShipmentManifestSection[] {
+  if (manifest.manifestType !== "COMBINED") return [];
+  const sectionByKey = new Map<string, ShipmentManifestSection>();
+  for (const line of manifest.lineSnapshots) {
+    const key = line.sectionKey || `shipment:${String(line.shipmentDraftId)}`;
+    const section = sectionByKey.get(key);
+    if (section) {
+      section.lines.push(line);
+    } else {
+      sectionByKey.set(key, {
+        key,
+        label: line.sectionLabel || "Business Account",
+        lines: [line]
+      });
+    }
+  }
+  return [...sectionByKey.values()];
+}
+
+export function shipmentManifestDeclaration(manifest: IShipmentManifest) {
+  const header = manifest.headerSnapshot as Record<string, unknown>;
+  const accountName = manifest.manifestType === "COMBINED"
+    ? "Swiftline Cargo and Express Logistics"
+    : text(header.businessAccountName) || "the carrier";
+  const awbCount = manifest.lineSnapshots.length;
+  return `We hereby declare that we are tendering ${manifest.totalPieces} parcels and ${awbCount} `
+    + `${awbCount === 1 ? "airwaybill" : "airwaybills"} to ${text(header.destination).toUpperCase() || "the receiving agent"} `
+    + "for delivery to the final consignees. We confirm that the parcels have been picked up from known shippers "
+    + "whose integrity we do not doubt. All parcels have been checked by us and they do not contain any substances "
+    + "banned or controlled by any Government agencies, or endanger the safety and security of the aircraft or its "
+    + "passengers. We hereby indemnify and keep indemnified "
+    + `${accountName} and all its employees against any untoward incidents, `
+    + "fines or penalties or legal action that may arise as a result of any mis-declaration or our action.";
 }
 
 export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<Buffer> {
@@ -169,6 +210,14 @@ export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<B
       return y + 26;
     }
 
+    function drawSectionHeading(label: string, y: number) {
+      document.rect(left, y, tableWidth, 20).fill(muted);
+      document.rect(left, y, tableWidth, 20).lineWidth(0.5).stroke(border);
+      document.font("Helvetica-Bold").fontSize(8).fillColor(ink)
+        .text(label, left + 5, y + 5, { width: tableWidth - 10, lineBreak: false, ellipsis: true });
+      return y + 20;
+    }
+
     // Title
     let y = document.page.margins.top;
     document.rect(left, y, tableWidth, 30).lineWidth(0.5).stroke(border);
@@ -204,15 +253,33 @@ export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<B
 
     // Table
     y = drawTableHeadings(y);
-    const rows = manifestRows(manifest.lineSnapshots);
-    rows.forEach((values) => {
-      const height = rowHeight(values, 6.5);
-      if (y + height > contentLimit) {
+    const sections = shipmentManifestSections(manifest);
+    const rowsBySection = sections.length
+      ? sections
+      : [{ key: "manifest", label: "", lines: manifest.lineSnapshots }];
+    let rowIndex = 0;
+    rowsBySection.forEach((section, sectionIndex) => {
+      const rows = manifestRows(section.lines, rowIndex);
+      rowIndex += rows.length;
+      const firstRowHeight = rows.length ? rowHeight(rows[0]!, 6.5) : 0;
+      const sectionGap = sections.length && sectionIndex > 0 ? 18 : 0;
+      const headingHeight = sections.length ? 20 : 0;
+      if (sections.length && y + sectionGap + headingHeight + firstRowHeight > contentLimit) {
         document.addPage();
         y = drawTableHeadings(document.page.margins.top);
+      } else {
+        y += sectionGap;
       }
-      values.forEach((value, column) => drawCell(column, y, height, value));
-      y += height;
+      if (sections.length) y = drawSectionHeading(section.label, y);
+      rows.forEach((values) => {
+        const height = rowHeight(values, 6.5);
+        if (y + height > contentLimit) {
+          document.addPage();
+          y = drawTableHeadings(document.page.margins.top);
+        }
+        values.forEach((value, column) => drawCell(column, y, height, value));
+        y += height;
+      });
     });
 
     // Footer declaration and signatures, kept whole on one page.
@@ -222,15 +289,7 @@ export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<B
       y = document.page.margins.top;
     }
     y += 14;
-    const awbCount = manifest.lineSnapshots.length;
-    const declaration = `We hereby declare that we are tendering ${manifest.totalPieces} parcels and ${awbCount} `
-      + `${awbCount === 1 ? "airwaybill" : "airwaybills"} to ${text(header.destination).toUpperCase() || "the receiving agent"} `
-      + "for delivery to the final consignees. We confirm that the parcels have been picked up from known shippers "
-      + "whose integrity we do not doubt. All parcels have been checked by us and they do not contain any substances "
-      + "banned or controlled by any Government agencies, or endanger the safety and security of the aircraft or its "
-      + "passengers. We hereby indemnify and keep indemnified "
-      + `${text(header.businessAccountName) || "the carrier"} and all its employees against any untoward incidents, `
-      + "fines or penalties or legal action that may arise as a result of any mis-declaration or our action.";
+    const declaration = shipmentManifestDeclaration(manifest);
 
     document.rect(left, y, tableWidth, footerHeight).lineWidth(0.5).stroke(border);
     document.font("Helvetica").fontSize(6.5).fillColor(ink)

@@ -18,6 +18,7 @@ const paymentTypes = ["PREPAID", "COLLECT", "CREDIT", "CASH"];
  * prefilled from the selected shipments wherever that is possible.
  */
 export default function CreateManifestDialog({
+  title = "Create Manifest",
   shipmentCount,
   totalPieces,
   totalWeightKg,
@@ -26,6 +27,7 @@ export default function CreateManifestDialog({
   onCancel,
   onConfirm
 }: {
+  title?: string;
   shipmentCount: number;
   totalPieces: number;
   totalWeightKg: number;
@@ -60,7 +62,7 @@ export default function CreateManifestDialog({
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>
-            <h2 className="text-base font-semibold text-[#0D1282]">Create Manifest</h2>
+            <h2 className="text-base font-semibold text-[#0D1282]">{title}</h2>
             <p className="mt-1 text-xs text-slate-500">
               {shipmentCount} {shipmentCount === 1 ? "shipment" : "shipments"} · {totalPieces} pcs · {totalWeightKg.toFixed(2)} kg
             </p>
@@ -131,7 +133,7 @@ export default function CreateManifestDialog({
             disabled={!canSubmit}
             className="h-10 rounded-lg bg-[#0D1282] px-4 text-sm font-semibold text-white transition hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:bg-slate-400"
           >
-            {busy ? "Creating..." : "Create Manifest"}
+            {busy ? "Creating..." : title}
           </button>
         </div>
       </form>

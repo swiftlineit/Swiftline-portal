@@ -2,6 +2,8 @@ import ExcelJS from "exceljs";
 import type { IShipmentManifest } from "../models/shipmentManifest.model.js";
 import {
   manifestRows,
+  shipmentManifestDeclaration,
+  shipmentManifestSections,
   shipmentManifestTableHeadings
 } from "./shipmentManifestPdf.service.js";
 
@@ -158,8 +160,12 @@ export async function buildShipmentManifestHandoverWorkbook(manifest: IShipmentM
     cell.border = border;
   }
 
-  const rows = manifestRows(manifest.lineSnapshots);
-  rows.forEach((values) => {
+  const sections = shipmentManifestSections(manifest);
+  const rowsBySection = sections.length
+    ? sections
+    : [{ key: "manifest", label: "", lines: manifest.lineSnapshots }];
+  let rowIndex = 0;
+  const addRows = (rows: string[][]) => rows.forEach((values) => {
     const row = worksheet.addRow(values.map(cellValue));
     row.height = rowHeight(values);
     values.forEach((_value, index) => {
@@ -175,17 +181,27 @@ export async function buildShipmentManifestHandoverWorkbook(manifest: IShipmentM
     row.getCell(10).numFmt = "0.00";
     row.getCell(11).numFmt = "0.00";
   });
+  rowsBySection.forEach((section, sectionIndex) => {
+    if (sections.length) {
+      if (sectionIndex > 0) worksheet.addRow([]).height = 20;
+      const sectionRow = worksheet.addRow([section.label]);
+      worksheet.mergeCells(`A${sectionRow.number}:L${sectionRow.number}`);
+      sectionRow.height = 24;
+      for (let column = 1; column <= shipmentManifestTableHeadings.length; column += 1) {
+        const cell = sectionRow.getCell(column);
+        cell.font = { bold: true, size: 10, color: { argb: colours.ink } };
+        cell.fill = filled(colours.muted);
+        cell.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+        cell.border = border;
+      }
+    }
+    const rows = manifestRows(section.lines, rowIndex);
+    rowIndex += rows.length;
+    addRows(rows);
+  });
 
   const afterRows = Math.max(worksheet.rowCount, 10) + 2;
-  const awbCount = manifest.lineSnapshots.length;
-  const declaration = `We hereby declare that we are tendering ${manifest.totalPieces} parcels and ${awbCount} `
-    + `${awbCount === 1 ? "airwaybill" : "airwaybills"} to ${text(header.destination).toUpperCase() || "the receiving agent"} `
-    + "for delivery to the final consignees. We confirm that the parcels have been picked up from known shippers "
-    + "whose integrity we do not doubt. All parcels have been checked by us and they do not contain any substances "
-    + "banned or controlled by any Government agencies, or endanger the safety and security of the aircraft or its "
-    + "passengers. We hereby indemnify and keep indemnified "
-    + `${text(header.businessAccountName) || "the carrier"} and all its employees against any untoward incidents, `
-    + "fines or penalties or legal action that may arise as a result of any mis-declaration or our action.";
+  const declaration = shipmentManifestDeclaration(manifest);
   worksheet.mergeCells(`A${afterRows}:L${afterRows}`);
   const declarationCell = worksheet.getCell(`A${afterRows}`);
   declarationCell.value = declaration;
