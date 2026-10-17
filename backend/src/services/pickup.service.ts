@@ -6,6 +6,7 @@ import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember, shipmentBookingRoles } from "../models/businessAccountMember.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { DriverProfile } from "../models/driverProfile.model.js";
+import { EmailOutbox } from "../models/emailOutbox.model.js";
 import { PickupAttempt } from "../models/pickupAttempt.model.js";
 import { PickupCounter } from "../models/pickupCounter.model.js";
 import { PickupCourierAddress } from "../models/pickupCourierAddress.model.js";
@@ -755,6 +756,7 @@ export async function reschedulePickup(input: {
   }
 
   const previous = { ...request.requestedWindow };
+  const previousDispatchAt = request.dispatchAt;
   request.requestedWindow = { startAt: input.startAt, endAt: input.endAt, timezone: input.timezone };
   request.dispatchAt = input.startAt;
   request.dispatchReminderSentAt = null;
@@ -786,6 +788,22 @@ export async function reschedulePickup(input: {
       to: { startAt: input.startAt, endAt: input.endAt }
     }
   });
+
+  // A queued reminder for the old dispatch must not be delivered after the move.
+  try {
+    const pickupReminderPrefix = `PICKUP_DISPATCH_REMINDER:${String(request._id)}:`;
+    const currentDispatchPrefix = `${pickupReminderPrefix}${input.startAt.getTime()}:`;
+    const currentSchedulePrefix = previousDispatchAt?.getTime() === input.startAt.getTime()
+      ? `${currentDispatchPrefix}${request.version}:`
+      : currentDispatchPrefix;
+    await EmailOutbox.updateMany({
+      notificationType: "PICKUP_DISPATCH_REMINDER",
+      idempotencyKey: { $regex: `^${pickupReminderPrefix}`, $not: new RegExp(`^${currentSchedulePrefix}`) },
+      status: "PENDING"
+    }, { $set: { status: "CANCELLED" } }).exec();
+  } catch (error) {
+    console.error("Pending pickup reminder email could not be cancelled.", error);
+  }
 
   const recipients = input.source === "CLIENT" ? "STAFF" : "CLIENT";
   const notification = {
@@ -1074,16 +1092,21 @@ export async function updatePickupPartnerInfo(input: { pickupId: string; actorId
   return getPickupDetail(input.pickupId);
 }
 
+export function pendingPickupReminderEmailFilter(reminderKey: string) {
+  return { idempotencyKey: { $regex: `^${reminderKey}:` }, status: "PENDING" as const };
+}
+
 export async function runPickupDispatchReminderSweep(now = new Date()) {
   const upcomingUntil = new Date(now.getTime() + 10 * 60 * 1000);
   const due = await PickupRequest.find({
     dispatchAt: { $lte: upcomingUntil },
     dispatchReminderSentAt: null,
     status: { $in: ["REQUESTED", "CONFIRMED", "DRIVER_ASSIGNED", "ACTION_REQUIRED", "IN_PROGRESS"] }
-  }).select("_id requestNumber businessAccountId branchId dispatchAt").sort({ dispatchAt: -1 }).limit(500).lean().exec();
+  }).select("_id requestNumber businessAccountId branchId dispatchAt").sort({ dispatchAt: 1 }).limit(500).lean().exec();
 
   let sent = 0;
   const notifiedPickupIds: string[] = [];
+  const notifiedReminderKeys: string[] = [];
   for (const candidate of due) {
     const session = await mongoose.startSession();
     try {
@@ -1095,7 +1118,9 @@ export async function runPickupDispatchReminderSweep(now = new Date()) {
           status: { $in: ["REQUESTED", "CONFIRMED", "DRIVER_ASSIGNED", "ACTION_REQUIRED", "IN_PROGRESS"] }
         }, { $set: { dispatchReminderSentAt: now } }, { returnDocument: "after", session }).lean().exec();
         if (!request) return false;
-        const upcoming = request.dispatchAt && request.dispatchAt > now;
+        if (!request.dispatchAt) throw new Error("Claimed pickup reminder has no dispatch time.");
+        const upcoming = request.dispatchAt > now;
+        const reminderKey = `PICKUP_DISPATCH_REMINDER:${String(request._id)}:${request.dispatchAt.getTime()}:${request.version}`;
         await notifyAssignedPickupBranchStaff(request.branchId, {
           type: "PICKUP_DISPATCH_REMINDER",
           title: upcoming ? "Pickup dispatch coming up" : "Pickup dispatch follow-up",
@@ -1103,21 +1128,22 @@ export async function runPickupDispatchReminderSweep(now = new Date()) {
             ? `${request.requestNumber} is scheduled to dispatch within the next 10 minutes.`
             : `${request.requestNumber}'s scheduled dispatch time has passed. Check its status.`,
           href: "/dashboard/pickups",
-          idempotencyKey: `PICKUP_DISPATCH_REMINDER:${String(request._id)}:${request.version}`,
+          idempotencyKey: reminderKey,
           businessAccountId: request.businessAccountId,
           metadata: { pickupRequestId: request._id, branchId: request.branchId, dispatchAt: request.dispatchAt }
         }, session);
-        return true;
+        return reminderKey;
       });
       if (notified) {
         sent += 1;
         notifiedPickupIds.push(String(candidate._id));
+        notifiedReminderKeys.push(notified);
       }
     } finally {
       await session.endSession();
     }
   }
-  return { due: due.length, sent, notifiedPickupIds };
+  return { due: due.length, sent, notifiedPickupIds, notifiedReminderKeys };
 }
 
 export async function confirmPickup(input: {
