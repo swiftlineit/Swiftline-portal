@@ -1075,11 +1075,12 @@ export async function updatePickupPartnerInfo(input: { pickupId: string; actorId
 }
 
 export async function runPickupDispatchReminderSweep(now = new Date()) {
+  const upcomingUntil = new Date(now.getTime() + 10 * 60 * 1000);
   const due = await PickupRequest.find({
-    dispatchAt: { $lte: now },
+    dispatchAt: { $lte: upcomingUntil },
     dispatchReminderSentAt: null,
     status: { $in: ["REQUESTED", "CONFIRMED", "DRIVER_ASSIGNED", "ACTION_REQUIRED", "IN_PROGRESS"] }
-  }).select("_id requestNumber businessAccountId branchId dispatchAt").sort({ dispatchAt: 1 }).limit(500).lean().exec();
+  }).select("_id requestNumber businessAccountId branchId dispatchAt").sort({ dispatchAt: -1 }).limit(500).lean().exec();
 
   let sent = 0;
   const notifiedPickupIds: string[] = [];
@@ -1090,16 +1091,19 @@ export async function runPickupDispatchReminderSweep(now = new Date()) {
         const request = await PickupRequest.findOneAndUpdate({
           _id: candidate._id,
           dispatchReminderSentAt: null,
-          dispatchAt: { $lte: now },
+          dispatchAt: candidate.dispatchAt,
           status: { $in: ["REQUESTED", "CONFIRMED", "DRIVER_ASSIGNED", "ACTION_REQUIRED", "IN_PROGRESS"] }
         }, { $set: { dispatchReminderSentAt: now } }, { returnDocument: "after", session }).lean().exec();
         if (!request) return false;
+        const upcoming = request.dispatchAt && request.dispatchAt > now;
         await notifyAssignedPickupBranchStaff(request.branchId, {
           type: "PICKUP_DISPATCH_REMINDER",
-          title: "Pickup dispatch time reached",
-          message: `${request.requestNumber} is scheduled to dispatch now.`,
+          title: upcoming ? "Pickup dispatch coming up" : "Pickup dispatch follow-up",
+          message: upcoming
+            ? `${request.requestNumber} is scheduled to dispatch within the next 10 minutes.`
+            : `${request.requestNumber}'s scheduled dispatch time has passed. Check its status.`,
           href: "/dashboard/pickups",
-          idempotencyKey: `PICKUP_DISPATCH_REMINDER:${String(request._id)}`,
+          idempotencyKey: `PICKUP_DISPATCH_REMINDER:${String(request._id)}:${request.version}`,
           businessAccountId: request.businessAccountId,
           metadata: { pickupRequestId: request._id, branchId: request.branchId, dispatchAt: request.dispatchAt }
         }, session);

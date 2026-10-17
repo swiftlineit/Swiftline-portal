@@ -46,11 +46,13 @@ MAILTO=""
 # Depart a due flight only after its single linked operations manifest is
 # dispatched. Business-rule failures stay unchanged for Operations to resolve
 # and can be completed with the manual Depart action.
-* * * * *     ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:flight:auto-depart
+# Disabled while FLIGHT_AUTO_DEPARTURE_ENABLED=false in production.
+# * * * * *     ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:flight:auto-depart
 
-# Check each minute so reminders are queued when dispatch time is reached.
+# Check every five minutes, staggered from other five-minute jobs. Reminders
+# target the next 10 minutes; missed runs are caught up by the next sweep.
 # The request stamp and notification idempotency key make retries safe.
-* * * * *     ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:pickups:dispatch-reminders
+3-59/5 * * * * ubuntu  /var/www/Swiftline-portal/backend/deploy/jobs/run-job.sh job:pickups:dispatch-reminders
 
 # Mark due-passed statements overdue, expire credit facilities past their
 # validity window, and send utilisation warnings.
