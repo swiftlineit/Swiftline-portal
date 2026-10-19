@@ -217,7 +217,9 @@ export function BusinessAccountsTable({
                               </option>
                             ))}
                           {["approved", "active"].includes(account.status)
-                            ? operationalActions.map((action) => (
+                            ? operationalActions
+                              .filter((action) => action.action !== "ledger_viewed" || Boolean(credit))
+                              .map((action) => (
                                 <option key={action.action} value={`operation:${action.action}`}>
                                   {action.label}
                                 </option>

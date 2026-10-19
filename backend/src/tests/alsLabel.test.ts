@@ -190,11 +190,15 @@ describe("ALS create_docket payload", () => {
     );
   });
 
-  test("refuses an ALS shipment description over 240 characters before sending", () => {
+  test("keeps shipment content above 240 when every CSB-IV parcel fits its own limit", () => {
     const firstDescription = "A".repeat(120);
-    const secondDescription = "B".repeat(119);
+    const secondDescription = "B".repeat(118);
+    const thirdDescription = "C".repeat(120);
+    const fourthDescription = "D".repeat(118);
     const draft = draftFixture() as unknown as {
+      csbType: string;
       parcelList: Array<{
+        sequence: number;
         items: Array<{
           description: string;
           hsnCode: string;
@@ -204,15 +208,60 @@ describe("ALS create_docket payload", () => {
         }>;
       }>;
     };
+    draft.csbType = "CSB_IV";
     draft.parcelList[0]!.items = [
       { description: firstDescription, hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 },
       { description: secondDescription, hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 }
     ];
+    draft.parcelList.push({
+      ...draft.parcelList[0]!,
+      sequence: 2,
+      items: [
+        { description: thirdDescription, hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 },
+        { description: fourthDescription, hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 }
+      ]
+    });
+
+    const payload = buildAlsCreateDocketPayload({ draft: draft as never, ...payloadInput });
+    assert.equal(payload.shipment_content.length, 482);
+    assert.deepEqual(payload.free_form_line_items.map((item) => item.description), [
+      firstDescription,
+      secondDescription,
+      thirdDescription,
+      fourthDescription
+    ]);
+  });
+
+  test("rejects a CSB-IV parcel whose combined item descriptions exceed 240 characters", () => {
+    const draft = draftFixture() as unknown as {
+      csbType: string;
+      parcelList: Array<{ items: Array<{ description: string; hsnCode: string; unitType: string; quantity: number; unitRate: number }> }>;
+    };
+    draft.csbType = "CSB_IV";
+    draft.parcelList[0]!.items = [
+      { description: "A".repeat(120), hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 },
+      { description: "B".repeat(119), hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 }
+    ];
 
     assert.throws(
       () => buildAlsCreateDocketPayload({ draft: draft as never, ...payloadInput }),
-      /exceeds the limit by 1/
+      /Parcel 1.*241 characters/
     );
+  });
+
+  test("does not apply the 240-character parcel rule to CSB-V", () => {
+    const draft = draftFixture() as unknown as {
+      csbType: string;
+      parcelList: Array<{ items: Array<{ description: string; hsnCode: string; unitType: string; quantity: number; unitRate: number }> }>;
+    };
+    draft.csbType = "CSB_V";
+    draft.parcelList[0]!.items = [
+      { description: "A".repeat(120), hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 },
+      { description: "B".repeat(119), hsnCode: "62034200", unitType: "Pcs", quantity: 1, unitRate: 500 }
+    ];
+
+    const payload = buildAlsCreateDocketPayload({ draft: draft as never, ...payloadInput });
+    assert.equal(payload.shipment_content.length, 241);
   });
 
   test("refuses to build without an exchange rate rather than declaring INR as GBP", () => {

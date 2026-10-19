@@ -14,8 +14,9 @@ import {
 } from "../models/labelDocument.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import type { PaymentSource } from "../models/financialTypes.js";
+import { normalizeCsbType } from "./csbType.service.js";
 import { validateShipmentDraftFields } from "./shipmentValidation.service.js";
-import { getShipmentDescriptionLimitMessage } from "./parcelItems.service.js";
+import { getParcelDescriptionLimitMessage } from "./parcelItems.service.js";
 import {
   buildShipmentPayload,
   sanitizeShipmentRequestSnapshot,
@@ -542,10 +543,12 @@ async function createLabelForShipmentDraftInternal(
     }
   }
 
-  // This is a booking-only rule. Draft PATCH/autosave and exports remain able
-  // to preserve longer descriptions for staff review, but no financial or
-  // carrier side-effect may start until the combined EDI description fits.
-  const descriptionLimitMessage = getShipmentDescriptionLimitMessage(draft.parcelList);
+  // CSB-IV has a 240-character description cap per parcel. Draft autosave keeps
+  // allowing longer entries for review; no financial or carrier side-effect
+  // starts until each parcel fits. CSB-V has no corresponding description cap.
+  const descriptionLimitMessage = normalizeCsbType(draft.csbType) === "CSB_IV"
+    ? getParcelDescriptionLimitMessage(draft.parcelList)
+    : "";
   if (descriptionLimitMessage) {
     throw new DpdShipmentServiceError(descriptionLimitMessage, 400, {
       validationIssues: [descriptionLimitMessage]

@@ -6,7 +6,7 @@ import { toast } from "react-toastify";
 import { FiCheck, FiCreditCard, FiMapPin, FiPackage } from "react-icons/fi";
 import { isValidAadhaarNumber } from "@/lib/aadhaar";
 import { getCsbVBookingIssues, getCsbVShipmentValueError } from "@/lib/csbVBooking";
-import { getPositiveNumberError } from "@/lib/parcelItems";
+import { getParcelDescriptionLimitMessage, getPositiveNumberError } from "@/lib/parcelItems";
 import {
   getPostcodeError,
   getShipmentMobileCountryMismatchError,
@@ -205,6 +205,14 @@ function validateShipmentStep(
       )
         errors[`${path}.hsnCode`] =
           `Enter a valid 4, 6, 8 or 10 digit HS code for item ${itemIndex + 1}.`;
+    }
+    if (data.csbType === "CSB_IV") {
+      const descriptionLimitMessage = getParcelDescriptionLimitMessage([{
+        sequence: index + 1,
+        items: parcel.items,
+      }]);
+      if (descriptionLimitMessage)
+        errors[`parcels.${index}.descriptionLimit`] = descriptionLimitMessage;
     }
   }
   const selectedFiles = Object.values(files).filter(Boolean) as File[];

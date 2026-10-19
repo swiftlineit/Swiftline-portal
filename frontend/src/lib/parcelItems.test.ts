@@ -5,7 +5,7 @@ import {
   composeShipmentDescription,
   getParcelItemAmountError,
   getPositiveNumberError,
-  getShipmentDescriptionLimitMessage,
+  getParcelDescriptionLimitMessage,
   isUntouchedParcelItem,
   mergeSavedParcelItemsWithLocalRows,
   maxParcelItems,
@@ -50,21 +50,34 @@ test("counts all parcel item descriptions with comma separators", () => {
 
   assert.equal(description, "A, B, C");
   assert.equal(description.length, 7);
-  assert.equal(getShipmentDescriptionLimitMessage([{ items: [item({ description: "A" })] }]), "");
+  assert.equal(getParcelDescriptionLimitMessage([{ items: [item({ description: "A" })] }]), "");
 });
 
-test("reports the exact excess only above the 240-character shipment limit", () => {
+test("enforces a 240-character combined item-description limit per CSB-IV parcel", () => {
   assert.equal(
-    getShipmentDescriptionLimitMessage([{ items: [item({ description: "x".repeat(240) })] }]),
+    getParcelDescriptionLimitMessage([{ items: [item({ description: "x".repeat(120) }), item({ description: "y".repeat(118) })] }]),
     ""
   );
 
-  const items = [item({ description: "x".repeat(120) }), item({ description: "y".repeat(120) }), item({ description: "z" })];
-  const message = getShipmentDescriptionLimitMessage([{ items }]);
+  const message = getParcelDescriptionLimitMessage([{
+    sequence: 3,
+    items: [item({ description: "x".repeat(120) }), item({ description: "y".repeat(120) }), item({ description: "z" })]
+  }]);
 
+  assert.match(message, /Parcel 3/);
   assert.match(message, /current combined description is 245 characters/);
   assert.match(message, /exceeds the limit by 5/);
-  assert.equal(getShipmentDescriptionLimitMessage([{ items }], false), "");
+});
+
+test("does not impose a shipment-wide description limit or a CSB-V parcel limit", () => {
+  const longShipment = [
+    { items: [item({ description: "x".repeat(120) }), item({ description: "a".repeat(78) })] },
+    { items: [item({ description: "y".repeat(120) }), item({ description: "b".repeat(78) })] }
+  ];
+  assert.equal(getParcelDescriptionLimitMessage(longShipment), "");
+
+  const longParcel = [{ items: [item({ description: "x".repeat(120) }), item({ description: "y".repeat(119) })] }];
+  assert.equal(getParcelDescriptionLimitMessage(longParcel, false), "");
 });
 
 test("recognizes only a completely untouched item row as UI-only", () => {

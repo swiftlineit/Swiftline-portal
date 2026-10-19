@@ -21,8 +21,8 @@ export const defaultParcelItemUnitType: ParcelItemUnitType = "Pcs";
 // Must stay <= the `contentsDescription` maxlength in shipmentDraft.model.ts and
 // the length the DPD payload validator enforces.
 export const contentsDescriptionMaxLength = 120;
-/** Maximum combined goods-description length allowed when booking a shipment. */
-export const shipmentDescriptionMaxLength = 240;
+/** Maximum combined item-description length inside one CSB-IV parcel. */
+export const parcelDescriptionMaxLength = 240;
 export const maxParcelsPerShipment = 100;
 export const maxParcelItems = 50;
 /** Exclusive upper bound for one item's derived value (quantity x unit rate). */
@@ -104,6 +104,7 @@ export function composeContentsDescription(items: ParcelItemInput[]): string {
 }
 
 type ShipmentDescriptionParcel = {
+  sequence?: number;
   items?: ParcelItemInput[] | null;
   contentsDescription?: unknown;
 };
@@ -136,16 +137,23 @@ export function composeShipmentDescription(parcels: ShipmentDescriptionParcel[])
   return descriptions.join(", ");
 }
 
-export function getShipmentDescriptionCharacterCount(parcels: ShipmentDescriptionParcel[]): number {
-  return composeShipmentDescription(parcels).length;
-}
+/** Returns the first per-parcel CSB-IV description error, or an empty string. */
+export function getParcelDescriptionLimitMessage(parcels: ShipmentDescriptionParcel[]): string {
+  for (const [index, parcel] of parcels.entries()) {
+    const itemDescriptions = (parcel.items ?? [])
+      .map((item) => (typeof item.description === "string" ? item.description.trim() : ""))
+      .filter(Boolean);
+    const legacyDescription = typeof parcel.contentsDescription === "string"
+      ? parcel.contentsDescription.trim()
+      : "";
+    const description = itemDescriptions.length ? itemDescriptions.join(", ") : legacyDescription;
+    if (description.length <= parcelDescriptionMaxLength) continue;
 
-/** Returns the final-booking validation message, or an empty string when valid. */
-export function getShipmentDescriptionLimitMessage(parcels: ShipmentDescriptionParcel[]): string {
-  const count = getShipmentDescriptionCharacterCount(parcels);
-  if (count <= shipmentDescriptionMaxLength) return "";
+    const parcelNumber = parcel.sequence ?? index + 1;
+    return `Parcel ${parcelNumber} item descriptions can be a maximum of ${parcelDescriptionMaxLength} characters combined. The current combined description is ${description.length} characters, which exceeds the limit by ${description.length - parcelDescriptionMaxLength}.`;
+  }
 
-  return `Item descriptions can be a maximum of ${shipmentDescriptionMaxLength} characters. The current combined description is ${count} characters, which exceeds the limit by ${count - shipmentDescriptionMaxLength}.`;
+  return "";
 }
 
 /**

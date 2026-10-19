@@ -353,6 +353,14 @@ export default function BranchDetailPage() {
       return;
     }
 
+    if (value === "operation:ledger_viewed") {
+      await refreshAccount(account.accountId, () =>
+        updateBusinessAccountOperationalAction(account.accountId, "ledger_viewed"),
+      );
+      router.push(`/dashboard/credit-accounts/${account._id}#credit-ledger`);
+      return;
+    }
+
     if (value.startsWith("operation:")) {
       await refreshAccount(account.accountId, () =>
         updateBusinessAccountOperationalAction(

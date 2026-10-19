@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { FiDownload, FiRefreshCw,FiChevronDown  } from "react-icons/fi";
+import { FiDownload, FiRefreshCw, FiChevronDown, FiX } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { creditLedgerFunding, creditLedgerLabel } from "@/lib/creditLedgerLabels";
 import { DashboardLoading } from "@/components/DashboardShell";
@@ -40,6 +40,7 @@ import {
 import { formatDashboardDate, formatDashboardDateTime } from "@/lib/dateFormat";
 import { CREDIT_VIEW_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
+import { useDialog } from "@/lib/useDialog";
 
 // Formats a minor-unit (paise) integer as an INR currency string.
 function money(valueMinor: number) {
@@ -90,8 +91,9 @@ export default function AdminCreditAccountDetailPage() {
   const [ledgerRange, setLedgerRange] = useState(emptyDateRange);
   const [ledgerPage, setLedgerPage] = useState(1);
   const [ledgerPagination, setLedgerPagination] = useState(emptyListPagination);
-  // Reporting window for the ledger export; empty exports the full history.
+  // The export period is chosen only when the export dialog is opened.
   const [exportRange, setExportRange] = useState("");
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
 
   // "Record Offline Payment" form state.
   const [statementId, setStatementId] = useState("");
@@ -104,6 +106,10 @@ export default function AdminCreditAccountDetailPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [highlightStatements, setHighlightStatements] = useState(false);
+  const [highlightLedger, setHighlightLedger] = useState(false);
+  const exportDialogRef = useDialog<HTMLDivElement>(exportDialogOpen, () => {
+    if (busy !== "ledger-export") setExportDialogOpen(false);
+  });
 
   // Loads the account, statements, payments, and ledger together, then
   // pre-fills the payment form with the oldest outstanding statement.
@@ -142,19 +148,30 @@ export default function AdminCreditAccountDetailPage() {
     return () => window.clearTimeout(initialLoad);
   }, [load, user]);
 
-  // When navigated via an Outstanding link (#billing-statements), scroll to and briefly highlight the statements section.
+  // Follow section links after the account data has loaded, then briefly mark
+  // the destination so staff can spot the section they selected.
   useEffect(() => {
     if (loading) return;
     const highlightFromHash = () => {
       const hash = window.location.hash;
-      if (hash === "#billing-statements" || hash === "#statements") {
-        const element = document.getElementById("billing-statements");
-        if (element) {
-          window.requestAnimationFrame(() => {
-            element.scrollIntoView({ behavior: "smooth", block: "start" });
-          });
+      const targetId = hash === "#billing-statements" || hash === "#statements"
+        ? "billing-statements"
+        : hash === "#credit-ledger"
+          ? "credit-ledger"
+          : null;
+      if (!targetId) return;
+
+      const element = document.getElementById(targetId);
+      if (element) {
+        window.requestAnimationFrame(() => {
+          element.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        if (targetId === "billing-statements") {
           setHighlightStatements(true);
           window.setTimeout(() => setHighlightStatements(false), 2800);
+        } else {
+          setHighlightLedger(true);
+          window.setTimeout(() => setHighlightLedger(false), 2800);
         }
       }
     };
@@ -283,6 +300,21 @@ export default function AdminCreditAccountDetailPage() {
     }
   }
 
+  async function exportLedger() {
+    setBusy("ledger-export");
+    try {
+      await openAuthenticatedFile(
+        withLedgerExportRange(`/api/v1/credit-accounts/${accountId}/ledger/export`, exportRange),
+        "credit-account-ledger.csv"
+      );
+      setExportDialogOpen(false);
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : "The ledger could not be exported.");
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (userLoading || !user) return <DashboardLoading />;
 
   return (
@@ -300,26 +332,10 @@ export default function AdminCreditAccountDetailPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <div className="relative">
-              <select
-                value={exportRange}
-                onChange={(event) => setExportRange(event.target.value)}
-                aria-label="Ledger export period"
-                className="h-10 appearance-none rounded-4xl border border-slate-300 bg-white pl-4 pr-11 text-sm font-semibold text-slate-700 outline-none focus:border-blue-900"
-              >
-                {ledgerExportRanges.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-              <FiChevronDown className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" />
-            </div>
             <button
               type="button"
-              onClick={() => void openAuthenticatedFile(
-                withLedgerExportRange(`/api/v1/credit-accounts/${accountId}/ledger/export`, exportRange),
-                "credit-account-statement.csv"
-              )}
-              className="inline-flex h-10 items-center gap-2 rounded-4xl border border-slate-300 bg-white px-4 text-sm font-semibold text-blue-900"
+              onClick={() => setExportDialogOpen(true)}
+              className="inline-flex h-10 items-center gap-2 rounded-4xl border border-slate-300 bg-white px-4 text-sm font-semibold text-blue-900 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#0D1282]/20"
             >
               <FiDownload /> Export Ledger
             </button>
@@ -669,7 +685,10 @@ export default function AdminCreditAccountDetailPage() {
         </section>
 
         {/* Credit ledger table */}
-        <section className="overflow-x-auto border border-slate-200 bg-white rounded-xl">
+        <section
+          id="credit-ledger"
+          className={`overflow-x-auto border bg-white rounded-xl scroll-mt-6 transition-all duration-500 ${highlightLedger ? "border-amber-400 ring-4 ring-amber-200 shadow-lg" : "border-slate-200"}`}
+        >
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 p-5">
             <div>
               <h2 className="font-semibold text-slate-950">Credit Ledger</h2>
@@ -741,6 +760,90 @@ export default function AdminCreditAccountDetailPage() {
             />
           </div>
         </section>
+
+        {exportDialogOpen ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && busy !== "ledger-export") {
+                setExportDialogOpen(false);
+              }
+            }}
+          >
+            <div
+              ref={exportDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="ledger-export-title"
+              aria-describedby="ledger-export-description"
+              tabIndex={-1}
+              className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl outline-none"
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+                <div>
+                  <h2 id="ledger-export-title" className="text-lg font-semibold text-slate-950">Export credit ledger</h2>
+                  <p id="ledger-export-description" className="mt-1 text-sm text-slate-500">
+                    Choose the period to include in the CSV file.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setExportDialogOpen(false)}
+                  disabled={busy === "ledger-export"}
+                  aria-label="Close export dialog"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#0D1282]/20 disabled:opacity-50"
+                >
+                  <FiX aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="px-5 py-4">
+                <fieldset className="space-y-2">
+                  <legend className="mb-2 text-sm font-semibold text-slate-700">Reporting period</legend>
+                  {ledgerExportRanges.map((option) => {
+                    const selected = exportRange === option.value;
+                    return (
+                      <label
+                        key={option.value || "all-time"}
+                        className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3.5 py-3 text-sm transition ${selected ? "border-[#0D1282] bg-[#0D1282]/5 text-slate-900" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}
+                      >
+                        <input
+                          type="radio"
+                          name="ledger-export-period"
+                          value={option.value}
+                          checked={selected}
+                          onChange={() => setExportRange(option.value)}
+                          className="h-4 w-4 accent-[#0D1282]"
+                        />
+                        <span className="font-medium">{option.label}</span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+              </div>
+
+              <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => setExportDialogOpen(false)}
+                  disabled={busy === "ledger-export"}
+                  className="h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void exportLedger()}
+                  disabled={busy === "ledger-export"}
+                  className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#0D1282] px-4 text-sm font-semibold text-white transition hover:bg-[#0a0d63] focus:outline-none focus:ring-2 focus:ring-[#0D1282]/30 disabled:cursor-wait disabled:opacity-60"
+                >
+                  <FiDownload aria-hidden="true" />
+                  {busy === "ledger-export" ? "Preparing CSV..." : "Download CSV"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
     </div>
   );
 }

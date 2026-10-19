@@ -3,7 +3,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { isValidAadhaarNumber, normalizeAadhaarNumber } from "./aadhaarValidation.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
-import { getDeclaredGoodsValue, maxParcelItems, maxParcelsPerShipment, parcelItemUnitTypeValues } from "./parcelItems.service.js";
+import { getDeclaredGoodsValue, getParcelDescriptionLimitMessage, maxParcelItems, maxParcelsPerShipment, parcelItemUnitTypeValues } from "./parcelItems.service.js";
 import { shipmentContentTypeValues } from "../models/shipmentDraft.model.js";
 import { getGstinError } from "./gstin.js";
 import { getAdCodeError } from "./adCode.service.js";
@@ -85,6 +85,21 @@ export const publicShipmentDraftPayloadSchema = z.object({
   kycUseForAllParcels: z.boolean().default(true),
   parcels: z.array(parcelSchema).min(1, "Add at least one parcel.").max(maxParcelsPerShipment, `A booking can contain up to ${maxParcelsPerShipment} parcels.`),
 }).superRefine((value, context) => {
+  if (value.csbType === "CSB_IV") {
+    value.parcels.forEach((parcel, parcelIndex) => {
+      const message = getParcelDescriptionLimitMessage([{
+        sequence: parcelIndex + 1,
+        items: parcel.items,
+      }]);
+      if (message) {
+        context.addIssue({
+          code: "custom",
+          path: ["parcels", parcelIndex, "items"],
+          message,
+        });
+      }
+    });
+  }
   if (value.csbType === "CSB_IV" && !isValidAadhaarNumber(value.sender.aadhaarNumber)) {
     context.addIssue({ code: "custom", path: ["sender", "aadhaarNumber"], message: "Enter a valid 12 digit Aadhaar number." });
   }

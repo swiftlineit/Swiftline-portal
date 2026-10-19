@@ -8,7 +8,7 @@ import {
   composeShipmentDescription,
   getDeclaredGoodsValue,
   getParcelItemAmount,
-  getShipmentDescriptionLimitMessage,
+  getParcelDescriptionLimitMessage,
   normalizeParcelItems
 } from "../parcelItems.service.js";
 
@@ -326,7 +326,9 @@ export function buildAlsCreateDocketPayload(input: {
   const booking = indiaDateParts(bookedAt);
   const totalWeight = draft.parcelList.reduce((sum, parcel) => sum + parcel.weightKg, 0);
   const shipmentContent = composeShipmentDescription(draft.parcelList);
-  const descriptionLimitMessage = getShipmentDescriptionLimitMessage(draft.parcelList);
+  const descriptionLimitMessage = normalizeCsbType(draft.csbType) === "CSB_IV"
+    ? getParcelDescriptionLimitMessage(draft.parcelList)
+    : "";
   if (descriptionLimitMessage) throw new AlsPayloadError(descriptionLimitMessage);
 
   return {
@@ -346,10 +348,8 @@ export function buildAlsCreateDocketPayload(input: {
     // request to a document that does not exist yet.
     shipment_invoice_no: truncate(required(trackingNumber, "Shipment invoice reference"), 80),
     shipment_invoice_date: booking.date,
-    // ALS accepts the full shipment-level description above the old 120
-    // character per-parcel summary. Keep every item in normal order and rely
-    // on the booking-wide 240-character validation rather than silently
-    // dropping the tail of the declaration.
+    // Keep every item description in normal order. The 240-character CSB-IV
+    // check is per parcel; it does not cap the combined shipment summary.
     shipment_content: required(shipmentContent, "Shipment contents"),
     remark: truncate(consignee.deliveryInstructions || "", 250),
     entry_type: 2,

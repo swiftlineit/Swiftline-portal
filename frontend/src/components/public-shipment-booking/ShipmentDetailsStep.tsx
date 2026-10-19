@@ -284,6 +284,11 @@ function ParcelEditor({
           maxQuantity={100_000}
           maxUnitRate={100_000_000}
         />
+        {revealErrors && errors[`parcels.${index}.descriptionLimit`] ? (
+          <p className="mt-2 text-sm font-medium text-red-700" role="alert">
+            {errors[`parcels.${index}.descriptionLimit`]}
+          </p>
+        ) : null}
       </div>
     </section>
   );

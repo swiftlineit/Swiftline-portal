@@ -51,7 +51,7 @@ import {
   getParcelItemAmountError,
   getHsnCodeError,
   getPositiveNumberError,
-  getShipmentDescriptionLimitMessage,
+  getParcelDescriptionLimitMessage,
   isUntouchedParcelItem,
   maxShipmentItemQuantity,
   maxShipmentItemUnitRate,
@@ -1165,7 +1165,7 @@ export default function DpdLabelDraftPage() {
       return;
     }
 
-    const descriptionLimitMessage = getShipmentDescriptionLimitMessage(parcelForms, csbType !== "CSB_V");
+    const descriptionLimitMessage = getParcelDescriptionLimitMessage(parcelForms, csbType !== "CSB_V");
     if (descriptionLimitMessage) {
       setError(descriptionLimitMessage);
       toast.error(descriptionLimitMessage);

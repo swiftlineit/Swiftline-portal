@@ -251,6 +251,12 @@ export default function BusinessAccountsPage() {
       return;
     }
 
+    if (value === "operation:ledger_viewed") {
+      await handleOperationalAction(account, "ledger_viewed");
+      router.push(`/dashboard/credit-accounts/${account._id}#credit-ledger`);
+      return;
+    }
+
     if (value === "assign_branch") {
       await openAssignBranchModal(account);
       return;

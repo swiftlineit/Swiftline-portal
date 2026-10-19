@@ -325,6 +325,41 @@ describe("consignor draft validation", () => {
     assert.equal(issues.some((issue) => issue.startsWith("Parcel 1 item")), false);
   });
 
+  test("limits combined item descriptions to 240 characters per CSB-IV parcel", () => {
+    const parcel = (sequence: number, descriptions: string[]) => ({
+      sequence, weightKg: 5, lengthCm: 10, widthCm: 10, heightCm: 10, shipmentContentType: "PARCEL",
+      shipmentReference1: `REF-${sequence}`,
+      items: descriptions.map((description) => ({ ...completeItem, description })),
+      contentsDescription: descriptions.join(", "),
+    });
+    const within = validateShipmentDraftFields(draftWith({
+      parcels: [parcel(1, ["x".repeat(120), "y".repeat(118)]), parcel(2, ["z".repeat(120), "w".repeat(118)])],
+    }));
+    assert.equal(within.some((issue) => issue.includes("item descriptions can be a maximum of 240")), false);
+
+    const over = validateShipmentDraftFields(draftWith({
+      parcels: [parcel(1, ["x".repeat(120), "y".repeat(119)])],
+    }));
+    assert.ok(over.some((issue) => issue.includes("Parcel 1 item descriptions can be a maximum of 240")));
+  });
+
+  test("does not apply the description limit to CSB-V or the shipment total", () => {
+    const parcels = [1, 2].map((sequence) => ({
+      sequence, weightKg: 5, lengthCm: 10, widthCm: 10, heightCm: 10, shipmentContentType: "PARCEL",
+      shipmentReference1: `REF-${sequence}`,
+      items: ["x".repeat(120), "y".repeat(118)].map((description) => ({ ...completeItem, description })),
+      contentsDescription: "x".repeat(120) + ", " + "y".repeat(118),
+    }));
+    const shipmentTotal = validateShipmentDraftFields(draftWith({ parcels }));
+    assert.equal(shipmentTotal.some((issue) => issue.includes("item descriptions can be a maximum of 240")), false);
+
+    const csbV = validateShipmentDraftFields(draftWith({ csbType: "CSB_V", parcels: [{
+      ...parcels[0],
+      items: ["x".repeat(120), "y".repeat(120)].map((description) => ({ ...completeItem, description })),
+    }] }));
+    assert.equal(csbV.some((issue) => issue.includes("item descriptions can be a maximum of 240")), false);
+  });
+
   test("rejects a malformed HS code on CSB-IV even though it is optional", () => {
     const issues = validateShipmentDraftFields(draftWith({
       parcels: [{

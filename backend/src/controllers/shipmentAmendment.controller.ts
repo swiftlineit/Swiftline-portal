@@ -16,7 +16,13 @@ import {
   type IShipmentDraft
 } from "../models/shipmentDraft.model.js";
 import { normalizeCsbType } from "../services/csbType.service.js";
-import { defaultParcelItemUnitType, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "../services/parcelItems.service.js";
+import {
+  defaultParcelItemUnitType,
+  getParcelDescriptionLimitMessage,
+  maxParcelItems,
+  maxParcelsPerShipment,
+  normalizeParcelItems
+} from "../services/parcelItems.service.js";
 import { findRestrictedCategories } from "../services/restrictedGoods.service.js";
 import {
   buildPricingInputFromDraft,
@@ -495,6 +501,11 @@ async function buildAmendmentPreview(
   }
 
   const requestedSnapshot = applyChangesToSnapshot(previousSnapshot, requestedChanges);
+  const descriptionLimitMessage = requestedSnapshot.csbType === "CSB_IV"
+    ? getParcelDescriptionLimitMessage(requestedSnapshot.parcelList)
+    : "";
+  if (descriptionLimitMessage) throw new AmendmentReviewError(400, descriptionLimitMessage);
+
   const pricingChanges = affectsPricing(requestedChanges);
   if (!await ShipmentInvoice.exists({ shipmentDraftId: shipmentDraft._id })) {
     try {
@@ -862,6 +873,13 @@ export async function approveShipmentAmendment(request: Request, response: Respo
           "Parcel count cannot be changed after booking. Create a new shipment for additional parcels."
         );
       }
+      const descriptionLimitMessage = requestedSnapshot.csbType === "CSB_IV"
+        ? getParcelDescriptionLimitMessage(requestedSnapshot.parcelList)
+        : "";
+      if (descriptionLimitMessage) {
+        throw new AmendmentReviewError(409, `This amendment cannot be approved. ${descriptionLimitMessage}`);
+      }
+
       const pricingChanges = affectsPricing(changePreview);
       const currentPricing = await getCurrentInvoicePricing(
         shipmentDraft._id as mongoose.Types.ObjectId,

@@ -9,7 +9,7 @@ import {
 import { isValidAadhaarNumber } from "./aadhaarValidation.service.js";
 import { getAdCodeError } from "./adCode.service.js";
 import { normalizeCsbType } from "./csbType.service.js";
-import { getDeclaredGoodsValue, getParcelItemAmountError, isValidHsnCode, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "./parcelItems.service.js";
+import { getDeclaredGoodsValue, getParcelDescriptionLimitMessage, getParcelItemAmountError, isValidHsnCode, maxParcelItems, maxParcelsPerShipment, normalizeParcelItems } from "./parcelItems.service.js";
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
 import { getGstinError } from "./gstin.js";
@@ -416,6 +416,14 @@ export function validateShipmentDraftFields(
   }
 
   draft.parcelList.forEach((parcel, index) => {
+    if (!isCsbV && requireItemDetails) {
+      const descriptionIssue = getParcelDescriptionLimitMessage([{
+        sequence: parcel.sequence ?? index + 1,
+        items: parcel.items,
+        contentsDescription: parcel.contentsDescription,
+      }]);
+      if (descriptionIssue) issues.push(descriptionIssue);
+    }
     issues.push(...validateParcel(parcel, index, requireItemDetails, requireHsnCode, !isCsbV));
   });
 

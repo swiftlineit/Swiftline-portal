@@ -146,6 +146,49 @@ describe("public shipment booking validation", () => {
     assert.equal(publicShipmentDraftPayloadSchema.safeParse(validPayload()).success, true);
   });
 
+  it("validates combined descriptions per CSB-IV parcel, without a shipment-wide cap", () => {
+    const tooLong = validPayload();
+    tooLong.parcels[0]!.items = [
+      { ...tooLong.parcels[0]!.items[0]!, description: "x".repeat(120) },
+      { ...tooLong.parcels[0]!.items[0]!, description: "y".repeat(119) },
+    ];
+    const rejected = publicShipmentDraftPayloadSchema.safeParse(tooLong);
+    assert.equal(rejected.success, false);
+    if (!rejected.success) {
+      assert.ok(rejected.error.issues.some((issue) => (
+        issue.path.join(".") === "parcels.0.items"
+        && issue.message.includes("Parcel 1 item descriptions can be a maximum of 240")
+      )));
+    }
+
+    const multipleParcels = validPayload();
+    const items = [
+      { ...multipleParcels.parcels[0]!.items[0]!, description: "x".repeat(120) },
+      { ...multipleParcels.parcels[0]!.items[0]!, description: "y".repeat(118) },
+    ];
+    multipleParcels.parcels = [
+      { ...multipleParcels.parcels[0]!, items },
+      { ...multipleParcels.parcels[0]!, shipmentReference1: "WEB-2", items },
+    ];
+    assert.equal(publicShipmentDraftPayloadSchema.safeParse(multipleParcels).success, true);
+  });
+
+  it("does not apply the combined description cap to CSB-V", () => {
+    const payload = validPayload();
+    payload.csbType = "CSB_V";
+    payload.consignee.stateCode = "39";
+    payload.csbVGstin = "08ABCDE1234F1Z5";
+    payload.csbVAccountNumber = "001234";
+    payload.csbVIecCode = "CUSTOMIEC1";
+    payload.csbVAdCode = "0123456";
+    payload.csbVInvoiceNumber = "INV-100";
+    payload.parcels[0]!.items = [
+      { ...payload.parcels[0]!.items[0]!, description: "x".repeat(120), hsnCode: "19053100" },
+      { ...payload.parcels[0]!.items[0]!, description: "y".repeat(120), hsnCode: "19053100" },
+    ];
+    assert.equal(publicShipmentDraftPayloadSchema.safeParse(payload).success, true);
+  });
+
   it("requires sender and receiver state or county", () => {
     const missingSenderState = validPayload();
     missingSenderState.sender.county = "";

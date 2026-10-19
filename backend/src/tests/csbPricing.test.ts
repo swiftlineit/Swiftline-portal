@@ -14,7 +14,7 @@ import {
   composeShipmentDescription,
   composeContentsDescription,
   contentsDescriptionMaxLength,
-  getShipmentDescriptionLimitMessage,
+  getParcelDescriptionLimitMessage,
   isValidHsnCode,
   normalizeParcelItems
 } from "../services/parcelItems.service.js";
@@ -151,18 +151,29 @@ describe("parcel items", () => {
     );
   });
 
-  test("reports the exact excess above 240 characters", () => {
+  test("enforces a 240-character combined item-description limit per parcel", () => {
     assert.equal(
-      getShipmentDescriptionLimitMessage([{ items: [{ description: "x".repeat(240) }] }]),
+      getParcelDescriptionLimitMessage([{ items: [{ description: "x".repeat(120) }, { description: "y".repeat(118) }] }]),
       ""
     );
 
-    const message = getShipmentDescriptionLimitMessage([
-      { items: [{ description: "x".repeat(120) }, { description: "y".repeat(120) }, { description: "z" }] }
+    const message = getParcelDescriptionLimitMessage([
+      { sequence: 2, items: [{ description: "x".repeat(120) }, { description: "y".repeat(120) }, { description: "z" }] }
     ]);
 
+    assert.match(message, /Parcel 2/);
     assert.match(message, /current combined description is 245 characters/);
     assert.match(message, /exceeds the limit by 5/);
+  });
+
+  test("allows a shipment to exceed 240 characters when each parcel fits", () => {
+    const parcels = [
+      { items: [{ description: "x".repeat(120) }, { description: "a".repeat(78) }] },
+      { items: [{ description: "y".repeat(120) }, { description: "b".repeat(78) }] }
+    ];
+
+    assert.ok(composeShipmentDescription(parcels).length > 240);
+    assert.equal(getParcelDescriptionLimitMessage(parcels), "");
   });
 
   test("never exceeds the contentsDescription column length", () => {
