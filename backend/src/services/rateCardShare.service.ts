@@ -1,6 +1,7 @@
 import crypto from "crypto";
+import { rateCardFilter, type RateCardScope } from "./rateCardScope.service.js";
 import mongoose from "mongoose";
-import { CountryRateCard, type RateCardBand } from "../models/countryRateCard.model.js";
+import { CountryRateCard, type CountryRateService, type RateCardBand } from "../models/countryRateCard.model.js";
 import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
 import {
   RateCardShare,
@@ -62,6 +63,13 @@ export function rateCardGstLabel(input: { gstTreatment?: "INCLUDED" | "EXCLUDED"
     : "GST excluded";
 }
 
+/** The selected validity date is inclusive in the portal's India timezone. */
+export function endOfShareValidityDay(date: Date) {
+  const end = new Date(date);
+  end.setUTCHours(18, 29, 59, 999);
+  return end;
+}
+
 /**
  * A positive value marks up, a negative one discounts. The result is floored at
  * zero so an over-large discount cannot produce a negative rate on the sheet.
@@ -85,12 +93,12 @@ export type RateCardSelection = {
  * what makes the share immutable.
  */
 export async function buildRateCardSnapshot(
-  band: RateCardBand,
+  band: RateCardBand | RateCardScope,
   selection: RateCardSelection,
   adjustmentMode: RateCardAdjustmentMode,
   adjustmentValue: number
 ): Promise<IRateCardShareRow[]> {
-  const filters: Record<string, unknown> = { band };
+  const filters: Record<string, unknown> = rateCardFilter(typeof band === "string" ? { band } : band);
   let requestedRateIds: string[] = [];
 
   if (selection.rateIds.length) {
@@ -130,19 +138,28 @@ export async function buildRateCardSnapshot(
 
 /** Freezes every selected route's band-specific commercial charges. */
 export async function buildRateCardRouteChargeSnapshot(
-  band: RateCardBand,
+  band: RateCardBand | RateCardScope,
   rows: IRateCardShareRow[]
 ): Promise<IRateCardShareRouteCharge[]> {
-  const routes = [...new Map(rows.map((row) => [`${row.countryCode}:${row.service}`, {
+  const routes = new Map<string, { countryCode: string; service: CountryRateService }>();
+  for (const row of rows) routes.set(`${row.countryCode}:${row.service}`, {
     countryCode: row.countryCode,
     service: row.service
-  }])).values()];
-  const configured = routes.length
-    ? await CountryRouteCharge.find({ band, $or: routes }).lean().exec()
-    : [];
+  });
+
+  // Include saved route-only entries too, not just routes currently represented
+  // by a weight slab. A complete share freezes the entire card configuration.
+  const configured = await CountryRouteCharge.find(
+    rateCardFilter(typeof band === "string" ? { band } : band)
+  ).sort({ countryCode: 1, service: 1 }).lean().exec();
+  for (const item of configured) routes.set(`${item.countryCode}:${item.service}`, {
+    countryCode: item.countryCode,
+    service: item.service
+  });
+
   const byRoute = new Map(configured.map((item) => [`${item.countryCode}:${item.service}`, item]));
 
-  return routes.map((route) => {
+  return [...routes.values()].map((route) => {
     const item = byRoute.get(`${route.countryCode}:${route.service}`);
     return {
       ...route,
@@ -223,7 +240,7 @@ export function serializeRateCardShare(share: IRateCardShare, options: Serialize
     routeCharges: share.routeCharges ?? [],
     documentType: share.adjustmentMode === "NONE" ? "RATE_CARD" : "EXTERNAL_PROPOSAL",
     ...(options.includeBaseRates
-      ? { band: share.band ?? "BAND_A", adjustmentMode: share.adjustmentMode, adjustmentValue: share.adjustmentValue }
+      ? { band: share.band, businessAccountId: share.businessAccountId ? String(share.businessAccountId) : undefined, privateRateCardVersion: share.privateRateCardVersion, adjustmentMode: share.adjustmentMode, adjustmentValue: share.adjustmentValue }
       : {}),
     terms: {
       validFrom: share.terms.validFrom,

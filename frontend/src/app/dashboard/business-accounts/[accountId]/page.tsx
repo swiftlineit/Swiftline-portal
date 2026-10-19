@@ -5,14 +5,14 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   FiChevronDown,
-  FiEdit2,
   FiFile,
   FiFileText,
 } from "react-icons/fi";
 import { BiEdit } from "react-icons/bi";
 import { DashboardLoading } from "@/components/DashboardShell";
 import { BusinessAccountAccessPanel } from "@/components/business-accounts/BusinessAccountAccessPanel";
-import RateCardAssignmentPanel from "@/components/business-accounts/RateCardAssignmentPanel";
+import RateCardWorkspace from "@/components/rate-cards/RateCardWorkspace";
+import { requestLeave } from "@/lib/useUnsavedChanges";
 import {
   canadaRegistrationTypeOptions,
   companyTypeOptions,
@@ -193,9 +193,9 @@ function normalizeKycCheckStatus(status?: string): BusinessKycCheckStatus {
   return "not_started";
 }
 
-type DetailTab = "overview" | "documents" | "kyc" | "access";
+type DetailTab = "overview" | "documents" | "kyc" | "access" | "rate-card";
 
-const detailTabs: DetailTab[] = ["overview", "documents", "kyc", "access"];
+const detailTabs: DetailTab[] = ["overview", "documents", "kyc", "access", "rate-card"];
 
 // Notification links address a tab directly (…/business-accounts/SL-1#kyc), so
 // the fragment picks the starting tab instead of always opening on Overview.
@@ -385,6 +385,7 @@ export default function BusinessAccountDetailsPage() {
     { key: "documents", label: "Documents" },
     { key: "kyc", label: "KYC Review" },
     { key: "access", label: "Users & Access" },
+    { key: "rate-card", label: "Rate Card" },
   ];
 
   const companyName = account.company?.companyName?.trim();
@@ -435,7 +436,7 @@ export default function BusinessAccountDetailsPage() {
               <button
                 key={tab.key}
                 type="button"
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => { void requestLeave().then((canLeave) => { if (canLeave) setActiveTab(tab.key); }); }}
                 className={`relative inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
                   isActive
                     ? "bg-[#0D1282]/80 text-white shadow-sm shadow-[#0D1282]/25"
@@ -464,9 +465,6 @@ export default function BusinessAccountDetailsPage() {
       <div id={activeTab} className="mt-5">
         {activeTab === "overview" ? (
           <div className="grid gap-5 lg:grid-cols-2">
-            <div className="lg:col-span-2">
-              <RateCardAssignmentPanel account={account} onAssigned={setAccount} />
-            </div>
             <div className="lg:col-span-2">
               <GstBillingReviewPanel account={account} onUpdated={setAccount} />
             </div>
@@ -648,6 +646,12 @@ export default function BusinessAccountDetailsPage() {
               void handleKycCheckChange(key, status, note)
             }
           />
+        ) : null}
+
+        {activeTab === "rate-card" ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <RateCardWorkspace businessAccountId={account._id} cardName={companyName || account.accountId} />
+          </div>
         ) : null}
 
         {activeTab === "access" ? (

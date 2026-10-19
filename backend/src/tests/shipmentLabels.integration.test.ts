@@ -5,6 +5,7 @@ import { env } from "../config/env.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { CountryRateCard } from "../models/countryRateCard.model.js";
+import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
 import { SwiftlineStationCounter } from "../models/swiftlineStationCounter.model.js";
@@ -296,8 +297,8 @@ describe("Swiftline tracking sequence", () => {
         companyName: "Drifter Co",
         contactName: "Rohit Kapoor",
         email: "rohit@driftercono.example",
-        mobileCountryCode: "+91",
-        mobileNumber: "9876501234",
+        mobileCountryCode: "+44",
+        mobileNumber: "7123456788",
         countryCode: "GB",
         countryName: "United Kingdom",
         postcode: "SW1A 1AA",
@@ -309,8 +310,8 @@ describe("Swiftline tracking sequence", () => {
         companyName: "Drifter Co",
         contactName: "Rohit Kapoor",
         email: "rohit@driftercono.example",
-        mobileCountryCode: "+91",
-        mobileNumber: "9876501234",
+        mobileCountryCode: "+44",
+        mobileNumber: "7123456788",
         countryCode: "GB",
         countryName: "United Kingdom",
         postcode: "SW1A 1AA",
@@ -356,7 +357,7 @@ describe("Swiftline tracking sequence", () => {
     assert.ok(result.labels.some((label) => label.parcelNumber.startsWith("SLC")));
   });
 
-  test("books two parcels once and keeps charge, invoice and both labels aligned", async () => {
+  test("books two parcels from a private rate card and keeps route charges, invoice and labels aligned", async () => {
     const userId = new mongoose.Types.ObjectId();
     const branch = await Branch.create({
       name: "Shipment Booking Test Branch",
@@ -382,6 +383,8 @@ describe("Swiftline tracking sequence", () => {
       accountId: `BOOKING-TEST-${Date.now()}`,
       status: "active",
       rateCardBand: "BAND_A",
+      privateRateCardVersion: 1,
+      privateRateCardReady: true,
       contact: {
         title: "mr.", firstName: "Booking", lastName: "Owner",
         email: `booking-${Date.now()}@example.test`, mobileType: "mobile",
@@ -403,15 +406,31 @@ describe("Swiftline tracking sequence", () => {
       assignedBranch: branch._id,
       createdBy: userId
     });
-    await CountryRateCard.create({
-      band: "BAND_A",
+    const privateRate = await CountryRateCard.create({
+      businessAccountId: account._id,
       countryCode: "GB",
       countryName: "United Kingdom",
       service: "COURIER",
       fromKg: 0.01,
       toKg: 25,
-      chargesPerKg: 200,
+      chargesPerKg: 420,
       maxBoxKg: 25,
+      gstTreatment: "INCLUDED",
+      gstRatePercent: 18,
+      gstApplyToAllRates: true,
+      createdBy: userId
+    });
+    await CountryRouteCharge.create({
+      businessAccountId: account._id,
+      countryCode: "GB",
+      service: "COURIER",
+      fuelSurchargePercent: 0,
+      remoteAreaCharge: 75,
+      remoteAreaPostcodes: ["SW1A"],
+      handlingCharge: 100,
+      insurancePercent: 0,
+      insuranceMinimum: 0,
+      discountPercent: 0,
       createdBy: userId
     });
     const draft = await ShipmentDraft.create({
@@ -479,11 +498,25 @@ describe("Swiftline tracking sequence", () => {
       1,
       "all parcel records should open the same combined printable PDF"
     );
-    assert.equal(first.shipmentInvoice.taxableValueMinor, 305085);
-    assert.equal(first.shipmentInvoice.totalTaxAmountMinor, 54915);
-    assert.equal(first.shipmentInvoice.totalAmountMinor, 360000);
-    const invoicePricing = first.shipmentInvoice.pricingSnapshot as { parcels: unknown[] };
+    assert.equal(first.shipmentInvoice.taxableValueMinor, 655508);
+    assert.equal(first.shipmentInvoice.totalTaxAmountMinor, 117992);
+    assert.equal(first.shipmentInvoice.totalAmountMinor, 773500);
+    const invoicePricing = first.shipmentInvoice.pricingSnapshot as {
+      parcels: unknown[];
+      totalAmount: number;
+      remoteAreaApplied: boolean;
+      inclusiveAmounts?: { handlingAmount: number; remoteAreaAmount: number };
+      pricingBasis: { businessAccountId?: string; privateRateCardVersion?: number; rateCardBand?: string; rateCardIds: string[] };
+    };
     assert.equal(invoicePricing.parcels.length, 2);
+    assert.equal(invoicePricing.totalAmount, 7735);
+    assert.equal(invoicePricing.remoteAreaApplied, true);
+    assert.equal(invoicePricing.inclusiveAmounts?.handlingAmount, 100);
+    assert.equal(invoicePricing.inclusiveAmounts?.remoteAreaAmount, 75);
+    assert.equal(invoicePricing.pricingBasis.businessAccountId, String(account._id));
+    assert.equal(invoicePricing.pricingBasis.privateRateCardVersion, 1);
+    assert.equal(invoicePricing.pricingBasis.rateCardBand, undefined);
+    assert.deepEqual(invoicePricing.pricingBasis.rateCardIds, [String(privateRate._id)]);
 
     const snapshot = first.dpdShipment.bookingSnapshot as {
       parcels: Array<{ actualWeightKg: number; carrierParcelNumber: string; swiftlineParcelNumber: string }>;
@@ -496,10 +529,24 @@ describe("Swiftline tracking sequence", () => {
         missingRate: boolean;
         exceedsMaxBoxKg: boolean;
         gstRate: number;
+        remoteAreaApplied: boolean;
+        inclusiveAmounts?: { handlingAmount: number; remoteAreaAmount: number };
+        lines: Array<{ code: string }>;
+        pricingBasis: { businessAccountId?: string; privateRateCardVersion?: number; rateCardBand?: string; rateCardIds: string[] };
       };
     };
     assert.deepEqual(snapshot.parcels.map((parcel) => parcel.actualWeightKg), [7, 11]);
     assert.equal(snapshot.payment.totalAmountMinor, first.shipmentInvoice.totalAmountMinor);
+    assert.equal(snapshot.pricing.totalAmount, 7735);
+    assert.equal(snapshot.pricing.remoteAreaApplied, true);
+    assert.equal(snapshot.pricing.inclusiveAmounts?.handlingAmount, 100);
+    assert.equal(snapshot.pricing.inclusiveAmounts?.remoteAreaAmount, 75);
+    assert.ok(snapshot.pricing.lines.some((line) => line.code === "REMOTE_AREA"));
+    assert.ok(snapshot.pricing.lines.some((line) => line.code === "HANDLING"));
+    assert.equal(snapshot.pricing.pricingBasis.businessAccountId, String(account._id));
+    assert.equal(snapshot.pricing.pricingBasis.privateRateCardVersion, 1);
+    assert.equal(snapshot.pricing.pricingBasis.rateCardBand, undefined);
+    assert.deepEqual(snapshot.pricing.pricingBasis.rateCardIds, [String(privateRate._id)]);
     // One Swiftline label per parcel. No carrier label is produced, so
     // carrierParcelNumber stays blank on the snapshot and contributes nothing.
     assert.deepEqual(
@@ -557,9 +604,13 @@ describe("Swiftline tracking sequence", () => {
       skipDpdLabel: true
     });
     swiftlineOnly.labels.forEach((label) => generatedKeys.add(label.storageKey));
-    // No carrier is called, so the booking carries no carrier identifiers.
+    // No carrier is called, so the carrier shipment identifier stays blank. The
+    // shipment still retains its Swiftline parcel numbers for physical scanning.
     assert.equal(swiftlineOnly.dpdShipment.dpdShipmentId, "");
-    assert.deepEqual(swiftlineOnly.dpdShipment.parcelNumbers, []);
+    assert.deepEqual(
+      swiftlineOnly.dpdShipment.parcelNumbers,
+      swiftlineOnly.labels.map((label) => label.parcelNumber)
+    );
     assert.equal(swiftlineOnly.labels.length, 2);
     assert.ok(swiftlineOnly.labels.every((label) => label.labelType === "SWIFTLINE"));
     assert.equal(swiftlineOnly.shipmentInvoice.totalAmountMinor, first.shipmentInvoice.totalAmountMinor);

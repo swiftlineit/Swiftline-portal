@@ -69,7 +69,7 @@ describe("rate list import", () => {
       request({
         userId,
         body: {
-          band: "BAND_A",
+          band: "BAND_D",
           services: ["COURIER"],
           confirmReplace: false,
           fileName: "SWIFTLINE ERUOPE RATELIST.xlsx",
@@ -86,7 +86,7 @@ describe("rate list import", () => {
 
     assert.equal(recorder.statusCode(), 200);
     assert.equal(recorder.payload().slabsWritten, 120);
-    assert.equal(await CountryRateCard.countDocuments({ band: "BAND_A" }), 120);
+    assert.equal(await CountryRateCard.countDocuments({ band: "BAND_D" }), 120);
     // Serbia and Montenegro came from one cell but are two priceable lanes.
     assert.equal(await CountryRateCard.countDocuments({ countryCode: "ME" }), 30);
   });
@@ -97,7 +97,7 @@ describe("rate list import", () => {
       request({
         userId,
         body: {
-          band: "BAND_A",
+          band: "BAND_D",
           services: ["COURIER"],
           confirmReplace: false,
           routes: [{ countryCode: "BE", countryName: "Belgium", slabs: slabs(600) }]
@@ -120,7 +120,7 @@ describe("rate list import", () => {
       request({
         userId,
         body: {
-          band: "BAND_A",
+          band: "BAND_D",
           services: ["COURIER"],
           confirmReplace: true,
           routes: [{ countryCode: "BE", countryName: "Belgium", slabs: slabs(795) }]
@@ -142,7 +142,7 @@ describe("rate list import", () => {
       request({
         userId,
         body: {
-          band: "BAND_A",
+          band: "BAND_D",
           services: ["COURIER"],
           confirmReplace: true,
           routes: [{ countryCode: "BE", countryName: "Belgium", slabs: slabs(700) }]
@@ -158,22 +158,12 @@ describe("rate list import", () => {
   });
 
   test("leaves another band alone", async () => {
-    const recorder = responseRecorder();
-    await commitRateCardImport(
-      request({
-        userId,
-        body: {
-          band: "BAND_B",
-          services: ["COURIER"],
-          confirmReplace: false,
-          routes: [{ countryCode: "BE", countryName: "Belgium", slabs: slabs(900) }]
-        }
-      }),
-      recorder.response
-    );
+    await CountryRateCard.create({
+      band: "BAND_B", countryCode: "BE", countryName: "Belgium", service: "COURIER",
+      fromKg: 0, toKg: 1, chargesPerKg: 900, maxBoxKg: 30, createdBy: userId
+    });
 
-    assert.equal(recorder.statusCode(), 200);
-    const bandA = await CountryRateCard.findOne({ band: "BAND_A", countryCode: "BE", fromKg: 0 }).lean().exec();
+    const bandA = await CountryRateCard.findOne({ band: "BAND_D", countryCode: "BE", fromKg: 0 }).lean().exec();
     const bandB = await CountryRateCard.findOne({ band: "BAND_B", countryCode: "BE", fromKg: 0 }).lean().exec();
     assert.equal(bandA?.chargesPerKg, 700);
     assert.equal(bandB?.chargesPerKg, 900);
@@ -185,7 +175,7 @@ describe("rate list import", () => {
       request({
         userId,
         body: {
-          band: "BAND_C",
+          band: "BAND_D",
           services: ["COURIER", "CARGO"],
           confirmReplace: false,
           routes: [{ countryCode: "HR", countryName: "Croatia", slabs: slabs(1480) }]
@@ -195,8 +185,8 @@ describe("rate list import", () => {
     );
 
     assert.equal(recorder.statusCode(), 200);
-    assert.equal(await CountryRateCard.countDocuments({ band: "BAND_C", service: "COURIER" }), 30);
-    assert.equal(await CountryRateCard.countDocuments({ band: "BAND_C", service: "CARGO" }), 30);
+    assert.equal(await CountryRateCard.countDocuments({ band: "BAND_D", countryCode: "HR", service: "COURIER" }), 30);
+    assert.equal(await CountryRateCard.countDocuments({ band: "BAND_D", countryCode: "HR", service: "CARGO" }), 30);
   });
 
   test("rejects overlapping slabs rather than storing two prices for one weight", async () => {
@@ -205,7 +195,7 @@ describe("rate list import", () => {
       request({
         userId,
         body: {
-          band: "BAND_A",
+          band: "BAND_D",
           services: ["COURIER"],
           confirmReplace: true,
           routes: [{
@@ -231,7 +221,7 @@ describe("rate list import", () => {
       request({
         userId,
         body: {
-          band: "BAND_A",
+          band: "BAND_D",
           services: ["COURIER"],
           confirmReplace: true,
           routes: [
@@ -261,7 +251,7 @@ describe("rate list import", () => {
     const estimate = await calculateShipmentPricingEstimate({
       countryCode: "FR",
       serviceType: "COURIER",
-      rateCardBand: "BAND_A",
+      rateCardBand: "BAND_D",
       parcels: [{ sequence: 1, weightKg: 5 }]
     } as Parameters<typeof calculateShipmentPricingEstimate>[0]);
 
@@ -277,7 +267,7 @@ describe("rate list import", () => {
     const estimate = await calculateShipmentPricingEstimate({
       countryCode: "FR",
       serviceType: "COURIER",
-      rateCardBand: "BAND_A",
+      rateCardBand: "BAND_D",
       parcels: [{ sequence: 1, weightKg: 4.2 }]
     } as Parameters<typeof calculateShipmentPricingEstimate>[0]);
 

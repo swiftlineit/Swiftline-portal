@@ -11,6 +11,7 @@ import {
   type RouteCharges
 } from "./countryRouteCharge.service.js";
 import { getDeclaredGoodsValue } from "./parcelItems.service.js";
+import { accountRateCardScope, rateCardFilter, type RateCardScope } from "./rateCardScope.service.js";
 
 export const defaultShipmentGstRate = 0.18;
 /** Public online bookings always use the dedicated GST-inclusive card. */
@@ -208,9 +209,10 @@ export type ShipmentPricingEstimate = {
    * lock can tell that rates or surcharges moved underneath a customer.
    */
   pricingBasis: {
-    // Optional only for stored/test snapshots created before bands existed. Every
-    // newly calculated estimate always writes it.
+    // Legacy/global snapshots use a band; private cards use owner and version.
     rateCardBand?: RateCardBand;
+    businessAccountId?: string;
+    privateRateCardVersion?: number;
     rateCardIds: string[];
     routeChargesUpdatedAt: Date | null;
     taxTreatment?: ShipmentTaxTreatment;
@@ -429,7 +431,9 @@ export function buildPricingInputFromDraft(draft: PricingDraftSource): ShipmentP
 }
 
 type AccountPricingContext = {
-  rateCardBand: RateCardBand;
+  rateCardBand?: RateCardBand;
+  scope?: RateCardScope;
+  privateRateCardVersion?: number;
   noGstEligible: boolean;
   gstBillingVersion: number;
   gstBillingEffectiveFrom: Date | null;
@@ -451,7 +455,7 @@ async function resolveAccountPricingContext(input: Pick<ShipmentPricingInput, "b
 
   const accountId = String(input.businessAccountId);
   if (!mongoose.Types.ObjectId.isValid(accountId)) throw new RateCardAccountNotFoundError();
-  const query = BusinessAccount.findById(accountId).select("rateCardBand accountKind gstBilling").lean();
+  const query = BusinessAccount.findById(accountId).select("rateCardBand accountKind gstBilling privateRateCardVersion privateRateCardReady").lean();
   if (input.session) query.session(input.session);
   const account = await query.exec();
 
@@ -472,10 +476,14 @@ async function resolveAccountPricingContext(input: Pick<ShipmentPricingInput, "b
       "PUBLIC_RATE_CARD_NOT_FOR_INTERNAL_ACCOUNT"
     );
   }
-  if (!account.rateCardBand) throw new RateCardRequiredError();
-  if (explicitBand && explicitBand !== account.rateCardBand) throw new RateCardAssignmentMismatchError();
+  const privateCard = account.privateRateCardVersion != null;
+  if (privateCard ? !account.privateRateCardReady : !account.rateCardBand) throw new RateCardRequiredError();
+  if (explicitBand && (privateCard || explicitBand !== account.rateCardBand)) throw new RateCardAssignmentMismatchError();
+  const scope = accountRateCardScope({ ...account, _id: accountId });
   return {
-    rateCardBand: account.rateCardBand,
+    rateCardBand: scope.band ?? undefined,
+    scope,
+    ...(privateCard ? { privateRateCardVersion: account.privateRateCardVersion! } : {}),
     noGstEligible: account.gstBilling?.requestedTreatment === "NO_GST"
       && account.gstBilling?.status === "APPROVED"
       && Boolean(account.gstBilling?.effectiveFrom)
@@ -485,8 +493,13 @@ async function resolveAccountPricingContext(input: Pick<ShipmentPricingInput, "b
   };
 }
 
-export async function resolveRateCardBand(input: Pick<ShipmentPricingInput, "businessAccountId" | "rateCardBand" | "session">): Promise<RateCardBand> {
+export async function resolveRateCardBand(input: Pick<ShipmentPricingInput, "businessAccountId" | "rateCardBand" | "session">): Promise<RateCardBand | undefined> {
   return (await resolveAccountPricingContext(input)).rateCardBand;
+}
+
+export async function resolveShipmentRateCardScope(input: Pick<ShipmentPricingInput, "businessAccountId" | "rateCardBand" | "session">): Promise<RateCardScope> {
+  const context = await resolveAccountPricingContext(input);
+  return context.scope ?? { band: context.rateCardBand };
 }
 
 export async function calculateShipmentPricingEstimate(
@@ -495,6 +508,7 @@ export async function calculateShipmentPricingEstimate(
   const countryCode = input.countryCode.trim().toUpperCase();
   const accountContext = await resolveAccountPricingContext(input);
   const rateCardBand = accountContext.rateCardBand;
+  const scope = accountContext.scope ?? { band: rateCardBand };
   // `gstRate` is an internal frozen-pricing input used by amendments and quote
   // publication. Public draft endpoints never accept it.
   const { gstRate, taxTreatment, gstForced } = resolveShipmentTaxSelection({
@@ -504,7 +518,7 @@ export async function calculateShipmentPricingEstimate(
   });
   const csbType = normalizeCsbType(input.csbType);
   const rateQuery = CountryRateCard.find({
-    band: rateCardBand,
+    ...rateCardFilter(scope),
     countryCode,
     service: input.serviceType
   }).sort({ fromKg: 1 }).lean();
@@ -513,9 +527,24 @@ export async function calculateShipmentPricingEstimate(
 
   const routeCharges = input.routeCharges ?? (
     countryCode
-      ? await getRouteCharges({ countryCode, service: input.serviceType, band: rateCardBand, session: input.session })
+      ? await getRouteCharges({ countryCode, service: input.serviceType, ...scope, session: input.session })
       : emptyRouteCharges
   );
+
+  // Slabs and route charges must come from one private-card revision, even when
+  // this read is outside a booking transaction and an operator edits mid-quote.
+  if (scope.businessAccountId) {
+    const currentQuery = BusinessAccount.findById(scope.businessAccountId)
+      .select("privateRateCardVersion").lean();
+    if (input.session) currentQuery.session(input.session);
+    const current = await currentQuery.exec();
+    if (current?.privateRateCardVersion !== accountContext.privateRateCardVersion) {
+      throw new RateCardRequiredError(
+        "This rate card changed while calculating the price. Refresh and try again.",
+        409, "RATE_CARD_VERSION_CHANGED"
+      );
+    }
+  }
 
   const inclusiveParcels = input.parcels.map((parcel, index) => {
     const actualWeightKg = numeric(parcel.weightKg);
@@ -594,6 +623,7 @@ export async function calculateShipmentPricingEstimate(
     gstBillingVersion: accountContext.gstBillingVersion,
     pricingBasis: {
       rateCardBand,
+      ...(scope.businessAccountId ? { businessAccountId: String(scope.businessAccountId), privateRateCardVersion: accountContext.privateRateCardVersion } : {}),
       rateCardIds: [...new Set(parcels.map((parcel) => parcel.rateCardId).filter((id): id is string => Boolean(id)))],
       routeChargesUpdatedAt: routeCharges.updatedAt,
       taxTreatment,

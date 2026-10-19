@@ -338,7 +338,7 @@ async function getActiveClientMembership(userId: string, branchId?: string) {
   })
     .populate({
       path: "businessAccount",
-      select: "accountId status contact company kycReview assignedBranch rateCardBand",
+      select: "accountId status contact company kycReview assignedBranch rateCardBand privateRateCardVersion privateRateCardReady",
       populate: { path: "assignedBranch", select: "name code status address city state" }
     })
     .populate("assignedBranches", "name code status address city state")
@@ -354,6 +354,8 @@ async function getActiveClientMembership(userId: string, branchId?: string) {
     kycReview?: { overallStatus?: string };
     assignedBranch?: ClientBranchSnapshot | null;
     rateCardBand?: string | null;
+    privateRateCardVersion?: number;
+    privateRateCardReady?: boolean;
   };
 
   // Every operational client path funnels through here, so the business account
@@ -413,10 +415,10 @@ function getDashboardAccess(account: {
   };
 }
 
-function getBookingAccess(account: { rateCardBand?: string | null }) {
+function getBookingAccess(account: { rateCardBand?: string | null; privateRateCardVersion?: number; privateRateCardReady?: boolean }) {
   const message = "Shipment booking is paused until a rate card is assigned. Please contact Swiftline support.";
 
-  return account.rateCardBand
+  return (account.privateRateCardVersion != null ? account.privateRateCardReady : account.rateCardBand)
     ? { state: "READY" as const, code: null, message: null }
     : { state: "PAUSED" as const, code: "RATE_CARD_REQUIRED" as const, message };
 }
@@ -446,7 +448,7 @@ export async function getClientDashboard(request: Request, response: Response): 
     })
       .populate({
         path: "businessAccount",
-        select: "accountId status contact company kycReview assignedBranch rateCardBand submittedAt createdAt",
+        select: "accountId status contact company kycReview assignedBranch rateCardBand privateRateCardVersion privateRateCardReady submittedAt createdAt",
         populate: { path: "assignedBranch", select: "name code status address city state" }
       })
       .populate("assignedBranches", "name code status address city state")
@@ -483,6 +485,8 @@ export async function getClientDashboard(request: Request, response: Response): 
       kycReview?: { overallStatus?: string };
       assignedBranch?: { _id?: unknown; name?: string; code?: string; status?: string } | null;
       rateCardBand?: string | null;
+    privateRateCardVersion?: number;
+    privateRateCardReady?: boolean;
       submittedAt?: Date | null;
       createdAt?: Date;
     };
@@ -523,8 +527,8 @@ export async function getClientDashboard(request: Request, response: Response): 
             }
           : null,
         rateCard: {
-          title: "Your Swiftline Rate Card",
-          assigned: Boolean(account.rateCardBand)
+          title: account.company?.companyName ? `${account.company.companyName} Rate Card` : "Your Swiftline Rate Card",
+          assigned: Boolean(account.privateRateCardVersion != null ? account.privateRateCardReady : account.rateCardBand)
         }
       },
       dashboardAccess,

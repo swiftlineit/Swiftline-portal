@@ -62,7 +62,7 @@ describe("rate-card concurrency", () => {
     const first = responseRecorder();
     const second = responseRecorder();
     const base = {
-      band: "BAND_A",
+      band: "BAND_D",
       countryCode: "GB",
       countryName: "United Kingdom",
       service: "COURIER",
@@ -76,10 +76,10 @@ describe("rate-card concurrency", () => {
     ]);
 
     assert.deepEqual([first.statusCode(), second.statusCode()].sort(), [201, 409]);
-    assert.equal(await CountryRateCard.countDocuments({ band: "BAND_A", countryCode: "GB" }), 1);
+    assert.equal(await CountryRateCard.countDocuments({ band: "BAND_D", countryCode: "GB" }), 1);
   });
 
-  test("stale account assignments cannot overwrite a newer choice", async () => {
+  test("retired shared-card assignments cannot change an account", async () => {
     const userId = new mongoose.Types.ObjectId();
     await CountryRateCard.create([
       {
@@ -117,12 +117,12 @@ describe("rate-card concurrency", () => {
       }), second.response)
     ]);
 
-    assert.deepEqual([first.statusCode(), second.statusCode()].sort(), [200, 409]);
+    assert.deepEqual([first.statusCode(), second.statusCode()], [410, 410]);
     const account = await BusinessAccount.findOne({ accountId: "BA-RATE-RACE" }).lean().exec();
-    assert.ok(account?.rateCardBand === "BAND_B" || account?.rateCardBand === "BAND_C");
+    assert.equal(account?.rateCardBand, null);
     assert.equal(await AuditLog.countDocuments({
       action: "BUSINESS_ACCOUNT_RATE_CARD_ASSIGNED",
       entityId: account?._id
-    }), 1);
+    }), 0);
   });
 });

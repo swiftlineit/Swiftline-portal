@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
 import type { CountryRateService, RateCardBand } from "../models/countryRateCard.model.js";
+import { rateCardFilter } from "./rateCardScope.service.js";
 
 /**
  * Route charge configuration in the shape the pricing engine consumes.
@@ -76,11 +77,12 @@ export function isRemoteAreaPostcode(postcode: unknown, remoteAreaPostcodes: str
 export async function getRouteCharges(input: {
   countryCode: string;
   service: CountryRateService;
-  band: RateCardBand;
+  band?: RateCardBand | null;
+  businessAccountId?: string | mongoose.Types.ObjectId | null;
   session?: mongoose.ClientSession;
 }): Promise<RouteCharges> {
   const query = CountryRouteCharge.findOne({
-    band: input.band,
+    ...rateCardFilter(input),
     countryCode: input.countryCode.trim().toUpperCase(),
     service: input.service
   }).lean();

@@ -42,7 +42,7 @@ export type ShipmentQuoteRequestInput = {
 
 export type QuoteContext = {
   businessAccountId: mongoose.Types.ObjectId;
-  rateCardBand: import("../models/countryRateCard.model.js").RateCardBand;
+  rateCardBand?: import("../models/countryRateCard.model.js").RateCardBand;
   accountId: string;
   companyName: string;
   branchId: mongoose.Types.ObjectId;
@@ -100,10 +100,11 @@ function displayContextFrom(
 }
 
 function contextFrom(account: InstanceType<typeof BusinessAccount>, branch: InstanceType<typeof Branch>, role?: BusinessAccountMemberRole): QuoteContext {
-  if (!account.rateCardBand) throw new ShipmentQuoteError("A rate card must be assigned before requesting or estimating a quote.", 409);
+  const privateCard = account.privateRateCardVersion != null;
+  if (privateCard ? !account.privateRateCardReady : !account.rateCardBand) throw new ShipmentQuoteError("Configure the business account's rate card before requesting or estimating a quote.", 409);
   return {
     ...displayContextFrom(account, branch, role),
-    rateCardBand: account.rateCardBand
+    rateCardBand: privateCard ? undefined : account.rateCardBand ?? undefined
   };
 }
 

@@ -129,6 +129,15 @@ function hasConflicts(report: Awaited<ReturnType<typeof auditRateCardBands>>) {
 async function backfillRateCardBands() {
   await connectDatabase();
   try {
+    const [ownedRates, ownedCharges, ownedShares, privateAccounts] = await Promise.all([
+      CountryRateCard.exists({ businessAccountId: { $ne: null } }).exec(),
+      CountryRouteCharge.exists({ businessAccountId: { $ne: null } }).exec(),
+      RateCardShare.collection.findOne({ businessAccountId: { $ne: null } }),
+      BusinessAccount.exists({ privateRateCardVersion: { $exists: true, $ne: null } }).exec()
+    ]);
+    if (ownedRates || ownedCharges || ownedShares || privateAccounts) {
+      throw new Error("The shared-band backfill is retired after private rate cards exist. Use migratePrivateRateCards.ts instead.");
+    }
     const report = await auditRateCardBands();
     console.log("Rate-card band migration audit.", JSON.stringify(report, null, 2));
 

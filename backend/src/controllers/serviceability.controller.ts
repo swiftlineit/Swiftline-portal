@@ -4,6 +4,7 @@ import { z } from "zod";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { checkServiceability } from "../services/serviceability.service.js";
+import { accountRateCardScope } from "../services/rateCardScope.service.js";
 
 const querySchema = z.object({
   destinationCountryCode: z.string().trim().length(2),
@@ -37,8 +38,8 @@ export async function checkClientServiceability(request: Request, response: Resp
     return response.status(403).json({ success: false, message: "No active business account is available for your login." });
   }
 
-  const account = await BusinessAccount.findById(membership.businessAccount).select("rateCardBand").lean().exec();
-  if (!account?.rateCardBand) {
+  const account = await BusinessAccount.findById(membership.businessAccount).select("rateCardBand privateRateCardVersion privateRateCardReady").lean().exec();
+  if (!account || (account.privateRateCardVersion != null ? !account.privateRateCardReady : !account.rateCardBand)) {
     return response.status(409).json({
       success: false,
       message: "A rate card must be assigned to your account before serviceability can be checked."
@@ -47,6 +48,6 @@ export async function checkClientServiceability(request: Request, response: Resp
 
   return response.status(200).json({
     success: true,
-    result: await checkServiceability({ ...parsed.data, rateCardBand: account.rateCardBand })
+    result: await checkServiceability({ ...parsed.data, scope: accountRateCardScope(account) })
   });
 }

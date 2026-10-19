@@ -80,6 +80,12 @@ export function buildPricingHash(pricing: ShipmentPricingEstimate): string {
     insuranceApplied: pricing.insuranceApplied,
     remoteAreaApplied: pricing.remoteAreaApplied,
     rateCardBand: pricing.pricingBasis.rateCardBand ?? "BAND_A",
+    // Preserve the legacy/public fingerprint exactly; only private cards add
+    // ownership and revision, so existing paid public quotes remain valid.
+    ...(pricing.pricingBasis.businessAccountId ? {
+      businessAccountId: pricing.pricingBasis.businessAccountId,
+      privateRateCardVersion: pricing.pricingBasis.privateRateCardVersion
+    } : {}),
     rateCardIds: [...pricing.pricingBasis.rateCardIds].sort(),
     routeChargesUpdatedAt: pricing.pricingBasis.routeChargesUpdatedAt?.toISOString() ?? null,
     gstBillingEffectiveFrom: pricing.pricingBasis.gstBillingEffectiveFrom?.toISOString() ?? null

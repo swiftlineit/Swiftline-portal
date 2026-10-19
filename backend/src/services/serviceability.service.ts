@@ -11,6 +11,7 @@ import { CountryRateCard, type ICountryRateCard, type RateCardBand } from "../mo
 import { SwiftlineRoute, type ISwiftlineRoute } from "../models/swiftlineRoute.model.js";
 import { getRouteCharges, isRemoteAreaPostcode } from "./countryRouteCharge.service.js";
 import { defaultOriginCountryCode } from "./swiftlineRoute.service.js";
+import { rateCardFilter, type RateCardScope } from "./rateCardScope.service.js";
 
 export type ServiceabilityQuery = {
   destinationCountryCode: string;
@@ -18,7 +19,8 @@ export type ServiceabilityQuery = {
   /** Kilograms, to check against the heaviest band the rate card offers. */
   weightKg?: number;
   /** The account's commercial band, so weights match what they would be quoted. */
-  rateCardBand: RateCardBand;
+  rateCardBand?: RateCardBand;
+  scope?: RateCardScope;
 };
 
 export type ServiceabilityOption = {
@@ -62,6 +64,7 @@ export type ServiceabilityResult = {
 export async function checkServiceability(query: ServiceabilityQuery): Promise<ServiceabilityResult> {
   const destinationCountryCode = query.destinationCountryCode.trim().toUpperCase();
   const services: Array<"COURIER" | "CARGO"> = ["COURIER", "CARGO"];
+  const scope = query.scope ?? { band: query.rateCardBand };
 
   const [routes, rateCards, ...chargesByService] = await Promise.all([
     SwiftlineRoute.find({
@@ -70,14 +73,14 @@ export async function checkServiceability(query: ServiceabilityQuery): Promise<S
     }).lean<Array<ISwiftlineRoute>>().exec(),
     CountryRateCard.find({
       countryCode: destinationCountryCode,
-      band: query.rateCardBand
+      ...rateCardFilter(scope)
     }).lean<Array<ICountryRateCard>>().exec(),
     // Route charges are held per service and band, so the remote-area list is
     // asked for the same way rather than assumed to be one list per country.
     ...services.map((service) => getRouteCharges({
       countryCode: destinationCountryCode,
       service,
-      band: query.rateCardBand
+      ...scope
     }).catch(() => null))
   ]);
 

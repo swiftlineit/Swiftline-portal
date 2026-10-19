@@ -17,6 +17,7 @@ import {
   buildRateCardSnapshot,
   buildRateCardRouteChargeSnapshot,
   createShareToken,
+  endOfShareValidityDay,
   generateShareNumber,
   isShareOpen,
   markRateCardShareRead,
@@ -26,13 +27,17 @@ import {
   shareDocumentBasename,
   shareTokenMatches
 } from "../services/rateCardShare.service.js";
+import { managedRateCardScope, RateCardScopeError } from "../services/rateCardScope.service.js";
+import { allowedBranchIds } from "../middleware/branchAccess.middleware.js";
 import { createRateCardSharePdf } from "../services/rateCardSharePdf.service.js";
 import { buildRateCardShareWorkbook } from "../services/rateCardShareWorkbook.service.js";
 
 const MAX_LINK_DAYS = 180;
 
 const payloadSchema = z.object({
-  band: z.enum(rateCardBandValues),
+  band: z.enum(rateCardBandValues).optional(),
+  businessAccountId: z.string().refine((id) => mongoose.Types.ObjectId.isValid(id)).optional(),
+  expectedVersion: z.number().int().nonnegative().optional(),
   title: z.string().trim().min(3).max(120).default("International Rate Card"),
   channels: z.array(z.enum(rateCardShareChannelValues)).min(1, "Select at least one sharing channel."),
   selection: z.object({
@@ -166,6 +171,11 @@ export async function createRateCardShare(request: Request, response: Response):
   }
 
   const input = parsed.data;
+  const scope = await managedRateCardScope(request, input, true);
+  const owner = scope.businessAccountId ? await BusinessAccount.findById(scope.businessAccountId).select("privateRateCardVersion").lean().exec() : null;
+  if (owner && input.expectedVersion !== (owner.privateRateCardVersion ?? 0)) throw new RateCardScopeError("This card changed. Refresh it before sharing.", 409);
+  if (input.recipientAccountIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) return failure(response, 400, "Select valid recipient accounts.");
+  if (input.recipientAccountIds.some((id) => id !== String(scope.businessAccountId ?? ""))) return failure(response, 409, "A private rate card can only target its owning business account. Use explicit email or WhatsApp recipients for an external proposal.");
   const accountIds = input.recipientAccountIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
   const accounts = accountIds.length
     ? await BusinessAccount.find({ _id: { $in: accountIds } }).select("company.companyName rateCardBand").lean().exec()
@@ -178,27 +188,35 @@ export async function createRateCardShare(request: Request, response: Response):
     if (input.adjustmentMode !== "NONE" || input.adjustmentValue !== 0) {
       return failure(response, 400, "Portal rate cards cannot include an extra markup or discount. Use an external proposal instead.");
     }
-    const unassigned = accounts.some((account) => !account.rateCardBand);
-    const mismatched = accounts.some((account) => account.rateCardBand !== input.band);
+    const unassigned = !scope.businessAccountId || !accounts.length;
+    const mismatched = accounts.some((account) => String(account._id) !== String(scope.businessAccountId));
     if (unassigned || mismatched) {
-      return failure(response, 409, "Every portal recipient must be assigned to the selected rate card before it can be shared.");
+      return failure(response, 409, "Portal sharing is available only to the business account that owns this rate card.");
     }
   }
 
   try {
-    const rows = await buildRateCardSnapshot(input.band, input.selection, input.adjustmentMode, input.adjustmentValue);
-    const routeCharges = await buildRateCardRouteChargeSnapshot(input.band, rows);
+    const rows = await buildRateCardSnapshot(scope, input.selection, input.adjustmentMode, input.adjustmentValue);
+    const routeCharges = await buildRateCardRouteChargeSnapshot(scope, rows);
+    if (owner) {
+      const current = await BusinessAccount.findById(owner._id).select("privateRateCardVersion").lean().exec();
+      if (current?.privateRateCardVersion !== owner.privateRateCardVersion) {
+        throw new RateCardScopeError("This card changed while preparing the share. Refresh it before sharing.", 409);
+      }
+    }
     const { token, tokenHash } = createShareToken();
 
     // The link dies with the rates it quotes, capped so an open-ended validity
     // window cannot leave a public URL live forever.
     const maximumExpiry = new Date(Date.now() + MAX_LINK_DAYS * 24 * 60 * 60 * 1000);
-    const publicTokenExpiresAt = new Date(Math.min(input.terms.validUntil.getTime(), maximumExpiry.getTime()));
+    const validityEnd = endOfShareValidityDay(input.terms.validUntil);
+    const publicTokenExpiresAt = new Date(Math.min(validityEnd.getTime(), maximumExpiry.getTime()));
 
     const share = await RateCardShare.create({
       shareNumber: await generateShareNumber(),
-      band: input.band,
-      title: input.channels.includes("PORTAL") ? "Your Swiftline Rate Card" : input.title,
+      ...scope,
+      privateRateCardVersion: owner?.privateRateCardVersion ?? undefined,
+      title: input.title,
       currency: "INR",
       channels: [...new Set(input.channels)],
       rows,
@@ -235,9 +253,16 @@ export async function createRateCardShare(request: Request, response: Response):
   }
 }
 
+async function staffShareFilter(request: Request): Promise<Record<string, unknown>> {
+  const branches = allowedBranchIds(request);
+  if (branches === null) return {};
+  const accounts = await BusinessAccount.find({ assignedBranch: { $in: branches }, accountKind: { $ne: "INDIVIDUAL_SENTINEL" } }).select("_id").lean().exec();
+  return { $or: [{ businessAccountId: { $in: accounts.map((account) => account._id) } }, { businessAccountId: null }] };
+}
+
 export async function listRateCardShares(request: Request, response: Response): Promise<Response> {
   const limit = Math.min(Math.max(Number(request.query.limit) || 50, 1), 200);
-  const shares = await RateCardShare.find({}).sort({ createdAt: -1 }).limit(limit).exec();
+  const shares = await RateCardShare.find(await staffShareFilter(request)).sort({ createdAt: -1 }).limit(limit).exec();
 
   return response.status(200).json({
     success: true,
@@ -249,7 +274,7 @@ export async function getRateCardShare(request: Request, response: Response): Pr
   const shareId = getShareId(request);
   if (!shareId) return failure(response, 404, "Rate card share not found.");
 
-  const share = await RateCardShare.findById(shareId).exec();
+  const share = await RateCardShare.findOne({ _id: shareId, ...await staffShareFilter(request) }).exec();
   if (!share) return failure(response, 404, "Rate card share not found.");
 
   return response.status(200).json({
@@ -265,8 +290,8 @@ export async function revokeRateCardShare(request: Request, response: Response):
   const shareId = getShareId(request);
   if (!shareId) return failure(response, 404, "Rate card share not found.");
 
-  const share = await RateCardShare.findByIdAndUpdate(
-    shareId,
+  const share = await RateCardShare.findOneAndUpdate(
+    { _id: shareId, ...await staffShareFilter(request) },
     { $set: { status: "REVOKED", revokedAt: new Date(), revokedBy: userId } },
     { new: true, runValidators: true }
   ).exec();
@@ -284,7 +309,7 @@ export async function downloadRateCardSharePdf(request: Request, response: Respo
   const shareId = getShareId(request);
   if (!shareId) return failure(response, 404, "Rate card share not found.");
 
-  const share = await RateCardShare.findById(shareId).exec();
+  const share = await RateCardShare.findOne({ _id: shareId, ...await staffShareFilter(request) }).exec();
   if (!share) return failure(response, 404, "Rate card share not found.");
 
   return sendSharePdf(response, share);
@@ -294,7 +319,7 @@ export async function downloadRateCardShareWorkbook(request: Request, response: 
   const shareId = getShareId(request);
   if (!shareId) return failure(response, 404, "Rate card share not found.");
 
-  const share = await RateCardShare.findById(shareId).exec();
+  const share = await RateCardShare.findOne({ _id: shareId, ...await staffShareFilter(request) }).exec();
   if (!share) return failure(response, 404, "Rate card share not found.");
 
   return sendShareWorkbook(response, share);
@@ -328,14 +353,16 @@ function clientShareFilter(accountIds: mongoose.Types.ObjectId[]) {
 }
 
 async function getAccountBandMap(accountIds: mongoose.Types.ObjectId[]) {
-  const accounts = await BusinessAccount.find({ _id: { $in: accountIds } }).select("rateCardBand").lean().exec();
-  return new Map(accounts.map((account) => [String(account._id), account.rateCardBand ?? null]));
+  const accounts = await BusinessAccount.find({ _id: { $in: accountIds } }).select("rateCardBand privateRateCardVersion").lean().exec();
+  return new Map(accounts.map((account) => [String(account._id), { band: account.rateCardBand ?? null, version: account.privateRateCardVersion }]));
 }
 
-function isHistoricalForClient(share: IRateCardShare, accountBands: Map<string, string | null>) {
+function isHistoricalForClient(share: IRateCardShare, accountBands: Map<string, { band: string | null; version?: number | null }>) {
   const recipient = share.recipientAccounts.find((account) => accountBands.has(String(account.businessAccountId)));
   if (!recipient) return true;
-  return (share.band ?? "BAND_A") !== accountBands.get(String(recipient.businessAccountId));
+  const current = accountBands.get(String(recipient.businessAccountId));
+  if (share.businessAccountId) return String(share.businessAccountId) !== String(recipient.businessAccountId) || share.privateRateCardVersion !== current?.version;
+  return current?.version != null || (share.band ?? "BAND_A") !== current?.band;
 }
 
 /**

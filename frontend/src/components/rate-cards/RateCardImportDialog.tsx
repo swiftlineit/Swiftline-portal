@@ -20,10 +20,9 @@ import {
   formatCountryRateService,
   formatRateCardBand,
   previewRateCardImport,
-  rateCardBands,
   type CountryRateCard,
   type CountryRateService,
-  type RateCardBand,
+  type RateCardTarget,
   type RateCardImportPreview,
   type RateCardImportResult,
   type RateCardImportRoute
@@ -159,18 +158,21 @@ function buildSlabs(weights: number[], rates: (number | null)[], maxBoxKg: numbe
 }
 
 export default function RateCardImportDialog({
-  initialBand,
+  target,
+  cardName,
+  version,
   existingRates,
   onClose,
   onImported
 }: {
-  initialBand: RateCardBand;
+  target: RateCardTarget;
+  cardName: string;
+  version: number;
   /** Every rate already stored, so the review can say what will be replaced. */
   existingRates: CountryRateCard[];
   onClose: () => void;
   onImported: () => void;
 }) {
-  const [band, setBand] = useState<RateCardBand>(initialBand);
   const [services, setServices] = useState<CountryRateService[]>(["COURIER"]);
   const [maxBoxKg, setMaxBoxKg] = useState("");
   const [preview, setPreview] = useState<RateCardImportPreview | null>(null);
@@ -204,11 +206,11 @@ export default function RateCardImportDialog({
   const existingCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const rate of existingRates) {
-      if (rate.band !== band || !services.includes(rate.service)) continue;
+      if (!services.includes(rate.service)) continue;
       counts.set(rate.countryCode, (counts.get(rate.countryCode) ?? 0) + 1);
     }
     return counts;
-  }, [existingRates, band, services]);
+  }, [existingRates, services]);
 
   const unresolvedCount = rows.filter((row) => !row.countryCode).length;
   const duplicateCodes = useMemo(() => {
@@ -259,7 +261,8 @@ export default function RateCardImportDialog({
 
     try {
       const written = await commitRateCardImport({
-        band,
+        ...target,
+        expectedVersion: version,
         services,
         confirmReplace,
         fileName: preview.fileName,
@@ -288,7 +291,7 @@ export default function RateCardImportDialog({
   }
 
   return (
-    <Shell title="Import a rate list" onClose={onClose}>
+    <Shell title={`Import rates — ${cardName}`} onClose={onClose}>
       {error ? (
         <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
           {error}
@@ -297,8 +300,6 @@ export default function RateCardImportDialog({
 
       {!preview ? (
         <ChooseStep
-          band={band}
-          setBand={setBand}
           services={services}
           setServices={setServices}
           busy={busy}
@@ -307,20 +308,6 @@ export default function RateCardImportDialog({
       ) : (
         <div className="flex flex-col gap-5">
           <div className="grid gap-4 sm:grid-cols-3">
-            <Field label="Rate card">
-              <select
-                value={band}
-                onChange={(event) => {
-                  setBand(event.target.value as RateCardBand);
-                  setConfirmReplace(false);
-                }}
-                className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 outline-none focus:border-blue-900"
-              >
-                {rateCardBands.map((value) => (
-                  <option key={value} value={value}>{formatRateCardBand(value)}</option>
-                ))}
-              </select>
-            </Field>
 
             <Field label="Service">
               <div className="flex flex-wrap gap-2">
@@ -358,7 +345,7 @@ export default function RateCardImportDialog({
                 step="0.01"
                 value={maxBoxKg}
                 onChange={(event) => setMaxBoxKg(event.target.value)}
-                className="h-10 w-full rounded-xl border border-slate-300 px-3 text-sm font-semibold text-slate-900 outline-none focus:border-blue-900"
+                className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-900 outline-none focus:border-blue-900"
               />
               <p className="mt-1 text-[11px] leading-4 text-slate-500">
                 {heaviestWeight
@@ -412,7 +399,7 @@ export default function RateCardImportDialog({
                   {" "}{replacements.length === 1 ? "its" : "their"} current rates replaced.
                 </span>
                 <span className="mt-0.5 block text-xs leading-5">
-                  Their existing weight slabs on {formatRateCardBand(band)} are deleted and rewritten from this file.
+                  Their existing weight slabs on {cardName} are deleted and rewritten from this file.
                   Destinations not in the file are left alone.
                 </span>
               </span>
@@ -456,15 +443,11 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function ChooseStep({
-  band,
-  setBand,
   services,
   setServices,
   busy,
   onFile
 }: {
-  band: RateCardBand;
-  setBand: (band: RateCardBand) => void;
   services: CountryRateService[];
   setServices: (services: CountryRateService[]) => void;
   busy: boolean;
@@ -480,17 +463,6 @@ function ChooseStep({
       </p>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Rate card">
-          <select
-            value={band}
-            onChange={(event) => setBand(event.target.value as RateCardBand)}
-            className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 outline-none focus:border-blue-900"
-          >
-            {rateCardBands.map((value) => (
-              <option key={value} value={value}>{formatRateCardBand(value)}</option>
-            ))}
-          </select>
-        </Field>
 
         <Field label="Service">
           <div className="flex flex-wrap gap-2">
@@ -615,7 +587,7 @@ function ReviewTable({
                         onChange={(value) => onCorrect(row.id, value)}
                         placeholder="Pick a country"
                         invalid={needsAttention}
-                        inputClassName="h-9 rounded-xl"
+                        inputClassName="h-9 rounded-lg"
                       />
                       {row.confidence === "fuzzy" ? (
                         <p className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-amber-700">
@@ -662,7 +634,7 @@ function ImportResult({ result, onClose }: { result: RateCardImportResult; onClo
         <FiCheckCircle aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0" />
         <div>
           <p className="font-semibold">
-            {countries.size} destination{countries.size === 1 ? "" : "s"} written to {formatRateCardBand(result.band)}.
+            {countries.size} destination{countries.size === 1 ? "" : "s"} written to {(result.businessAccountId ? "this business account" : formatRateCardBand(result.band ?? "BAND_D"))}.
           </p>
           <p className="mt-1 text-sm">
             {result.slabsWritten} weight slab{result.slabsWritten === 1 ? "" : "s"} added

@@ -186,6 +186,9 @@ export interface IBusinessAccount extends mongoose.Document {
   ledgerViewedAt?: Date | null;
   assignedBranch?: mongoose.Types.ObjectId | null;
   rateCardBand?: RateCardBand | null;
+  /** Null/missing with a band means a legacy account awaiting the audited copy. */
+  privateRateCardVersion?: number | null;
+  privateRateCardReady?: boolean;
   origin?: "STAFF" | "PUBLIC";
   createdBy: mongoose.Types.ObjectId | null;
   updatedBy?: mongoose.Types.ObjectId;
@@ -433,6 +436,8 @@ const businessAccountSchema = new mongoose.Schema<IBusinessAccount>(
     // their commercial rate card. The individual-shipment sentinel always uses
     // the dedicated Band D individual tariff.
     rateCardBand: { type: String, enum: [...rateCardBandValues, null], default: null, index: true },
+    privateRateCardVersion: { type: Number, min: 0 },
+    privateRateCardReady: { type: Boolean },
     // Public self-serve accounts have no internal creator; admin creates with a user.
     origin: { type: String, enum: ["STAFF", "PUBLIC"], default: "STAFF", index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: false, default: null, index: true },
@@ -491,6 +496,10 @@ businessAccountSchema.index(
 businessAccountSchema.pre("validate", function normalizeLegacyWorkflowStatus() {
   const account = this as IBusinessAccount & { status: BusinessAccountStatus | string };
   const status = String(account.status);
+  if (account.isNew && account.accountKind !== "INDIVIDUAL_SENTINEL" && !account.rateCardBand) {
+    account.privateRateCardVersion ??= 0;
+    account.privateRateCardReady ??= false;
+  }
 
   if (account.accountKind === "INDIVIDUAL_SENTINEL") {
     account.rateCardBand = "BAND_D";

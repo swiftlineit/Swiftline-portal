@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { RateCardMutationLock } from "../models/rateCardMutationLock.model.js";
 import type { CountryRateService, RateCardBand } from "../models/countryRateCard.model.js";
 
-const LOCK_LEASE_MS = 30_000;
+const LOCK_LEASE_MS = 120_000;
 
 export class RateCardRouteBusyError extends Error {
   readonly code = "RATE_CARD_ROUTE_BUSY";
@@ -15,11 +15,13 @@ export class RateCardRouteBusyError extends Error {
 }
 
 export async function acquireRateCardRouteLock(input: {
-  band: RateCardBand;
+  band?: RateCardBand | null;
+  businessAccountId?: unknown;
   countryCode: string;
   service: CountryRateService;
 }) {
-  const key = [input.band, input.countryCode, input.service].join(":");
+  // Country-wide GST edits span Courier and Cargo, so both services share a lock.
+  const key = [input.businessAccountId ? `ACCOUNT:${String(input.businessAccountId)}` : input.band, input.countryCode].join(":");
   const owner = randomUUID();
   const now = new Date();
 

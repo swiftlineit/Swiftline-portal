@@ -26,7 +26,7 @@ export default function RateCardCountryPicker({
   placeholder = "Search a country",
   disabled = false,
   invalid = false,
-  inputClassName = "h-10 rounded-2xl"
+  inputClassName = "h-10 rounded-lg"
 }: {
   label?: string;
   /** The visible text. The ISO code is derived from it by the parent. */
@@ -132,6 +132,7 @@ export default function RateCardCountryPicker({
             setHighlighted(0);
           }}
           onFocus={() => setOpen(true)}
+          onBlur={() => setOpen(false)}
           onKeyDown={handleKeyDown}
           className={`w-full border bg-white text-sm font-semibold text-slate-900 outline-none disabled:bg-slate-50 ${inputClassName} ${
             invalid ? "border-red-400 focus:border-red-500" : "border-slate-300 focus:border-blue-900"

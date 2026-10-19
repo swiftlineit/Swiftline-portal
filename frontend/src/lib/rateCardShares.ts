@@ -70,7 +70,9 @@ export type RateCardShare = {
 };
 
 export type RateCardShareInput = {
-  band: RateCardBand;
+  band?: RateCardBand;
+  businessAccountId?: string;
+  expectedVersion?: number;
   title: string;
   channels: RateCardShareChannel[];
   selection: {

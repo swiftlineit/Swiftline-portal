@@ -3,13 +3,14 @@ import mongoose from "mongoose";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { CountryRateCard, type InternalRateCardBand } from "../models/countryRateCard.model.js";
 import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
+import { accountRateCardScope, rateCardFilter } from "../services/rateCardScope.service.js";
 
 function userId(request: Request) {
   const id = (request as Request & { user?: { _id?: unknown } }).user?._id;
   return id && mongoose.Types.ObjectId.isValid(String(id)) ? new mongoose.Types.ObjectId(String(id)) : null;
 }
 
-/** Returns only the signed-in client's assigned commercial card. */
+/** Returns only the signed-in client's privately owned commercial card. */
 export async function listClientCountryRateCards(request: Request, response: Response): Promise<Response> {
   const actor = userId(request);
   if (!actor) return response.status(401).json({ success: false, message: "Unauthorized" });
@@ -23,16 +24,16 @@ export async function listClientCountryRateCards(request: Request, response: Res
     user: actor,
     status: "active",
     ...(requestedAccount ? { businessAccount: requestedAccount } : {})
-  }).populate("businessAccount", "rateCardBand").exec();
+  }).populate("businessAccount", "rateCardBand privateRateCardVersion privateRateCardReady company.companyName").exec();
 
-  const account = membership?.businessAccount as unknown as { rateCardBand?: InternalRateCardBand | null } | undefined;
+  const account = membership?.businessAccount as unknown as { _id: unknown; company?: { companyName?: string }; rateCardBand?: InternalRateCardBand | null; privateRateCardVersion?: number; privateRateCardReady?: boolean } | undefined;
   if (!membership) {
     return response.status(404).json({ success: false, message: "Business account access is not available." });
   }
-  if (!account?.rateCardBand) {
+  if (!account || (account.privateRateCardVersion != null ? !account.privateRateCardReady : !account.rateCardBand)) {
     return response.status(200).json({
       success: true,
-      title: "Your Swiftline Rate Card",
+      title: account?.company?.companyName ? `${account.company.companyName} Rate Card` : "Your Swiftline Rate Card",
       rateCardAssigned: false,
       rates: [],
       routeCharges: []
@@ -40,19 +41,19 @@ export async function listClientCountryRateCards(request: Request, response: Res
   }
 
   const [rates, routeCharges] = await Promise.all([
-    CountryRateCard.find({ band: account.rateCardBand })
-      .select("-band -createdBy -updatedBy")
+    CountryRateCard.find(rateCardFilter(accountRateCardScope(account)))
+      .select("-band -businessAccountId -createdBy -updatedBy")
       .sort({ countryName: 1, service: 1, fromKg: 1 })
       .lean().exec(),
-    CountryRouteCharge.find({ band: account.rateCardBand })
-      .select("-band -createdBy -updatedBy")
+    CountryRouteCharge.find(rateCardFilter(accountRateCardScope(account)))
+      .select("-band -businessAccountId -createdBy -updatedBy")
       .sort({ countryCode: 1, service: 1 })
       .lean().exec()
   ]);
 
   return response.status(200).json({
     success: true,
-    title: "Your Swiftline Rate Card",
+    title: account.company?.companyName ? `${account.company.companyName} Rate Card` : "Your Swiftline Rate Card",
     rateCardAssigned: true,
     rates,
     routeCharges

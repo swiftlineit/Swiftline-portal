@@ -21,11 +21,6 @@ import { Branch } from "../models/branch.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { AuditLog } from "../models/auditLog.model.js";
-import {
-  CountryRateCard,
-  internalRateCardBandValues,
-  rateCardBandValues,
-} from "../models/countryRateCard.model.js";
 import { businessAccountBranchFilter } from "../middleware/businessAccountBranchAccess.middleware.js";
 import { excludeSentinel } from "../services/individualCustomer.service.js";
 import { isSupportedDocument } from "../services/storage/fileSignature.js";
@@ -125,15 +120,6 @@ const businessKycCheckKeySchema = z.enum([
 const businessKycCheckStatusSchema = z.enum(businessKycCheckStatuses);
 const assignBranchBodySchema = z.object({
   branchId: z.string().trim().refine((value) => mongoose.Types.ObjectId.isValid(value), "Invalid branch ID")
-});
-const assignRateCardBodySchema = z.object({
-  // Band D is reserved for public online bookings and must never be assigned
-  // to an internal business account.
-  rateCardBand: z.enum(internalRateCardBandValues).nullable(),
-  // Accept a historical Band D value for optimistic-concurrency checks so a
-  // manually migrated account can still be cleared safely.
-  expectedRateCardBand: z.enum(rateCardBandValues).nullable(),
-  reason: z.string().trim().min(3, "Enter a reason for this rate-card change.").max(500)
 });
 const nullableCreditLimitSchema = z.preprocess(
   (value) => typeof value === "string" && value.trim() === "" ? null : value,
@@ -1745,104 +1731,10 @@ export async function assignBusinessAccountBranch(request: Request, response: Re
   });
 }
 
-export async function assignBusinessAccountRateCard(request: Request, response: Response): Promise<Response> {
-  const userId = getAuthenticatedUserId(request);
-  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
-
-  const parsed = assignRateCardBodySchema.safeParse(request.body);
-  if (!parsed.success) {
-    return response.status(400).json({
-      success: false,
-      message: parsed.error.issues[0]?.message ?? "Select a valid rate card."
-    });
-  }
-
-  const account = await BusinessAccount.findOne({
-    accountId: request.params.accountId,
-    accountKind: { $ne: "INDIVIDUAL_SENTINEL" }
-  }).exec();
-  if (!account) return response.status(404).json({ success: false, message: "Business account not found" });
-
-  const nextBand = parsed.data.rateCardBand;
-  if (nextBand) {
-    const hasRates = await CountryRateCard.exists({ band: nextBand }).exec();
-    if (!hasRates) {
-      return response.status(409).json({
-        success: false,
-        code: "RATE_CARD_EMPTY",
-        message: "Add at least one valid rate to this card before assigning it."
-      });
-    }
-  }
-
-  const previousBand = account.rateCardBand ?? null;
-  if (previousBand !== parsed.data.expectedRateCardBand) {
-    return response.status(409).json({
-      success: false,
-      code: "RATE_CARD_ASSIGNMENT_CHANGED",
-      message: "This account's rate card changed while you were editing. Refresh and try again."
-    });
-  }
-
-  const updated = await BusinessAccount.findOneAndUpdate(
-    {
-      _id: account._id,
-      rateCardBand: parsed.data.expectedRateCardBand
-    },
-    {
-      $set: {
-        rateCardBand: nextBand,
-        updatedBy: userId
-      }
-    },
-    { returnDocument: "after", runValidators: true }
-  ).exec();
-  if (!updated) {
-    return response.status(409).json({
-      success: false,
-      code: "RATE_CARD_ASSIGNMENT_CHANGED",
-      message: "This account's rate card changed while you were editing. Refresh and try again."
-    });
-  }
-
-  await AuditLog.create({
-    action: "BUSINESS_ACCOUNT_RATE_CARD_ASSIGNED",
-    entityType: "BUSINESS_ACCOUNT",
-    entityId: updated._id,
-    performedBy: userId,
-    performedAt: new Date(),
-    metadata: {
-      previousRateCardBand: previousBand,
-      rateCardBand: nextBand,
-      reason: parsed.data.reason
-    }
-  });
-
-  const updatedAccount = await getPopulatedBusinessAccount(updated.accountId);
-  const configuredRoutes = await CountryRateCard.find({})
-    .select("band countryCode service")
-    .lean()
-    .exec();
-  const allRoutes = new Set(configuredRoutes.map((rate) => `${rate.countryCode}:${rate.service}`));
-  const selectedRoutes = new Set(
-    configuredRoutes
-      .filter((rate) => rate.band === nextBand)
-      .map((rate) => `${rate.countryCode}:${rate.service}`)
-  );
-  const missingRouteCount = nextBand
-    ? [...allRoutes].filter((route) => !selectedRoutes.has(route)).length
-    : 0;
-  const coverageWarning = missingRouteCount
-    ? `This card has no configured slabs for ${missingRouteCount} route(s) available in other bands. Those routes will remain blocked.`
-    : null;
-
-  return response.status(200).json({
-    success: true,
-    message: nextBand
-      ? "Rate card assigned successfully. New and ongoing pricing will use it."
-      : "Rate card removed. New estimates, quotes and bookings are now paused.",
-    coverageWarning,
-    account: updatedAccount
+export async function assignBusinessAccountRateCard(_request: Request, response: Response): Promise<Response> {
+  return response.status(410).json({
+    success: false, code: "SHARED_RATE_CARD_ASSIGNMENTS_REMOVED",
+    message: "Business accounts now own their rate cards. Open the account's Rate Card tab to maintain rates and route charges."
   });
 }
 

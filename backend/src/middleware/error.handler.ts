@@ -4,6 +4,7 @@ import type {
   Request,
   Response
 } from "express";
+import { RateCardScopeError } from "../services/rateCardScope.service.js";
 
 export const notFoundHandler = (
   request: Request,
@@ -21,6 +22,10 @@ export const errorHandler: ErrorRequestHandler = (
   response: Response,
   _next: NextFunction
 ): void => {
+  if (error instanceof RateCardScopeError) {
+    response.status(error.statusCode).json({ success: false, code: error.code, message: error.message });
+    return;
+  }
   console.error(error);
 
   response.status(500).json({

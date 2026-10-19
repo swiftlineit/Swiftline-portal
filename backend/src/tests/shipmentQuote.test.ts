@@ -134,7 +134,7 @@ describe("shipment quote policy", () => {
       } as unknown as InstanceType<typeof ShipmentQuote>;
       const display = await loadQuoteDisplayContext(quote);
       assert.equal(display?.companyName, "Acme Exports");
-      await assert.rejects(loadQuoteContext(quote), /rate card must be assigned/i);
+      await assert.rejects(loadQuoteContext(quote), /configure.*rate card/i);
     } finally {
       BusinessAccount.findById = originalAccountFind;
       Branch.findById = originalBranchFind;

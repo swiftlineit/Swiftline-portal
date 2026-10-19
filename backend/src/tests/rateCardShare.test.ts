@@ -8,6 +8,7 @@ import { getEmailTemplate, hasEmailTemplate } from "../services/email/templates/
 import {
   applyAdjustment,
   createShareToken,
+  endOfShareValidityDay,
   groupShareRows,
   hashShareToken,
   isShareOpen,
@@ -160,6 +161,11 @@ test("a share is open only while it is active and unexpired", () => {
   assert.ok(isShareOpen(makeShare(), now));
   assert.ok(!isShareOpen(makeShare({ status: "REVOKED" }), now));
   assert.ok(!isShareOpen(makeShare({ publicTokenExpiresAt: new Date("2026-08-15T00:00:00.000Z") }), now));
+});
+
+test("the selected valid-until date stays available through the end of that day in India", () => {
+  const end = endOfShareValidityDay(new Date("2026-10-30T00:00:00.000Z"));
+  assert.equal(end.toISOString(), "2026-10-30T18:29:59.999Z");
 });
 
 test("a share with a single addressee is named on the sheet", () => {
@@ -348,6 +354,15 @@ test("an adjusted WhatsApp share is clearly labelled as an external proposal", (
   // The teaser quotes the customer's rate, not the base rate.
   assert.match(message, /330\.00/);
   assert.doesNotMatch(message, /300\.00/);
+});
+
+test("the WhatsApp message carries the optional rate-card terms", () => {
+  const base = makeShare();
+  const share = makeShare({ terms: { ...base.terms, remarks: "Pickup from Delhi NCR is included." } });
+  const links = buildShareLinks(APP_URL, String(share._id), "abc123");
+  const message = buildWhatsAppMessage({ share, links, recipientName: "Priya Raman", senderName: "Aman Negi" });
+
+  assert.match(message, /Terms: Pickup from Delhi NCR is included\./);
 });
 
 test("a WhatsApp link strips formatting from the number and encodes the body", () => {

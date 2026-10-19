@@ -1,11 +1,12 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useId, useState, type ReactNode } from "react";
 import { FiSave } from "react-icons/fi";
+import { confirmLeave, useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import { toast } from "react-toastify";
 import {
   CountryRouteCharge,
-  RateCardBand,
+  RateCardTarget,
   CountryRateService,
   countryRateServices,
   formatCountryRateService,
@@ -62,21 +63,31 @@ function toFormState(routeCharge: CountryRouteCharge | undefined): FormState {
 export default function RouteChargesForm({
   countryCode,
   countryName,
-  band,
+  target,
+  countryPicker,
+  disabled = false,
+  initialService = "COURIER",
   onSaved
 }: {
   countryCode: string;
   countryName: string;
-  band: RateCardBand;
+  target: RateCardTarget;
+  countryPicker: ReactNode;
+  disabled?: boolean;
+  initialService?: CountryRateService;
   onSaved?: () => void;
 }) {
+  const formId = useId();
   const [form, setForm] = useState<FormState>(emptyForm);
-  const [selectedServices, setSelectedServices] = useState<CountryRateService[]>(["COURIER"]);
+  const [selectedServices, setSelectedServices] = useState<CountryRateService[]>([initialService]);
   const [routeCharges, setRouteCharges] = useState<Partial<Record<CountryRateService, CountryRouteCharge>>>({});
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
+  const [version, setVersion] = useState(0);
+  const [baseline, setBaseline] = useState<FormState>(emptyForm);
+  useUnsavedChanges(JSON.stringify(form) !== JSON.stringify(baseline), { label: "route charges" });
 
   // Reloads whenever the selection above changes, so the fields always describe
   // the route named in the heading, and again after a save so what is shown is
@@ -95,7 +106,7 @@ export default function RouteChargesForm({
       setError("");
 
       try {
-        const result = await listCountryRouteCharges(band);
+        const result = await listCountryRouteCharges(target);
         if (!active) return;
         const nextCharges: Partial<Record<CountryRateService, CountryRouteCharge>> = {};
         for (const service of countryRateServices) {
@@ -104,8 +115,11 @@ export default function RouteChargesForm({
           );
           if (routeCharge) nextCharges[service] = routeCharge;
         }
+        setVersion(result.version ?? 0);
         setRouteCharges(nextCharges);
-        setForm(toFormState(nextCharges[selectedServices[0]]));
+        const nextForm = toFormState(nextCharges[selectedServices[0]]);
+        setForm(nextForm);
+        setBaseline(nextForm);
       } catch (caughtError) {
         if (!active) return;
         setError(caughtError instanceof Error ? caughtError.message : "Unable to load route charges.");
@@ -119,7 +133,7 @@ export default function RouteChargesForm({
     return () => {
       active = false;
     };
-  }, [band, countryCode, reloadKey, selectedServices]);
+  }, [target, countryCode, reloadKey, selectedServices]);
 
   function handleInput(field: keyof FormState) {
     return (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -128,6 +142,7 @@ export default function RouteChargesForm({
   }
 
   function toggleService(service: CountryRateService) {
+    if (!confirmLeave(JSON.stringify(form) !== JSON.stringify(baseline))) return;
     setSelectedServices((current) => {
       if (current.includes(service)) {
         const next = current.length === 1 ? current : current.filter((item) => item !== service);
@@ -151,10 +166,12 @@ export default function RouteChargesForm({
 
     try {
       // Blank fields mean "do not charge this", which is zero to the pricing engine.
-      await Promise.all(selectedServices.map((service) => saveCountryRouteCharge({
-          band,
+      const result = await saveCountryRouteCharge({
+          ...target,
+          expectedVersion: version,
           countryCode,
-          service,
+          service: selectedServices[0],
+          services: selectedServices,
           fuelSurchargePercent: Number(form.fuelSurchargePercent) || 0,
           remoteAreaCharge: Number(form.remoteAreaCharge) || 0,
           remoteAreaPostcodes: form.remoteAreaPostcodes,
@@ -162,7 +179,9 @@ export default function RouteChargesForm({
           insurancePercent: Number(form.insurancePercent) || 0,
           insuranceMinimum: Number(form.insuranceMinimum) || 0,
           discountPercent: Number(form.discountPercent) || 0
-        })));
+        });
+      setVersion(result.version);
+      setBaseline(form);
       toast.success(`Route charges saved for ${countryName} (${selectedServices.map(formatCountryRateService).join(" and ")}).`);
       setReloadKey((current) => current + 1);
       onSaved?.();
@@ -173,118 +192,112 @@ export default function RouteChargesForm({
     }
   }
 
-  // These charges belong to a route, so without a country there is no route to
-  // describe. Shown as a prompt rather than as a form full of disabled inputs.
-  if (!countryCode) {
-    return (
-      <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4">
-        <h2 className="text-sm font-semibold uppercase text-slate-500">Route Charges</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Select a country above to set its fuel surcharge, remote area and handling charges.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <form onSubmit={handleSubmit} className="mb-6 rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold uppercase text-slate-500">Route Charges</h2>
-          <p className="mt-1 text-sm text-slate-600">
-            Applied to every weight slab for{" "}
-            <span className="font-semibold text-slate-900">
-              {countryName}
-            </span>
-            . Select one or both services, then leave a field blank to charge nothing.
+    <section aria-label="Route charges" className="mb-6 rounded-xl border border-slate-200 bg-white">
+      <div className="grid gap-4 border-b border-slate-100 p-4 sm:p-5 lg:grid-cols-[minmax(16rem,24rem)_minmax(0,1fr)_auto] lg:items-end">
+        <div className="min-w-0">{countryPicker}</div>
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-slate-900">{countryCode ? `Route charges for ${countryName}` : "Configure route charges"}</h2>
+          <p className="mt-1 text-sm leading-5 text-slate-600">
+            {countryCode ? "These settings apply to every weight slab for this destination." : "Choose a destination to configure its Courier and Cargo charges."}
           </p>
         </div>
-        <button
-          type="submit"
-          disabled={busy || loading}
-          className="inline-flex h-10 items-center gap-2 rounded-4xl bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-        >
-          <FiSave aria-hidden="true" className="h-4 w-4" />
-          {busy ? "Saving..." : "Save Route Charges"}
-        </button>
+        {countryCode ? (
+          <button
+            type="submit"
+            form={formId}
+            disabled={disabled || busy || loading}
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0a0e66] disabled:cursor-not-allowed disabled:bg-slate-400 sm:w-auto"
+          >
+            <FiSave aria-hidden="true" className="h-4 w-4" />
+            {busy ? "Saving…" : "Save Route Charges"}
+          </button>
+        ) : null}
       </div>
 
-      {error ? (
-        <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-          {error}
+      {countryCode ? (
+        <form id={formId} onSubmit={handleSubmit} className="p-4 sm:p-5">
+          {error ? (
+            <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+              {error}
+            </p>
+          ) : null}
+
+          <fieldset disabled={disabled || loading} className="min-w-0">
+            <legend className="sr-only">Route charges for {countryName}</legend>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-slate-100 pb-4">
+              <span className="text-sm font-semibold text-slate-800">Apply to services</span>
+              {countryRateServices.map((serviceOption) => (
+                <label key={serviceOption} className="inline-flex min-h-8 cursor-pointer items-center gap-2 text-sm font-medium text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={selectedServices.includes(serviceOption)}
+                    onChange={() => toggleService(serviceOption)}
+                    className="h-4 w-4 accent-blue-900"
+                  />
+                  {formatCountryRateService(serviceOption)}
+                </label>
+              ))}
+              <span className="text-xs text-slate-600">The same values will be saved for each selected service.</span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2 xl:grid-cols-4">
+              <ChargeInput
+                label="Fuel Surcharge %"
+                hint="Percentage of base freight"
+                value={form.fuelSurchargePercent}
+                onChange={handleInput("fuelSurchargePercent")}
+                max={100}
+              />
+              <ChargeInput
+                label="Remote Area Charge"
+                hint="Flat, on matching postcodes"
+                value={form.remoteAreaCharge}
+                onChange={handleInput("remoteAreaCharge")}
+              />
+              <ChargeInput
+                label="Handling Charge"
+                hint="Flat, once per shipment"
+                value={form.handlingCharge}
+                onChange={handleInput("handlingCharge")}
+              />
+              {/*
+                Insurance is switched off portal-wide while the product is unfinished.
+                Keep its stored values unchanged so the route configuration survives.
+              */}
+              <ChargeInput
+                label="Discount %"
+                hint="Off all GST-inclusive charges"
+                value={form.discountPercent}
+                onChange={handleInput("discountPercent")}
+                max={100}
+              />
+            </div>
+
+            <label className="mt-5 block border-t border-slate-100 pt-4">
+              <span className="text-sm font-semibold text-slate-800">Remote Area Postcodes</span>
+              <span className="mt-1 block max-w-4xl text-xs leading-5 text-slate-600">
+                Enter prefixes separated by commas or new lines. A destination is remote when its postcode starts with one, so &quot;HS&quot; covers a region and &quot;HS12AB&quot; a single delivery point.
+              </span>
+              <textarea
+                value={form.remoteAreaPostcodes}
+                onChange={handleInput("remoteAreaPostcodes")}
+                rows={2}
+                placeholder="HS, IV41, ZE"
+                className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium uppercase text-slate-900 outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-900/15"
+              />
+            </label>
+            <p className="mt-4 text-xs leading-5 text-slate-600">
+              Charges and discounts apply only to this rate card, destination, and selected services.
+            </p>
+          </fieldset>
+        </form>
+      ) : (
+        <p className="px-4 py-5 text-sm text-slate-600 sm:px-5">
+          Select a country above to configure its fuel surcharge, remote area, and handling charges.
         </p>
-      ) : null}
-      <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Services</span>
-        {countryRateServices.map((serviceOption) => (
-          <label key={serviceOption} className="inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-800">
-            <input
-              type="checkbox"
-              checked={selectedServices.includes(serviceOption)}
-              onChange={() => toggleService(serviceOption)}
-              className="h-4 w-4 accent-blue-900"
-            />
-            {formatCountryRateService(serviceOption)}
-          </label>
-        ))}
-        <span className="text-xs text-slate-500">The same values will be saved for every selected service.</span>
-      </div>
-
-      <div className="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-        <ChargeInput
-          label="Fuel Surcharge %"
-          hint="Percentage of base freight"
-          value={form.fuelSurchargePercent}
-          onChange={handleInput("fuelSurchargePercent")}
-          max={100}
-        />
-        <ChargeInput
-          label="Remote Area Charge"
-          hint="Flat, on matching postcodes"
-          value={form.remoteAreaCharge}
-          onChange={handleInput("remoteAreaCharge")}
-        />
-        <ChargeInput
-          label="Handling Charge"
-          hint="Flat, once per shipment"
-          value={form.handlingCharge}
-          onChange={handleInput("handlingCharge")}
-        />
-        {/*
-          Insurance is switched off portal-wide while the product is unfinished.
-          The inputs are hidden rather than removed: the stored percentage and
-          minimum are still submitted unchanged below, so a route's configuration
-          survives untouched and restoring cover is a matter of showing these
-          again. Pricing ignores them regardless- see shipmentPricing.service.ts.
-        */}
-        <ChargeInput
-          label="Discount %"
-          hint="Off all GST-inclusive charges"
-          value={form.discountPercent}
-          onChange={handleInput("discountPercent")}
-          max={100}
-        />
-      </div>
-
-      <label className="mt-4 block">
-        <span className="text-xs font-semibold uppercase text-slate-500">Remote Area Postcodes</span>
-        <span className="mt-1 block text-xs text-slate-500">
-          Prefixes, separated by commas or new lines. A destination is remote when its postcode starts with any
-          of them, so &quot;HS&quot; covers a whole region and &quot;HS12AB&quot; a single delivery point.
-        </span>
-        <textarea
-          value={form.remoteAreaPostcodes}
-          onChange={handleInput("remoteAreaPostcodes")}
-          rows={2}
-          placeholder="HS, IV41, ZE"
-          className="mt-2 w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm font-semibold uppercase text-slate-900 outline-none focus:border-blue-900"
-        />
-      </label>
-
-      <p className="mt-3 text-xs text-slate-500">
-        A discount set here applies to every customer shipping on this route.
-      </p>
-    </form>
+      )}
+    </section>
   );
 }
 
@@ -303,7 +316,7 @@ function ChargeInput({
 }) {
   return (
     <label>
-      <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
+      <span className="text-xs font-semibold text-slate-600">{label}</span>
       <input
         type="number"
         min="0"
@@ -312,7 +325,7 @@ function ChargeInput({
         value={value}
         onChange={onChange}
         placeholder="0"
-        className="mt-2 h-10 w-full rounded-2xl border border-slate-300 px-3 text-sm font-semibold text-slate-900 outline-none focus:border-blue-900"
+        className="mt-2 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-900 outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-900/15"
       />
       <span className="mt-1 block text-xs text-slate-500">{hint}</span>
     </label>

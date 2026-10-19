@@ -11,7 +11,8 @@ export const rateCardGstTreatmentValues = ["INCLUDED", "EXCLUDED"] as const;
 export type RateCardGstTreatment = (typeof rateCardGstTreatmentValues)[number];
 
 export interface ICountryRateCard extends mongoose.Document {
-  band: RateCardBand;
+  band?: RateCardBand | null;
+  businessAccountId?: mongoose.Types.ObjectId | null;
   countryCode: string;
   countryName: string;
   service: CountryRateService;
@@ -30,7 +31,8 @@ export interface ICountryRateCard extends mongoose.Document {
 
 const countryRateCardSchema = new mongoose.Schema<ICountryRateCard>(
   {
-    band: { type: String, enum: rateCardBandValues, required: true, index: true },
+    band: { type: String, enum: rateCardBandValues, index: true },
+    businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", index: true },
     countryCode: { type: String, uppercase: true, trim: true, required: true, minlength: 2, maxlength: 2, index: true },
     countryName: { type: String, trim: true, required: true, maxlength: 80 },
     service: { type: String, enum: countryRateServiceValues, required: true, index: true },
@@ -48,6 +50,10 @@ const countryRateCardSchema = new mongoose.Schema<ICountryRateCard>(
 );
 
 countryRateCardSchema.index({ band: 1, countryCode: 1, service: 1, fromKg: 1, toKg: 1 });
+countryRateCardSchema.index({ businessAccountId: 1, countryCode: 1, service: 1, fromKg: 1, toKg: 1 });
+countryRateCardSchema.pre("validate", function () {
+  if (Boolean(this.band) === Boolean(this.businessAccountId)) this.invalidate("businessAccountId", "A rate must belong to exactly one private account or global/legacy band.");
+});
 
 export const CountryRateCard = mongoose.model<ICountryRateCard>(
   "CountryRateCard",

@@ -67,7 +67,7 @@ export type ClientDashboardAccount = {
       status: string;
     } | null;
     rateCard: {
-      title: "Your Swiftline Rate Card";
+      title: string;
       assigned: boolean;
     };
   };

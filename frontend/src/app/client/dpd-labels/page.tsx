@@ -33,7 +33,6 @@ import {
   useBulkDeleteShipmentDrafts,
   useDeleteShipmentDraft,
 } from "@/lib/useDeleteShipmentDraft";
-import { RiMenuAddLine } from "react-icons/ri";
 import BookingPausedNotice from "@/components/booking/BookingPausedNotice";
 
 async function loadCurrentUser() {
@@ -253,7 +252,6 @@ export default function ClientDpdLabelsPage() {
         <div>
           <h1 className="text-2xl  text-[#0D1282]">
             {" "}
-            {/* <RiMenuAddLine className="inline-block mb-1 mr-1 text-lg" /> */}
             Create & Manage Shipment{" "}
           </h1>
           <p className="mt-1 text-sm text-slate-500">
@@ -277,7 +275,7 @@ export default function ClientDpdLabelsPage() {
               Shipment booking is paused for your account.
             </p>
             <p className="mt-1">
-              A rate card has not been assigned yet. Please contact Swiftline
+              Your business rate card has not been configured yet. Please contact Swiftline
               support.
             </p>
           </div>

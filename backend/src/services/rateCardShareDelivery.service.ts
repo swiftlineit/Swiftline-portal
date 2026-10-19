@@ -48,7 +48,8 @@ function buildEmailPayload(share: IRateCardShare, viewUrl: string, senderName: s
       terms.fuelSurchargePercent > 0 ? { label: "Fuel surcharge", value: `${terms.fuelSurchargePercent}%` } : null,
       terms.gstPercent > 0 ? { label: "GST", value: `${terms.gstPercent}% included as applicable` } : null,
       terms.minChargeableWeightKg > 0 ? { label: "Min chargeable weight", value: `${terms.minChargeableWeightKg} kg` } : null,
-      terms.volumetricDivisor > 0 ? { label: "Volumetric divisor", value: `L x W x H (cm) / ${terms.volumetricDivisor}` } : null
+      terms.volumetricDivisor > 0 ? { label: "Volumetric divisor", value: `L x W x H (cm) / ${terms.volumetricDivisor}` } : null,
+      terms.remarks.trim() ? { label: "Terms", value: terms.remarks.trim() } : null
     ].filter(Boolean)
   };
 }

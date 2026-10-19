@@ -81,7 +81,9 @@ export interface IRateCardShareTerms {
 }
 
 export interface IRateCardShare extends mongoose.Document {
-  band: RateCardBand;
+  band?: RateCardBand | null;
+  businessAccountId?: mongoose.Types.ObjectId | null;
+  privateRateCardVersion?: number;
   shareNumber: string;
   title: string;
   currency: string;
@@ -146,7 +148,9 @@ const rateCardShareTermsSchema = new mongoose.Schema<IRateCardShareTerms>({
 }, { _id: false });
 
 const rateCardShareSchema = new mongoose.Schema<IRateCardShare>({
-  band: { type: String, enum: rateCardBandValues, required: true, index: true },
+  band: { type: String, enum: rateCardBandValues, index: true },
+  businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", index: true },
+  privateRateCardVersion: { type: Number, min: 0 },
   shareNumber: { type: String, required: true, unique: true, trim: true, maxlength: 40 },
   title: { type: String, required: true, trim: true, maxlength: 120 },
   currency: { type: String, required: true, uppercase: true, trim: true, default: "INR", maxlength: 3 },
@@ -197,6 +201,12 @@ const rateCardShareSchema = new mongoose.Schema<IRateCardShare>({
   lastViewedAt: { type: Date, default: null },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true }
 }, { timestamps: true });
+
+rateCardShareSchema.pre("validate", function () {
+  if (Boolean(this.band) === Boolean(this.businessAccountId)) {
+    this.invalidate("businessAccountId", "A rate card share must have one business owner or one legacy/global band.");
+  }
+});
 
 // The client tray query: shares aimed at my accounts, newest first.
 //

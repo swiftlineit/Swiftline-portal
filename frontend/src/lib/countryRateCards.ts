@@ -12,11 +12,19 @@ export const rateCardGstTreatments = ["INCLUDED", "EXCLUDED"] as const;
 export type RateCardGstTreatment = (typeof rateCardGstTreatments)[number];
 
 export function formatRateCardBand(band: RateCardBand) {
-  return band.replace("BAND_", "Band ");
+  return band === "BAND_D" ? "Individual Clients" : band.replace("BAND_", "Band ");
+}
+
+export type RateCardTarget = { businessAccountId?: string; band?: RateCardBand };
+
+function targetQuery(target: RateCardTarget | RateCardBand = { band: "BAND_D" }) {
+  const scope = typeof target === "string" ? { band: target } : target;
+  return new URLSearchParams(scope.businessAccountId ? { businessAccountId: scope.businessAccountId } : { band: scope.band ?? "BAND_D" }).toString();
 }
 
 export type CountryRateCard = {
-  band: RateCardBand;
+  band?: RateCardBand;
+  businessAccountId?: string;
   _id: string;
   countryCode: string;
   countryName: string;
@@ -33,7 +41,9 @@ export type CountryRateCard = {
 };
 
 export type CountryRateCardInput = {
-  band: RateCardBand;
+  expectedVersion?: number;
+  band?: RateCardBand;
+  businessAccountId?: string;
   countryCode: string;
   countryName: string;
   service: CountryRateService;
@@ -56,7 +66,8 @@ export type ClientCountryRouteCharge = Omit<CountryRouteCharge, "band">;
  * charges none of these.
  */
 export type CountryRouteCharge = {
-  band: RateCardBand;
+  band?: RateCardBand;
+  businessAccountId?: string;
   _id: string;
   countryCode: string;
   service: CountryRateService;
@@ -72,7 +83,10 @@ export type CountryRouteCharge = {
 };
 
 export type CountryRouteChargeInput = {
-  band: RateCardBand;
+  services?: CountryRateService[];
+  expectedVersion?: number;
+  band?: RateCardBand;
+  businessAccountId?: string;
   countryCode: string;
   service: CountryRateService;
   fuelSurchargePercent: number;
@@ -85,7 +99,7 @@ export type CountryRouteChargeInput = {
   discountPercent: number;
 };
 
-export type RateCardAssignmentAccount = {
+export type RateCardBusinessAccountOption = {
   _id: string;
   accountId: string;
   status: string;
@@ -167,13 +181,15 @@ export function rateCardDisplay(rate: {
   };
 }
 
-export async function listCountryRateCards(band?: RateCardBand) {
-  const path = band ? `/api/v1/country-rate-cards?band=${encodeURIComponent(band)}` : "/api/v1/country-rate-cards";
+export async function listCountryRateCards(target?: RateCardTarget | RateCardBand) {
+  const path = `/api/v1/country-rate-cards?${targetQuery(target)}`;
   const response = await fetchWithAuth(apiUrl(path));
 
   return parseApiResponse<{
     success: true;
     rates: CountryRateCard[];
+    version: number;
+    migrationRequired: boolean;
   }>(response);
 }
 
@@ -185,7 +201,7 @@ export async function listClientCountryRateCards(businessAccountId?: string) {
 
   return parseApiResponse<{
     success: true;
-    title: "Your Swiftline Rate Card";
+    title: string;
     rateCardAssigned: boolean;
     rates: ClientCountryRateCard[];
     routeCharges: ClientCountryRouteCharge[];
@@ -200,7 +216,7 @@ export async function getDraftRateCardContext(draftId: string, audience: "admin"
 
   return parseApiResponse<{
     success: true;
-    title: "Your Swiftline Rate Card";
+    title: string;
     rateCardAssigned: boolean;
     band?: RateCardBand;
     rates: ClientCountryRateCard[];
@@ -221,21 +237,20 @@ export async function saveCountryRateCard(input: CountryRateCardInput, rateId?: 
   }>(response);
 }
 
-export async function listCountryRouteCharges(band?: RateCardBand) {
-  const path = band
-    ? `/api/v1/country-rate-cards/route-charges?band=${encodeURIComponent(band)}`
-    : "/api/v1/country-rate-cards/route-charges";
+export async function listCountryRouteCharges(target?: RateCardTarget | RateCardBand) {
+  const path = `/api/v1/country-rate-cards/route-charges?${targetQuery(target)}`;
   const response = await fetchWithAuth(apiUrl(path));
 
   return parseApiResponse<{
     success: true;
     routeCharges: CountryRouteCharge[];
+    version: number;
   }>(response);
 }
 
-export async function listRateCardAssignmentAccounts() {
-  const response = await fetchWithAuth(apiUrl("/api/v1/country-rate-cards/assignment-accounts"));
-  return parseApiResponse<{ success: true; accounts: RateCardAssignmentAccount[] }>(response);
+export async function listRateCardBusinessAccountOptions(search = "") {
+  const response = await fetchWithAuth(apiUrl(`/api/v1/country-rate-cards/account-options?search=${encodeURIComponent(search)}`));
+  return parseApiResponse<{ success: true; accounts: RateCardBusinessAccountOption[] }>(response);
 }
 
 /** Creates or replaces the configuration for one route, keyed by country + service. */
@@ -249,11 +264,12 @@ export async function saveCountryRouteCharge(input: CountryRouteChargeInput) {
   return parseApiResponse<{
     success: true;
     routeCharge: CountryRouteCharge;
+    version: number;
   }>(response);
 }
 
-export async function deleteCountryRateCard(rateId: string, confirmAssignedImpact = false) {
-  const query = confirmAssignedImpact ? "?confirmAssignedImpact=true" : "";
+export async function deleteCountryRateCard(rateId: string, expectedVersion?: number) {
+  const query = expectedVersion == null ? "" : `?expectedVersion=${expectedVersion}`;
   const response = await fetchWithAuth(apiUrl(`/api/v1/country-rate-cards/${rateId}${query}`), {
     method: "DELETE"
   });
@@ -293,7 +309,9 @@ export type RateCardImportRoute = {
 };
 
 export type RateCardImportPayload = {
-  band: RateCardBand;
+  expectedVersion?: number;
+  band?: RateCardBand;
+  businessAccountId?: string;
   services: CountryRateService[];
   routes: RateCardImportRoute[];
   confirmReplace: boolean;
@@ -310,7 +328,8 @@ export type RateCardImportRouteResult = {
 
 export type RateCardImportResult = {
   success: true;
-  band: RateCardBand;
+  band?: RateCardBand;
+  businessAccountId?: string;
   services: CountryRateService[];
   routesWritten: number;
   slabsWritten: number;
@@ -348,11 +367,11 @@ export async function commitRateCardImport(payload: RateCardImportPayload) {
   return parseApiResponse<RateCardImportResult>(response);
 }
 
-export function buildCountryRateCardCsv(rates: CountryRateCard[]) {
+export function buildCountryRateCardCsv(rates: CountryRateCard[], cardName?: string) {
   const rows = [
-    ["Band", "Country", "Service", "From KG", "To KG", "Charges / KG", "GST", "Max Box KG"],
+    ["Rate Card", "Country", "Service", "From KG", "To KG", "Charges / KG", "GST", "Max Box KG"],
     ...rates.map((rate) => [
-      formatRateCardBand(rate.band),
+      cardName || (rate.businessAccountId ? rate.businessAccountId : formatRateCardBand(rate.band ?? "BAND_D")),
       `${rate.countryName} (${rate.countryCode})`,
       formatCountryRateService(rate.service),
       String(rate.fromKg),

@@ -4,7 +4,7 @@ import {
   createCountryRateCard,
   deleteCountryRateCard,
   listCountryRateCards,
-  listRateCardAssignmentAccounts,
+  listRateCardBusinessAccountOptions,
   listCountryRouteCharges,
   previewRateCardImport,
   saveCountryRouteCharge,
@@ -20,7 +20,7 @@ countryRateCardRouter.use(requireRole("admin", "finance", "operations"));
 
 countryRateCardRouter.get("/", listCountryRateCards);
 countryRateCardRouter.post("/", createCountryRateCard);
-countryRateCardRouter.get("/assignment-accounts", listRateCardAssignmentAccounts);
+countryRateCardRouter.get("/account-options", listRateCardBusinessAccountOptions);
 
 // Registered before the "/:id" handlers so "route-charges" is never read as a
 // rate card id.

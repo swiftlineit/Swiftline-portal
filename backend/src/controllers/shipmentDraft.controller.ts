@@ -34,7 +34,8 @@ import { rebookShipmentDraft } from "../services/rebookShipmentDraft.service.js"
 import { buildShipmentCostEstimate } from "../services/shipmentCostEstimate.service.js";
 import { getDeclaredGoodsValue } from "../services/parcelItems.service.js";
 import { RateCardRequiredError } from "../services/shipmentPricing.service.js";
-import { resolveRateCardBand } from "../services/shipmentPricing.service.js";
+import { resolveShipmentRateCardScope } from "../services/shipmentPricing.service.js";
+import { rateCardFilter } from "../services/rateCardScope.service.js";
 import { CountryRateCard } from "../models/countryRateCard.model.js";
 import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
 import { Branch } from "../models/branch.model.js";
@@ -418,15 +419,17 @@ export async function getShipmentDraftRateCardContext(request: Request, response
 
   const draft = await ShipmentDraft.findById(draftId).select("businessAccountId").lean().exec();
   if (!draft) return response.status(404).json({ success: false, message: "Shipment draft not found" });
+  const account = await BusinessAccount.findById(draft.businessAccountId).select("company.companyName").lean().exec();
+  const title = account?.company?.companyName ? `${account.company.companyName} Rate Card` : "Your Swiftline Rate Card";
 
-  let band;
+  let scope;
   try {
-    band = await resolveRateCardBand({ businessAccountId: draft.businessAccountId });
+    scope = await resolveShipmentRateCardScope({ businessAccountId: draft.businessAccountId });
   } catch (error) {
     if (error instanceof RateCardRequiredError && error.code === "RATE_CARD_REQUIRED") {
       return response.status(200).json({
         success: true,
-        title: "Your Swiftline Rate Card",
+        title,
         rateCardAssigned: false,
         rates: [],
         routeCharges: []
@@ -436,12 +439,12 @@ export async function getShipmentDraftRateCardContext(request: Request, response
   }
 
   const [rates, routeCharges] = await Promise.all([
-    CountryRateCard.find({ band })
-      .select("-band -createdBy -updatedBy")
+    CountryRateCard.find(rateCardFilter(scope))
+      .select("-band -businessAccountId -createdBy -updatedBy")
       .sort({ countryName: 1, service: 1, fromKg: 1 })
       .lean().exec(),
-    CountryRouteCharge.find({ band })
-      .select("-band -createdBy -updatedBy")
+    CountryRouteCharge.find(rateCardFilter(scope))
+      .select("-band -businessAccountId -createdBy -updatedBy")
       .sort({ countryCode: 1, service: 1 })
       .lean().exec()
   ]);
@@ -449,9 +452,9 @@ export async function getShipmentDraftRateCardContext(request: Request, response
 
   return response.status(200).json({
     success: true,
-    title: "Your Swiftline Rate Card",
+    title,
     rateCardAssigned: true,
-    ...(role === "client" ? {} : { band }),
+    ...(role === "client" ? {} : scope),
     rates,
     routeCharges
   });

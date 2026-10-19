@@ -43,6 +43,7 @@ export default function ClientRateCardPage() {
   const [rates, setRates] = useState<ClientCountryRateCard[]>([]);
   const [routeCharges, setRouteCharges] = useState<ClientCountryRouteCharge[]>([]);
   const [assigned, setAssigned] = useState(false);
+  const [rateCardTitle, setRateCardTitle] = useState("Your Swiftline Rate Card");
   const [canRequestQuote, setCanRequestQuote] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -84,6 +85,7 @@ export default function ClientRateCardPage() {
         setRates(result.rates);
         setRouteCharges(result.routeCharges);
         setAssigned(result.rateCardAssigned);
+        setRateCardTitle(result.title);
       })
       .catch((caught) => {
         if (active)
@@ -140,7 +142,7 @@ export default function ClientRateCardPage() {
               Rate card
             </p> */}
             <h1 className="mt-1 text-xl font-semibold tracking-[-0.02em] text-slate-900 sm:text-2xl">
-              Your Swiftline Rate Card
+              {rateCardTitle}
             </h1>
             <p className="mt-1.5 text-sm leading-6 text-slate-500">
               Your current destinations, weight slabs and applicable route charges.
@@ -174,7 +176,7 @@ export default function ClientRateCardPage() {
               Shipment booking is paused for your account.
             </p>
             <p className="mt-1 text-sm">
-              A rate card has not been assigned yet. Please contact Swiftline
+              Your business rate card has not been configured yet. Please contact Swiftline
               support.
             </p>
           </div>

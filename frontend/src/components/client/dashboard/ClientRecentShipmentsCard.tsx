@@ -45,7 +45,7 @@ function RecentShipmentsTable({
           title="No shipments yet"
           message={canCreateShipment
             ? "Create a shipment to start building dashboard activity."
-            : "Shipment creation is paused until a rate card is assigned."}
+            : "Shipment creation is paused until your business rates are configured."}
           actionLabel={canCreateShipment ? "Create Shipment" : undefined}
           actionHref={canCreateShipment ? "/client/dpd-labels" : undefined}
         />

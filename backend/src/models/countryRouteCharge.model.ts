@@ -24,7 +24,8 @@ import {
  * unconfigured routes unchanged, so no migration is required.
  */
 export interface ICountryRouteCharge extends mongoose.Document {
-  band: RateCardBand;
+  band?: RateCardBand | null;
+  businessAccountId?: mongoose.Types.ObjectId | null;
   countryCode: string;
   service: CountryRateService;
   /** Percentage of base freight. The industry-standard way fuel is billed. */
@@ -62,7 +63,8 @@ const amountField = { type: Number, required: true, min: 0, default: 0 };
 
 const countryRouteChargeSchema = new mongoose.Schema<ICountryRouteCharge>(
   {
-    band: { type: String, enum: rateCardBandValues, required: true, index: true },
+    band: { type: String, enum: rateCardBandValues, index: true },
+    businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", index: true },
     countryCode: { type: String, uppercase: true, trim: true, required: true, minlength: 2, maxlength: 2 },
     service: { type: String, enum: countryRateServiceValues, required: true },
     fuelSurchargePercent: percentField,
@@ -83,7 +85,10 @@ const countryRouteChargeSchema = new mongoose.Schema<ICountryRouteCharge>(
 
 // One configuration per route. The pricing engine relies on this being unique:
 // it reads a single document, never merges two.
-countryRouteChargeSchema.index({ band: 1, countryCode: 1, service: 1 }, { unique: true });
+countryRouteChargeSchema.index({ businessAccountId: 1, band: 1, countryCode: 1, service: 1 }, { unique: true, name: "rate_card_owner_route_unique" });
+countryRouteChargeSchema.pre("validate", function () {
+  if (Boolean(this.band) === Boolean(this.businessAccountId)) this.invalidate("businessAccountId", "Route charges must belong to exactly one private account or global/legacy band.");
+});
 
 export const CountryRouteCharge = mongoose.model<ICountryRouteCharge>(
   "CountryRouteCharge",

@@ -172,6 +172,8 @@ export type BusinessAccount = {
     status?: string;
   } | string | null;
   rateCardBand?: RateCardBand | null;
+  privateRateCardVersion?: number;
+  privateRateCardReady?: boolean;
   origin?: "STAFF" | "PUBLIC";
   createdBy?: { email?: string; name?: string } | null;
   createdAt: string;
@@ -483,39 +485,6 @@ export async function assignBusinessAccountBranch(accountId: string, branchId: s
   });
 
   return parseApiResponse<{ success: true; account: BusinessAccount; message: string }>(response);
-}
-
-export async function assignBusinessAccountRateCard(
-  accountId: string,
-  rateCardBand: RateCardBand | null,
-  expectedRateCardBand: RateCardBand | null,
-  reason: string,
-) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/rate-card`), {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rateCardBand, expectedRateCardBand, reason }),
-  });
-  return parseApiResponse<{
-    success: true;
-    message: string;
-    coverageWarning: string | null;
-    account: BusinessAccount;
-  }>(response);
-}
-
-export type RateCardAssignmentHistoryEntry = {
-  id: string;
-  previousRateCardBand: RateCardBand | null;
-  rateCardBand: RateCardBand | null;
-  reason: string;
-  performedAt: string;
-  performedBy: { name: string; email: string };
-};
-
-export async function getBusinessAccountRateCardHistory(accountId: string) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/rate-card-history`));
-  return parseApiResponse<{ success: true; history: RateCardAssignmentHistoryEntry[] }>(response);
 }
 
 export async function getBusinessAccountDocument(accountId: string, documentType: DocumentType) {
