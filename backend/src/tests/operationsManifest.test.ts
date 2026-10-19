@@ -40,11 +40,13 @@ import {
   deleteOperationsManifest,
   formatOperationsBagNumber,
   formatOperationsManifestNumber,
+  getOperationsParcelDetails,
   isOperationsBagWeightAllowed,
   isOperationsManifestNumberReusable,
   isDeferredDispatchTimelineCandidate,
   movingManifestConsignments,
   operationsManifestSearchConditions,
+  packingStatusAfterBagAction,
   sealedManifestDeletionBlockReason,
   OPERATIONS_MANIFEST_ORIGIN_ADDRESS,
   sealingIssues,
@@ -171,6 +173,77 @@ describe("operations manifest omitted parcels", () => {
       ]
     }]);
     assert.deepEqual(resolved, []);
+  });
+});
+
+describe("operations manifest bag status updates", () => {
+  it("derives packing status without recalculating parcel or weight totals", () => {
+    assert.equal(packingStatusAfterBagAction(0, ["CLOSED"]), "DRAFT");
+    assert.equal(packingStatusAfterBagAction(3, ["CLOSED", "READY"]), "READY_TO_SEAL");
+    assert.equal(packingStatusAfterBagAction(3, ["CLOSED", "REOPENED"]), "PACKING");
+    assert.equal(packingStatusAfterBagAction(3, []), "PACKING");
+  });
+});
+
+describe("operations manifest read-only parcel details", () => {
+  it("shows the parcel's actual bag and never assigns an unscanned parcel to a bag", async () => {
+    const manifestId = new mongoose.Types.ObjectId();
+    const consignmentId = new mongoose.Types.ObjectId();
+    const firstBagId = new mongoose.Types.ObjectId();
+    const secondBagId = new mongoose.Types.ObjectId();
+    const originals = {
+      manifestFindById: OperationsManifest.findById,
+      consignmentFindOne: OperationsManifestConsignment.findOne,
+      scanFind: OperationsManifestScan.find,
+      bagFind: OperationsManifestBag.find
+    };
+    const query = (result: unknown) => ({
+      select() { return this; }, lean() { return this; }, sort() { return this; }, exec: async () => result
+    });
+    let manifestScope: string | null = null;
+    (OperationsManifest as any).findById = () => query({ _id: manifestId, manifestNumber: "SLC031", status: "DISPATCHED" });
+    (OperationsManifestConsignment as any).findOne = (filter: { manifestId: mongoose.Types.ObjectId }) => {
+      manifestScope = String(filter.manifestId);
+      return query({
+        _id: consignmentId,
+        consignmentNumber: "SLC031",
+        serviceInfo: "EXP",
+        description: "Shipment contents",
+        consigneeSnapshot: { formatted: "Asha Patel\nLondon" },
+        parcelWeightSnapshots: [
+          { parcelNumber: "SLC031-01", weightKg: 5, valueMinor: 10000, contentsDescription: "Scarf", items: [{ description: "Scarf" }] },
+          { parcelNumber: "SLC031-03", weightKg: 4, valueMinor: 3000, contentsDescription: "Book", items: [{ description: "Book" }] }
+        ],
+        parcelDispositions: [{ parcelNumber: "SLC031-03", disposition: "HELD", reason: "Not at facility" }]
+      });
+    };
+    (OperationsManifestScan as any).find = () => query([
+      { parcelNumber: "SLC031-01", bagId: firstBagId, scannedAt: new Date("2026-10-19T00:00:00Z") },
+      { parcelNumber: "SLC031-02", bagId: secondBagId, scannedAt: new Date("2026-10-19T00:01:00Z") }
+    ]);
+    (OperationsManifestBag as any).find = () => query([
+      { _id: firstBagId, bagNumber: "SLC03101", sequence: 1, status: "CLOSED" },
+      { _id: secondBagId, bagNumber: "SLC03102", sequence: 2, status: "CLOSED" }
+    ]);
+    try {
+      const packed = await getOperationsParcelDetails(String(manifestId), "slc031-01");
+      assert.equal(packed.bag?.bagNumber, "SLC03101");
+      assert.equal(packed.weightKg, 5);
+      assert.equal(packed.valueMinor, 10000);
+      assert.deepEqual(packed.otherShipmentBags, ["SLC03102"]);
+      const unscanned = await getOperationsParcelDetails(String(manifestId), "SLC031-03");
+      assert.equal(unscanned.packed, false);
+      assert.equal(unscanned.bag, null);
+      assert.equal(unscanned.disposition, "HELD");
+      assert.deepEqual(unscanned.otherShipmentBags, ["SLC03101", "SLC03102"]);
+      assert.deepEqual(await getOperationsParcelDetails(String(manifestId), "SLC031-03"), unscanned);
+      assert.equal(manifestScope, String(manifestId));
+    } finally {
+      (OperationsManifest as any).findById = originals.manifestFindById;
+      (OperationsManifestConsignment as any).findOne = originals.consignmentFindOne;
+      (OperationsManifestScan as any).find = originals.scanFind;
+      (OperationsManifestBag as any).find = originals.bagFind;
+    }
   });
 });
 

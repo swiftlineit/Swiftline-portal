@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { env } from "../config/env.js";
 
 function isOperationsScannerRequest(path: string) {
-  return /^\/api\/v1\/operations-manifests\/(?:scan-sessions(?:\/|$)|[^/]+\/(?:scan|scan-feed|scan-sessions)(?:\/|$))/.test(path);
+  return /^\/api\/v1\/operations-manifests\/(?:scan-sessions(?:\/|$)|[^/]+\/(?:scan|scan-feed|scan-sessions)(?:\/|$)|[^/]+\/parcels\/[^/]+\/details$)/.test(path);
 }
 
 function authenticatedScannerKey(request: Request) {

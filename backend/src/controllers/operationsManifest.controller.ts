@@ -24,12 +24,14 @@ import {
   deleteOperationsManifest,
   dispatchOperationsManifest,
   getOperationsManifestDetail,
+  getOperationsParcelDetails,
   listOperationsManifests,
   markOperationsBagReady,
   moveOperationsConsignment,
   OperationsManifestServiceError,
   removeOperationsScan,
   reopenOperationsBag,
+  reopenOperationsBags,
   scanOperationsParcel,
   sealOperationsManifest,
   setOperationsParcelDisposition,
@@ -262,6 +264,38 @@ export async function getManifest(request: Request, response: Response) {
   catch (error) { return sendError(response, error); }
 }
 
+export async function getParcelDetails(request: Request, response: Response) {
+  try {
+    const parsed = z.string().trim().min(1).max(80).safeParse(request.params.parcelNumber);
+    if (!parsed.success) return response.status(400).json({ success: false, message: "Scan a valid Swiftline parcel barcode." });
+    return response.json({
+      success: true,
+      parcel: await getOperationsParcelDetails(String(request.params.manifestId), parsed.data)
+    });
+  } catch (error) { return sendError(response, error); }
+}
+
+export async function getScanDetailsContext(request: Request, response: Response) {
+  try {
+    const manifest = await OperationsManifest.findById(String(request.params.manifestId))
+      .select("manifestNumber status totalBags totalConsignments totalPhysicalParcels totalWeightKg")
+      .lean().exec();
+    if (!manifest) return response.status(404).json({ success: false, message: "Operations manifest was not found." });
+    return response.json({
+      success: true,
+      manifest: {
+        id: String(manifest._id),
+        manifestNumber: manifest.manifestNumber,
+        status: manifest.status,
+        totalBags: manifest.totalBags,
+        totalConsignments: manifest.totalConsignments,
+        totalPhysicalParcels: manifest.totalPhysicalParcels,
+        totalWeightKg: manifest.totalWeightKg
+      }
+    });
+  } catch (error) { return sendError(response, error); }
+}
+
 export async function updateManifest(request: Request, response: Response) {
   try {
     const actorId = userId(request);
@@ -348,6 +382,19 @@ export async function closeAllBags(request: Request, response: Response) {
     return response.json({
       success: true,
       message: result.closed ? `${result.closed} bag${result.closed === 1 ? "" : "s"} closed.` : "Every bag is already closed.",
+      result
+    });
+  } catch (error) { return sendError(response, error); }
+}
+
+export async function reopenAllBags(request: Request, response: Response) {
+  try {
+    const actorId = userId(request);
+    if (!actorId) return response.status(401).json({ success: false, message: "Unauthorized" });
+    const result = await reopenOperationsBags(String(request.params.manifestId), actorId);
+    return response.json({
+      success: true,
+      message: result.reopened ? `${result.reopened} bag${result.reopened === 1 ? "" : "s"} reopened.` : "Every closed bag is already open.",
       result
     });
   } catch (error) { return sendError(response, error); }

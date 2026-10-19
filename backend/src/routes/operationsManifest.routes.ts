@@ -29,6 +29,8 @@ operationsManifestRouter.post("/:manifestId/scan-sessions/direct", scannerPairin
 operationsManifestRouter.patch("/:manifestId/scan-sessions/:sessionId/bag", scannerFeedLimiter, scanSessionController.changeSessionBag);
 operationsManifestRouter.delete("/:manifestId/scan-sessions/:sessionId", scannerFeedLimiter, scanSessionController.disconnectSession);
 operationsManifestRouter.get("/:manifestId", controller.getManifest);
+operationsManifestRouter.get("/:manifestId/parcels/:parcelNumber/details", scannerScanLimiter, controller.getParcelDetails);
+operationsManifestRouter.get("/:manifestId/scan-details", controller.getScanDetailsContext);
 operationsManifestRouter.patch("/:manifestId", controller.updateManifest);
 operationsManifestRouter.post("/:manifestId/bags", controller.createBag);
 operationsManifestRouter.post("/:manifestId/scan", scannerScanLimiter, controller.scanParcel);
@@ -36,6 +38,7 @@ operationsManifestRouter.post("/:manifestId/consignments/:consignmentId/move", c
 operationsManifestRouter.put("/:manifestId/consignments/:consignmentId/parcel-disposition", controller.setParcelDisposition);
 operationsManifestRouter.post("/:manifestId/scans/:scanId/remove", controller.removeScan);
 operationsManifestRouter.post("/:manifestId/bags/close-all", controller.closeAllBags);
+operationsManifestRouter.post("/:manifestId/bags/reopen-all", controller.reopenAllBags);
 operationsManifestRouter.post("/:manifestId/bags/:bagId/close", controller.closeBag);
 operationsManifestRouter.post("/:manifestId/bags/ready", controller.markBagReady);
 operationsManifestRouter.post("/:manifestId/bags/:bagId/reopen", controller.reopenBag);

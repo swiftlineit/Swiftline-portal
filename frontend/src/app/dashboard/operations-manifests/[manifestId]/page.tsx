@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -11,7 +12,7 @@ import {
   FiDownload,
   FiEdit2,
   FiPlus,
-  FiPrinter,
+  FiSearch,
   FiSmartphone,
   FiTrash2,
   FiWifi,
@@ -26,6 +27,7 @@ import {
   createDirectOperationsScanSession,
   createOperationsScanSession,
   closeAllOperationsBags,
+  reopenAllOperationsBags,
   disconnectOperationsScanSession,
   downloadOperationsManifest,
   getActiveOperationsScanSession,
@@ -44,6 +46,7 @@ import {
   type OperationsParcelDisposition,
   type OperationsScanSession,
 } from "@/lib/operationsManifests";
+import { buildOperationsBagViews, outstandingParcels, parcelBagId, searchOperationsBagViews, type BagView } from "@/lib/operationsManifestView";
 import {
   reconcileManualAlsBooking,
   type ManualAlsBookingReconciliationInput,
@@ -87,6 +90,7 @@ export default function OperationsManifestWorkspace() {
   const [activeBagId, setActiveBagId] = useState("");
   const [barcode, setBarcode] = useState("");
   const [scanning, setScanning] = useState(false);
+  const [detailSearch, setDetailSearch] = useState("");
   const [pendingReason, setPendingReason] = useState<PendingReason | null>(
     null,
   );
@@ -235,6 +239,14 @@ export default function OperationsManifestWorkspace() {
   const manifest = data.manifest;
   const activeBag = data.bags.find((bag) => bag.id === activeBagId);
   const canEdit = isEditable(manifest.status);
+  const allBagViews = buildOperationsBagViews(data);
+  const bagViews = searchOperationsBagViews(allBagViews, detailSearch);
+  const activeBagView = allBagViews.find((view) => view.bag.id === activeBagId);
+  const attentionConsignments = data.consignments.filter((item) =>
+    item.expectedParcelNumbers.some((parcel) => !item.scannedParcelNumbers.includes(parcel))
+    || item.carrierReconciliationRequired
+    || item.dpdStatus === "DPD_STATUS_UNKNOWN"
+  );
   const bagNumbersByShipmentReference = new Map(
     data.consignments.map((consignment) => [
       consignment.consignmentNumber,
@@ -400,8 +412,7 @@ export default function OperationsManifestWorkspace() {
           await closeAllOperationsBags(manifestId);
           return;
         }
-        for (const bag of targets)
-          await runBagAction(manifestId, bag.id, action);
+        await reopenAllOperationsBags(manifestId);
       },
       `${targets.length} bag${targets.length === 1 ? "" : "s"} ${action === "close" ? "closed" : "reopened"}.`,
     );
@@ -511,6 +522,7 @@ export default function OperationsManifestWorkspace() {
               "Manifest dispatched.",
             )
           }
+          scanDetailsHref={`/manifest-scanner/details/${manifestId}`}
         />
 
         {data.sealingIssues.length && canEdit ? (
@@ -584,17 +596,31 @@ export default function OperationsManifestWorkspace() {
           </section>
         ) : null}
 
-        <div className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border border-[#EEEDED] bg-white shadow-sm md:grid-cols-4">
-          <Metric label="Bags" value={manifest.totalBags} />
-          <Metric label="Consignments" value={manifest.totalConsignments} />
-          <Metric
-            label="Parcels Scanned"
-            value={manifest.totalPhysicalParcels}
-          />
-          <Metric
-            label="Manifest Weight"
-            value={`${manifest.totalWeightKg.toFixed(3)} kg`}
-          />
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Bag contents</h2>
+            <p className="text-xs text-slate-600">Parcels are shown in the bag they were actually scanned into.</p>
+          </div>
+          <label className="relative block w-full sm:max-w-sm">
+            <span className="sr-only">Search bag contents</span>
+            <FiSearch aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              value={detailSearch}
+              onChange={(event) => {
+                const nextSearch = event.target.value;
+                setDetailSearch(nextSearch);
+                if (canEdit && nextSearch.trim()) {
+                  const matches = searchOperationsBagViews(buildOperationsBagViews(data), nextSearch);
+                  if (matches.length && !matches.some((view) => view.bag.id === activeBagId)) {
+                    setActiveBagId(matches[0].bag.id);
+                  }
+                }
+              }}
+              placeholder="Search bag, parcel, shipment, consignee or item"
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-900 outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20"
+            />
+          </label>
         </div>
 
         {canEdit ? (
@@ -676,6 +702,10 @@ export default function OperationsManifestWorkspace() {
                     {activeBag?.totalWeightKg.toFixed(3) ?? "0.000"} / {OPERATIONS_BAG_MAX_WEIGHT_KG.toFixed(3)} kg
                   </span>
                 </div>
+                <p className="mt-1 text-xs text-slate-600">
+                  {activeBag?.totalPhysicalParcels ?? 0} parcels in this bag · Goods value {formatMoney(activeBagView?.recordedValueMinor ?? 0)}
+                  {activeBagView?.valueIncomplete ? " (incomplete)" : ""}
+                </p>
                 <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-[#EEEDED]">
                   <div
                     className="h-full rounded-full bg-[#F0DE36] transition-all"
@@ -724,9 +754,12 @@ export default function OperationsManifestWorkspace() {
               <ConsignmentTable
                 rows={data.consignments.filter(
                   (item) =>
-                    item.bagIds?.includes(activeBagId) ??
-                    item.bagId === activeBagId,
+                    (item.bagIds?.includes(activeBagId) ?? item.bagId === activeBagId)
+                    && (!detailSearch.trim() || bagViews.some((view) =>
+                      view.bag.id === activeBagId && view.parcels.some((row) => row.consignment.id === item.id)
+                    )),
                 )}
+                activeBagId={activeBagId}
                 canRemove={canEdit}
                 canDecide={canEdit}
                 canReconcileAlsBooking={manifest.status === "SEALED"}
@@ -739,17 +772,22 @@ export default function OperationsManifestWorkspace() {
             </div>
           </div>
         ) : (
-          <ConsignmentTable
-            rows={data.consignments}
-            canRemove={false}
-            canDecide={manifest.status === "SEALED"}
-            canReconcileAlsBooking={manifest.status === "SEALED"}
-            onRemove={requestParcelRemoval}
-            onDisposition={requestParcelDisposition}
-            onReconcileAlsBooking={setReconciliationTarget}
-            manifestId={manifestId}
-            onReconciled={load}
-          />
+          <div className="space-y-4">
+            <BagContentsTable views={bagViews} searchActive={Boolean(detailSearch.trim())} />
+            {attentionConsignments.length ? (
+              <section aria-label="Shipment actions" className="space-y-2">
+                <h2 className="text-sm font-semibold text-slate-900">Shipments needing attention</h2>
+                <ShipmentAttentionList
+                  rows={attentionConsignments}
+                  canAct={manifest.status === "SEALED"}
+                  onDisposition={requestParcelDisposition}
+                  onReconcileAlsBooking={setReconciliationTarget}
+                  manifestId={manifestId}
+                  onReconciled={load}
+                />
+              </section>
+            ) : null}
+          </div>
         )}
 
         {canEdit ? (
@@ -961,6 +999,7 @@ function ManifestHeader({
   onExport,
   onSeal,
   onDispatch,
+  scanDetailsHref,
   sealBlocked,
 }: {
   data: ManifestDetail;
@@ -969,6 +1008,7 @@ function ManifestHeader({
   onExport: (format: "xlsx" | "pdf" | "edi" | "opsEdi" | "mhbs" | "csbVEdi" | "csbVEdi2" | "uk", view?: boolean) => void;
   onSeal: () => void;
   onDispatch: () => void;
+  scanDetailsHref: string;
   sealBlocked: boolean;
 }) {
   const { manifest } = data;
@@ -977,19 +1017,19 @@ function ManifestHeader({
     ? undefined
     : "Only CSB-V shipments should be in this manifest.";
   return (
-    <div className="mb-5 rounded-xl border border-[#EEEDED] bg-white p-4 shadow-sm sm:p-5">
-      <div className="flex flex-col gap-5">
-        <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <section className="mb-5 overflow-hidden rounded-2xl border border-[#EEEDED] bg-white shadow-sm">
+      <div className="p-4 sm:p-5">
+        <div className="flex min-w-0 flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-              <h1 className="text-2xl font-semibold text-slate-950">
+              <h1 className="text-2xl font-semibold leading-tight text-slate-950">
                 {manifest.manifestNumber}
               </h1>
               <span className="rounded-md border border-[#0D1282]/25 bg-[#0D1282]/5 px-2.5 py-1 text-xs font-semibold text-[#0D1282]">
                 {manifest.status.replaceAll("_", " ")}
               </span>
             </div>
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-1.5 text-sm text-slate-600">
               {manifest.branch?.name} ({manifest.branch?.code}) |{" "}
               {manifest.header.originIataCode || "Origin"} to{" "}
               {manifest.header.destinationIataCode ||
@@ -998,8 +1038,11 @@ function ManifestHeader({
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-2 lg:justify-end">
-            <button type="button" onClick={onEditDetails} disabled={busy} className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-xl border border-[#CDD5DF] bg-white px-3.5 text-sm font-semibold text-slate-700 transition hover:border-[#0D1282] hover:text-[#0D1282] disabled:opacity-50">
+          <div className="flex flex-wrap items-center gap-2 md:justify-end">
+            <a href={scanDetailsHref} className="inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-[#0D1282]/30 bg-white px-3 text-sm font-semibold text-[#0D1282] transition hover:bg-[#0D1282]/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30">
+              <FiCamera /> Scan Details
+            </a>
+            <button type="button" onClick={onEditDetails} disabled={busy} className="inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-[#CDD5DF] bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-[#0D1282] hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 disabled:opacity-50">
               <FiEdit2 /> Edit details
             </button>
             {manifest.status === "READY_TO_SEAL" ? (
@@ -1007,7 +1050,7 @@ function ManifestHeader({
                 onClick={onSeal}
                 disabled={busy || sealBlocked}
                 title={sealBlocked ? "Resolve the sealing requirements shown below first." : undefined}
-                className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-full bg-[#F0DE36] px-4 text-sm font-semibold text-[#0D1282] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg bg-[#F0DE36] px-3.5 text-sm font-semibold text-[#0D1282] hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FiCheck />
                 Seal Manifest
@@ -1018,7 +1061,7 @@ function ManifestHeader({
                 onClick={onDispatch}
                 disabled={busy || data.dispatchIssues.length > 0}
                 title={data.dispatchIssues.length ? "Complete all missing shipment milestones before dispatch." : undefined}
-                className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-full bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg bg-[#0D1282] px-3.5 text-sm font-semibold text-white hover:bg-[#0D1282]/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 <IoMdSend />
                 Confirm Dispatch
@@ -1028,62 +1071,71 @@ function ManifestHeader({
         </div>
 
         {["SEALED", "DISPATCHED"].includes(manifest.status) ? (
-          <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4">
-            <ActionButton
-              onClick={() => onExport("pdf", true)}
-              icon={<FiPrinter />}
-              label="View Manifest PDF"
-            />
-            <ActionButton
-              onClick={() => onExport("xlsx")}
-              icon={<FiDownload />}
-              label="Manifest Excel"
-            />
-            <ActionButton
-              onClick={() => onExport("pdf")}
-              icon={<FiDownload />}
-              label="Manifest PDF"
-            />
-            <ActionButton
-              onClick={() => onExport("edi")}
-              icon={<FiDownload />}
-              label="EDI"
-            />
-            <ActionButton
-              onClick={() => onExport("opsEdi")}
-              icon={<FiDownload />}
-              label="OPS EDI"
-            />
-            <ActionButton
-              onClick={() => onExport("mhbs")}
-              icon={<FiDownload />}
-              label="MHBS"
-            />
-            <ActionButton
-              onClick={() => onExport("csbVEdi")}
-              icon={<FiDownload />}
-              label="CSB-V EDI"
-              disabled={!csbVEligible}
-              title={csbVTooltip}
-            />
-            <ActionButton
-              onClick={() => onExport("csbVEdi2")}
-              icon={<FiDownload />}
-              label="CSB-V EDI2"
-              disabled={!csbVEligible}
-              title={csbVTooltip}
-            />
-            {manifest.header.destinationCountryCode === "GB" ? (
+          <div className="mt-4 border-t border-slate-200 pt-3">
+            <div className="flex flex-wrap gap-2">
               <ActionButton
-                onClick={() => onExport("uk")}
+                onClick={() => onExport("xlsx")}
                 icon={<FiDownload />}
-                label="UK Manifest"
+                label="Manifest Excel"
               />
-            ) : null}
+              <ActionButton
+                onClick={() => onExport("pdf")}
+                icon={<FiDownload />}
+                label="Manifest PDF"
+              />
+              <ActionButton
+                onClick={() => onExport("edi")}
+                icon={<FiDownload />}
+                label="EDI"
+              />
+              <ActionButton
+                onClick={() => onExport("opsEdi")}
+                icon={<FiDownload />}
+                label="OPS EDI"
+              />
+              <ActionButton
+                onClick={() => onExport("mhbs")}
+                icon={<FiDownload />}
+                label="MHBS"
+              />
+              <ActionButton
+                onClick={() => onExport("csbVEdi")}
+                icon={<FiDownload />}
+                label="CSB-V EDI"
+                disabled={!csbVEligible}
+                title={csbVTooltip}
+              />
+              <ActionButton
+                onClick={() => onExport("csbVEdi2")}
+                icon={<FiDownload />}
+                label="CSB-V EDI2"
+                disabled={!csbVEligible}
+                title={csbVTooltip}
+              />
+              {manifest.header.destinationCountryCode === "GB" ? (
+                <ActionButton
+                  onClick={() => onExport("uk")}
+                  icon={<FiDownload />}
+                  label="UK Manifest"
+                />
+              ) : null}
+            </div>
           </div>
         ) : null}
       </div>
-    </div>
+      <div className="grid grid-cols-2 gap-2.5 border-t border-[#EEEDED] bg-slate-50/80 p-3 sm:gap-3 sm:p-4 lg:grid-cols-4">
+        <ManifestMetricCard label="Bags" value={manifest.totalBags} />
+        <ManifestMetricCard label="Consignments" value={manifest.totalConsignments} />
+        <ManifestMetricCard
+          label="Parcels Scanned"
+          value={manifest.totalPhysicalParcels}
+        />
+        <ManifestMetricCard
+          label="Manifest Weight"
+          value={`${manifest.totalWeightKg.toFixed(3)} kg`}
+        />
+      </div>
+    </section>
   );
 }
 
@@ -1106,7 +1158,7 @@ function ActionButton({
         onClick={onClick}
         disabled={disabled}
         title={disabled ? undefined : title}
-        className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-full border border-[#0D1282]/20 bg-white px-4 text-sm font-semibold text-[#0D1282] hover:bg-[#EEEDED] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+        className="inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-[#0D1282]/20 bg-white px-3 text-sm font-semibold text-[#0D1282] transition hover:bg-[#EEEDED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
       >
         {icon}
         {label}
@@ -1114,11 +1166,21 @@ function ActionButton({
     </span>
   );
 }
-function Metric({ label, value }: { label: string; value: string | number }) {
+function ManifestMetricCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
   return (
-    <div className="border-r border-[#EEEDED] p-4 last:border-r-0">
-      <p className="text-xs font-semibold uppercase text-[#0D1282]">{label}</p>
-      <p className="mt-2 text-xl font-semibold text-slate-950">{value}</p>
+    <div className="min-w-0 text-left">
+      <p className="text-xl font-semibold leading-6 tabular-nums text-slate-950 sm:text-2xl">
+        {value}
+      </p>
+      <p className="mt-1 text-xs font-medium leading-4 text-slate-600 sm:text-sm">
+        {label}
+      </p>
     </div>
   );
 }
@@ -1187,6 +1249,7 @@ function BagButton({
 
 function ConsignmentTable({
   rows,
+  activeBagId,
   canRemove,
   canDecide,
   canReconcileAlsBooking,
@@ -1197,6 +1260,7 @@ function ConsignmentTable({
   onReconciled,
 }: {
   rows: OperationsConsignment[];
+  activeBagId?: string;
   canRemove: boolean;
   canDecide: boolean;
   canReconcileAlsBooking: boolean;
@@ -1212,28 +1276,29 @@ function ConsignmentTable({
 }) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-[#EEEDED] bg-white shadow-sm">
-      <table className="w-full min-w-205 text-left text-sm">
+      <table className="w-full min-w-170 text-left text-sm">
         <thead className="bg-slate-200 text-xs uppercase text-slate-600">
           <tr>
             <th className="px-3 py-4">Consignment</th>
             <th className="px-3 py-4">Consignee</th>
             <th className="px-3 py-4">Contents</th>
             <th className="px-3 py-4">Parcels</th>
-            <th className="px-3 py-4 text-right">Weight</th>
-            <th className="px-3 py-4 text-right">Total Value</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-[#EEEDED]">
           {rows.map((item) => {
+            const packedHere = activeBagId
+              ? item.scannedParcelNumbers.filter((parcel) => parcelBagId(item, parcel) === activeBagId)
+              : item.scannedParcelNumbers;
             const unscannedParcels = item.expectedParcelNumbers.filter(
               (parcel) => !item.scannedParcelNumbers.includes(parcel),
             );
             return (
               <tr key={item.id} className="align-top hover:bg-[#EEEDED]/35">
               <td className="px-3 py-3">
-                <span className="font-mono text-xs font-semibold text-[#0D1282]">
+                <Link href={`/dashboard/shipments/${item.shipmentDraftId}`} className="font-mono text-xs font-semibold text-[#0D1282] underline decoration-1 underline-offset-2 hover:decoration-2 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">
                   {item.displayConsignmentNumber || item.consignmentNumber}
-                </span>
+                </Link>
                 <p className="mt-0.5 text-[11px] text-slate-500">
                   {item.serviceInfo}
                 </p>
@@ -1272,16 +1337,23 @@ function ConsignmentTable({
                 {item.consigneeSnapshot.formatted}
               </td>
               <td className="max-w-40 px-3 py-3 text-xs text-slate-700">
-                {item.description}
+                {activeBagId
+                  ? packedHere.map((parcel) => {
+                      const snapshot = item.parcelWeightSnapshots?.find((entry) => entry.parcelNumber === parcel);
+                      return snapshot?.items?.map((entry) => entry.description).filter(Boolean).join(", ")
+                        || snapshot?.contentsDescription || "Parcel contents unavailable";
+                    }).join(" · ")
+                  : item.description}
               </td>
               <td className="min-w-52.5 px-3 py-3">
                 {/* A held-back box is normal, so this count is a record rather than a warning. */}
                 <p className="mb-1.5 text-[11px] font-semibold text-slate-600">
-                  {item.scannedParcelNumbers.length} of{" "}
-                  {item.expectedParcelNumbers.length} scanned
+                  {activeBagId
+                    ? `${packedHere.length} in this bag · ${item.scannedParcelNumbers.length} of ${item.expectedParcelNumbers.length} scanned overall`
+                    : `${item.scannedParcelNumbers.length} of ${item.expectedParcelNumbers.length} scanned`}
                 </p>
                 <div className="space-y-1">
-                  {item.scannedParcelNumbers.map((parcel) => {
+                  {packedHere.map((parcel) => {
                     const parcelValue =
                       item.parcelValues?.find(
                         (value) => value.parcelNumber === parcel,
@@ -1383,28 +1455,13 @@ function ConsignmentTable({
                   })}
                 </div>
               </td>
-              <td className="px-3 py-3 text-right text-xs font-semibold">
-                {item.weightKg.toFixed(3)} kg
-              </td>
-              <td className="px-3 py-3 text-right">
-                <span
-                  className={`text-xs font-semibold ${item.goodsValueRequired ? "text-[#D71313]" : "text-slate-900"}`}
-                >
-                  {formatMoney(item.declaredValueMinor)}
-                </span>
-                {item.goodsValueRequired ? (
-                  <p className="mt-0.5 text-[10px] text-[#D71313]">
-                    Value needed per parcel
-                  </p>
-                ) : null}
-              </td>
               </tr>
             );
           })}
           {!rows.length ? (
             <tr>
               <td
-                colSpan={6}
+                colSpan={4}
                 className="px-4 py-12 text-center text-sm text-slate-500"
               >
                 <FiArchive className="mx-auto mb-2 h-6 w-6 text-[#0D1282]" />
@@ -1414,6 +1471,176 @@ function ConsignmentTable({
           ) : null}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function BagContentsTable({ views, searchActive }: { views: BagView[]; searchActive: boolean }) {
+  if (!views.length) return (
+    <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-600">
+      {searchActive ? "No bag contents match this search." : "No bags or packed parcels to show yet."}
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white md:block">
+        <table className="w-full min-w-225 text-left text-sm">
+          <thead className="bg-slate-100 text-xs font-semibold uppercase text-slate-600">
+            <tr>
+              <th className="px-3 py-3">Bag number</th>
+              <th className="px-3 py-3">Parcel / shipment</th>
+              <th className="px-3 py-3">Consignee</th>
+              <th className="px-3 py-3">Contents</th>
+              <th className="px-3 py-3 text-right">Parcel weight</th>
+              <th className="px-3 py-3 text-right">Parcel value</th>
+            </tr>
+          </thead>
+          {views.map((view) => (
+            <tbody key={view.bag.id} className="border-t border-slate-200">
+              <tr className="bg-[#0D1282]/5 text-slate-900">
+                <th scope="rowgroup" className="px-3 py-3 font-mono text-xs font-semibold text-[#0D1282]">
+                  {view.bag.bagNumber}
+                  <span className="mt-0.5 block font-sans text-[11px] font-medium text-slate-600">{view.bag.status.replaceAll("_", " ")}</span>
+                </th>
+                <td colSpan={5} className="px-3 py-3 text-xs text-slate-700">
+                  <span className="font-semibold">{view.bag.totalPhysicalParcels} parcels</span>
+                  <span className="mx-2 text-slate-400">·</span>
+                  Bag weight <span className="font-semibold">{formatParcelWeight(view.bag.totalWeightKg)}</span>
+                  <span className="mx-2 text-slate-400">·</span>
+                  Bag goods value <span className="font-semibold">{formatMoney(view.recordedValueMinor)}</span>
+                  {view.valueIncomplete ? <span className="ml-1 font-semibold text-amber-800">(incomplete)</span> : null}
+                </td>
+              </tr>
+              {view.parcels.map((row) => (
+                <tr key={`${view.bag.id}-${row.parcelNumber}`} className="border-t border-slate-100 align-top">
+                  <td className="px-3 py-3 text-xs text-slate-500">{view.bag.bagNumber}</td>
+                  <td className="px-3 py-3">
+                    <span className="block break-all font-mono text-xs font-semibold text-[#0D1282]">{row.parcelNumber}</span>
+                    <Link href={`/dashboard/shipments/${row.consignment.shipmentDraftId}`} className="mt-0.5 block w-fit text-xs text-[#0D1282] underline decoration-1 underline-offset-2 hover:decoration-2 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">{row.consignment.displayConsignmentNumber || row.consignment.consignmentNumber}</Link>
+                  </td>
+                  <td className="max-w-52 whitespace-pre-line px-3 py-3 text-xs leading-5 text-slate-700">{row.consignment.consigneeSnapshot.formatted}</td>
+                  <td className="max-w-72 px-3 py-3 text-xs leading-5 text-slate-700">{row.contents}</td>
+                  <td className="px-3 py-3 text-right whitespace-nowrap text-xs font-medium">{formatParcelWeight(row.weightKg)}</td>
+                  <td className="px-3 py-3 text-right whitespace-nowrap text-xs font-medium">{formatMoney(row.valueMinor)}</td>
+                </tr>
+              ))}
+              {!view.parcels.length ? <tr><td colSpan={6} className="px-3 py-4 text-xs text-slate-500">No parcels are packed in this bag.</td></tr> : null}
+              {outstandingParcels(view).length ? (
+                <tr className="border-t border-amber-100 bg-amber-50/60">
+                  <td colSpan={6} className="px-3 py-2 text-xs leading-5 text-amber-950">
+                    <span className="font-semibold">Not in this bag:</span>{" "}
+                    {outstandingParcels(view).map((item, index) => (
+                      <span key={`${item.shipmentDraftId}-${item.parcel}`}>
+                        {index ? " · " : ""}{item.parcel} ({item.label}, <Link href={`/dashboard/shipments/${item.shipmentDraftId}`} className="text-[#0D1282] underline decoration-1 underline-offset-2 hover:decoration-2 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">{item.consignmentNumber}</Link>)
+                      </span>
+                    ))}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          ))}
+        </table>
+      </div>
+
+      <div className="space-y-3 md:hidden">
+        {views.map((view) => (
+          <section key={view.bag.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white" aria-label={`Bag ${view.bag.bagNumber}`}>
+            <div className="bg-[#0D1282]/5 px-3 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="break-all font-mono text-sm font-semibold text-[#0D1282]">{view.bag.bagNumber}</h3>
+                <span className="text-xs font-medium text-slate-600">{view.bag.status.replaceAll("_", " ")}</span>
+              </div>
+              <p className="mt-1 text-xs text-slate-700">{view.bag.totalPhysicalParcels} parcels · {formatParcelWeight(view.bag.totalWeightKg)} · {formatMoney(view.recordedValueMinor)} value{view.valueIncomplete ? " (incomplete)" : ""}</p>
+            </div>
+            {view.parcels.map((row) => (
+              <div key={row.parcelNumber} className="border-t border-slate-100 px-3 py-3 text-xs">
+                <p className="break-all font-mono font-semibold text-[#0D1282]">{row.parcelNumber}</p>
+                <p className="mt-1 text-slate-600"><Link href={`/dashboard/shipments/${row.consignment.shipmentDraftId}`} className="text-[#0D1282] underline decoration-1 underline-offset-2 hover:decoration-2 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">{row.consignment.displayConsignmentNumber || row.consignment.consignmentNumber}</Link> · {row.consignment.consigneeSnapshot.name || row.consignment.consigneeSnapshot.formatted?.split("\n")[0]}</p>
+                <p className="mt-1 leading-5 text-slate-700">{row.contents}</p>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-semibold text-slate-800">
+                  <span>{formatParcelWeight(row.weightKg)}</span><span>{formatMoney(row.valueMinor)}</span>
+                </div>
+              </div>
+            ))}
+            {!view.parcels.length ? <p className="px-3 py-4 text-xs text-slate-500">No parcels packed in this bag.</p> : null}
+            {outstandingParcels(view).length ? (
+              <p className="border-t border-amber-100 bg-amber-50/60 px-3 py-2 text-xs leading-5 text-amber-950">
+                <span className="font-semibold">Not in this bag:</span>{" "}
+                {outstandingParcels(view).map((item) => `${item.parcel} (${item.label})`).join(" · ")}
+              </p>
+            ) : null}
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ShipmentAttentionList({
+  rows,
+  canAct,
+  onDisposition,
+  onReconcileAlsBooking,
+  manifestId,
+  onReconciled,
+}: {
+  rows: OperationsConsignment[];
+  canAct: boolean;
+  onDisposition: (consignmentId: string, parcel: string, disposition: OperationsParcelDisposition) => void;
+  onReconcileAlsBooking: (consignment: OperationsConsignment) => void;
+  manifestId: string;
+  onReconciled: () => Promise<void>;
+}) {
+  return (
+    <div className="grid gap-3 lg:grid-cols-2">
+      {rows.map((item) => {
+        const unscanned = item.expectedParcelNumbers.filter((parcel) => !item.scannedParcelNumbers.includes(parcel));
+        return (
+          <div key={item.id} className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
+            <h3 className="break-all font-mono text-xs font-semibold"><Link href={`/dashboard/shipments/${item.shipmentDraftId}`} className="text-[#0D1282] underline decoration-1 underline-offset-2 hover:decoration-2 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">{item.displayConsignmentNumber || item.consignmentNumber}</Link></h3>
+            {item.dpdWarning ? <p className="mt-1 text-xs text-amber-800">Swiftline label incomplete</p> : null}
+            {item.dpdStatus === "DPD_STATUS_UNKNOWN" ? <p className="mt-1 text-xs font-semibold text-amber-800">Carrier outcome unconfirmed</p> : null}
+            {canAct && item.carrierReconciliationRequired && item.dpdStatus === "DPD_CREATED" && item.carrierBookingReconciled ? (
+              <div className="mt-2">
+                <p className="text-xs font-semibold text-amber-800">DPD label missing</p>
+                <AlsCarrierReconciliationForm shipmentDraftId={item.shipmentDraftId} swiftlineTrackingNumber={item.consignmentNumber} manifestId={manifestId} onComplete={onReconciled} />
+              </div>
+            ) : null}
+            {canAct && item.dpdStatus === "DPD_STATUS_UNKNOWN" && item.dpdStage === "DPD_LABEL_ONLY" ? (
+              <button type="button" onClick={() => onReconcileAlsBooking(item)} className="mt-2 rounded-lg border border-[#0D1282]/25 px-2.5 py-1.5 text-xs font-semibold text-[#0D1282] hover:bg-[#0D1282]/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30">
+                Reconcile manual ALS booking
+              </button>
+            ) : null}
+            {unscanned.length ? (
+              <div className="mt-3 space-y-2">
+                <p className="text-xs font-semibold text-slate-700">Not scanned in this manifest</p>
+                {unscanned.map((parcel) => {
+                  const recorded = item.parcelDispositions.find((entry) => entry.parcelNumber === parcel);
+                  const label = recorded?.disposition === "DEFERRED_TO_NEXT_MANIFEST" ? "Next manifest"
+                    : recorded?.disposition === "HELD" ? "Held" : recorded?.disposition === "CANCELLED" ? "Cancelled" : "Decision required";
+                  return (
+                    <div key={parcel} className="rounded-lg bg-amber-50 px-2.5 py-2 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-1">
+                        <span className="break-all font-mono font-semibold text-slate-800">{parcel}</span>
+                        <span className="font-semibold text-amber-900">{label}</span>
+                      </div>
+                      {recorded?.reason ? <p className="mt-1 text-slate-600">{recorded.reason}</p> : null}
+                      {canAct && !recorded ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {([ ["HELD", "Hold"], ["DEFERRED_TO_NEXT_MANIFEST", "Next manifest"], ["CANCELLED", "Cancel"] ] as const).map(([disposition, text]) => (
+                            <button key={disposition} type="button" onClick={() => onDisposition(item.id, parcel, disposition)} className="min-h-8 rounded-md border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:border-[#0D1282] hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30">{text}</button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

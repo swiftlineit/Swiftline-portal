@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 
 import { useParams, useRouter } from "next/navigation";
 
@@ -16,6 +17,7 @@ import {
   FiLogOut,
   FiPackage,
   FiRefreshCw,
+  FiSearch,
   FiTrash2,
   FiZap,
   FiZapOff,
@@ -23,6 +25,7 @@ import {
 } from "react-icons/fi";
 
 import { getAccessToken, refreshAccessToken } from "@/lib/auth";
+import { createNativeBarcodeDetector, drawScanRegion } from "@/lib/parcelBarcodeCamera";
 
 import {
   disconnectOperationsScanSession,
@@ -50,20 +53,6 @@ type CameraConstraintSet = MediaTrackConstraintSet & {
 
   torch?: boolean;
 };
-
-type DetectedBarcode = { rawValue: string };
-
-type BarcodeDetectorLike = {
-  detect: (source: CanvasImageSource) => Promise<DetectedBarcode[]>;
-};
-
-type BarcodeDetectorConstructor = {
-  new (options?: { formats?: string[] }): BarcodeDetectorLike;
-
-  getSupportedFormats?: () => Promise<string[]>;
-};
-
-const SCAN_OUTPUT_WIDTH = 960;
 
 const OPERATIONS_BAG_MAX_WEIGHT_KG = 32;
 
@@ -94,91 +83,6 @@ function getScannerReturnPath(value: string | null) {
   }
 }
 
-/**
-
- * Copies exactly the camera area visible inside the yellow frame. The video is
-
- * rendered with object-cover, so matching its element aspect ratio here keeps
-
- * the decoder crop and the operator's visible crop identical on every phone.
-
- */
-
-function drawScanRegion(video: HTMLVideoElement, canvas: HTMLCanvasElement) {
-  const videoWidth = video.videoWidth;
-
-  const videoHeight = video.videoHeight;
-
-  if (!videoWidth || !videoHeight) return false;
-
-  const frameAspectRatio =
-    video.clientWidth > 0 && video.clientHeight > 0
-      ? video.clientWidth / video.clientHeight
-      : 3;
-
-  const videoAspectRatio = videoWidth / videoHeight;
-
-  const sourceWidth = Math.round(
-    videoAspectRatio > frameAspectRatio
-      ? videoHeight * frameAspectRatio
-      : videoWidth,
-  );
-
-  const sourceHeight = Math.round(
-    videoAspectRatio > frameAspectRatio
-      ? videoHeight
-      : videoWidth / frameAspectRatio,
-  );
-
-  const sourceX = Math.round((videoWidth - sourceWidth) / 2);
-
-  const sourceY = Math.round((videoHeight - sourceHeight) / 2);
-
-  // 960px retains crisp Code 128 bars while materially reducing the fallback
-
-  // ZXing luminance and binarisation work on mid-range phones.
-
-  const outputWidth = Math.min(SCAN_OUTPUT_WIDTH, sourceWidth);
-
-  const outputHeight = Math.max(
-    1,
-
-    Math.round((outputWidth * sourceHeight) / sourceWidth),
-  );
-
-  if (canvas.width !== outputWidth || canvas.height !== outputHeight) {
-    canvas.width = outputWidth;
-
-    canvas.height = outputHeight;
-  }
-
-  const context = canvas.getContext("2d", { alpha: false });
-
-  if (!context) return false;
-
-  context.drawImage(
-    video,
-
-    sourceX,
-
-    sourceY,
-
-    sourceWidth,
-
-    sourceHeight,
-
-    0,
-
-    0,
-
-    outputWidth,
-
-    outputHeight,
-  );
-
-  return true;
-}
-
 // Consignment parties are stored as a single formatted block: company on the first
 
 // line, then contact and address. The phone shows the name and address separately.
@@ -199,24 +103,6 @@ function partyLines(snapshot?: { name?: string; formatted?: string }) {
 
     address: (explicitName ? lines : lines.slice(1)).join(", "),
   };
-}
-
-async function createNativeBarcodeDetector() {
-  const detectorConstructor = (
-    window as unknown as { BarcodeDetector?: BarcodeDetectorConstructor }
-  ).BarcodeDetector;
-
-  if (!detectorConstructor) return null;
-
-  try {
-    const supported = (await detectorConstructor.getSupportedFormats?.()) ?? [];
-
-    if (!supported.includes("code_128")) return null;
-
-    return new detectorConstructor({ formats: ["code_128"] });
-  } catch {
-    return null;
-  }
 }
 
 function feedbackTone(accepted: boolean) {
@@ -680,13 +566,24 @@ export default function ManifestPhoneScannerPage() {
           </div>
         </div>
 
-        <button
-          onClick={() => void disconnect()}
-          title="Disconnect phone"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/15 text-white transition active:scale-95"
-        >
-          <FiLogOut />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {session?.manifestId ? (
+            <a
+              href={`/manifest-scanner/details/${session.manifestId}?returnTo=${encodeURIComponent(`/manifest-scanner/${sessionId}`)}`}
+              onClick={stopCamera}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white/15 px-2.5 text-xs font-semibold text-white hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F0DE36]"
+            >
+              <FiSearch /> Scan Details
+            </a>
+          ) : null}
+          <button
+            onClick={() => void disconnect()}
+            title="Disconnect phone"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white transition active:scale-95"
+          >
+            <FiLogOut />
+          </button>
+        </div>
       </header>
 
       {session?.manifest ? (
@@ -909,9 +806,9 @@ export default function ManifestPhoneScannerPage() {
                     <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
                       <span>Consignment</span>
 
-                      <strong className="text-right text-white">
+                      <Link href={`/dashboard/shipments/${latestConsignment.shipmentDraftId}`} className="text-right font-semibold text-white underline decoration-1 decoration-white/70 underline-offset-2 hover:decoration-white focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#F0DE36]">
                         {latestConsignment.displayConsignmentNumber}
-                      </strong>
+                      </Link>
 
                       <span>Parcels</span>
 

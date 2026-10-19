@@ -74,6 +74,7 @@ export type ArchivedOperationsManifest = {
 export type OperationsBag = {
   id: string;
   bagNumber: string;
+  sequence?: number;
   barcode?: string;
   status: "OPEN" | "CLOSED" | "READY" | "REOPENED" | "CANCELLED";
   totalConsignments: number;
@@ -87,6 +88,9 @@ export type OperationsParcelValue = {
 export type OperationsParcelWeight = {
   parcelNumber: string;
   weightKg: number;
+  contentsDescription?: string;
+  items?: Array<{ description: string }>;
+  valueMinor?: number | null;
 };
 export type OperationsParcelDisposition =
   | "HELD"
@@ -103,7 +107,7 @@ export type OperationsConsignment = {
   displayConsignmentNumber: string;
   expectedParcelNumbers: string[];
   scannedParcelNumbers: string[];
-  activeParcelScans?: Array<{ parcelNumber: string; scanId: string }>;
+  activeParcelScans?: Array<{ parcelNumber: string; scanId: string; bagId: string | null }>;
   parcelWeightSnapshots?: OperationsParcelWeight[];
   parcelDispositions: Array<{
     parcelNumber: string;
@@ -173,6 +177,7 @@ export type OperationsScanResult = {
     totalWeightKg: number;
   };
   consignment: {
+    shipmentDraftId: string;
     displayConsignmentNumber: string;
     scannedParcels: number;
     expectedParcels: number;
@@ -217,6 +222,27 @@ export type OperationsScanSession = {
     scannedAt: string;
   } | null;
 };
+
+export type OperationsParcelDetails = {
+  parcelNumber: string;
+  packed: boolean;
+  scannedAt: string | null;
+  disposition: OperationsParcelDisposition | null;
+  dispositionReason: string;
+  weightKg: number | null;
+  valueMinor: number | null;
+  contentsDescription: string;
+  items: Array<{ description: string }>;
+  shipmentDraftId: string;
+  consignmentNumber: string;
+  serviceInfo: string;
+  consignee: { name?: string; formatted?: string };
+  manifest: { id: string; manifestNumber: string; status: ManifestStatus };
+  bag: { bagNumber: string; status: OperationsBag["status"] } | null;
+  otherShipmentBags: string[];
+};
+export type OperationsScanDetailsContext = Pick<OperationsManifest,
+  "id" | "manifestNumber" | "status" | "totalBags" | "totalConsignments" | "totalPhysicalParcels" | "totalWeightKg">;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let token = getAccessToken() ?? (await refreshAccessToken());
@@ -308,6 +334,14 @@ export const updateOperationsManifest = (id: string, body: { header: ManifestHea
 export const getOperationsManifest = (id: string) =>
   request<{ success: true } & ManifestDetail>(
     `/api/v1/operations-manifests/${id}`,
+  );
+export const getOperationsParcelDetails = (manifestId: string, parcelNumber: string) =>
+  request<{ success: true; parcel: OperationsParcelDetails }>(
+    `/api/v1/operations-manifests/${manifestId}/parcels/${encodeURIComponent(parcelNumber.trim())}/details`,
+  );
+export const getOperationsScanDetailsContext = (manifestId: string) =>
+  request<{ success: true; manifest: OperationsScanDetailsContext }>(
+    `/api/v1/operations-manifests/${manifestId}/scan-details`,
   );
 export const listArchivedOperationsManifests = (page = 1) =>
   request<{ success: true; items: ArchivedOperationsManifest[]; pagination: { pages: number } }>(
@@ -478,6 +512,11 @@ export const runBagAction = (
 export const closeAllOperationsBags = (id: string) =>
   request<{ success: true; message: string; result: { closed: number; bagNumbers: string[] } }>(
     `/api/v1/operations-manifests/${id}/bags/close-all`,
+    { method: "POST", body: "{}" },
+  );
+export const reopenAllOperationsBags = (id: string) =>
+  request<{ success: true; message: string; result: { reopened: number; bagNumbers: string[] } }>(
+    `/api/v1/operations-manifests/${id}/bags/reopen-all`,
     { method: "POST", body: "{}" },
   );
 export const markOperationsBagReady = (manifestId: string, bagBarcode: string) =>
