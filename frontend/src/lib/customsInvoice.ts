@@ -47,6 +47,7 @@ export type CustomsInvoiceBox = {
 
 export type CustomsInvoice = {
   invoiceNumber: string;
+  swiftlineTrackingNumber: string;
   invoiceDate: string;
   otherReference: string;
   aadhaarNumber: string;
@@ -101,7 +102,9 @@ async function download(draftId: string, audience: CustomsInvoiceAudience, forma
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;
-  link.download = `${draftId}-shipment-invoice.${format}`;
+  const contentDisposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = /filename="?([^";]+)"?/i.exec(contentDisposition)?.[1]?.trim();
+  link.download = filename || `${draftId}-shipment-invoice.${format}`;
   document.body.appendChild(link);
   link.click();
   link.remove();

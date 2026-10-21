@@ -17,6 +17,26 @@ describe("shipment cancellation policy", () => {
     });
   });
 
+  it("allows a cancellation fee below INR 700 and calculates the refund", () => {
+    assert.deepEqual(calculateCancellationAmounts(200_000, 10_000), {
+      feeBaseMinor: 10_000,
+      feeGstMinor: 1_800,
+      feeTotalMinor: 11_800,
+      refundableAmountMinor: 188_200,
+      feeWasCapped: false
+    });
+  });
+
+  it("allows a zero cancellation fee and refunds the full shipment charge", () => {
+    assert.deepEqual(calculateCancellationAmounts(200_000, 0), {
+      feeBaseMinor: 0,
+      feeGstMinor: 0,
+      feeTotalMinor: 0,
+      refundableAmountMinor: 200_000,
+      feeWasCapped: false
+    });
+  });
+
   it("caps the fee at a low-value shipment without creating a new charge", () => {
     assert.deepEqual(calculateCancellationAmounts(50_000), {
       feeBaseMinor: 42_373,

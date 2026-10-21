@@ -67,7 +67,7 @@ const shipmentCancellationSchema = new mongoose.Schema<IShipmentCancellation>({
   status: { type: String, enum: shipmentCancellationStatusValues, default: "REQUESTED", required: true, index: true },
   originalAmountMinor: { type: Number, required: true, min: 0, validate: isMinorUnitInteger },
   taxTreatment: { type: String, enum: ["GST_APPLICABLE", "NO_GST"], required: true, default: "GST_APPLICABLE" },
-  requestedFeeBaseMinor: { type: Number, required: true, min: 70000, validate: isMinorUnitInteger },
+  requestedFeeBaseMinor: { type: Number, required: true, min: 0, validate: isMinorUnitInteger },
   approvedFeeBaseMinor: optionalMinorAmount,
   feeGstMinor: optionalMinorAmount,
   feeTotalMinor: optionalMinorAmount,

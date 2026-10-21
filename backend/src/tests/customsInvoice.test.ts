@@ -8,6 +8,7 @@ import {
 import { customsInvoiceFooterNote } from "../services/customsInvoice/customsInvoiceConstants.js";
 import { buildCustomsInvoiceWorkbook } from "../services/customsInvoice/customsInvoiceWorkbook.service.js";
 import { renderCustomsInvoicePdfBuffer } from "../services/customsInvoice/customsInvoicePdf.service.js";
+import { customsInvoiceFileName } from "../services/customsInvoice/customsInvoice.service.js";
 import { getDeclaredGoodsValue, getParcelItemAmount } from "../services/parcelItems.service.js";
 
 // Mirrors the customer's supplied template (DAT301472) closely enough to check
@@ -154,6 +155,15 @@ describe("customs invoice model", () => {
 });
 
 describe("customs invoice documents", () => {
+  test("names downloads with the shipment AWB and consignee, for both formats", () => {
+    const invoice = build();
+    invoice.swiftlineTrackingNumber = "SLC/DEL 123";
+    invoice.consignee.name = "Aman Neji / Receiver";
+
+    assert.equal(customsInvoiceFileName(invoice, "pdf"), "SLC-DEL-123-Aman-Neji-Receiver-shipment-invoice.pdf");
+    assert.equal(customsInvoiceFileName(invoice, "xlsx"), "SLC-DEL-123-Aman-Neji-Receiver-shipment-invoice.xlsx");
+  });
+
   test("produces a PDF", async () => {
     const buffer = await renderCustomsInvoicePdfBuffer(build());
     assert.ok(buffer.length > 500, `expected a non-trivial PDF, got ${buffer.length} bytes`);

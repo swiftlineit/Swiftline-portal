@@ -50,8 +50,9 @@ export default function CancellationReview({
   const isIndividual = cancellation.customerType === "INDIVIDUAL";
 
   const amounts = useMemo(() => {
+    if (!feeRupees.trim()) return null;
     const requestedBaseMinor = Math.round(Number(feeRupees) * 100);
-    if (!Number.isInteger(requestedBaseMinor) || requestedBaseMinor < 70000)
+    if (!Number.isInteger(requestedBaseMinor) || requestedBaseMinor < 0)
       return null;
     const noGst = cancellation.taxTreatment === "NO_GST";
     const requestedGstMinor = noGst ? 0 : Math.round(requestedBaseMinor * 0.18);
@@ -82,7 +83,7 @@ export default function CancellationReview({
   async function approve() {
     if (!amounts)
       return setError(
-        "Enter a cancellation fee of at least INR 700 before any applicable GST.",
+        "Enter a valid cancellation fee of INR 0.00 or more before any applicable GST.",
       );
     if (amounts.requestedBaseMinor > 70000 && feeReason.trim().length < 5) {
       return setError("Explain the additional carrier or handling fee.");

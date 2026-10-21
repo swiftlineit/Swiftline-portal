@@ -33,7 +33,7 @@ const requestSchema = z.object({
   reason: z.string().trim().min(5, "Enter a clear reason for cancellation.").max(500)
 });
 const reviewSchema = z.object({
-  feeBaseMinor: z.number().int().min(70000, "The fee must be at least INR 700 before GST."),
+  feeBaseMinor: z.number().int().min(0, "The cancellation fee cannot be negative."),
   feeReason: z.string().trim().max(500).optional().default(""),
   carrierConfirmed: z.literal(true, { error: "Confirm carrier cancellation before approval." }),
   settlementConfirmed: z.literal(true, { error: "Confirm the cancellation settlement before approval." }),

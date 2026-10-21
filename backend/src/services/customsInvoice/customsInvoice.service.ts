@@ -73,6 +73,7 @@ export async function buildCustomsInvoiceForDraft(input: {
   return buildCustomsInvoiceModel({
     draft: draft as never,
     invoiceNumber,
+    swiftlineTrackingNumber: booking?.swiftlineTrackingNumber,
     invoiceDate: draft.createdAt ?? new Date(),
     parcelNumbers
   });
@@ -95,6 +96,14 @@ export async function renderCustomsInvoiceWorkbook(input: {
 }
 
 export function customsInvoiceFileName(invoice: CustomsInvoiceModel, extension: "pdf" | "xlsx") {
-  const safe = invoice.invoiceNumber.replace(/[^A-Za-z0-9._-]+/g, "-");
-  return `${safe}-shipment-invoice.${extension}`;
+  const safePart = (value: string) => value
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[.-]+|[.-]+$/g, "");
+  const trackingNumber = safePart(invoice.swiftlineTrackingNumber);
+  const consigneeName = safePart(invoice.consignee.name || invoice.consignee.companyName);
+  const fallback = safePart(invoice.invoiceNumber) || "shipment";
+  const base = [trackingNumber || fallback, consigneeName].filter(Boolean).join("-") || "shipment";
+  return `${base}-shipment-invoice.${extension}`;
 }

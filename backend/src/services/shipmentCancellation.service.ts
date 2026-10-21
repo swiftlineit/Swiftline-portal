@@ -18,6 +18,8 @@ import { ShipmentOperationsParcelScan } from "../models/shipmentOperationsParcel
 import { appendCreditLedgerEntry } from "./creditAccount.service.js";
 import { notifyActiveAdmins, notifyBusinessFinancialMembers } from "./portalNotification.service.js";
 
+// The default fee and threshold for requiring an additional-fee reason; lower
+// fees are valid and are not subject to a minimum.
 export const DEFAULT_CANCELLATION_FEE_BASE_MINOR = 70000;
 export const CANCELLATION_GST_RATE_PERCENT = 18;
 
@@ -44,8 +46,8 @@ export function calculateCancellationAmounts(
   if (!Number.isInteger(originalAmountMinor) || originalAmountMinor < 0) {
     throw new ShipmentCancellationError(400, "The shipment invoice amount is invalid.");
   }
-  if (!Number.isInteger(requestedFeeBaseMinor) || requestedFeeBaseMinor < DEFAULT_CANCELLATION_FEE_BASE_MINOR) {
-    throw new ShipmentCancellationError(400, "The cancellation fee must be at least INR 700 before any applicable GST.");
+  if (!Number.isInteger(requestedFeeBaseMinor) || requestedFeeBaseMinor < 0) {
+    throw new ShipmentCancellationError(400, "The cancellation fee must be a non-negative amount.");
   }
 
   const requestedGstMinor = taxTreatment === "NO_GST" ? 0 : Math.round(requestedFeeBaseMinor * CANCELLATION_GST_RATE_PERCENT / 100);

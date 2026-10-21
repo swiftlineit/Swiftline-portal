@@ -58,6 +58,8 @@ export type CustomsInvoiceBox = {
 
 export type CustomsInvoiceModel = {
   invoiceNumber: string;
+  /** Parent Swiftline AWB, used to name the downloaded shipment invoice. */
+  swiftlineTrackingNumber: string;
   invoiceDate: Date;
   otherReference: string;
   aadhaarNumber: string;
@@ -172,6 +174,7 @@ function partyFrom(source: Record<string, unknown> | null | undefined, fallbackC
 export function buildCustomsInvoiceModel(input: {
   draft: DraftLike;
   invoiceNumber: string;
+  swiftlineTrackingNumber?: string | null;
   invoiceDate?: Date;
   currency?: string;
   /** Swiftline parcel numbers in parcel order, from the carrier booking when booked. */
@@ -217,6 +220,7 @@ export function buildCustomsInvoiceModel(input: {
 
   return {
     invoiceNumber: input.invoiceNumber,
+    swiftlineTrackingNumber: text(input.swiftlineTrackingNumber),
     invoiceDate: input.invoiceDate ?? new Date(),
     otherReference,
     aadhaarNumber,

@@ -58,6 +58,7 @@ export async function downloadCustomsInvoicePdf(request: Request, response: Resp
     });
 
     response.setHeader("Content-Type", "application/pdf");
+    response.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
     response.setHeader("Content-Disposition", `attachment; filename="${customsInvoiceFileName(invoice, "pdf")}"`);
     return response.status(200).send(buffer);
   } catch (error) {
@@ -82,6 +83,7 @@ export async function downloadCustomsInvoiceWorkbook(request: Request, response:
     });
 
     response.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    response.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
     response.setHeader("Content-Disposition", `attachment; filename="${customsInvoiceFileName(invoice, "xlsx")}"`);
     return response.status(200).send(buffer);
   } catch (error) {
