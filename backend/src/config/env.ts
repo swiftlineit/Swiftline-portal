@@ -17,6 +17,8 @@ const environmentSchema = z.object({
 
   CLIENT_URL: z.string().url(),
   CORS_ORIGINS: z.string().optional(),
+  // Operator endpoints stay unavailable until tenant indexes and isolation are deployed.
+  OPERATOR_PORTAL_ENABLED: booleanFromEnv.default(false),
   // Set true when the frontend and API are served from different origins over HTTPS
   // (e.g. two devtunnel subdomains), so the refresh cookie uses SameSite=None; Secure.
   CROSS_SITE_COOKIES: booleanFromEnv.default(false),

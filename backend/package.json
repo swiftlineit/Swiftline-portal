@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "test:operator:registry": "tsx --test src/tests/tenantRegistry.integration.test.ts",
+    "audit:tenant-registry-indexes": "tsx src/scripts/migrateTenantRegistryIndexes.ts",
+    "migrate:tenant-registry-indexes": "tsx src/scripts/migrateTenantRegistryIndexes.ts --apply",
     "start": "tsx src/server.ts",
     "build:reference-data": "tsx src/scripts/buildReferenceData.ts",
     "build:hs-codes": "tsx src/scripts/buildHsCodeData.ts",

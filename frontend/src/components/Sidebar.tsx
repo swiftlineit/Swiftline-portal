@@ -280,6 +280,12 @@ const staffNavigation: Array<
         icon: FiUsers,
         roles: withAdmin(STAFF_DIRECTORY_AREA),
       },
+      ...(process.env.NEXT_PUBLIC_OPERATOR_PORTAL_ENABLED === "true" ? [{
+        label: "Operators",
+        href: "/dashboard/operators",
+        icon: FiBriefcase,
+        roles: ["admin"] as const,
+      }] : []),
     ],
   },
   {

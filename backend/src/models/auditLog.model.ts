@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 
 export type AuditAction =
+  | "OPERATOR_DRAFT_CREATED"
+  | "OPERATOR_SLUG_CHANGED"
   | "BRANCH_CREATED"
   | "BRANCH_DRAFT_CREATED"
   | "BRANCH_DRAFT_DELETED"
@@ -226,6 +228,7 @@ export type AuditAction =
   | "FLIGHT_EXCEPTION_UPDATED"
   | "FLIGHT_EXCEPTION_RESOLVED";
 export type AuditEntityType =
+  | "TENANT"
   | "BRANCH"
   | "DPD_CONFIGURATION"
   | "SHIPMENT_IMPORT_BATCH"

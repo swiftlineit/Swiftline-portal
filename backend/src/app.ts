@@ -58,6 +58,8 @@ import { bookingPauseRouter } from "./routes/bookingPause.routes.js";
 import { flightLinehaulRouter } from "./routes/flightLinehaul.routes.js";
 import { publicBusinessAccountRouter } from "./routes/publicBusinessAccount.routes.js";
 import { publicShipmentBookingRouter } from "./routes/publicShipmentBooking.routes.js";
+import { platformOperatorRouter } from "./routes/platformOperator.routes.js";
+import { operatorRouter } from "./routes/operator.routes.js";
 
 export const app = express();
 
@@ -122,6 +124,10 @@ app.get("/", (_request, response) => {
 });
 
 app.use("/api/v1/health", healthRouter);
+if (env.OPERATOR_PORTAL_ENABLED) {
+  app.use("/api/v1/platform/operators", platformOperatorRouter);
+  app.use("/api/v1/operators/:operatorSlug", operatorRouter);
+}
 app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/users", userRouter);
 app.use("/api/v1/profile", profileRouter);
