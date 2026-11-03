@@ -42,6 +42,17 @@ export function withOperatorTenantContext(handler: RequestHandler): RequestHandl
   };
 }
 
+/** Restores tenant scope after callback-based uploads before running the handler. */
+export function withOperatorTenantUpload(upload: RequestHandler, handler: RequestHandler): RequestHandler {
+  const scopedUpload = withOperatorTenantContext(upload);
+  const scopedHandler = withOperatorTenantContext(handler);
+
+  return (request, response, next) => scopedUpload(request, response, (error?: unknown) => {
+    if (error) return next(error);
+    return scopedHandler(request, response, next);
+  });
+}
+
 /** Only for operator routes. Never grants access from the URL slug alone. */
 export async function requireOperatorContext(request: Request, response: Response, next: NextFunction) {
   const user = (request as Request & { user?: { _id?: unknown; role?: string } }).user;

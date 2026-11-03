@@ -77,7 +77,8 @@ import {
   requireOperatorContext,
   requireOperatorRole,
   requireOperatorSupportReadOnly,
-  withOperatorTenantContext
+  withOperatorTenantContext,
+  withOperatorTenantUpload
 } from "../middleware/operatorContext.middleware.js";
 import type { TenantMembershipRole } from "../models/tenantMembership.model.js";
 import {
@@ -189,11 +190,7 @@ function withOperatorClientDraftAccess(handler: RequestHandler, requireEditPermi
 }
 
 function withKycUpload(handler: RequestHandler): RequestHandler {
-  return (request, response, next) => shipmentKycUpload(
-    request,
-    response,
-    (error?: unknown) => error ? next(error) : handler(request, response, next)
-  );
+  return withOperatorTenantUpload(shipmentKycUpload, handler);
 }
 
 const requireOperatorMemberAccess: RequestHandler = (request, response, next) => {
@@ -225,10 +222,18 @@ operatorRouter.patch("/settings/slug", requireOperatorRole("OPERATOR_ADMIN"), up
 operatorRouter.get("/settings", requireOperatorRole("OPERATOR_ADMIN", "OPERATIONS"), getOperatorInvoiceSettings);
 operatorRouter.patch("/settings/company", requireOperatorRole("OPERATOR_ADMIN"), updateOperatorCompanyProfile);
 operatorRouter.get("/settings/logo", getOperatorCompanyLogo);
-operatorRouter.put("/settings/logo", requireOperatorRole("OPERATOR_ADMIN"), operatorBrandLogoUpload, updateOperatorCompanyLogo);
+operatorRouter.put(
+  "/settings/logo",
+  requireOperatorRole("OPERATOR_ADMIN"),
+  withOperatorTenantUpload(operatorBrandLogoUpload, updateOperatorCompanyLogo)
+);
 operatorRouter.delete("/settings/logo", requireOperatorRole("OPERATOR_ADMIN"), removeOperatorCompanyLogo);
 operatorRouter.get("/settings/banners/:bannerId", getOperatorBrandBanner);
-operatorRouter.post("/settings/banners", requireOperatorRole("OPERATOR_ADMIN", "OPERATIONS"), operatorBrandBannerUpload, uploadOperatorBrandBanner);
+operatorRouter.post(
+  "/settings/banners",
+  requireOperatorRole("OPERATOR_ADMIN", "OPERATIONS"),
+  withOperatorTenantUpload(operatorBrandBannerUpload, uploadOperatorBrandBanner)
+);
 operatorRouter.delete("/settings/banners/:bannerId", requireOperatorRole("OPERATOR_ADMIN", "OPERATIONS"), removeOperatorBrandBanner);
 operatorRouter.get(
   "/business-accounts",
@@ -326,10 +331,18 @@ operatorRouter.post("/branches", requireOperatorRole("OPERATOR_ADMIN"), createBr
 operatorRouter.patch("/branches/:branchId", requireOperatorRole("OPERATOR_ADMIN"), updateBranch);
 operatorRouter.patch("/branches/:branchId/status", requireOperatorRole("OPERATOR_ADMIN"), updateBranchStatus);
 operatorRouter.delete("/branches/:branchId", requireOperatorRole("OPERATOR_ADMIN"), deleteBranchDraft);
-operatorRouter.post("/branches/:branchId/images", requireOperatorRole("OPERATOR_ADMIN"), branchUpload, uploadBranchImages);
+operatorRouter.post(
+  "/branches/:branchId/images",
+  requireOperatorRole("OPERATOR_ADMIN"),
+  withOperatorTenantUpload(branchUpload, uploadBranchImages)
+);
 operatorRouter.get("/branches/:branchId/images/:imageIndex", requireOperatorRole("OPERATOR_ADMIN"), viewBranchImage);
 operatorRouter.delete("/branches/:branchId/images/:imageIndex", requireOperatorRole("OPERATOR_ADMIN"), deleteBranchImage);
-operatorRouter.post("/branches/:branchId/documents", requireOperatorRole("OPERATOR_ADMIN"), branchUpload, uploadBranchDocument);
+operatorRouter.post(
+  "/branches/:branchId/documents",
+  requireOperatorRole("OPERATOR_ADMIN"),
+  withOperatorTenantUpload(branchUpload, uploadBranchDocument)
+);
 operatorRouter.get("/branches/:branchId/documents/:docIndex", requireOperatorRole("OPERATOR_ADMIN", "OPERATIONS", "FINANCE"), requireOperatorBranchDocumentAccess, viewBranchDocument);
 operatorRouter.delete("/branches/:branchId/documents/:docIndex", requireOperatorRole("OPERATOR_ADMIN"), deleteBranchDocument);
 // Operator commercial cards use the existing audited/versioned rate-card
