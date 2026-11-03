@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const shipmentEventStatusValues = [
   "SHIPMENT_CREATED",
@@ -86,7 +87,7 @@ export function shipmentMilestoneKey(status?: string | null): string {
   return (shipmentOperationalStatusValues as readonly string[]).includes(status) ? status : "";
 }
 
-export interface IShipmentEvent extends mongoose.Document {
+export interface IShipmentEvent extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
   dpdShipmentId?: mongoose.Types.ObjectId | null;
   status: ShipmentEventStatus;
@@ -202,6 +203,8 @@ shipmentEventSchema.index(
     partialFilterExpression: { milestoneKey: { $type: "string", $gt: "" } }
   }
 );
+
+addTenantOwnership(shipmentEventSchema);
 
 export const ShipmentEvent = mongoose.model<IShipmentEvent>(
   "ShipmentEvent",

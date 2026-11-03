@@ -31,11 +31,11 @@ describe("global client identity", () => {
     assert.equal(phoneIndex[1].unique, true);
   });
 
-  test("only one invited, active or suspended membership may exist per user", () => {
+  test("only one invited, active or suspended membership may exist per user in each tenant", () => {
     const memberIndex = (BusinessAccountMember.schema.indexes() as SchemaIndex[])
-      .find((index) => index[1].name === "uniq_current_business_membership_per_user");
+      .find((index) => index[1].name === "uniq_current_business_membership_per_tenant_user");
     assert.ok(memberIndex, "the single-current-membership index exists");
-    assert.deepEqual(memberIndex[0], { user: 1 });
+    assert.deepEqual(memberIndex[0], { tenantId: 1, user: 1 });
     assert.equal(memberIndex[1].unique, true);
     assert.deepEqual(memberIndex[1].partialFilterExpression, {
       status: { $in: ["invited", "active", "suspended"] }

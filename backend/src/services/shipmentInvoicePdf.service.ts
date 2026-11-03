@@ -13,6 +13,9 @@ export type ShipmentInvoicePdfOptions = {
    * tax invoice, even when it is downloaded outside the portal.
    */
   revisedCopy?: boolean;
+  tenantKind?: "SWIFTLINE" | "OPERATOR";
+  /** Logo bytes are loaded only after the invoice owner has been authorized. */
+  logoBuffer?: Buffer;
 };
 
 // The built-in Helvetica face is WinAnsi encoded and has no rupee glyph, so a
@@ -160,10 +163,14 @@ export function createShipmentInvoicePdf(invoice: ShipmentInvoiceDocument, optio
   const parcels = Array.isArray(shipment.parcels) ? shipment.parcels as Record<string, unknown>[] : [];
   // Carries the freight / CSB-V clearance split behind the taxable value.
   const pricingSnapshot = invoice.pricingSnapshot as Record<string, unknown>;
+  const supplierName = optionalTextValue(supplier, "legalName") || "Swiftline Cargo and Express Logistics Pvt. Ltd.";
+  const isSwiftlineInvoice = options.tenantKind !== "OPERATOR";
   const logoPath = path.resolve(process.cwd(), "assets", "swiftline-invoice-logo.png");
 
-  if (fs.existsSync(logoPath)) doc.image(logoPath, 42, 25, { fit: [185, 100] });
-  else doc.font("Helvetica-Bold").fontSize(22).fillColor("#0f2f5f").text("SWIFTLINE", 42, 48);
+  if (!isSwiftlineInvoice && options.logoBuffer) doc.image(options.logoBuffer, 42, 25, { fit: [185, 100] });
+  else if (isSwiftlineInvoice && fs.existsSync(logoPath)) doc.image(logoPath, 42, 25, { fit: [185, 100] });
+  else doc.font("Helvetica-Bold").fontSize(isSwiftlineInvoice ? 22 : 14).fillColor("#0f2f5f")
+    .text(isSwiftlineInvoice ? "SWIFTLINE" : supplierName, 42, isSwiftlineInvoice ? 48 : 42, { width: 245 });
   const noGst = invoice.taxTreatment === "NO_GST" || invoice.gstRatePercent === 0;
   const invoiceTitle = options.revisedCopy
     ? "REVISED DOCUMENT"
@@ -312,7 +319,7 @@ export function createShipmentInvoicePdf(invoice: ShipmentInvoiceDocument, optio
   const declarationY = wordsY + 58;
   doc.font("Helvetica-Bold").fontSize(8).text("Declaration", 42, declarationY);
   doc.font("Helvetica").fontSize(7).text("We declare that this invoice records the shipment service and applicable charges shown above.", 42, declarationY + 13, { width: 310 });
-  doc.font("Helvetica-Bold").fontSize(8).text("For Swiftline Cargo and Express Logistics Pvt. Ltd.", 330, declarationY, { width: 219, align: "right" });
+  doc.font("Helvetica-Bold").fontSize(8).text(`For ${supplierName}.`, 330, declarationY, { width: 219, align: "right" });
   doc.font("Helvetica").fontSize(8).text("Authorised Signatory", 330, declarationY + 35, { width: 219, align: "right" });
 
   if (invoice.status === "DRAFT") {
@@ -325,7 +332,7 @@ for (let index = range.start; index < range.start + range.count; index += 1) {
   const bottomMargin = doc.page.margins.bottom;
   doc.page.margins.bottom = 0; // prevent auto page-break for footer text
   doc.font("Helvetica").fontSize(7).fillColor("#64748b").text(
-    `This is a computer generated invoice from Swiftline Portal | Page ${index + 1} of ${range.count}`,
+    `This is a computer generated invoice from ${isSwiftlineInvoice ? "Swiftline Portal" : supplierName} | Page ${index + 1} of ${range.count}`,
     42,
     806,
     { width: 507, align: "center", lineBreak: false }

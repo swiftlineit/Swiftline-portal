@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
-export interface IPaymentTermsDocument extends mongoose.Document {
+export interface IPaymentTermsDocument extends mongoose.Document, TenantOwnedFields {
   version: string;
   title: string;
   effectiveFrom: Date;
@@ -13,7 +14,7 @@ export interface IPaymentTermsDocument extends mongoose.Document {
 }
 
 const paymentTermsDocumentSchema = new mongoose.Schema<IPaymentTermsDocument>({
-  version: { type: String, trim: true, required: true, unique: true, maxlength: 40 },
+  version: { type: String, trim: true, required: true, maxlength: 40 },
   title: { type: String, trim: true, required: true, maxlength: 160 },
   effectiveFrom: { type: Date, required: true },
   sections: [{ _id: false, heading: { type: String, trim: true, required: true }, content: { type: String, trim: true, required: true } }],
@@ -22,9 +23,15 @@ const paymentTermsDocumentSchema = new mongoose.Schema<IPaymentTermsDocument>({
   publishedAt: { type: Date, default: null }
 }, { timestamps: true });
 
+paymentTermsDocumentSchema.index(
+  { tenantId: 1, version: 1 },
+  { unique: true, name: "uniq_tenant_payment_terms_version" }
+);
+addTenantOwnership(paymentTermsDocumentSchema);
+
 export const PaymentTermsDocument = mongoose.model<IPaymentTermsDocument>("PaymentTermsDocument", paymentTermsDocumentSchema);
 
-export interface IPaymentTermsAcceptance extends mongoose.Document {
+export interface IPaymentTermsAcceptance extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
   termsVersion: string;
@@ -44,6 +51,10 @@ const paymentTermsAcceptanceSchema = new mongoose.Schema<IPaymentTermsAcceptance
   paymentReference: { type: String, trim: true, maxlength: 120, default: "" }
 });
 
-paymentTermsAcceptanceSchema.index({ businessAccountId: 1, userId: 1, termsVersion: 1, paymentReference: 1 }, { unique: true });
+paymentTermsAcceptanceSchema.index(
+  { tenantId: 1, businessAccountId: 1, userId: 1, termsVersion: 1, paymentReference: 1 },
+  { unique: true, name: "uniq_tenant_payment_terms_acceptance" }
+);
+addTenantOwnership(paymentTermsAcceptanceSchema);
 
 export const PaymentTermsAcceptance = mongoose.model<IPaymentTermsAcceptance>("PaymentTermsAcceptance", paymentTermsAcceptanceSchema);

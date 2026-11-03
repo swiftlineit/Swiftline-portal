@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const branchServiceValues = [
   "EXPRESS_COURIER",
@@ -49,6 +50,8 @@ export interface IBranchPhoneNumber {
 }
 
 export interface IBranch extends mongoose.Document {
+  /** Tenant ownership; optional only while the staged Swiftline backfill is pending. */
+  tenantId?: mongoose.Types.ObjectId;
   name: string;
   code: string;
   labelCode?: string;
@@ -90,6 +93,7 @@ export interface IBranch extends mongoose.Document {
 
 const branchSchema = new mongoose.Schema<IBranch>(
   {
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant", immutable: true },
     name: { type: String, required: true, trim: true, minlength: 3, maxlength: 100 },
     code: {
       type: String,
@@ -154,6 +158,10 @@ const branchSchema = new mongoose.Schema<IBranch>(
   },
   { timestamps: true }
 );
+
+branchSchema.index({ tenantId: 1 }, { name: "branch_tenant" });
+
+addTenantOwnership(branchSchema);
 
 branchSchema.index({ "address.countryCode": 1 });
 branchSchema.index({ "address.city": 1 });

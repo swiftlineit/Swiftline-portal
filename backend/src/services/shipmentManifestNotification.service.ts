@@ -1,7 +1,10 @@
 import mongoose from "mongoose";
 import { env } from "../config/env.js";
 import type { IShipmentManifest } from "../models/shipmentManifest.model.js";
-import { notifyActiveAdmins } from "./portalNotification.service.js";
+import { TenantMembership } from "../models/tenantMembership.model.js";
+import { Tenant } from "../models/tenant.model.js";
+import { getTenantContext } from "./tenantScope.service.js";
+import { notifyActiveAdmins, notifyPortalUsers } from "./portalNotification.service.js";
 
 type ManifestNotificationInput = {
   manifest: IShipmentManifest;
@@ -26,12 +29,12 @@ export async function notifyAdminsOfClientManifest(input: ManifestNotificationIn
   const shipmentCount = manifest.lineSnapshots.length;
 
   try {
-    await notifyActiveAdmins({
-      type: "SHIPMENT_MANIFEST_GENERATED",
+    const tenantContext = getTenantContext();
+    const notification = {
+      type: "SHIPMENT_MANIFEST_GENERATED" as const,
       title: "Client generated a shipment manifest",
       message: `${input.businessAccountName || "A client"} generated manifest ${manifest.manifestNumber} `
         + `with ${shipmentCount} ${shipmentCount === 1 ? "shipment" : "shipments"}.`,
-      href: manifestHref(manifest),
       idempotencyKey: `SHIPMENT_MANIFEST_GENERATED:${String(manifest._id)}`,
       businessAccountId: manifest.businessAccountId,
       metadata: {
@@ -47,13 +50,37 @@ export async function notifyAdminsOfClientManifest(input: ManifestNotificationIn
           generatedAt: manifest.generatedAt
         },
         attachmentRefs: [{
-          kind: "SHIPMENT_MANIFEST_PDF",
+          kind: "SHIPMENT_MANIFEST_PDF" as const,
           refId: manifest._id as mongoose.Types.ObjectId,
           revision: null,
           filename: `MANIFEST-${manifest.manifestNumber}.pdf`
-        }],
-        // Keeps the shared operations inbox on the distribution list; it has no
-        // portal user behind it and so resolves to no in-app notification.
+        }]
+      }
+    };
+
+    if (tenantContext?.kind === "OPERATOR") {
+      const [tenant, memberships] = await Promise.all([
+        Tenant.findById(tenantContext.tenantId).select("slug").lean().exec(),
+        TenantMembership.find({
+          tenantId: tenantContext.tenantId,
+          role: { $in: ["OPERATOR_ADMIN", "OPERATIONS"] },
+          status: "ACTIVE"
+        }).select("userId").lean().exec()
+      ]);
+      if (!tenant?.slug) throw new Error("The operator manifest notification has no tenant slug.");
+      await notifyPortalUsers(memberships.map((membership) => membership.userId), {
+        ...notification,
+        href: "/portal/" + encodeURIComponent(tenant.slug) + "/manifests#manifest-" + String(manifest._id)
+      });
+      return;
+    }
+
+    await notifyActiveAdmins({
+      ...notification,
+      href: manifestHref(manifest),
+      // The shared Swiftline operations inbox remains on the root-tenant email.
+      email: {
+        ...notification.email,
         extraRecipients: env.ADMIN_EMAIL
           ? [{ userId: null, email: env.ADMIN_EMAIL, name: "Swiftline Operations" }]
           : []

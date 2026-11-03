@@ -3,7 +3,10 @@
 import mongoose from "mongoose";
 import { DpdShipment } from "../../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../../models/shipmentDraft.model.js";
+import { Tenant } from "../../models/tenant.model.js";
 import { readShipmentBookingSnapshot } from "../shipmentBookingSnapshot.service.js";
+import { getTenantContext } from "../tenantScope.service.js";
+import { loadOperatorBrandLogo } from "../operatorBranding.service.js";
 import { publicShipmentSourceIdentity } from "../shipmentSourceIdentity.service.js";
 import { buildCustomsInvoiceModel, type CustomsInvoiceModel } from "./customsInvoiceModel.service.js";
 import { renderCustomsInvoicePdfBuffer } from "./customsInvoicePdf.service.js";
@@ -70,13 +73,22 @@ export async function buildCustomsInvoiceForDraft(input: {
       ? booking.parcelNumbers.map((value) => String(value ?? "").trim())
       : [];
 
-  return buildCustomsInvoiceModel({
+  const invoice = buildCustomsInvoiceModel({
     draft: draft as never,
     invoiceNumber,
     swiftlineTrackingNumber: booking?.swiftlineTrackingNumber,
     invoiceDate: draft.createdAt ?? new Date(),
     parcelNumbers
   });
+  const tenantContext = getTenantContext();
+  if (tenantContext?.kind !== "OPERATOR") return invoice;
+
+  const tenant = await Tenant.findOne({ _id: tenantContext.tenantId, kind: "OPERATOR", status: "ACTIVE" })
+    .select("companyName")
+    .lean()
+    .exec();
+  if (!tenant) throw new CustomsInvoiceError("Operator not found.", 404);
+  return { ...invoice, issuerName: tenant.companyName };
 }
 
 export async function renderCustomsInvoicePdf(input: {
@@ -84,7 +96,17 @@ export async function renderCustomsInvoicePdf(input: {
   businessAccountId?: mongoose.Types.ObjectId | null;
 }) {
   const invoice = await buildCustomsInvoiceForDraft(input);
-  return { invoice, buffer: await renderCustomsInvoicePdfBuffer(invoice) };
+  const tenantContext = getTenantContext();
+  let logoBuffer: Buffer | undefined;
+  if (tenantContext?.kind === "OPERATOR") {
+    const tenant = await Tenant.findOne({ _id: tenantContext.tenantId, kind: "OPERATOR", status: "ACTIVE" })
+      .select("branding.logo.storageKey")
+      .lean()
+      .exec();
+    const storageKey = tenant?.branding?.logo?.storageKey;
+    if (storageKey) logoBuffer = await loadOperatorBrandLogo(String(tenantContext.tenantId), storageKey);
+  }
+  return { invoice, buffer: await renderCustomsInvoicePdfBuffer(invoice, logoBuffer) };
 }
 
 export async function renderCustomsInvoiceWorkbook(input: {

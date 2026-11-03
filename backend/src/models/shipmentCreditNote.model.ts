@@ -1,7 +1,8 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import type { ShipmentInvoiceTaxTreatment, ShipmentInvoiceTaxType } from "./shipmentInvoice.model.js";
 
-export interface IShipmentCreditNote extends mongoose.Document {
+export interface IShipmentCreditNote extends mongoose.Document, TenantOwnedFields {
   creditNoteNumber: string;
   financialYear: string;
   cancellationId: mongoose.Types.ObjectId;
@@ -29,9 +30,9 @@ export interface IShipmentCreditNote extends mongoose.Document {
 }
 
 const schema = new mongoose.Schema<IShipmentCreditNote>({
-  creditNoteNumber: { type: String, required: true, unique: true, immutable: true, trim: true, maxlength: 32 },
+  creditNoteNumber: { type: String, required: true, immutable: true, trim: true, maxlength: 32 },
   financialYear: { type: String, required: true, immutable: true, trim: true },
-  cancellationId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentCancellation", required: true, unique: true, immutable: true },
+  cancellationId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentCancellation", required: true, immutable: true },
   shipmentInvoiceId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentInvoice", required: true, immutable: true },
   shipmentDraftId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentDraft", required: true, immutable: true },
   businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, immutable: true, index: true },
@@ -58,5 +59,16 @@ const schema = new mongoose.Schema<IShipmentCreditNote>({
 schema.pre(["updateOne", "updateMany", "findOneAndUpdate", "deleteOne", "deleteMany"], function blockMutation() {
   throw new Error("Issued shipment credit notes are immutable.");
 });
+
+schema.index(
+  { tenantId: 1, creditNoteNumber: 1 },
+  { unique: true, name: "tenant_credit_note_number_unique" }
+);
+schema.index(
+  { tenantId: 1, cancellationId: 1 },
+  { unique: true, name: "tenant_credit_note_cancellation_unique" }
+);
+
+addTenantOwnership(schema);
 
 export const ShipmentCreditNote = mongoose.model<IShipmentCreditNote>("ShipmentCreditNote", schema);

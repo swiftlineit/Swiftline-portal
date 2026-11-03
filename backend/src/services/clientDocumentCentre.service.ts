@@ -1,4 +1,4 @@
-import type { PipelineStage } from "mongoose";
+import type { PipelineStage, Types } from "mongoose";
 import { Claim } from "../models/claim.model.js";
 import { ClaimDocument } from "../models/claimDocument.model.js";
 import { CreditBillingStatement } from "../models/creditBillingStatement.model.js";
@@ -10,6 +10,7 @@ import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
 import { ShipmentSupportingDocument } from "../models/shipmentSupportingDocument.model.js";
+import { getDataAccessTenantId } from "./tenantScope.service.js";
 import type { ClientScope } from "../utils/clientScope.js";
 
 export const clientDocumentTypeValues = [
@@ -77,6 +78,7 @@ type AggregateResult = {
 };
 
 type SuccessfulClientScope = Extract<ClientScope, { ok: true }>;
+type TenantScopedClientScope = SuccessfulClientScope & { tenantId?: Types.ObjectId };
 
 function destinationExpression(draftPath: string) {
   return {
@@ -103,7 +105,7 @@ function trackingExpression(bookingPath: string, draftPath: string) {
   };
 }
 
-function scopeMatch(scope: SuccessfulClientScope, draftPath = "") {
+function businessScopeMatch(scope: SuccessfulClientScope, draftPath = "") {
   const prefix = draftPath ? `${draftPath}.` : "";
   return {
     [`${prefix}businessAccountId`]: scope.businessAccountId,
@@ -111,34 +113,78 @@ function scopeMatch(scope: SuccessfulClientScope, draftPath = "") {
   };
 }
 
+function scopeMatch(scope: TenantScopedClientScope, draftPath = "") {
+  const prefix = draftPath ? `${draftPath}.` : "";
+  return {
+    ...(scope.tenantId ? { [`${prefix}tenantId`]: scope.tenantId } : {}),
+    ...businessScopeMatch(scope, draftPath)
+  };
+}
+
 function union(collection: string, pipeline: Array<Record<string, unknown>>) {
   return { $unionWith: { coll: collection, pipeline } };
 }
 
-function lookupDraft(localField: string, as = "draft") {
+function scopedLookup(
+  collection: string,
+  localField: string,
+  foreignField: string,
+  as: string,
+  match: Record<string, unknown>
+) {
   return {
     $lookup: {
-      from: ShipmentDraft.collection.name,
+      from: collection,
       localField,
-      foreignField: "_id",
-      as
+      foreignField,
+      as,
+      ...(Object.keys(match).length ? { pipeline: [{ $match: match }] } : {})
     }
   };
 }
 
-function commercialInvoicePipeline(scope: SuccessfulClientScope) {
+function lookupDraft(localField: string, scope: TenantScopedClientScope, as = "draft") {
+  return scopedLookup(
+    ShipmentDraft.collection.name,
+    localField,
+    "_id",
+    as,
+    scopeMatch(scope)
+  );
+}
+
+function lookupBooking(localField: string, scope: TenantScopedClientScope, as = "booking") {
+  return scopedLookup(
+    DpdShipment.collection.name,
+    localField,
+    "shipmentDraftId",
+    as,
+    scope.tenantId ? { tenantId: scope.tenantId } : {}
+  );
+}
+
+function lookupBookingById(localField: string, expectedDraftField: string, scope: TenantScopedClientScope) {
+  return {
+    $lookup: {
+      from: DpdShipment.collection.name,
+      localField,
+      foreignField: "_id",
+      as: "booking",
+      let: { expectedDraftId: `$${expectedDraftField}` },
+      pipeline: [
+        ...(scope.tenantId ? [{ $match: { tenantId: scope.tenantId } }] : []),
+        { $match: { $expr: { $eq: ["$shipmentDraftId", "$$expectedDraftId"] } } }
+      ]
+    }
+  };
+}
+
+function commercialInvoicePipeline(scope: TenantScopedClientScope) {
   const destination = destinationExpression("$draft");
   const awb = trackingExpression("$booking", "$draft");
   return [
     { $match: { bookingState: "BOOKED", deletedAt: null, ...scopeMatch(scope) } },
-    {
-      $lookup: {
-        from: DpdShipment.collection.name,
-        localField: "_id",
-        foreignField: "shipmentDraftId",
-        as: "booking"
-      }
-    },
+    lookupBooking("_id", scope),
     { $unwind: "$booking" },
     { $match: { "booking.status": { $ne: "DPD_REJECTED" } } },
     {
@@ -165,21 +211,20 @@ function commercialInvoicePipeline(scope: SuccessfulClientScope) {
   ];
 }
 
-function shippingLabelPipeline(scope: SuccessfulClientScope) {
+function shippingLabelPipeline(scope: TenantScopedClientScope) {
   const destination = destinationExpression("$draft");
   const awb = trackingExpression("$booking", "$draft");
   return [
-    { $match: { voidedAt: null } },
-    {
-      $lookup: {
-        from: DpdShipment.collection.name,
-        localField: "dpdShipmentId",
-        foreignField: "_id",
-        as: "booking"
-      }
-    },
+    { $match: { voidedAt: null, ...(scope.tenantId ? { tenantId: scope.tenantId } : {}) } },
+    scopedLookup(
+      DpdShipment.collection.name,
+      "dpdShipmentId",
+      "_id",
+      "booking",
+      scope.tenantId ? { tenantId: scope.tenantId } : {}
+    ),
     { $unwind: "$booking" },
-    lookupDraft("booking.shipmentDraftId"),
+    lookupDraft("booking.shipmentDraftId", scope),
     { $unwind: "$draft" },
     { $match: { "draft.deletedAt": null, ...scopeMatch(scope, "draft") } },
     {
@@ -214,7 +259,7 @@ function shippingLabelPipeline(scope: SuccessfulClientScope) {
   ];
 }
 
-function manifestPipeline(scope: SuccessfulClientScope) {
+function manifestPipeline(scope: TenantScopedClientScope) {
   return [
     { $match: { ...scopeMatch(scope), manifestType: { $ne: "COMBINED" } } },
     {
@@ -241,32 +286,22 @@ function manifestPipeline(scope: SuccessfulClientScope) {
   ];
 }
 
-function podPipeline(scope: SuccessfulClientScope) {
+function podPipeline(scope: TenantScopedClientScope) {
   const destination = destinationExpression("$draft");
   const awb = trackingExpression("$booking", "$draft");
   return [
     { $match: { status: "VERIFIED" } },
     { $unwind: "$evidence" },
-    {
-      $lookup: {
-        from: DeliveryAssignment.collection.name,
-        localField: "assignmentId",
-        foreignField: "_id",
-        as: "assignment"
-      }
-    },
+    scopedLookup(DeliveryAssignment.collection.name, "assignmentId", "_id", "assignment", {
+      businessAccountId: scope.businessAccountId,
+      branchId: { $in: scope.branchIds }
+    }),
     { $unwind: "$assignment" },
-    { $match: scopeMatch(scope, "assignment") },
-    lookupDraft("shipmentDraftId"),
+    { $match: businessScopeMatch(scope, "assignment") },
+    lookupDraft("shipmentDraftId", scope),
     { $unwind: "$draft" },
-    {
-      $lookup: {
-        from: DpdShipment.collection.name,
-        localField: "assignment.dpdShipmentId",
-        foreignField: "_id",
-        as: "booking"
-      }
-    },
+    { $match: { $expr: { $eq: ["$assignment.shipmentDraftId", "$draft._id"] } } },
+    lookupBookingById("assignment.dpdShipmentId", "assignment.shipmentDraftId", scope),
     { $unwind: { path: "$booking", preserveNullAndEmptyArrays: true } },
     {
       $project: {
@@ -306,20 +341,13 @@ function podPipeline(scope: SuccessfulClientScope) {
   ];
 }
 
-function billingInvoicePipeline(scope: SuccessfulClientScope) {
+function billingInvoicePipeline(scope: TenantScopedClientScope) {
   const destination = destinationExpression("$draft");
   return [
     { $match: { status: "ISSUED", ...scopeMatch(scope) } },
-    lookupDraft("shipmentDraftId"),
+    lookupDraft("shipmentDraftId", scope),
     { $unwind: "$draft" },
-    {
-      $lookup: {
-        from: DpdShipment.collection.name,
-        localField: "dpdShipmentId",
-        foreignField: "_id",
-        as: "booking"
-      }
-    },
+    lookupBookingById("dpdShipmentId", "shipmentDraftId", scope),
     { $unwind: { path: "$booking", preserveNullAndEmptyArrays: true } },
     {
       $project: {
@@ -345,20 +373,13 @@ function billingInvoicePipeline(scope: SuccessfulClientScope) {
   ];
 }
 
-function creditNotePipeline(scope: SuccessfulClientScope) {
+function creditNotePipeline(scope: TenantScopedClientScope) {
   const destination = destinationExpression("$draft");
   return [
     { $match: scopeMatch(scope) },
-    lookupDraft("shipmentDraftId"),
+    lookupDraft("shipmentDraftId", scope),
     { $unwind: "$draft" },
-    {
-      $lookup: {
-        from: DpdShipment.collection.name,
-        localField: "shipmentDraftId",
-        foreignField: "shipmentDraftId",
-        as: "booking"
-      }
-    },
+    lookupBooking("shipmentDraftId", scope),
     { $unwind: { path: "$booking", preserveNullAndEmptyArrays: true } },
     {
       $project: {
@@ -384,17 +405,16 @@ function creditNotePipeline(scope: SuccessfulClientScope) {
   ];
 }
 
-function statementPipeline(scope: SuccessfulClientScope) {
+function statementPipeline(scope: TenantScopedClientScope) {
   return [
-    { $match: { businessAccountId: scope.businessAccountId } },
-    {
-      $lookup: {
-        from: ShipmentDraft.collection.name,
-        localField: "lines.shipmentDraftId",
-        foreignField: "_id",
-        as: "drafts"
-      }
-    },
+    { $match: { businessAccountId: scope.businessAccountId, ...(scope.tenantId ? { tenantId: scope.tenantId } : {}) } },
+    scopedLookup(
+      ShipmentDraft.collection.name,
+      "lines.shipmentDraftId",
+      "_id",
+      "drafts",
+      scopeMatch(scope)
+    ),
     {
       $match: {
         $expr: {
@@ -434,30 +454,19 @@ function statementPipeline(scope: SuccessfulClientScope) {
   ];
 }
 
-function claimDocumentPipeline(scope: SuccessfulClientScope) {
+function claimDocumentPipeline(scope: TenantScopedClientScope) {
   const destination = destinationExpression("$draft");
   return [
     { $match: { deletedAt: null, visibility: "PUBLIC" } },
-    {
-      $lookup: {
-        from: Claim.collection.name,
-        localField: "claimId",
-        foreignField: "_id",
-        as: "claim"
-      }
-    },
+    scopedLookup(Claim.collection.name, "claimId", "_id", "claim", {
+      businessAccountId: scope.businessAccountId,
+      branchId: { $in: scope.branchIds }
+    }),
     { $unwind: "$claim" },
-    { $match: scopeMatch(scope, "claim") },
-    lookupDraft("claim.shipmentDraftId"),
+    { $match: businessScopeMatch(scope, "claim") },
+    lookupDraft("claim.shipmentDraftId", scope),
     { $unwind: "$draft" },
-    {
-      $lookup: {
-        from: DpdShipment.collection.name,
-        localField: "claim.shipmentDraftId",
-        foreignField: "shipmentDraftId",
-        as: "booking"
-      }
-    },
+    lookupBooking("claim.shipmentDraftId", scope),
     { $unwind: { path: "$booking", preserveNullAndEmptyArrays: true } },
     {
       $project: {
@@ -488,20 +497,13 @@ function claimDocumentPipeline(scope: SuccessfulClientScope) {
   ];
 }
 
-function customsDocumentPipeline(scope: SuccessfulClientScope) {
+function customsDocumentPipeline(scope: TenantScopedClientScope) {
   const destination = destinationExpression("$draft");
   return [
     { $match: scopeMatch(scope) },
-    lookupDraft("shipmentDraftId"),
+    lookupDraft("shipmentDraftId", scope),
     { $unwind: "$draft" },
-    {
-      $lookup: {
-        from: DpdShipment.collection.name,
-        localField: "shipmentDraftId",
-        foreignField: "shipmentDraftId",
-        as: "booking"
-      }
-    },
+    lookupBooking("shipmentDraftId", scope),
     { $unwind: { path: "$booking", preserveNullAndEmptyArrays: true } },
     {
       $project: {
@@ -534,7 +536,7 @@ function customsDocumentPipeline(scope: SuccessfulClientScope) {
 
 const sourcePipelines: Record<
   ClientDocumentType,
-  (scope: SuccessfulClientScope) => Array<Record<string, unknown>>
+  (scope: TenantScopedClientScope) => Array<Record<string, unknown>>
 > = {
   SHIPPING_LABEL: shippingLabelPipeline,
   COMMERCIAL_INVOICE: commercialInvoicePipeline,
@@ -570,6 +572,42 @@ export async function listClientDocumentCentre(
   filters: ClientDocumentCentreFilters
 ) {
   const availableTypes = availableClientDocumentTypes(scope.canViewFinancials);
+  const tenantId = await getDataAccessTenantId();
+  const pipeline = buildClientDocumentCentrePipeline(scope, filters, tenantId ?? undefined);
+
+  // This cross-collection aggregation is intentionally run on the native
+  // collection after each tenant-owned union and join has received an explicit
+  // tenant filter. The model-level aggregate guard correctly rejects arbitrary
+  // joins because it cannot prove their ownership boundaries.
+  const [result] = await ShipmentDraft.collection
+    .aggregate<AggregateResult>(pipeline as unknown as PipelineStage[], { allowDiskUse: true })
+    .toArray();
+  const total = result?.metadata[0]?.total ?? 0;
+  const items = (result?.items ?? []).map(({ _id, ...item }) => ({
+    ...item,
+    id: String(_id),
+    documentTypeLabel: clientDocumentTypeLabels[item.documentType]
+  }));
+
+  return {
+    items,
+    documentTypes: availableTypes,
+    pagination: {
+      page: filters.page,
+      limit: filters.limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / filters.limit))
+    }
+  };
+}
+
+export function buildClientDocumentCentrePipeline(
+  scope: SuccessfulClientScope,
+  filters: ClientDocumentCentreFilters,
+  tenantId?: Types.ObjectId
+) {
+  const scopedScope: TenantScopedClientScope = { ...scope, ...(tenantId ? { tenantId } : {}) };
+  const availableTypes = availableClientDocumentTypes(scope.canViewFinancials);
   const allowed = new Set(availableTypes.map((item) => item.value));
   const selectedTypes = filters.documentType
     ? (allowed.has(filters.documentType) ? [filters.documentType] : [])
@@ -599,7 +637,7 @@ export async function listClientDocumentCentre(
   ];
 
   for (const type of selectedTypes) {
-    pipeline.push(union(sourceCollections[type], sourcePipelines[type](scope)));
+    pipeline.push(union(sourceCollections[type], sourcePipelines[type](scopedScope)));
   }
 
   const match: Record<string, unknown> = {};
@@ -627,24 +665,5 @@ export async function listClientDocumentCentre(
     }
   );
 
-  const [result] = await ShipmentDraft.aggregate<AggregateResult>(pipeline as unknown as PipelineStage[])
-    .allowDiskUse(true)
-    .exec();
-  const total = result?.metadata[0]?.total ?? 0;
-  const items = (result?.items ?? []).map(({ _id, ...item }) => ({
-    ...item,
-    id: String(_id),
-    documentTypeLabel: clientDocumentTypeLabels[item.documentType]
-  }));
-
-  return {
-    items,
-    documentTypes: availableTypes,
-    pagination: {
-      page: filters.page,
-      limit: filters.limit,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / filters.limit))
-    }
-  };
+  return pipeline;
 }

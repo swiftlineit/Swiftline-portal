@@ -13,6 +13,7 @@ import {
   workingDayValues
 } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
+import { getTenantIdForWrite } from "../services/tenantScope.service.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { OperationsManifest } from "../models/operationsManifest.model.js";
 import { User } from "../models/user.model.js";
@@ -441,7 +442,8 @@ export async function createBranch(request: Request, response: Response): Promis
   }
 
   try {
-    const branch = await Branch.create(normalizeBranchPayload(parsed.data, userId));
+    const tenantId = await getTenantIdForWrite();
+    const branch = await Branch.create({ ...normalizeBranchPayload(parsed.data, userId), tenantId });
     await writeBranchAuditLog(parsed.data.status === "ACTIVE" ? "BRANCH_CREATED" : "BRANCH_DRAFT_CREATED", branch._id as mongoose.Types.ObjectId, parsed.data, userId);
     return response.status(201).json({ success: true, branch });
   } catch (error) {

@@ -1,8 +1,10 @@
 import mongoose from "mongoose";
 import { EmailOutbox, type IEmailAttachmentRef } from "../../models/emailOutbox.model.js";
 import { User } from "../../models/user.model.js";
+import { Tenant } from "../../models/tenant.model.js";
 import { getEmailPolicy } from "./catalog.js";
 import { scheduleEmailDrain } from "./dispatcher.js";
+import { getTenantContext } from "../tenantScope.service.js";
 
 export type EmailRecipient = {
   userId?: mongoose.Types.ObjectId | null;
@@ -59,6 +61,11 @@ export async function resolveUserRecipients(
  * upserts onto the same row instead of creating a second message.
  */
 export async function enqueueEmails(input: EnqueueEmailInput, session?: mongoose.ClientSession) {
+  const tenantContext = getTenantContext();
+  if (tenantContext?.kind === "OPERATOR" && !await Tenant.exists({
+    _id: tenantContext.tenantId, kind: "OPERATOR", status: "ACTIVE"
+  }).session(session ?? null)) return { enqueued: 0 };
+
   const policy = getEmailPolicy(input.notificationType);
   // Absence from the catalogue is how a notification type stays in-app only.
   if (!policy) return { enqueued: 0 };

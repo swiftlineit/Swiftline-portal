@@ -14,9 +14,10 @@ import mongoose from "mongoose";
 import { DeliveryAssignment, PodRevision } from "../../models/pod.model.js";
 import { DpdShipment } from "../../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../../models/shipmentDraft.model.js";
+import type { ClientAccountBranchScope } from "../../utils/clientScope.js";
 
 export type PodCentreFilter = {
-  businessAccountIds: mongoose.Types.ObjectId[];
+  accountScopes: ClientAccountBranchScope[];
   /** Free text over the Swiftline AWB, carrier reference and recipient name. */
   search?: string;
   dateFrom?: string;
@@ -57,8 +58,10 @@ function joinPlace(values: Array<string | undefined>) {
  * whatever fell outside the cap.
  */
 export async function listClientPods(filter: PodCentreFilter): Promise<PodCentreRow[]> {
+  const accountScopeFilter = clientPodAssignmentScope(filter.accountScopes);
+  if (!accountScopeFilter) return [];
   const assignments = await DeliveryAssignment.find({
-    businessAccountId: { $in: filter.businessAccountIds },
+    ...accountScopeFilter,
     status: { $in: ["DELIVERED", "PARTIALLY_DELIVERED"] }
   })
     .select("shipmentDraftId dpdShipmentId businessAccountId parcelNumbers partnerReference status")
@@ -163,16 +166,26 @@ function dateCondition(filter: PodCentreFilter) {
  * afterwards.
  */
 export async function loadClientPodsByIds(input: {
-  businessAccountIds: mongoose.Types.ObjectId[];
+  accountScopes: ClientAccountBranchScope[];
   assignmentIds: string[];
 }) {
   const valid = input.assignmentIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
   if (!valid.length) return [];
 
   const rows = await listClientPods({
-    businessAccountIds: input.businessAccountIds,
+    accountScopes: input.accountScopes,
     limit: valid.length
   });
   const wanted = new Set(valid);
   return rows.filter((row) => wanted.has(row.assignmentId));
+}
+
+export function clientPodAssignmentScope(accountScopes: ClientAccountBranchScope[]) {
+  const branches = accountScopes
+    .filter((scope) => scope.branchIds.length > 0)
+    .map((scope) => ({
+      businessAccountId: scope.businessAccountId,
+      branchId: { $in: scope.branchIds }
+    }));
+  return branches.length ? { $or: branches } : null;
 }

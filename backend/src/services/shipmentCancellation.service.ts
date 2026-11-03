@@ -16,7 +16,16 @@ import { ShipmentEvent, type ShipmentEventStatus } from "../models/shipmentEvent
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentOperationsParcelScan } from "../models/shipmentOperationsParcelScan.model.js";
 import { appendCreditLedgerEntry } from "./creditAccount.service.js";
-import { notifyActiveAdmins, notifyBusinessFinancialMembers } from "./portalNotification.service.js";
+import { getTenantContext } from "./tenantScope.service.js";
+import {
+  notifyActiveAdmins,
+  notifyBusinessFinancialMembers,
+  notifyOperatorShipmentCancellationReviewers
+} from "./portalNotification.service.js";
+import {
+  getOperatorCancellationEligibility,
+  terminalOperatorShipmentStatuses
+} from "./operatorShipmentCancellationPolicy.service.js";
 
 // The default fee and threshold for requiring an additional-fee reason; lower
 // fees are valid and are not subject to a minimum.
@@ -131,10 +140,22 @@ async function cancellationGate(
   session?: mongoose.ClientSession
 ) {
   const [events, receivedParcel] = await Promise.all([
-    ShipmentEvent.find({ shipmentDraftId }).select("status").session(session ?? null).lean().exec(),
+    ShipmentEvent.find({ shipmentDraftId }).select("status eventAt createdAt").session(session ?? null).lean().exec(),
     ShipmentOperationsParcelScan.exists({ shipmentDraftId, action: "RECEIVE" }).session(session ?? null).exec()
   ]);
   const statuses = new Set(events.map((event) => event.status));
+  if (getTenantContext()?.kind === "OPERATOR") {
+    const latestEvent = [...events].sort((left, right) => (
+      new Date(right.eventAt).getTime() - new Date(left.eventAt).getTime()
+      || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    ))[0];
+    return getOperatorCancellationEligibility({
+      hasBooked: statuses.has("SHIPMENT_BOOKED"),
+      latestStatus: latestEvent?.status,
+      hasTerminalStatus: events.some((event) => terminalOperatorShipmentStatuses.includes(event.status)),
+      alreadyCancelled: statuses.has("SHIPMENT_CANCELLED")
+    });
+  }
   return getCancellationEligibility({
     requesterType,
     hasBooked: statuses.has("SHIPMENT_BOOKED"),
@@ -194,6 +215,7 @@ export function serializeShipmentCancellation(cancellation: IShipmentCancellatio
     refundableAmountMinor: cancellation.refundableAmountMinor ?? null,
     feeReason: cancellation.feeReason,
     carrierConfirmed: cancellation.carrierConfirmed,
+    carrierConfirmationRequired: cancellation.carrierConfirmationRequired !== false,
     settlementConfirmed: cancellation.settlementConfirmed,
     carrierReference: cancellation.carrierReference,
     reviewNote: cancellation.reviewNote,
@@ -217,12 +239,15 @@ export async function requestShipmentCancellation(input: {
   requesterType: "CLIENT" | "ADMIN";
   requesterRole: string;
   reason: string;
+  portalSlug?: string;
 }) {
-  const draft = await ShipmentDraft.findById(input.shipmentDraftId).exec();
+  const tenantContext = getTenantContext();
+  const ownerFilter = tenantContext ? { tenantId: tenantContext.tenantId } : {};
+  const draft = await ShipmentDraft.findOne({ _id: input.shipmentDraftId, ...ownerFilter }).exec();
   if (!draft) throw new ShipmentCancellationError(404, "Shipment not found.");
-  const dpdShipment = await DpdShipment.findOne({ shipmentDraftId: draft._id }).exec();
+  const dpdShipment = await DpdShipment.findOne({ shipmentDraftId: draft._id, ...ownerFilter }).exec();
   if (!dpdShipment) throw new ShipmentCancellationError(409, "Only booked shipments can be cancelled.");
-  const invoice = await ShipmentInvoice.findOne({ shipmentDraftId: draft._id }).exec();
+  const invoice = await ShipmentInvoice.findOne({ shipmentDraftId: draft._id, ...ownerFilter }).exec();
   if (!invoice) throw new ShipmentCancellationError(409, "Shipment billing information is incomplete.");
 
   const gate = await cancellationGate(draft._id as mongoose.Types.ObjectId, input.requesterType);
@@ -251,7 +276,8 @@ export async function requestShipmentCancellation(input: {
     status: "REQUESTED",
     originalAmountMinor: invoice.totalAmountMinor,
     taxTreatment: invoice.taxTreatment ?? (invoice.gstRatePercent === 0 ? "NO_GST" : "GST_APPLICABLE"),
-    requestedFeeBaseMinor: DEFAULT_CANCELLATION_FEE_BASE_MINOR,
+    requestedFeeBaseMinor: tenantContext?.kind === "OPERATOR" ? 0 : DEFAULT_CANCELLATION_FEE_BASE_MINOR,
+    carrierConfirmationRequired: tenantContext?.kind !== "OPERATOR",
     requestedAt: new Date()
   });
 
@@ -263,14 +289,22 @@ export async function requestShipmentCancellation(input: {
     performedAt: cancellation.requestedAt,
     metadata: { shipmentDraftId: draft._id, dpdShipmentId: dpdShipment._id, requesterType: input.requesterType }
   });
-  await notifyActiveAdmins({
-    type: "SHIPMENT_CANCELLATION_REQUESTED",
+  const notification = {
+    type: "SHIPMENT_CANCELLATION_REQUESTED" as const,
     title: "Shipment cancellation requested",
     message: `A cancellation request for shipment ${dpdShipment.dpdShipmentId || String(dpdShipment._id)} requires review.`,
-    href: `/dashboard/cancellations#cancellation-${String(cancellation._id)}`,
     idempotencyKey: `SHIPMENT_CANCELLATION_REQUESTED:${String(cancellation._id)}`,
-    businessAccountId: draft.businessAccountId
-  });
+    businessAccountId: draft.businessAccountId,
+    metadata: { cancellationId: String(cancellation._id), shipmentDraftId: String(draft._id) }
+  };
+  if (tenantContext?.kind === "OPERATOR") {
+    await notifyOperatorShipmentCancellationReviewers(notification);
+  } else {
+    await notifyActiveAdmins({
+      ...notification,
+      href: `/dashboard/cancellations#cancellation-${String(cancellation._id)}`
+    });
+  }
   return cancellation;
 }
 
@@ -278,6 +312,7 @@ export async function rejectShipmentCancellation(input: {
   cancellationId: mongoose.Types.ObjectId;
   reviewedBy: mongoose.Types.ObjectId;
   reviewNote: string;
+  portalSlug?: string;
 }) {
   const cancellation = await ShipmentCancellation.findOneAndUpdate(
     { _id: input.cancellationId, status: "REQUESTED" },
@@ -301,11 +336,17 @@ export async function rejectShipmentCancellation(input: {
     performedAt: cancellation.reviewedAt ?? new Date(),
     metadata: { shipmentDraftId: cancellation.shipmentDraftId, reviewNote: input.reviewNote }
   });
+  const tenantContext = getTenantContext();
+  const shipmentHref = tenantContext?.kind === "OPERATOR" && input.portalSlug
+    ? `/portal/${encodeURIComponent(input.portalSlug)}/shipments/${String(cancellation.shipmentDraftId)}`
+    : `/client/shipments/${String(cancellation.shipmentDraftId)}#shipment-cancellation`;
   await notifyBusinessFinancialMembers(cancellation.businessAccountId, {
     type: "SHIPMENT_CANCELLATION_REJECTED",
     title: "Cancellation request rejected",
-    message: "Swiftline reviewed the shipment cancellation request and did not approve it.",
-    href: `/client/shipments/${String(cancellation.shipmentDraftId)}#shipment-cancellation`,
+    message: tenantContext?.kind === "OPERATOR"
+      ? "The operator reviewed the shipment cancellation request and did not approve it."
+      : "Swiftline reviewed the shipment cancellation request and did not approve it.",
+    href: shipmentHref,
     idempotencyKey: `SHIPMENT_CANCELLATION_REJECTED:${String(cancellation._id)}`
   });
   return cancellation;
@@ -335,6 +376,7 @@ export async function approveShipmentCancellation(input: {
   settlementConfirmed: boolean;
   carrierReference: string;
   reviewNote: string;
+  portalSlug?: string;
   /**
    * How the refund was paid back to a walk-in customer. Required only when the
    * shipment was a counter sale with something to refund; account-backed
@@ -346,13 +388,15 @@ export async function approveShipmentCancellation(input: {
     note?: string;
   };
 }) {
-  if (!input.carrierConfirmed) {
-    throw new ShipmentCancellationError(400, "Confirm carrier cancellation before completing the refund.");
-  }
   if (!input.settlementConfirmed) {
     throw new ShipmentCancellationError(400, "Confirm the cancellation settlement before completing the refund.");
   }
-  if (input.feeBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR && input.feeReason.trim().length < 5) {
+  const tenantContext = getTenantContext();
+  if (tenantContext?.kind === "OPERATOR") {
+    if (input.feeBaseMinor > 0 && input.feeReason.trim().length < 5) {
+      throw new ShipmentCancellationError(400, "Explain the operator cancellation fee.");
+    }
+  } else if (input.feeBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR && input.feeReason.trim().length < 5) {
     throw new ShipmentCancellationError(400, "Explain the additional carrier or handling fee.");
   }
 
@@ -364,6 +408,12 @@ export async function approveShipmentCancellation(input: {
       if (cancellation.status === "COMPLETED") return cancellation;
       if (cancellation.status !== "REQUESTED") {
         throw new ShipmentCancellationError(409, "Only pending cancellation requests can be approved.");
+      }
+      if (cancellation.carrierConfirmationRequired !== false && !input.carrierConfirmed) {
+        throw new ShipmentCancellationError(400, "Confirm carrier cancellation before completing the refund.");
+      }
+      if (cancellation.carrierConfirmationRequired === false && tenantContext?.kind !== "OPERATOR") {
+        throw new ShipmentCancellationError(404, "Cancellation request not found.");
       }
 
       const gate = await cancellationGate(cancellation.shipmentDraftId, "ADMIN", session);
@@ -525,7 +575,6 @@ export async function approveShipmentCancellation(input: {
 
       const issuedAt = new Date();
       const creditNoteNumber = await nextDocumentNumber("CREDIT_NOTE", issuedAt, session);
-      const feeInvoiceNumber = await nextDocumentNumber("FEE_INVOICE", issuedAt, session);
       const feeTaxes = feeTaxSplit(amounts.feeGstMinor, invoice.taxType);
       const [creditNote] = await ShipmentCreditNote.create([{
         creditNoteNumber: creditNoteNumber.number,
@@ -553,34 +602,42 @@ export async function approveShipmentCancellation(input: {
         issuedAt,
         createdBy: input.reviewedBy
       }], { session });
-      const [feeInvoice] = await CancellationFeeInvoice.create([{
-        invoiceNumber: feeInvoiceNumber.number,
-        financialYear: feeInvoiceNumber.financialYear,
-        cancellationId: cancellation._id,
-        shipmentDraftId: cancellation.shipmentDraftId,
-        businessAccountId: cancellation.businessAccountId,
-        branchId: cancellation.branchId,
-        supplier: invoice.supplier,
-        customer: invoice.customer,
-        taxableValueMinor: amounts.feeBaseMinor,
-        gstRatePercent: taxTreatment === "NO_GST" ? 0 : CANCELLATION_GST_RATE_PERCENT,
-        taxTreatment,
-        taxType: invoice.taxType,
-        ...feeTaxes,
-        totalTaxAmountMinor: amounts.feeGstMinor,
-        totalAmountMinor: amounts.feeTotalMinor,
-        advanceAppliedMinor: settlement.cancellationFeeSettledMinor,
-        creditOutstandingMinor: settlement.cancellationFeeCreditMinor,
-        paymentStatus: settlement.cancellationFeeCreditMinor === 0
-          ? "PAID"
-          : settlement.cancellationFeeSettledMinor > 0 ? "PARTIALLY_PAID" : "UNPAID",
-        billingStatementId: null,
-        billedAt: null,
-        feeReason: input.feeReason.trim() || "Standard shipment cancellation fee.",
-        issuedAt,
-        createdBy: input.reviewedBy
-      }], { session });
-      if (!creditNote || !feeInvoice) {
+      const operatorCancellation = cancellation.carrierConfirmationRequired === false;
+      const feeInvoiceNumber = !operatorCancellation || amounts.feeTotalMinor > 0
+        ? await nextDocumentNumber("FEE_INVOICE", issuedAt, session)
+        : null;
+      let feeInvoice: InstanceType<typeof CancellationFeeInvoice> | null = null;
+      if (feeInvoiceNumber) {
+        const [createdFeeInvoice] = await CancellationFeeInvoice.create([{
+          invoiceNumber: feeInvoiceNumber.number,
+          financialYear: feeInvoiceNumber.financialYear,
+          cancellationId: cancellation._id,
+          shipmentDraftId: cancellation.shipmentDraftId,
+          businessAccountId: cancellation.businessAccountId,
+          branchId: cancellation.branchId,
+          supplier: invoice.supplier,
+          customer: invoice.customer,
+          taxableValueMinor: amounts.feeBaseMinor,
+          gstRatePercent: taxTreatment === "NO_GST" ? 0 : CANCELLATION_GST_RATE_PERCENT,
+          taxTreatment,
+          taxType: invoice.taxType,
+          ...feeTaxes,
+          totalTaxAmountMinor: amounts.feeGstMinor,
+          totalAmountMinor: amounts.feeTotalMinor,
+          advanceAppliedMinor: settlement.cancellationFeeSettledMinor,
+          creditOutstandingMinor: settlement.cancellationFeeCreditMinor,
+          paymentStatus: settlement.cancellationFeeCreditMinor === 0
+            ? "PAID"
+            : settlement.cancellationFeeSettledMinor > 0 ? "PARTIALLY_PAID" : "UNPAID",
+          billingStatementId: null,
+          billedAt: null,
+          feeReason: input.feeReason.trim() || "Standard shipment cancellation fee.",
+          issuedAt,
+          createdBy: input.reviewedBy
+        }], { session });
+        feeInvoice = createdFeeInvoice ?? null;
+      }
+      if (!creditNote || (feeInvoiceNumber && !feeInvoice)) {
         throw new ShipmentCancellationError(500, "Cancellation financial documents could not be generated.");
       }
 
@@ -597,7 +654,9 @@ export async function approveShipmentCancellation(input: {
         shipmentDraftId: cancellation.shipmentDraftId,
         dpdShipmentId: cancellation.dpdShipmentId,
         status: "SHIPMENT_CANCELLED",
-        note: "Shipment cancelled after Swiftline review and carrier confirmation.",
+        note: operatorCancellation
+          ? "Shipment cancelled after operator review."
+          : "Shipment cancelled after Swiftline review and carrier confirmation.",
         customerVisible: true,
         createdBy: input.reviewedBy,
         eventAt: issuedAt
@@ -608,8 +667,10 @@ export async function approveShipmentCancellation(input: {
       cancellation.feeGstMinor = amounts.feeGstMinor;
       cancellation.feeTotalMinor = amounts.feeTotalMinor;
       cancellation.refundableAmountMinor = amounts.refundableAmountMinor;
-      cancellation.feeReason = input.feeReason.trim() || "Standard shipment cancellation fee.";
-      cancellation.carrierConfirmed = true;
+      cancellation.feeReason = amounts.feeTotalMinor > 0
+        ? input.feeReason.trim() || (operatorCancellation ? "Operator cancellation fee." : "Standard shipment cancellation fee.")
+        : "";
+      cancellation.carrierConfirmed = operatorCancellation ? false : true;
       cancellation.settlementConfirmed = true;
       cancellation.carrierReference = input.carrierReference;
       cancellation.reviewNote = input.reviewNote;
@@ -624,7 +685,7 @@ export async function approveShipmentCancellation(input: {
         customerAdvanceCreditedMinor: settlement.customerAdvanceCreditedMinor
       };
       cancellation.creditNoteId = creditNote._id;
-      cancellation.cancellationFeeInvoiceId = feeInvoice._id;
+      cancellation.cancellationFeeInvoiceId = feeInvoice?._id ?? null;
       await cancellation.save({ session });
 
       await AuditLog.create([{
@@ -636,16 +697,24 @@ export async function approveShipmentCancellation(input: {
         metadata: {
           shipmentDraftId: cancellation.shipmentDraftId,
           creditNoteNumber: creditNote.creditNoteNumber,
-          cancellationFeeInvoiceNumber: feeInvoice.invoiceNumber,
+          cancellationFeeInvoiceNumber: feeInvoice?.invoiceNumber ?? null,
           feeTotalMinor: amounts.feeTotalMinor,
           refundableAmountMinor: amounts.refundableAmountMinor
         }
       }], { session });
+      const clientHref = operatorCancellation && input.portalSlug
+        ? `/portal/${encodeURIComponent(input.portalSlug)}/shipments/${String(cancellation.shipmentDraftId)}`
+        : `/client/shipments/${String(cancellation.shipmentDraftId)}#shipment-cancellation`;
+      const feeInvoiceMessage = feeInvoice
+        ? ` ${feeInvoice.invoiceNumber} is available.`
+        : " No cancellation fee was applied.";
       await notifyBusinessFinancialMembers(cancellation.businessAccountId, {
         type: "SHIPMENT_CANCELLATION_COMPLETED",
         title: "Shipment cancellation completed",
-        message: `Cancellation completed. ${creditNote.creditNoteNumber} and ${feeInvoice.invoiceNumber} are available.`,
-        href: `/client/shipments/${String(cancellation.shipmentDraftId)}#shipment-cancellation`,
+        message: operatorCancellation
+          ? `The operator completed the cancellation. ${creditNote.creditNoteNumber} is available.${feeInvoiceMessage}`
+          : `Cancellation completed. ${creditNote.creditNoteNumber} and ${feeInvoice!.invoiceNumber} are available.`,
+        href: clientHref,
         idempotencyKey: `SHIPMENT_CANCELLATION_COMPLETED:${String(cancellation._id)}`
       }, session);
       const { syncShipmentProfitability } = await import("./shipmentProfitability.service.js");

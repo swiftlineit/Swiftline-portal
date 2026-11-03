@@ -52,6 +52,7 @@ import { encryptSecret } from "../services/credentialEncryption.service.js";
 import { recordBusinessAccountAudit, toAuditSnapshot } from "../services/businessAccountAudit.service.js";
 import { isValidStateForCountry } from "../services/reference/geography.service.js";
 import { getCountryCodeByName } from "../services/reference/portalCountries.js";
+import { getSwiftlineTenantId } from "../services/swiftlineTenant.service.js";
 
 // Reuse same OTP constants as auth.controller but public-specific
 const PUBLIC_OTP_TTL_MS = 10 * 60 * 1000;
@@ -395,8 +396,9 @@ function generateAccountId(): string {
   return `BA-${year}-${sequence}`;
 }
 async function createBusinessAccountRecord(basePayload: Record<string, unknown>) {
+  const tenantId = await getSwiftlineTenantId();
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    try { return await BusinessAccount.create({ accountId: generateAccountId(), ...basePayload }); }
+    try { return await BusinessAccount.create({ tenantId, accountId: generateAccountId(), ...basePayload }); }
     catch (error) {
       const collidedOnAccountId = isDuplicateKeyError(error) && Boolean((error as { keyPattern?: Record<string, unknown> }).keyPattern?.accountId);
       if (collidedOnAccountId) continue;

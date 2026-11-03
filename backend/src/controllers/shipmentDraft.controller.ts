@@ -41,6 +41,7 @@ import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { operationsBranchIds } from "../middleware/operationsBranchAccess.middleware.js";
+import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 
 const manualDraftSchema = z.object({
   businessAccountId: z.string().trim().min(1),
@@ -179,6 +180,13 @@ function getAuthenticatedUserId(request: Request): mongoose.Types.ObjectId | nul
 }
 
 function getAuthenticatedPortalRole(request: Request) {
+  const operator = getOperatorContext(request);
+  if (operator) {
+    if (operator.role === "OPERATOR_ADMIN") return "admin";
+    if (operator.role === "OPERATIONS") return "operations";
+    if (operator.role === "CLIENT") return "client";
+    return "finance";
+  }
   const user = (request as Request & { user?: { role?: unknown } }).user;
   return typeof user?.role === "string" ? user.role : "";
 }
@@ -193,6 +201,11 @@ function getAuthenticatedPortalRole(request: Request) {
  * branch assignment it does not have would refuse every client booking.
  */
 function draftCreationBranchScope(request: Request) {
+  const operator = getOperatorContext(request);
+  if (operator) {
+    if (operator.role === "OPERATOR_ADMIN" || operator.role === "CLIENT") return null;
+    return operator.assignedBranches.map(String);
+  }
   return getAuthenticatedPortalRole(request) === "client" ? null : operationsBranchIds(request);
 }
 
@@ -319,13 +332,15 @@ export async function getShipmentDraft(request: Request, response: Response): Pr
   const shipmentDraft = await ShipmentDraft.findOne({ _id: draftId, deletedAt: null }).exec();
   if (!shipmentDraft) return response.status(404).json({ success: false, message: "Shipment draft not found" });
 
-  try {
-    const bookingState = await syncLegacyDraftBookingState(shipmentDraft);
-    if (bookingState === "EDITABLE") {
-      await syncReviewValidationIssues(shipmentDraft);
+  if (getOperatorContext(request)?.accessMode !== "PLATFORM_SUPPORT") {
+    try {
+      const bookingState = await syncLegacyDraftBookingState(shipmentDraft);
+      if (bookingState === "EDITABLE") {
+        await syncReviewValidationIssues(shipmentDraft);
+      }
+    } catch {
+      // Keep loading the draft even if the original invoice is no longer parseable.
     }
-  } catch {
-    // Keep loading the draft even if the original invoice is no longer parseable.
   }
 
   return response.status(200).json({

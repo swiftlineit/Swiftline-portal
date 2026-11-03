@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const addressBookEntryTypeValues = ["SENDER", "RECIPIENT"] as const;
 export type AddressBookEntryType = (typeof addressBookEntryTypeValues)[number];
@@ -23,7 +24,7 @@ export interface AddressBookPostalAddress {
   postcode: string;
 }
 
-export interface IAddressBookEntry extends mongoose.Document, AddressBookPostalAddress {
+export interface IAddressBookEntry extends mongoose.Document, AddressBookPostalAddress, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   type: AddressBookEntryType;
   label: string;
@@ -101,5 +102,7 @@ const addressBookEntrySchema = new mongoose.Schema<IAddressBookEntry>(
 addressBookEntrySchema.index({ businessAccountId: 1, deletedAt: 1, isFavourite: -1, updatedAt: -1 });
 addressBookEntrySchema.index({ businessAccountId: 1, deletedAt: 1, type: 1, updatedAt: -1 });
 addressBookEntrySchema.index({ businessAccountId: 1, label: 1 });
+
+addTenantOwnership(addressBookEntrySchema);
 
 export const AddressBookEntry = mongoose.model<IAddressBookEntry>("AddressBookEntry", addressBookEntrySchema);

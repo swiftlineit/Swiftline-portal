@@ -58,6 +58,8 @@ export type CustomsInvoiceBox = {
 
 export type CustomsInvoiceModel = {
   invoiceNumber: string;
+  /** Operator name used as the issuer on operator-routed copies. */
+  issuerName?: string;
   /** Parent Swiftline AWB, used to name the downloaded shipment invoice. */
   swiftlineTrackingNumber: string;
   invoiceDate: Date;

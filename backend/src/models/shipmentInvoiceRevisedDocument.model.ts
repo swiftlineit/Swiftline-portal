@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 /**
  * A document-only edited copy of a shipment tax invoice.
@@ -9,7 +10,7 @@ import mongoose from "mongoose";
  * as they were. It exists so a corrected-looking paper can be stored
  * permanently and revisited later, from any device.
  */
-export interface IShipmentInvoiceRevisedDocument extends mongoose.Document {
+export interface IShipmentInvoiceRevisedDocument extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
   /** The statutory number of the real invoice, kept for reference. */
   invoiceNumber: string;
@@ -59,6 +60,8 @@ const shipmentInvoiceRevisedDocumentSchema = new mongoose.Schema<IShipmentInvoic
 );
 
 shipmentInvoiceRevisedDocumentSchema.index({ shipmentDraftId: 1, deletedAt: 1, updatedAt: -1 });
+
+addTenantOwnership(shipmentInvoiceRevisedDocumentSchema);
 
 export const ShipmentInvoiceRevisedDocument = mongoose.model<IShipmentInvoiceRevisedDocument>(
   "ShipmentInvoiceRevisedDocument",

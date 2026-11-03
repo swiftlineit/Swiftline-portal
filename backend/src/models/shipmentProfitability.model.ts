@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import { profitabilityCostComponentValues, type ProfitabilityCostComponent } from "./vendorCostRate.model.js";
 
 export const shipmentCostStateValues = ["MISSING", "ESTIMATED", "ACTUAL"] as const;
@@ -27,7 +28,7 @@ export type ShipmentFlightAllocationCost = {
   amountMinorGbp?: number | null;
 };
 
-export interface IShipmentProfitability extends mongoose.Document {
+export interface IShipmentProfitability extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
   dpdShipmentId: mongoose.Types.ObjectId;
   shipmentInvoiceId: mongoose.Types.ObjectId;
@@ -122,5 +123,7 @@ schema.index({ branchId: 1, bookedAt: -1 });
 schema.index({ businessAccountId: 1, bookedAt: -1 });
 schema.index({ destinationCountryCode: 1, serviceType: 1, bookedAt: -1 });
 schema.index({ branchId: 1, coverage: 1, grossProfitMinor: 1 });
+
+addTenantOwnership(schema);
 
 export const ShipmentProfitability = mongoose.model<IShipmentProfitability>("ShipmentProfitability", schema);

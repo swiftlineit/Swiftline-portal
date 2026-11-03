@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const shipmentImportBatchStatusValues = [
   "PARSED",
@@ -10,7 +11,7 @@ export const shipmentImportBatchStatusValues = [
 
 export type ShipmentImportBatchStatus = (typeof shipmentImportBatchStatusValues)[number];
 
-export interface IShipmentImportBatch extends mongoose.Document {
+export interface IShipmentImportBatch extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   branchId: mongoose.Types.ObjectId;
   uploadedBy: mongoose.Types.ObjectId;
@@ -49,5 +50,7 @@ shipmentImportBatchSchema.index(
   { uploadedBy: 1, confirmationKey: 1 },
   { unique: true, partialFilterExpression: { confirmationKey: { $type: "string", $gt: "" } } }
 );
+
+addTenantOwnership(shipmentImportBatchSchema);
 
 export const ShipmentImportBatch = mongoose.model<IShipmentImportBatch>("ShipmentImportBatch", shipmentImportBatchSchema);

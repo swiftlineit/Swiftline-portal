@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const businessAccountMemberRoleValues = [
   "account_owner",
@@ -80,7 +81,7 @@ export const creditPermissionValues = [
 ] as const;
 export type CreditPermission = (typeof creditPermissionValues)[number];
 
-export interface IBusinessAccountMember extends mongoose.Document {
+export interface IBusinessAccountMember extends mongoose.Document, TenantOwnedFields {
   businessAccount: mongoose.Types.ObjectId;
   user: mongoose.Types.ObjectId;
   role: BusinessAccountMemberRole;
@@ -130,16 +131,19 @@ const businessAccountMemberSchema = new mongoose.Schema<IBusinessAccountMember>(
   { timestamps: true }
 );
 
-// A portal identity belongs to one business account only. Removed memberships
-// remain as audit history, but the user record stays reserved and is restored
-// instead of being recreated under a different account.
+// A portal identity belongs to at most one current business account per
+// operating tenant. This lets the same login serve a Swiftline account and an
+// operator account without sharing either tenant's account data. Removed
+// memberships remain as audit history and can be restored within their tenant.
 businessAccountMemberSchema.index(
-  { user: 1 },
+  { tenantId: 1, user: 1 },
   {
     unique: true,
     partialFilterExpression: { status: { $in: ["invited", "active", "suspended"] } },
-    name: "uniq_current_business_membership_per_user"
+    name: "uniq_current_business_membership_per_tenant_user"
   }
 );
+
+addTenantOwnership(businessAccountMemberSchema);
 
 export const BusinessAccountMember = mongoose.model<IBusinessAccountMember>("BusinessAccountMember", businessAccountMemberSchema);

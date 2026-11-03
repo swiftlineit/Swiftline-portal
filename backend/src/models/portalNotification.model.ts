@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const portalNotificationTypeValues = [
   "STATEMENT_ISSUED",
@@ -17,6 +18,7 @@ export const portalNotificationTypeValues = [
   "SHIPMENT_QUOTE_DECLINED",
   "SHIPMENT_QUOTE_CONVERTED",
   "SHIPMENT_BOOKED",
+  "OPERATOR_CONTACT_QUERY_SUBMITTED",
   "SHIPMENT_MANIFEST_GENERATED",
   "SHIPMENT_AMENDMENT_REQUESTED",
   "SHIPMENT_AMENDMENT_APPROVED",
@@ -92,7 +94,7 @@ export const portalNotificationTypeValues = [
 ] as const;
 export type PortalNotificationType = (typeof portalNotificationTypeValues)[number];
 
-export interface IPortalNotification extends mongoose.Document {
+export interface IPortalNotification extends mongoose.Document, TenantOwnedFields {
   recipientUserId: mongoose.Types.ObjectId;
   businessAccountId?: mongoose.Types.ObjectId | null;
   type: PortalNotificationType;
@@ -112,13 +114,26 @@ const portalNotificationSchema = new mongoose.Schema<IPortalNotification>({
   title: { type: String, required: true, trim: true, maxlength: 120 },
   message: { type: String, required: true, trim: true, maxlength: 500 },
   href: { type: String, required: true, trim: true, maxlength: 300 },
-  idempotencyKey: { type: String, required: true, unique: true, trim: true, maxlength: 300 },
+  idempotencyKey: { type: String, required: true, trim: true, maxlength: 300 },
   readAt: { type: Date, default: null, index: true },
   metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
   createdAt: { type: Date, default: Date.now, index: true }
 }, { timestamps: false });
 
-portalNotificationSchema.index({ recipientUserId: 1, readAt: 1, createdAt: -1 });
+portalNotificationSchema.index(
+  { tenantId: 1, recipientUserId: 1, createdAt: -1 },
+  { name: "tenant_notification_recipient_inbox" }
+);
+portalNotificationSchema.index(
+  { tenantId: 1, recipientUserId: 1, readAt: 1 },
+  { name: "tenant_notification_unread_count" }
+);
+portalNotificationSchema.index(
+  { tenantId: 1, idempotencyKey: 1 },
+  { unique: true, name: "tenant_notification_idempotency_unique" }
+);
+
+addTenantOwnership(portalNotificationSchema);
 
 export const PortalNotification = mongoose.model<IPortalNotification>(
   "PortalNotification",

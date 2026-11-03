@@ -44,6 +44,12 @@ const COMPANY_NAME = "SWIFTLINE CARGO";
 
 export interface ShipmentLabelData {
   parcelNumber: string;
+  /** Optional tenant brand for internal labels issued by an operator. */
+  companyName?: string;
+  /** Optional operator logo; Swiftline labels keep the existing bundled mark. */
+  logoBuffer?: Buffer;
+  /** Optional tenant service label; Swiftline bookings retain the existing copy. */
+  serviceName?: string;
   /** Human-readable number; the barcode continues to use the unique parcel number. */
   displayParcelNumber?: string;
   parcelIndex: number;
@@ -96,14 +102,14 @@ function pngSize(buffer: Buffer) {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
-async function barcode(value: string) {
+async function barcode(value: string, operatorLabel = false) {
   return bwipjs.toBuffer({
     bcid: "code128",
     text: value,
     // `scale` is raster resolution, not printed size. The PDF downsamples this
     // image so the bars remain sharp on office and thermal printers.
     scale: 8,
-    height: 14,
+    height: operatorLabel ? 15 : 14,
     includetext: false,
     backgroundcolor: "FFFFFF",
     barcolor: "000000",
@@ -197,16 +203,21 @@ function drawSwiftlineLabel(
     .lineWidth(1.2)
     .stroke(INK);
 
-  if (fs.existsSync(logoPath)) {
+  const companyName = text(data.companyName) || COMPANY_NAME;
+  const hasTenantBrand = Boolean(text(data.companyName));
+  const hasLogo = Boolean(data.logoBuffer) || (!hasTenantBrand && fs.existsSync(logoPath));
+  if (data.logoBuffer) {
+    document.image(data.logoBuffer, TEXT_LEFT, ROW_HEADER + 7, { fit: [48, 19] });
+  } else if (!hasTenantBrand && fs.existsSync(logoPath)) {
     document.image(logoPath, TEXT_LEFT, ROW_HEADER + 7, { fit: [48, 19] });
   }
-  const companyLeft = TEXT_LEFT + 55;
+  const companyLeft = hasLogo ? TEXT_LEFT + 55 : TEXT_LEFT;
   const companyWidth = CONTENT_RIGHT - CELL_PADDING - companyLeft;
   document
     .fillColor(INK)
     .font("Helvetica-Bold")
-    .fontSize(fitOneLine(document, COMPANY_NAME, companyWidth, 12, 7))
-    .text(COMPANY_NAME, companyLeft, ROW_HEADER + 12, {
+    .fontSize(fitOneLine(document, companyName, companyWidth, 12, 7))
+    .text(companyName, companyLeft, ROW_HEADER + 12, {
       width: companyWidth,
       align: "right",
       lineBreak: false
@@ -214,12 +225,12 @@ function drawSwiftlineLabel(
   rule(document, ROW_BARCODE, 0.9);
 
   const barcodeTop = ROW_BARCODE + 7;
-  const barcodeBox = ROW_GRID - barcodeTop - 24;
+  const barcodeBox = ROW_GRID - barcodeTop - (hasTenantBrand ? 20 : 24);
   const source = pngSize(barcodeImage);
   // Keep the bars broad while preserving a real quiet zone between Code 128
   // and the label's outer border so handheld scanners do not read the border.
-  const barcodeLeft = CONTENT_LEFT + 9;
-  const barcodeWidth = CONTENT_WIDTH - 18;
+  const barcodeWidth = CONTENT_WIDTH - (hasTenantBrand ? 36 : 18);
+  const barcodeLeft = CONTENT_LEFT + (CONTENT_WIDTH - barcodeWidth) / 2;
   const barcodeHeight = Math.min(barcodeBox, (barcodeWidth * source.height) / source.width);
   document.image(barcodeImage, barcodeLeft, barcodeTop, {
     fit: [barcodeWidth, barcodeBox],
@@ -228,8 +239,8 @@ function drawSwiftlineLabel(
   document
     .fillColor(INK)
     .font("Helvetica-Bold")
-    .fontSize(fitOneLine(document, displayParcelNumber, TEXT_WIDTH, 14, 7))
-    .text(displayParcelNumber, TEXT_LEFT, barcodeTop + barcodeHeight + 9, {
+    .fontSize(fitOneLine(document, displayParcelNumber, TEXT_WIDTH, hasTenantBrand ? 12 : 14, 7))
+    .text(displayParcelNumber, TEXT_LEFT, barcodeTop + barcodeHeight + (hasTenantBrand ? 5 : 9), {
       width: TEXT_WIDTH,
       align: "center",
       lineBreak: false
@@ -317,7 +328,7 @@ function drawSwiftlineLabel(
 
   const serviceLeft = DETAILS_COL + CELL_PADDING;
   const serviceWidth = CONTENT_RIGHT - CELL_PADDING - serviceLeft;
-  const serviceWords = SERVICE_NAME.split(" ");
+  const serviceWords = (text(data.serviceName) || SERVICE_NAME).split(" ");
   const serviceSize = Math.min(
     ...serviceWords.map((word) => fitOneLine(document.font("Helvetica-Bold"), word, serviceWidth, 11, 6))
   );
@@ -340,7 +351,7 @@ function drawSwiftlineLabel(
 
 /** One square label on a printer-safe square page. */
 export async function renderSwiftlineLabelPdf(data: ShipmentLabelData) {
-  const barcodeImage = await barcode(data.parcelNumber);
+  const barcodeImage = await barcode(data.parcelNumber, Boolean(text(data.companyName)));
   return collectPdf((document) => {
     drawSwiftlineLabel(document, data, barcodeImage, SINGLE_PAGE_INSET, SINGLE_PAGE_INSET);
   }, [SINGLE_PAGE_EDGE, SINGLE_PAGE_EDGE]);
@@ -354,7 +365,10 @@ export async function renderSwiftlineLabelSetPdf(data: readonly ShipmentLabelDat
   if (!data.length) throw new Error("At least one Swiftline label is required.");
   if (data.length === 1) return renderSwiftlineLabelPdf(data[0] as ShipmentLabelData);
 
-  const barcodeImages = await Promise.all(data.map((label) => barcode(label.parcelNumber)));
+  const barcodeImages = await Promise.all(data.map((label) => barcode(
+    label.parcelNumber,
+    Boolean(text(label.companyName))
+  )));
   return collectPdf((document) => {
     data.forEach((label, index) => {
       const pageIndex = Math.floor(index / LABELS_PER_SHEET);

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 const shipmentInvoiceTaxTreatmentValues = ["GST_APPLICABLE", "NO_GST"] as const;
 export type ShipmentInvoiceTaxTreatment = (typeof shipmentInvoiceTaxTreatmentValues)[number];
@@ -31,7 +32,7 @@ export interface IShipmentInvoiceRevision {
   paymentStatus?: "UNPAID" | "PARTIALLY_PAID" | "PAID" | "VOID";
 }
 
-export interface IShipmentInvoice extends mongoose.Document {
+export interface IShipmentInvoice extends mongoose.Document, TenantOwnedFields {
   invoiceNumber: string;
   financialYear: string;
   shipmentDraftId: mongoose.Types.ObjectId;
@@ -113,10 +114,10 @@ const shipmentInvoiceRevisionSchema = new mongoose.Schema<IShipmentInvoiceRevisi
 
 const shipmentInvoiceSchema = new mongoose.Schema<IShipmentInvoice>(
   {
-    invoiceNumber: { type: String, required: true, unique: true, trim: true, maxlength: 16, index: true },
+    invoiceNumber: { type: String, required: true, trim: true, maxlength: 16 },
     financialYear: { type: String, required: true, trim: true, index: true },
-    shipmentDraftId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentDraft", required: true, unique: true, index: true },
-    dpdShipmentId: { type: mongoose.Schema.Types.ObjectId, ref: "DpdShipment", required: true, unique: true, index: true },
+    shipmentDraftId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentDraft", required: true },
+    dpdShipmentId: { type: mongoose.Schema.Types.ObjectId, ref: "DpdShipment", required: true },
     businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, index: true },
     branchId: { type: mongoose.Schema.Types.ObjectId, ref: "Branch", required: true, index: true },
     currency: { type: String, uppercase: true, trim: true, default: "INR" },
@@ -158,5 +159,19 @@ shipmentInvoiceSchema.index({ businessAccountId: 1, branchId: 1, issuedAt: -1 })
 shipmentInvoiceSchema.index({ businessAccountId: 1, billingStatementId: 1, issuedAt: 1 });
 // Drives the billing cycle's "which shipments settled in this period" query.
 shipmentInvoiceSchema.index({ businessAccountId: 1, chargeFinalizedAt: 1, billingStatementId: 1 });
+shipmentInvoiceSchema.index(
+  { tenantId: 1, invoiceNumber: 1 },
+  { unique: true, name: "tenant_invoice_number_unique" }
+);
+shipmentInvoiceSchema.index(
+  { tenantId: 1, shipmentDraftId: 1 },
+  { unique: true, name: "tenant_shipment_draft_invoice_unique" }
+);
+shipmentInvoiceSchema.index(
+  { tenantId: 1, dpdShipmentId: 1 },
+  { unique: true, name: "tenant_dpd_shipment_invoice_unique" }
+);
+
+addTenantOwnership(shipmentInvoiceSchema);
 
 export const ShipmentInvoice = mongoose.model<IShipmentInvoice>("ShipmentInvoice", shipmentInvoiceSchema);

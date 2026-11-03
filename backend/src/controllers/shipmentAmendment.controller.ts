@@ -42,6 +42,10 @@ import {
 } from "../services/amendmentBilling.service.js";
 import { regenerateShipmentLabels } from "../services/dpdShipment.service.js";
 import { notifyActiveAdmins, notifyBusinessShipmentMembers } from "../services/portalNotification.service.js";
+import { notifyOperatorShipmentAmendmentReviewers } from "../services/portalNotification.service.js";
+import { getTenantContext } from "../services/tenantScope.service.js";
+import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
+import { operatorAmendmentBlockedTrackingStatuses } from "../services/operatorShipmentAmendmentPolicy.service.js";
 import { dateRangeCondition, dateRangeParams } from "../utils/dateRangeFilter.js";
 import {
   buildRevisedShipmentSnapshot,
@@ -433,9 +437,13 @@ async function assertShipmentCanBeAmended(
   session?: mongoose.ClientSession
 ) {
   const dpdShipmentQuery = DpdShipment.findOne({ shipmentDraftId });
+  const tenantContext = getTenantContext();
+  const blockingStatuses = tenantContext?.kind === "OPERATOR"
+    ? [...postParcelCollectedStatuses, ...operatorAmendmentBlockedTrackingStatuses]
+    : postParcelCollectedStatuses;
   const blockingEventQuery = ShipmentEvent.findOne({
     shipmentDraftId,
-    status: { $in: postParcelCollectedStatuses }
+    status: { $in: blockingStatuses }
   }).lean();
   const cancellationQuery = ShipmentCancellation.findOne({
     shipmentDraftId,
@@ -682,16 +690,23 @@ export async function createShipmentAmendment(
   // An admin raising the amendment is already in the review queue, so only a
   // client-raised request needs to reach the operations team.
   if (actorRole === "client") {
-    await notifyActiveAdmins({
+    const notification = {
       type: "SHIPMENT_AMENDMENT_REQUESTED",
       title: "Shipment amendment requested",
-      message: `A client requested ${preview.requestedChanges.length} change(s) to shipment `
+      message: `${getTenantContext()?.kind === "OPERATOR" ? "An operator client" : "A client"} requested ${preview.requestedChanges.length} change(s) to shipment `
         + `${amendmentGate.dpdShipment.swiftlineTrackingNumber || String(shipmentDraft._id)}.`,
-      href: `/dashboard/amendments#amendment-${String(amendment._id)}`,
       idempotencyKey: `SHIPMENT_AMENDMENT_REQUESTED:${String(amendment._id)}`,
       businessAccountId: shipmentDraft.businessAccountId,
-      metadata: { amendmentId: amendment._id, shipmentDraftId: shipmentDraft._id }
-    });
+      metadata: { amendmentId: String(amendment._id), shipmentDraftId: String(shipmentDraft._id) }
+    } as const;
+    if (getTenantContext()?.kind === "OPERATOR") {
+      await notifyOperatorShipmentAmendmentReviewers(notification);
+    } else {
+      await notifyActiveAdmins({
+        ...notification,
+        href: `/dashboard/amendments#amendment-${String(amendment._id)}`
+      });
+    }
   }
 
   return response.status(200).json({
@@ -1022,12 +1037,17 @@ export async function approveShipmentAmendment(request: Request, response: Respo
         }
       }], { session });
 
+      const operatorContext = getOperatorContext(request);
+      const operatorTenant = getTenantContext()?.kind === "OPERATOR";
       await notifyBusinessShipmentMembers(amendment.businessAccountId, {
         type: "SHIPMENT_AMENDMENT_APPROVED",
         title: "Shipment amendment approved",
-        message: `${changePreview.length} change(s) were applied to your shipment. `
-          + `Revised invoice ${revisedInvoice.invoiceNumber} is available.`,
-        href: `/client/shipments/${String(shipmentDraft._id)}#shipment-amendments`,
+        message: operatorTenant
+          ? `Your operator approved ${changePreview.length} shipment change(s). Revised invoice ${revisedInvoice.invoiceNumber} is available.`
+          : `${changePreview.length} change(s) were applied to your shipment. Revised invoice ${revisedInvoice.invoiceNumber} is available.`,
+        href: operatorTenant && operatorContext
+          ? `/portal/${encodeURIComponent(operatorContext.slug)}/shipments/${String(shipmentDraft._id)}#shipment-amendments`
+          : `/client/shipments/${String(shipmentDraft._id)}#shipment-amendments`,
         idempotencyKey: `SHIPMENT_AMENDMENT_APPROVED:${String(amendment._id)}`,
         metadata: { amendmentId: amendment._id, shipmentDraftId: shipmentDraft._id }
       }, session);
@@ -1054,15 +1074,20 @@ export async function approveShipmentAmendment(request: Request, response: Respo
     dpdShipmentId: mongoose.Types.ObjectId;
   };
   let documentWarning = "";
+  const operatorTenant = getTenantContext()?.kind === "OPERATOR";
   try {
     await regenerateShipmentLabels(approvalResult.dpdShipmentId, userId);
   } catch (error) {
     console.error("Approved amendment requires document reconciliation.", error);
-    documentWarning = "The amendment was approved, but its revised labels require Swiftline Operations review.";
+    documentWarning = operatorTenant
+      ? "The amendment was approved, but its revised internal labels require operator staff review."
+      : "The amendment was approved, but its revised labels require Swiftline Operations review.";
   }
   return response.status(200).json({
     success: true,
-    message: documentWarning || "Amendment approved and shipment documents updated.",
+    message: documentWarning || (operatorTenant
+      ? "Amendment approved and operator shipment documents updated."
+      : "Amendment approved and shipment documents updated."),
     documentWarning,
     amendment: approvalResult.amendment,
     shipmentDraft: approvalResult.shipmentDraft
@@ -1105,13 +1130,21 @@ export async function rejectShipmentAmendment(request: Request, response: Respon
     }
   });
 
+  const operatorContext = getOperatorContext(request);
+  const operatorTenant = getTenantContext()?.kind === "OPERATOR";
   await notifyBusinessShipmentMembers(amendment.businessAccountId, {
     type: "SHIPMENT_AMENDMENT_REJECTED",
     title: "Shipment amendment rejected",
-    message: amendment.reviewNote
-      ? `Your amendment request was not approved. Reason: ${amendment.reviewNote}`
-      : "Your amendment request was not approved. Contact your Swiftline branch for details.",
-    href: `/client/shipments/${String(amendment.shipmentDraftId)}#shipment-amendments`,
+    message: operatorTenant
+      ? amendment.reviewNote
+        ? `Your operator did not approve the shipment amendment. Reason: ${amendment.reviewNote}`
+        : "Your operator did not approve the shipment amendment. Contact its operations team for details."
+      : amendment.reviewNote
+        ? `Your amendment request was not approved. Reason: ${amendment.reviewNote}`
+        : "Your amendment request was not approved. Contact your Swiftline branch for details.",
+    href: operatorTenant && operatorContext
+      ? `/portal/${encodeURIComponent(operatorContext.slug)}/shipments/${String(amendment.shipmentDraftId)}#shipment-amendments`
+      : `/client/shipments/${String(amendment.shipmentDraftId)}#shipment-amendments`,
     idempotencyKey: `SHIPMENT_AMENDMENT_REJECTED:${String(amendment._id)}`,
     metadata: { amendmentId: amendment._id, shipmentDraftId: amendment.shipmentDraftId }
   });

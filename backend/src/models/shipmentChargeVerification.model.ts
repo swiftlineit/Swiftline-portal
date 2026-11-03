@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 type ShipmentParcelSnapshot = {
   sequence: number;
@@ -12,7 +13,7 @@ type ShipmentParcelSnapshot = {
   shipmentReference2: string;
 };
 
-export interface IShipmentChargeVerification extends mongoose.Document {
+export interface IShipmentChargeVerification extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
   dpdShipmentId: mongoose.Types.ObjectId;
   businessAccountId: mongoose.Types.ObjectId;
@@ -74,6 +75,8 @@ shipmentChargeVerificationSchema.pre(
 shipmentChargeVerificationSchema.pre("save", function blockSavedMutation() {
   if (!this.isNew) throw new Error("Shipment charge verifications are immutable.");
 });
+
+addTenantOwnership(shipmentChargeVerificationSchema);
 
 export const ShipmentChargeVerification = mongoose.model<IShipmentChargeVerification>(
   "ShipmentChargeVerification",

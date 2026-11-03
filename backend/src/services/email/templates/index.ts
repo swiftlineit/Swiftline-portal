@@ -1,7 +1,10 @@
 import type { EmailContent } from "../layout.js";
 import { asText, firstNameOf, toAbsoluteUrl } from "../format.js";
 import { shipmentBookedClientTemplate, shipmentBookedStaffTemplate } from "./shipmentBooked.js";
+import { operatorShipmentBookedClientTemplate, operatorShipmentBookedStaffTemplate } from "./operatorShipmentBooked.js";
+import { operatorContactQueryStaffTemplate } from "./operatorContactQuery.js";
 import { clientInvitationTemplate } from "./clientInvitation.js";
+import { operatorInvitationTemplate } from "./operatorInvitation.js";
 import { passwordResetTemplate } from "./passwordReset.js";
 import { loginOtpTemplate } from "./loginOtp.js";
 import { pickupOtpTemplate } from "./pickupOtp.js";
@@ -51,8 +54,12 @@ const genericNotificationTemplate: EmailTemplate = ({ recipientName, payload, ap
 const registry: Record<string, EmailTemplate> = {
   SHIPMENT_BOOKED_CLIENT: shipmentBookedClientTemplate,
   SHIPMENT_BOOKED_STAFF: shipmentBookedStaffTemplate,
+  OPERATOR_SHIPMENT_BOOKED_CLIENT: operatorShipmentBookedClientTemplate,
+  OPERATOR_SHIPMENT_BOOKED_STAFF: operatorShipmentBookedStaffTemplate,
+  OPERATOR_CONTACT_QUERY_STAFF: operatorContactQueryStaffTemplate,
   PUBLIC_SHIPMENT_BOOKED: publicShipmentBookedTemplate,
   CLIENT_INVITATION: clientInvitationTemplate,
+  OPERATOR_INVITATION: operatorInvitationTemplate,
   PASSWORD_RESET: passwordResetTemplate,
   LOGIN_OTP: loginOtpTemplate,
   BUSINESS_ACCOUNT_EMAIL_OTP: businessAccountOtpTemplate,

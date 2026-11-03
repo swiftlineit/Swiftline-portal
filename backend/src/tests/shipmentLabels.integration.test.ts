@@ -31,6 +31,7 @@ import { deleteObject } from "../services/storage/storage.service.js";
 
 const databaseName = `sl_shipment_labels_${Date.now()}`;
 const generatedKeys = new Set<string>();
+const previousStorageDriver = env.STORAGE_DRIVER;
 
 // A complete Indian consignor plus mandatory KYC uploads, so booking drafts pass
 // the consignor validation added alongside consignor capture. "234567890124"
@@ -88,6 +89,9 @@ function isCarrierUrl(url: string) {
 }
 
 before(async () => {
+  // These tests create and clean up their own label files; never use a shared
+  // S3 bucket even when the developer's environment is configured for S3.
+  env.STORAGE_DRIVER = "local";
   globalThis.fetch = (async (input: Parameters<typeof realFetch>[0], init?: Parameters<typeof realFetch>[1]) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (isCarrierUrl(url)) {
@@ -104,19 +108,24 @@ before(async () => {
 
 after(async () => {
   globalThis.fetch = realFetch;
-  // Reported as a failure rather than only thrown at the call site, so a booking
-  // that swallows carrier errors cannot hide the attempt.
-  assert.deepEqual(attemptedCarrierCalls, [], "no test may call the live carrier");
-
-  // Labels are stored through the storage service, so they are removed through
-  // it too- the test does not need to know which driver is active.
-  for (const key of generatedKeys) {
-    await deleteObject(key).catch(() => undefined);
-  }
-  if (mongoose.connection.readyState !== 0) {
-    assert.ok(mongoose.connection.name.startsWith("sl_shipment_labels_"));
-    await mongoose.connection.dropDatabase();
-    await mongoose.disconnect();
+  try {
+    // Reported as a failure rather than only thrown at the call site, so a booking
+    // that swallows carrier errors cannot hide the attempt.
+    assert.deepEqual(attemptedCarrierCalls, [], "no test may call the live carrier");
+  } finally {
+    try {
+      // These test objects always use the local storage driver, never a shared S3 bucket.
+      for (const key of generatedKeys) {
+        await deleteObject(key).catch(() => undefined);
+      }
+      if (mongoose.connection.readyState !== 0) {
+        assert.ok(mongoose.connection.name.startsWith("sl_shipment_labels_"));
+        await mongoose.connection.dropDatabase();
+        await mongoose.disconnect();
+      }
+    } finally {
+      env.STORAGE_DRIVER = previousStorageDriver;
+    }
   }
 });
 

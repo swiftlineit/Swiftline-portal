@@ -13,6 +13,7 @@ export type EnsureShipmentBookedEventInput = {
   eventAt?: Date | null;
   source?: ShipmentEventSource;
   sourceReference?: string;
+  note?: string;
 };
 
 export function buildShipmentBookedEventUpdate(
@@ -27,10 +28,9 @@ export function buildShipmentBookedEventUpdate(
       shipmentDraftId: input.shipmentDraftId,
       status: SHIPMENT_BOOKED_STATUS,
       milestoneKey: SHIPMENT_BOOKED_STATUS,
-      note: "Shipment booked with carrier.",
+      note: input.note ?? "Shipment booked with carrier.",
       source: input.source ?? "SYSTEM",
       sourceReference: input.sourceReference ?? "",
-      customerVisible: true,
       createdBy: input.userId,
       eventAt: input.eventAt ?? new Date(),
     },

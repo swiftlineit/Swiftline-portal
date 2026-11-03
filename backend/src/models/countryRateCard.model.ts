@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const countryRateServiceValues = ["COURIER", "CARGO"] as const;
 export type CountryRateService = (typeof countryRateServiceValues)[number];
@@ -10,7 +11,7 @@ export type InternalRateCardBand = (typeof internalRateCardBandValues)[number];
 export const rateCardGstTreatmentValues = ["INCLUDED", "EXCLUDED"] as const;
 export type RateCardGstTreatment = (typeof rateCardGstTreatmentValues)[number];
 
-export interface ICountryRateCard extends mongoose.Document {
+export interface ICountryRateCard extends mongoose.Document, TenantOwnedFields {
   band?: RateCardBand | null;
   businessAccountId?: mongoose.Types.ObjectId | null;
   countryCode: string;
@@ -49,11 +50,19 @@ const countryRateCardSchema = new mongoose.Schema<ICountryRateCard>(
   { timestamps: true }
 );
 
-countryRateCardSchema.index({ band: 1, countryCode: 1, service: 1, fromKg: 1, toKg: 1 });
-countryRateCardSchema.index({ businessAccountId: 1, countryCode: 1, service: 1, fromKg: 1, toKg: 1 });
+countryRateCardSchema.index(
+  { tenantId: 1, band: 1, countryCode: 1, service: 1, fromKg: 1, toKg: 1 },
+  { name: "tenant_band_country_service_weight" }
+);
+countryRateCardSchema.index(
+  { tenantId: 1, businessAccountId: 1, countryCode: 1, service: 1, fromKg: 1, toKg: 1 },
+  { name: "tenant_account_country_service_weight" }
+);
 countryRateCardSchema.pre("validate", function () {
   if (Boolean(this.band) === Boolean(this.businessAccountId)) this.invalidate("businessAccountId", "A rate must belong to exactly one private account or global/legacy band.");
 });
+
+addTenantOwnership(countryRateCardSchema);
 
 export const CountryRateCard = mongoose.model<ICountryRateCard>(
   "CountryRateCard",

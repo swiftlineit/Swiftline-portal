@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import ExcelJS from "exceljs";
 import { ShipmentManifestCounter } from "../models/shipmentManifestCounter.model.js";
 import { ShipmentManifest, type IShipmentManifest, type ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
+import { getTenantContext, type TenantContext } from "./tenantScope.service.js";
 import {
   readShipmentBookingSnapshot,
   type ShipmentBookingSnapshot
@@ -422,6 +423,17 @@ export function shipmentManifestCounterKey(prefix: string) {
   return `shipment-manifest:${prefix.toUpperCase()}`;
 }
 
+export function shipmentManifestCounterId(prefix: string, tenant?: TenantContext) {
+  const normalizedPrefix = prefix.toUpperCase();
+  if (tenant?.kind === "OPERATOR") {
+    return `${tenant.tenantId}:${shipmentManifestCounterKey(normalizedPrefix)}`;
+  }
+  // Keep the historic Swiftline SLC counter ID so a rolling deployment never
+  // allocates the same SLC number from both the old and tenant-aware writers.
+  if (normalizedPrefix === "SLC") return "shipment-manifest";
+  return shipmentManifestCounterKey(normalizedPrefix);
+}
+
 export function shipmentManifestSearchConditions(searchValue: string) {
   const search = searchValue.trim().slice(0, 80);
   if (!search) return [];
@@ -439,19 +451,30 @@ export function shipmentManifestSearchConditions(searchValue: string) {
   ];
 }
 
-export function resolveClientManifestAccountScope(
-  accountIds: mongoose.Types.ObjectId[],
+export function resolveClientManifestBranchScope(
+  accountScopes: Array<{ businessAccountId: mongoose.Types.ObjectId; branchIds: mongoose.Types.ObjectId[] }>,
   requestedAccountId = ""
 ) {
-  if (!accountIds.length) return { allowed: false as const, filter: {} };
-  if (requestedAccountId && mongoose.Types.ObjectId.isValid(requestedAccountId)) {
-    const requestedId = new mongoose.Types.ObjectId(requestedAccountId);
-    if (!accountIds.some((accountId) => String(accountId) === String(requestedId))) {
+  if (!accountScopes.length) return { allowed: false as const, filter: {} };
+  if (requestedAccountId) {
+    if (!mongoose.Types.ObjectId.isValid(requestedAccountId)) {
       return { allowed: false as const, filter: {} };
     }
-    return { allowed: true as const, filter: { businessAccountId: requestedId } };
+    const requestedId = new mongoose.Types.ObjectId(requestedAccountId);
+    if (!accountScopes.some((scope) => String(scope.businessAccountId) === String(requestedId))) {
+      return { allowed: false as const, filter: {} };
+    }
+    accountScopes = accountScopes.filter((scope) => String(scope.businessAccountId) === String(requestedId));
   }
-  return { allowed: true as const, filter: { businessAccountId: { $in: accountIds } } };
+
+  const branchFilters = accountScopes
+    .filter((scope) => scope.branchIds.length > 0)
+    .map((scope) => ({
+      businessAccountId: scope.businessAccountId,
+      branchId: { $in: scope.branchIds }
+    }));
+  if (!branchFilters.length) return { allowed: false as const, filter: {} };
+  return { allowed: true as const, filter: { $or: branchFilters } };
 }
 
 function duplicateKeyError(error: unknown) {
@@ -460,10 +483,9 @@ function duplicateKeyError(error: unknown) {
 
 export async function allocateShipmentManifestNumber(businessAccountName = "") {
   const prefix = shipmentManifestNumberPrefix(businessAccountName);
-  // Keep the historical counter for SLC-prefixed names so old and new backend
-  // instances cannot issue overlapping SLC numbers during a rolling deploy.
-  const usesLegacyCounter = prefix.toUpperCase() === "SLC";
-  const counterId = usesLegacyCounter ? "shipment-manifest" : shipmentManifestCounterKey(prefix);
+  const tenant = getTenantContext();
+  const usesLegacyCounter = tenant?.kind !== "OPERATOR" && prefix.toUpperCase() === "SLC";
+  const counterId = shipmentManifestCounterId(prefix, tenant);
   const existingCounter = await ShipmentManifestCounter.findById(counterId).select("sequence").lean().exec();
 
   if (!existingCounter || usesLegacyCounter) {

@@ -10,6 +10,15 @@ type ClientInvitationEmailInput = {
   companyName: string;
   activationUrl: string;
   expiresAt: Date;
+  requiresSignIn?: boolean;
+};
+
+type OperatorInvitationEmailInput = {
+  to: string;
+  name: string;
+  companyName: string;
+  activationUrl: string;
+  expiresAt: Date;
 };
 
 type PasswordResetEmailInput = {
@@ -61,7 +70,7 @@ function keyForSecret(prefix: string, secret: string) {
  * instead and is never awaited on a request.
  */
 async function enqueueAndSendNow(params: {
-  notificationType: "CLIENT_INVITATION" | "PASSWORD_RESET" | "LOGIN_OTP" | "BUSINESS_ACCOUNT_EMAIL_OTP" | "PICKUP_OTP";
+  notificationType: "CLIENT_INVITATION" | "OPERATOR_INVITATION" | "PASSWORD_RESET" | "LOGIN_OTP" | "BUSINESS_ACCOUNT_EMAIL_OTP" | "PICKUP_OTP";
   idempotencyKey: string;
   to: string;
   name: string;
@@ -97,12 +106,32 @@ async function enqueueAndSendNow(params: {
 }
 
 export async function sendClientInvitationEmail(input: ClientInvitationEmailInput): Promise<MailDeliveryResult> {
+  const requiresSignIn = input.requiresSignIn === true;
   return enqueueAndSendNow({
     notificationType: "CLIENT_INVITATION",
     idempotencyKey: keyForSecret("CLIENT_INVITATION", input.activationUrl),
     to: input.to,
     name: input.name,
-    subject: `Activate your Swiftline Portal access for ${input.companyName}`,
+    subject: requiresSignIn
+      ? `Accept your Swiftline Portal access for ${input.companyName}`
+      : `Activate your Swiftline Portal access for ${input.companyName}`,
+    payload: {
+      companyName: input.companyName,
+      activationUrl: input.activationUrl,
+      expiresAt: input.expiresAt,
+      requiresSignIn
+    },
+    context: { to: input.to, companyName: input.companyName }
+  });
+}
+
+export async function sendOperatorInvitationEmail(input: OperatorInvitationEmailInput): Promise<MailDeliveryResult> {
+  return enqueueAndSendNow({
+    notificationType: "OPERATOR_INVITATION",
+    idempotencyKey: keyForSecret("OPERATOR_INVITATION", input.activationUrl),
+    to: input.to,
+    name: input.name,
+    subject: `Set up your ${input.companyName} operator portal`,
     payload: {
       companyName: input.companyName,
       activationUrl: input.activationUrl,

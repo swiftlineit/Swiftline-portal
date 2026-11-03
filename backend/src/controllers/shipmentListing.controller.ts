@@ -27,6 +27,7 @@ import {
   type TableExportFormat
 } from "../services/export/tableExportHttp.js";
 import { allowedBranchIds } from "../middleware/branchAccess.middleware.js";
+import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 
 function staffBranchIds(request: Request, requested: mongoose.Types.ObjectId | null) {
   const allowed = allowedBranchIds(request);
@@ -280,6 +281,7 @@ export async function listClientBookedShipments(request: Request, response: Resp
   const result = await listBookedShipments({
     ...(format ? listWindow(request, format) : pagination(request)),
     actorRole: "client",
+    includeParcelWeights: Boolean(getOperatorContext(request)),
     status: typeof request.query.status === "string" ? request.query.status : "",
     attention: request.query.attention === "1" || request.query.attention === "true",
     rebookedOnly: request.query.rebooked === "1" || request.query.rebooked === "true",

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership } from "./plugins/tenantOwnedSchema.plugin.js";
 import { rateCardBandValues, type RateCardBand } from "./countryRateCard.model.js";
 
 export type ShipmentType = "international_cargo" | "international_courier";
@@ -116,6 +117,8 @@ export interface IBusinessGstBilling {
 }
 
 export interface IBusinessAccount extends mongoose.Document {
+  /** Tenant ownership; optional only while the staged Swiftline backfill is pending. */
+  tenantId?: mongoose.Types.ObjectId;
   accountId: string;
   accountKind: BusinessAccountKind;
   status: BusinessAccountStatus;
@@ -302,7 +305,8 @@ const businessGstBillingSchema = new mongoose.Schema<IBusinessGstBilling>(
 
 const businessAccountSchema = new mongoose.Schema<IBusinessAccount>(
   {
-    accountId: { type: String, required: true, unique: true, index: true },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant", immutable: true },
+    accountId: { type: String, required: true },
     // Defaults to BUSINESS so every existing account keeps its meaning without a
     // migration; only the sentinel is ever written as INDIVIDUAL_SENTINEL.
     accountKind: { type: String, enum: businessAccountKinds, default: "BUSINESS", required: true, index: true },
@@ -447,6 +451,15 @@ const businessAccountSchema = new mongoose.Schema<IBusinessAccount>(
   { timestamps: true }
 );
 
+businessAccountSchema.index({ tenantId: 1 }, { name: "business_account_tenant" });
+
+addTenantOwnership(businessAccountSchema);
+
+businessAccountSchema.index(
+  { tenantId: 1, accountId: 1 },
+  { unique: true, name: "uniq_tenant_business_account_id" }
+);
+
 /**
  * Uniqueness enforced by the database, not only by the pre-flight query in the
  * controller- two simultaneous requests can both pass that check and both
@@ -471,17 +484,17 @@ const liveAccountFilter = {
 };
 
 businessAccountSchema.index(
-  { "contact.email": 1 },
-  { unique: true, partialFilterExpression: liveAccountFilter, name: "uniq_live_contact_email" }
+  { tenantId: 1, "contact.email": 1 },
+  { unique: true, partialFilterExpression: liveAccountFilter, name: "uniq_tenant_live_contact_email" }
 );
 
 businessAccountSchema.index(
-  { "contact.countryCode": 1, "contact.mobileNumber": 1 },
-  { unique: true, partialFilterExpression: liveAccountFilter, name: "uniq_live_contact_mobile" }
+  { tenantId: 1, "contact.countryCode": 1, "contact.mobileNumber": 1 },
+  { unique: true, partialFilterExpression: liveAccountFilter, name: "uniq_tenant_live_contact_mobile" }
 );
 
 businessAccountSchema.index(
-  { "company.registrationIdKey": 1 },
+  { tenantId: 1, "company.registrationIdKey": 1 },
   {
     unique: true,
     // Keyed off registrationIdKey rather than registrationId because a US SSN or
@@ -489,7 +502,7 @@ businessAccountSchema.index(
     // the same four digits share the string "•••-••-6789". The key is left blank
     // for those, and blanks are excluded here, so they never collide.
     partialFilterExpression: { ...liveAccountFilter, "company.registrationIdKey": { $type: "string", $gt: "" } },
-    name: "uniq_live_company_registration_id"
+    name: "uniq_tenant_live_company_registration_id"
   }
 );
 

@@ -115,7 +115,7 @@ function renderBlockText(block: EmailBlock): string {
   ].join("\n");
 }
 
-export function renderEmail(content: EmailContent, footerNote: string) {
+export function renderEmail(content: EmailContent, footerNote: string, brandName = "Swiftline") {
   const preheader = content.preheader ?? "";
   const html = `<!doctype html>
 <html lang="en">
@@ -131,7 +131,7 @@ export function renderEmail(content: EmailContent, footerNote: string) {
   <tr><td align="center" style="padding:28px 12px;">
     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:600px;background:#ffffff;border:1px solid ${palette.border};border-radius:10px;overflow:hidden;">
       <tr><td style="padding:18px 28px;background:${palette.ink};">
-        <span style="font-size:17px;font-weight:700;color:#ffffff;letter-spacing:.3px;">Swiftline</span>
+        <span style="font-size:17px;font-weight:700;color:#ffffff;letter-spacing:.3px;">${escapeHtml(brandName)}</span>
         <span style="font-size:12px;color:#94a3b8;margin-left:8px;">Portal</span>
       </td></tr>
       <tr><td style="padding:28px;">

@@ -1,7 +1,8 @@
 import mongoose from "mongoose";
 import { isMinorUnitInteger } from "./financialTypes.js";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
-export interface ICreditLimitHistory extends mongoose.Document {
+export interface ICreditLimitHistory extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   creditAccountId: mongoose.Types.ObjectId;
   previousLimitMinor: number;
@@ -20,5 +21,7 @@ const creditLimitHistorySchema = new mongoose.Schema<ICreditLimitHistory>({
   changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   changedAt: { type: Date, default: Date.now, index: true }
 });
+
+addTenantOwnership(creditLimitHistorySchema);
 
 export const CreditLimitHistory = mongoose.model<ICreditLimitHistory>("CreditLimitHistory", creditLimitHistorySchema);

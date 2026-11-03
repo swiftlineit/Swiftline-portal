@@ -1,7 +1,8 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import type { ShipmentInvoiceTaxTreatment, ShipmentInvoiceTaxType } from "./shipmentInvoice.model.js";
 
-export interface ICancellationFeeInvoice extends mongoose.Document {
+export interface ICancellationFeeInvoice extends mongoose.Document, TenantOwnedFields {
   invoiceNumber: string;
   financialYear: string;
   cancellationId: mongoose.Types.ObjectId;
@@ -30,9 +31,9 @@ export interface ICancellationFeeInvoice extends mongoose.Document {
 }
 
 const schema = new mongoose.Schema<ICancellationFeeInvoice>({
-  invoiceNumber: { type: String, required: true, unique: true, immutable: true, trim: true, maxlength: 32 },
+  invoiceNumber: { type: String, required: true, immutable: true, trim: true, maxlength: 32 },
   financialYear: { type: String, required: true, immutable: true, trim: true },
-  cancellationId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentCancellation", required: true, unique: true, immutable: true },
+  cancellationId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentCancellation", required: true, immutable: true },
   shipmentDraftId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentDraft", required: true, immutable: true },
   businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, immutable: true, index: true },
   branchId: { type: mongoose.Schema.Types.ObjectId, ref: "Branch", required: true, immutable: true },
@@ -60,5 +61,16 @@ const schema = new mongoose.Schema<ICancellationFeeInvoice>({
 schema.pre(["deleteOne", "deleteMany"], function blockDeletion() {
   throw new Error("Issued cancellation fee invoices are immutable.");
 });
+
+schema.index(
+  { tenantId: 1, invoiceNumber: 1 },
+  { unique: true, name: "tenant_cancellation_invoice_number_unique" }
+);
+schema.index(
+  { tenantId: 1, cancellationId: 1 },
+  { unique: true, name: "tenant_cancellation_invoice_cancellation_unique" }
+);
+
+addTenantOwnership(schema);
 
 export const CancellationFeeInvoice = mongoose.model<ICancellationFeeInvoice>("CancellationFeeInvoice", schema);

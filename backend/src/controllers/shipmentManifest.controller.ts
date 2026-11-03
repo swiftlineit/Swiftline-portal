@@ -5,7 +5,6 @@ import { z } from "zod";
 import { canAccessBranch } from "../middleware/branchAccess.middleware.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { Branch } from "../models/branch.model.js";
-import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { DpdShipment, type IDpdShipment } from "../models/dpdShipment.model.js";
 import { ShipmentDraft, type IShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
@@ -17,14 +16,16 @@ import { notifyAdminsOfClientManifest } from "../services/shipmentManifestNotifi
 import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
 import { buildShipmentManifestPdf } from "../services/shipmentManifestPdf.service.js";
 import { dateRangeCondition, dateRangeParams } from "../utils/dateRangeFilter.js";
+import { resolveClientAccountBranchScopes } from "../utils/clientScope.js";
 import { normalizePortalRole } from "../utils/portalRole.js";
+import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 import {
   allocateShipmentManifestNumber,
   buildHandoverManifestLine,
   formatManifestOrigin,
   hydrateMissingManifestParcelChargeableWeights,
   manifestBusinessAccountName,
-  resolveClientManifestAccountScope,
+  resolveClientManifestBranchScope,
   shipmentManifestSearchConditions,
   serializeShipmentManifest,
   ShipmentManifestServiceError
@@ -66,6 +67,17 @@ function getUserId(request: Request) {
 }
 
 function getCreatorRole(request: Request): Role | null {
+  const operatorRole = getOperatorContext(request)?.role;
+  if (operatorRole) {
+    const roleByMembership = {
+      OPERATOR_ADMIN: "admin",
+      OPERATIONS: "operations",
+      FINANCE: "finance",
+      CLIENT: "client"
+    } as const;
+    const mappedRole = roleByMembership[operatorRole];
+    return roleValues.includes(mappedRole) ? mappedRole : null;
+  }
   const role = (request as Request & { user?: { role?: unknown } }).user?.role;
   if (typeof role !== "string") return null;
   const normalizedRole = normalizePortalRole(role);
@@ -470,8 +482,7 @@ async function downloadManifest(request: Request, response: Response, actorRole:
     if (manifest.actorRole !== "client") {
       return response.status(404).json({ success: false, message: "Manifest not found." });
     }
-    const draft = await ShipmentDraft.findById(manifest.shipmentDraftIds[0]).exec();
-    if (!draft || !await clientCanAccessShipmentDraft({ userId, draft })) {
+    if (!await canClientAccessManifest(userId, manifest)) {
       return response.status(404).json({ success: false, message: "Manifest not found." });
     }
   }
@@ -549,13 +560,28 @@ const bulkManifestSchema = z.object({
   paymentType: z.string().trim().max(60).default("")
 });
 
-/** The business accounts a client may read manifests for. */
-async function clientBusinessAccountIds(userId: mongoose.Types.ObjectId) {
-  const memberships = await BusinessAccountMember.find({ user: userId, status: "active" })
-    .select("businessAccount")
-    .lean()
-    .exec();
-  return memberships.map((membership) => membership.businessAccount);
+async function canClientAccessManifest(userId: mongoose.Types.ObjectId, manifest: IShipmentManifest) {
+  if (manifest.manifestType === "COMBINED" || !manifest.businessAccountId) return false;
+  const accountScopes = await resolveClientAccountBranchScopes(userId);
+  const accountScope = resolveClientManifestBranchScope(accountScopes, String(manifest.businessAccountId));
+  if (!accountScope.allowed || !accountScopes.some((scope) => (
+    String(scope.businessAccountId) === String(manifest.businessAccountId)
+    && scope.branchIds.some((branchId) => String(branchId) === String(manifest.branchId))
+  ))) return false;
+
+  const referencedIds = [...new Set([
+    ...(manifest.shipmentDraftIds ?? []),
+    ...(manifest.lineSnapshots ?? []).map((line) => line.shipmentDraftId)
+  ].map(String))];
+  if (!referencedIds.length) return true;
+  if (referencedIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) return false;
+
+  const matchingDrafts = await ShipmentDraft.countDocuments({
+    _id: { $in: referencedIds.map((id) => new mongoose.Types.ObjectId(id)) },
+    businessAccountId: manifest.businessAccountId,
+    branchId: manifest.branchId
+  }).exec();
+  return matchingDrafts === referencedIds.length;
 }
 
 async function serializeManifestList(manifests: IShipmentManifest[]) {
@@ -587,9 +613,10 @@ async function listManifests(request: Request, response: Response, actorRole: "a
   const query: Record<string, unknown> = {};
   const andConditions: Record<string, unknown>[] = [];
   if (actorRole === "client") {
-    // Clients see manifests raised for their own business accounts, whoever sealed them.
-    const accountIds = await clientBusinessAccountIds(userId);
-    const accountScope = resolveClientManifestAccountScope(accountIds, businessAccountId);
+    // Branch restrictions are part of the account membership; account-only
+    // filtering would expose sibling-branch shipment documents.
+    const accountScopes = await resolveClientAccountBranchScopes(userId);
+    const accountScope = resolveClientManifestBranchScope(accountScopes, businessAccountId);
     if (!accountScope.allowed) {
       return response.status(200).json({
         success: true,
@@ -607,6 +634,10 @@ async function listManifests(request: Request, response: Response, actorRole: "a
         { businessAccountIds: requestedId }
       ]
     });
+  }
+  const operatorContext = getOperatorContext(request);
+  if (actorRole === "admin" && operatorContext && operatorContext.role !== "OPERATOR_ADMIN") {
+    query.branchId = { $in: operatorContext.assignedBranches };
   }
   const searchConditions = shipmentManifestSearchConditions(search);
   if (searchConditions.length) andConditions.push({ $or: searchConditions });
@@ -642,11 +673,7 @@ async function loadVisibleManifest(
   const manifest = await ShipmentManifest.findById(manifestId).exec();
   if (!manifest) throw new ShipmentManifestServiceError("Manifest not found.", 404);
   if (actorRole === "client") {
-    if (manifest.manifestType === "COMBINED") {
-      throw new ShipmentManifestServiceError("Manifest not found.", 404);
-    }
-    const accountIds = await clientBusinessAccountIds(userId);
-    if (!accountIds.some((id) => String(id) === String(manifest.businessAccountId))) {
+    if (!await canClientAccessManifest(userId, manifest)) {
       throw new ShipmentManifestServiceError("Manifest not found.", 404);
     }
   }

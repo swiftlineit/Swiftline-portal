@@ -2,11 +2,13 @@ import { env } from "../../config/env.js";
 import { EmailOutbox, type IEmailOutbox } from "../../models/emailOutbox.model.js";
 import { EmailPreference } from "../../models/emailPreference.model.js";
 import { EmailSuppression } from "../../models/emailSuppression.model.js";
+import { Tenant } from "../../models/tenant.model.js";
 import { resolveAttachments } from "./attachments.js";
 import { renderEmail } from "./layout.js";
 import { resolveInlineEmailImages } from "./inlineImages.js";
 import { getEmailTemplate } from "./templates/index.js";
 import { EmailSendError, getEmailTransport, isMailConfigured } from "./transport.js";
+import { getTenantContext } from "../tenantScope.service.js";
 
 /** Exponential-ish backoff: 1m, 5m, 30m, 2h, 12h. */
 const backoffMinutes = [1, 5, 30, 120, 720];
@@ -74,10 +76,24 @@ async function isOptedOut(row: IEmailOutbox) {
   return !preference.operationalEmailsEnabled || preference.optedOutTypes.includes(row.notificationType);
 }
 
-function footerNoteFor(row: IEmailOutbox) {
+function footerNoteFor(row: IEmailOutbox, brandName: string) {
   return row.category === "TRANSACTIONAL"
-    ? "This is a transactional message about your Swiftline Portal account and cannot be unsubscribed."
-    : "You are receiving this operational update because of your role on the Swiftline Portal. Reply to this email to change your preferences.";
+    ? `This is a transactional message about your ${brandName} Portal account and cannot be unsubscribed.`
+    : `You are receiving this operational update because of your role on the ${brandName} Portal. Reply to this email to change your preferences.`;
+}
+
+async function emailPortalPresentation() {
+  const tenantContext = getTenantContext();
+  if (!tenantContext || tenantContext.kind === "SWIFTLINE") {
+    return { appUrl: env.CLIENT_URL, brandName: "Swiftline" };
+  }
+
+  const tenant = await Tenant.findById(tenantContext.tenantId).select("companyName").lean().exec();
+  if (!tenant) throw new Error("The email tenant could not be resolved.");
+  return {
+    appUrl: env.CLIENT_URL,
+    brandName: tenant.companyName
+  };
 }
 
 async function settle(row: IEmailOutbox, update: Partial<IEmailOutbox>) {
@@ -127,6 +143,7 @@ async function deliver(row: IEmailOutbox) {
   }
 
   const resolution = await resolveAttachments(row.attachmentRefs);
+  const presentation = await emailPortalPresentation();
   const content = getEmailTemplate(row.templateKey)({
     recipientName: row.toName,
     // The template decides its wording from what actually made it into the
@@ -134,10 +151,11 @@ async function deliver(row: IEmailOutbox) {
     payload: {
       ...row.payload,
       labelsAttached: resolution.attachments.some((attachment) => attachment.kind === "LABEL_DOCUMENT"),
+      invoiceAttached: resolution.attachments.some((attachment) => attachment.kind === "SHIPMENT_INVOICE_PDF"),
       pickupDocumentsAttached: resolution.attachments.filter((attachment) => attachment.kind === "PICKUP_DOCUMENT").length,
       attachmentsDropped: resolution.dropped
     },
-    appUrl: env.CLIENT_URL
+    appUrl: presentation.appUrl
   });
 
   const inlineImages = await resolveInlineEmailImages(content).catch((error: unknown) => {
@@ -146,7 +164,7 @@ async function deliver(row: IEmailOutbox) {
     console.error("Pickup email illustration could not be loaded.", error instanceof Error ? error.message : error);
     return [];
   });
-  const { html, text } = renderEmail(content, footerNoteFor(row));
+  const { html, text } = renderEmail(content, footerNoteFor(row, presentation.brandName), presentation.brandName);
   const headers: Record<string, string> = {};
   if (row.category !== "TRANSACTIONAL" && env.MAIL_REPLY_TO) {
     headers["List-Unsubscribe"] = `<mailto:${env.MAIL_REPLY_TO}?subject=Unsubscribe%20${encodeURIComponent(row.notificationType)}>`;
@@ -264,7 +282,7 @@ export async function flushOutboxRow(idempotencyKey: string) {
   };
 }
 
-let pendingDrain: NodeJS.Timeout | null = null;
+const pendingDrains = new Map<string, NodeJS.Timeout>();
 
 /**
  * Fire-and-forget drain used right after enqueue so mail leaves promptly
@@ -275,14 +293,17 @@ let pendingDrain: NodeJS.Timeout | null = null;
  * Anything it still misses is picked up by `job:email:drain`.
  */
 export function scheduleEmailDrain(delayMs = 1500) {
-  if (pendingDrain) return;
+  const tenantContext = getTenantContext();
+  const tenantKey = tenantContext ? String(tenantContext.tenantId) : "implicit-swiftline";
+  if (pendingDrains.has(tenantKey)) return;
 
-  pendingDrain = setTimeout(() => {
-    pendingDrain = null;
+  const pendingDrain = setTimeout(() => {
+    pendingDrains.delete(tenantKey);
     void drainEmailOutbox().catch((error: unknown) => {
       console.error("Email drain failed.", error instanceof Error ? error.message : error);
     });
   }, delayMs);
+  pendingDrains.set(tenantKey, pendingDrain);
 
   // A queued drain must never hold the process open at shutdown.
   pendingDrain.unref?.();

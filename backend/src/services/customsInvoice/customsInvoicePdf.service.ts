@@ -60,6 +60,10 @@ function formatDate(value: Date) {
   }).format(value).replaceAll("/", "-");
 }
 
+export function customsInvoiceIssuerName(invoice: CustomsInvoiceModel) {
+  return invoice.issuerName?.trim() || "Swiftline Cargo and Express Logistics Pvt. Ltd.";
+}
+
 function box(doc: PDFKit.PDFDocument, x: number, y: number, width: number, height: number) {
   doc.rect(x, y, width, height).lineWidth(0.8).strokeColor(border).stroke();
 }
@@ -98,14 +102,17 @@ function measurePartyHeight(doc: PDFKit.PDFDocument, party: CustomsInvoiceParty,
 /**
  * Draws the repeating header block and returns the y the item table starts at.
  */
-function drawHeader(doc: PDFKit.PDFDocument, invoice: CustomsInvoiceModel) {
+function drawHeader(doc: PDFKit.PDFDocument, invoice: CustomsInvoiceModel, logoBuffer?: Buffer) {
   let y = pageMargin;
 
-  // Invoice-only branding. This intentionally uses the dedicated invoice asset,
-  // leaving every other Swiftline document and portal logo unchanged.
+  // Operator copies use their company name until a tenant-owned logo is configured.
   const logoPath = path.resolve(process.cwd(), "assets", "swiftline-invoice-logo.png");
-  if (fs.existsSync(logoPath)) doc.image(logoPath, contentLeft, y - 7, { fit: [175, 105] });
-  else doc.font("Helvetica-Bold").fontSize(22).fillColor("#0f2f5f").text("SWIFTLINE", contentLeft, y + 28);
+  const issuerName = customsInvoiceIssuerName(invoice);
+  const isSwiftlineInvoice = !invoice.issuerName?.trim();
+  if (!isSwiftlineInvoice && logoBuffer) doc.image(logoBuffer, contentLeft, y - 7, { fit: [175, 105] });
+  else if (isSwiftlineInvoice && fs.existsSync(logoPath)) doc.image(logoPath, contentLeft, y - 7, { fit: [175, 105] });
+  else doc.font("Helvetica-Bold").fontSize(isSwiftlineInvoice ? 22 : 14).fillColor("#0f2f5f")
+    .text(isSwiftlineInvoice ? "SWIFTLINE" : issuerName, contentLeft, y + (isSwiftlineInvoice ? 28 : 20), { width: 255 });
   doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(18)
     .text("INVOICE", contentLeft + 285, y + 12, { width: contentWidth - 285, align: "right" });
   doc.fontSize(8).text(`Invoice No: ${invoice.invoiceNumber}`, contentLeft + 285, y + 43, {
@@ -201,15 +208,16 @@ function drawBoxHeader(doc: PDFKit.PDFDocument, parcel: CustomsInvoiceBox, y: nu
   return y + rowHeights.boxHeader;
 }
 
-export function createCustomsInvoicePdf(invoice: CustomsInvoiceModel) {
+export function createCustomsInvoicePdf(invoice: CustomsInvoiceModel, logoBuffer?: Buffer) {
   const doc = new PDFDocument({ size: "A4", margin: pageMargin, bufferPages: true });
-  let y = drawHeader(doc, invoice);
+  const issuerName = customsInvoiceIssuerName(invoice);
+  let y = drawHeader(doc, invoice, logoBuffer);
 
   for (const parcel of invoice.boxes) {
     // Keep a box header with at least its first row rather than orphaning it.
     if (y + rowHeights.boxHeader + rowHeights.itemMinimum > pageBottom) {
       doc.addPage();
-      y = drawHeader(doc, invoice);
+      y = drawHeader(doc, invoice, logoBuffer);
     }
     y = drawBoxHeader(doc, parcel, y);
 
@@ -219,7 +227,7 @@ export function createCustomsInvoicePdf(invoice: CustomsInvoiceModel) {
 
       if (y + rowHeight > pageBottom) {
         doc.addPage();
-        y = drawHeader(doc, invoice);
+        y = drawHeader(doc, invoice, logoBuffer);
         y = drawBoxHeader(doc, parcel, y);
       }
 
@@ -249,7 +257,7 @@ export function createCustomsInvoicePdf(invoice: CustomsInvoiceModel) {
   // Amount chargeable footer
   if (y + rowHeights.total + rowHeights.footerLabel + rowHeights.footerNoteMinimum > pageBottom) {
     doc.addPage();
-    y = drawHeader(doc, invoice);
+    y = drawHeader(doc, invoice, logoBuffer);
   }
   const wordsWidth = contentWidth - 150;
   box(doc, contentLeft, y, 110, rowHeights.total);
@@ -278,13 +286,15 @@ export function createCustomsInvoicePdf(invoice: CustomsInvoiceModel) {
   box(doc, contentLeft + half, y, half, footerNoteHeight);
   doc.font("Helvetica").fontSize(7.5).text(invoice.note, contentLeft + 6, y + 8, { width: half - 12 });
   doc.font("Helvetica").fontSize(7).fillColor("#475569").text(
-    "For Swiftline Cargo and Express Logistics Pvt. Ltd.",
+    `For ${issuerName}.`,
     contentLeft + half + 6, y + footerNoteHeight - 16, { width: half - 12, align: "right" }
   );
   y += footerNoteHeight;
 
   doc.font("Helvetica").fontSize(7).fillColor("#475569").text(
-    customsInvoiceFooterNote,
+    invoice.issuerName?.trim()
+      ? `This is a computer generated invoice from ${issuerName}.`
+      : customsInvoiceFooterNote,
     contentLeft, y + 12, { width: contentWidth, align: "center" }
   );
 
@@ -292,9 +302,9 @@ export function createCustomsInvoicePdf(invoice: CustomsInvoiceModel) {
   return doc;
 }
 
-export function renderCustomsInvoicePdfBuffer(invoice: CustomsInvoiceModel): Promise<Buffer> {
+export function renderCustomsInvoicePdfBuffer(invoice: CustomsInvoiceModel, logoBuffer?: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = createCustomsInvoicePdf(invoice);
+    const doc = createCustomsInvoicePdf(invoice, logoBuffer);
     const chunks: Buffer[] = [];
     doc.on("data", (chunk: Buffer) => chunks.push(chunk));
     doc.on("end", () => resolve(Buffer.concat(chunks)));

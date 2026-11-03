@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { isMinorUnitInteger, maxCreditLimitMinor } from "./financialTypes.js";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const creditAccountStatusValues = [
   "NOT_REQUESTED", "PENDING_REVIEW", "APPROVED", "ACTIVE", "ON_HOLD",
@@ -10,7 +11,7 @@ export type CreditAccountStatus = (typeof creditAccountStatusValues)[number];
 export const creditBillingCycleValues = ["WEEKLY", "MONTHLY"] as const;
 export type CreditBillingCycle = (typeof creditBillingCycleValues)[number];
 
-export interface IBusinessCreditAccount extends mongoose.Document {
+export interface IBusinessCreditAccount extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   status: CreditAccountStatus;
   currency: "INR";
@@ -59,7 +60,7 @@ const creditLimitAmount = {
 
 const businessCreditAccountSchema = new mongoose.Schema<IBusinessCreditAccount>(
   {
-    businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, unique: true, index: true },
+    businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, index: true },
     status: { type: String, enum: creditAccountStatusValues, default: "NOT_REQUESTED", index: true },
     currency: { type: String, enum: ["INR"], default: "INR", required: true },
     requestedCreditLimitMinor: creditLimitAmount,
@@ -92,5 +93,11 @@ const businessCreditAccountSchema = new mongoose.Schema<IBusinessCreditAccount>(
   },
   { timestamps: true }
 );
+
+businessCreditAccountSchema.index(
+  { tenantId: 1, businessAccountId: 1 },
+  { unique: true, name: "uniq_credit_account_tenant_business" }
+);
+addTenantOwnership(businessCreditAccountSchema);
 
 export const BusinessCreditAccount = mongoose.model<IBusinessCreditAccount>("BusinessCreditAccount", businessCreditAccountSchema);

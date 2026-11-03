@@ -22,6 +22,11 @@ export type ClientScope =
     }
   | { ok: false; status: number; message: string };
 
+export type ClientAccountBranchScope = {
+  businessAccountId: mongoose.Types.ObjectId;
+  branchIds: mongoose.Types.ObjectId[];
+};
+
 function getAuthenticatedUserId(request: Request): mongoose.Types.ObjectId | null {
   const user = (request as Request & { user?: { _id?: unknown } }).user;
   const id = user?._id;
@@ -55,16 +60,7 @@ export async function resolveClientScope(request: Request): Promise<ClientScope>
     return { ok: false, status: 404, message: "Business account access is not available." };
   }
 
-  // Members with no explicit branches inherit the account's assigned branch,
-  // matching how the shipment listings already scope.
-  let branchIds = (membership.assignedBranches ?? []) as mongoose.Types.ObjectId[];
-  if (!branchIds.length) {
-    const account = await BusinessAccount.findById(membership.businessAccount)
-      .select("assignedBranch")
-      .lean()
-      .exec();
-    branchIds = account?.assignedBranch ? [account.assignedBranch as mongoose.Types.ObjectId] : [];
-  }
+  let branchIds = await resolveMembershipBranchIds(membership);
 
   const requestedBranchId = typeof request.query.branchId === "string" ? request.query.branchId : "";
   if (requestedBranchId) {
@@ -81,4 +77,29 @@ export async function resolveClientScope(request: Request): Promise<ClientScope>
     branchIds,
     canViewFinancials: canAccessCreditFinancials(membership.role)
   };
+}
+
+async function resolveMembershipBranchIds(membership: {
+  businessAccount: mongoose.Types.ObjectId;
+  assignedBranches?: mongoose.Types.ObjectId[];
+}) {
+  const assignedBranches = (membership.assignedBranches ?? []) as mongoose.Types.ObjectId[];
+  if (assignedBranches.length) return assignedBranches;
+  const account = await BusinessAccount.findById(membership.businessAccount)
+    .select("assignedBranch")
+    .lean()
+    .exec();
+  return account?.assignedBranch ? [account.assignedBranch as mongoose.Types.ObjectId] : [];
+}
+
+/** Branch scopes for account-wide client surfaces such as manifest and POD lists. */
+export async function resolveClientAccountBranchScopes(userId: mongoose.Types.ObjectId): Promise<ClientAccountBranchScope[]> {
+  const memberships = await BusinessAccountMember.find({ user: userId, status: "active" })
+    .select("businessAccount assignedBranches")
+    .lean()
+    .exec();
+  return Promise.all(memberships.map(async (membership) => ({
+    businessAccountId: membership.businessAccount as mongoose.Types.ObjectId,
+    branchIds: await resolveMembershipBranchIds(membership)
+  })));
 }

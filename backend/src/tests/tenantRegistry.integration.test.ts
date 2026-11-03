@@ -7,14 +7,21 @@ import { AuditLog } from "../models/auditLog.model.js";
 import { Tenant } from "../models/tenant.model.js";
 import { TenantSlug } from "../models/tenantSlug.model.js";
 import { TenantMembership } from "../models/tenantMembership.model.js";
+import { OperatorSupportSession } from "../models/operatorSupportSession.model.js";
+import { PortalNotification } from "../models/portalNotification.model.js";
+import { EmailOutbox } from "../models/emailOutbox.model.js";
 import { getOperatorContext, requireOperatorContext } from "../middleware/operatorContext.middleware.js";
 import {
   changeOperatorSlug,
+  changeOperatorStatus,
   createDraftOperator,
   normalizeTenantSlug,
   resolveTenantSlug,
   TenantRegistryError
 } from "../services/tenantRegistry.service.js";
+import { notifyPortalUsers } from "../services/portalNotification.service.js";
+import { enqueueEmails } from "../services/email/enqueue.js";
+import { runWithTenantContext } from "../services/tenantScope.service.js";
 
 const databaseName = `sl_operator_registry_${Date.now()}`;
 const actorId = new mongoose.Types.ObjectId();
@@ -97,7 +104,7 @@ describe("operator tenant registry", () => {
     });
 
     async function check(slug: string, role: string, userId = memberId) {
-      const request = { params: { operatorSlug: slug }, user: { _id: userId, role } } as unknown as Request;
+      const request = { params: { operatorSlug: slug }, headers: {}, user: { _id: userId, role } } as unknown as Request;
       let status = 200;
       let payload: unknown;
       let allowed = false;
@@ -120,5 +127,54 @@ describe("operator tenant registry", () => {
     assert.equal((await check("atlas-cargo", "client", new mongoose.Types.ObjectId())).status, 404);
     await TenantMembership.updateOne({ tenantId: atlas._id, userId: memberId }, { $set: { status: "SUSPENDED" } });
     assert.equal((await check("atlas-cargo", "client")).status, 404);
+  });
+
+  test("suspension closes operator access and new notices; reactivation restores access", async () => {
+    const operator = await Tenant.findOne({ slug: "atlas-cargo" }).orFail().exec();
+    const other = await Tenant.findOne({ slug: "meridian" }).orFail().exec();
+    const recipient = new mongoose.Types.ObjectId();
+    const context = { tenantId: operator._id as mongoose.Types.ObjectId, kind: "OPERATOR" as const };
+    const support = await OperatorSupportSession.create({
+      tokenHash: "a".repeat(64), operatorTenantId: operator._id, actorUserId: actorId,
+      reason: "Checking a support case", expiresAt: new Date(Date.now() + 30 * 60_000)
+    });
+    await runWithTenantContext(context, () => notifyPortalUsers([recipient], {
+      type: "SHIPMENT_BOOKED", title: "Before suspension", message: "Queued before suspension",
+      href: "/portal/atlas-cargo/shipments", idempotencyKey: "before-suspension"
+    }));
+    await runWithTenantContext(context, () => enqueueEmails({
+      notificationType: "SHIPMENT_BOOKED", idempotencyKey: "email-before-suspension",
+      recipients: [{ email: "operator-suspension-test@example.test", name: "Test" }], subject: "Before suspension"
+    }));
+
+    const suspended = await changeOperatorStatus({ tenantId: operator._id as mongoose.Types.ObjectId, actorId, status: "SUSPENDED", reason: "Pilot operations paused" });
+    assert.equal(suspended.status, "SUSPENDED");
+    assert.equal(await resolveTenantSlug("atlas-cargo"), null);
+    assert.ok(await resolveTenantSlug("meridian"), "another operator remains available");
+    assert.equal((await OperatorSupportSession.findById(support._id).orFail().exec()).endedBy?.toString(), String(actorId));
+    await runWithTenantContext(context, () => notifyPortalUsers([recipient], {
+      type: "SHIPMENT_BOOKED", title: "After suspension", message: "Must not be created",
+      href: "/portal/atlas-cargo/shipments", idempotencyKey: "after-suspension"
+    }));
+    const queuedAfterSuspension = await runWithTenantContext(context, () => enqueueEmails({
+      notificationType: "SHIPMENT_BOOKED", idempotencyKey: "email-after-suspension",
+      recipients: [{ email: "operator-suspension-test@example.test", name: "Test" }], subject: "After suspension"
+    }));
+    assert.equal(queuedAfterSuspension.enqueued, 0);
+    assert.equal(await runWithTenantContext(context, () => PortalNotification.countDocuments({ idempotencyKey: `after-suspension:${recipient}` })), 0);
+    assert.equal(await runWithTenantContext(context, () => PortalNotification.countDocuments({ idempotencyKey: `before-suspension:${recipient}` })), 1);
+    assert.equal(await runWithTenantContext(context, () => EmailOutbox.countDocuments({ idempotencyKey: "email-before-suspension:operator-suspension-test@example.test:email" })), 1);
+    assert.equal(await runWithTenantContext(context, () => EmailOutbox.countDocuments({ idempotencyKey: "email-after-suspension:operator-suspension-test@example.test:email" })), 0);
+    assert.equal(await runWithTenantContext(context, () => AuditLog.countDocuments({ action: "OPERATOR_TENANT_SUSPENDED", entityId: operator._id, "metadata.reason": "Pilot operations paused" })), 1);
+    await assert.rejects(
+      changeOperatorStatus({ tenantId: operator._id as mongoose.Types.ObjectId, actorId, status: "SUSPENDED", reason: "Repeated" }),
+      (error: unknown) => error instanceof TenantRegistryError && error.statusCode === 409
+    );
+    const reactivated = await changeOperatorStatus({ tenantId: operator._id as mongoose.Types.ObjectId, actorId, status: "ACTIVE", reason: "Pilot operations resumed" });
+    assert.equal(reactivated.status, "ACTIVE");
+    assert.ok(await resolveTenantSlug("atlas-cargo"));
+    assert.equal((await OperatorSupportSession.findById(support._id).orFail().exec()).endedBy?.toString(), String(actorId), "old support grant stays closed");
+    assert.equal(await runWithTenantContext(context, () => AuditLog.countDocuments({ action: "OPERATOR_TENANT_REACTIVATED", entityId: operator._id })), 1);
+    assert.equal(other.status, "ACTIVE");
   });
 });

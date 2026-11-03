@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import {
   countryRateServiceValues,
   rateCardBandValues,
@@ -23,7 +24,7 @@ import {
  * every surcharge reads zero. That is what keeps historical shipments and
  * unconfigured routes unchanged, so no migration is required.
  */
-export interface ICountryRouteCharge extends mongoose.Document {
+export interface ICountryRouteCharge extends mongoose.Document, TenantOwnedFields {
   band?: RateCardBand | null;
   businessAccountId?: mongoose.Types.ObjectId | null;
   countryCode: string;
@@ -85,10 +86,15 @@ const countryRouteChargeSchema = new mongoose.Schema<ICountryRouteCharge>(
 
 // One configuration per route. The pricing engine relies on this being unique:
 // it reads a single document, never merges two.
-countryRouteChargeSchema.index({ businessAccountId: 1, band: 1, countryCode: 1, service: 1 }, { unique: true, name: "rate_card_owner_route_unique" });
+countryRouteChargeSchema.index(
+  { tenantId: 1, businessAccountId: 1, band: 1, countryCode: 1, service: 1 },
+  { unique: true, name: "tenant_rate_card_owner_route_unique" }
+);
 countryRouteChargeSchema.pre("validate", function () {
   if (Boolean(this.band) === Boolean(this.businessAccountId)) this.invalidate("businessAccountId", "Route charges must belong to exactly one private account or global/legacy band.");
 });
+
+addTenantOwnership(countryRouteChargeSchema);
 
 export const CountryRouteCharge = mongoose.model<ICountryRouteCharge>(
   "CountryRouteCharge",

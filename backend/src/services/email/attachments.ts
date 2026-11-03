@@ -10,9 +10,11 @@ import { createRateCardSharePdf } from "../rateCardSharePdf.service.js";
 import { buildRateCardShareWorkbook } from "../rateCardShareWorkbook.service.js";
 import { serializeShipmentInvoice } from "../shipmentInvoice.service.js";
 import { createShipmentInvoicePdf } from "../shipmentInvoicePdf.service.js";
+import { loadOperatorBrandLogo } from "../operatorBranding.service.js";
 import { buildShipmentManifestPdf } from "../shipmentManifestPdf.service.js";
 import { getObjectBuffer } from "../storage/storage.service.js";
 import { labelContentType, labelFileExtension } from "../labelStorage.service.js";
+import { getTenantContext } from "../tenantScope.service.js";
 import type { OutboundAttachment } from "./transport.js";
 
 export type ResolvedAttachment = OutboundAttachment & { kind: EmailAttachmentKind };
@@ -48,7 +50,20 @@ async function resolveShipmentInvoicePdf(ref: IEmailAttachmentRef): Promise<Reso
 
   const revision = ref.revision ?? invoice.revision;
   const serialized = serializeShipmentInvoice(invoice, revision);
-  const content = await bufferPdfDocument(createShipmentInvoicePdf(serialized));
+  const tenantContext = getTenantContext();
+  const supplier = revision === invoice.revision
+    ? invoice.supplier
+    : invoice.revisions.find((item) => item.revision === revision)?.supplier;
+  const logoKey = supplier && typeof supplier === "object"
+    ? (supplier as Record<string, unknown>).operatorLogoStorageKey
+    : null;
+  const logoBuffer = tenantContext?.kind === "OPERATOR" && typeof logoKey === "string"
+    ? await loadOperatorBrandLogo(String(tenantContext.tenantId), logoKey)
+    : undefined;
+  const content = await bufferPdfDocument(createShipmentInvoicePdf(serialized, {
+    tenantKind: tenantContext?.kind ?? "SWIFTLINE",
+    logoBuffer
+  }));
 
   return {
     kind: "SHIPMENT_INVOICE_PDF",
@@ -139,6 +154,15 @@ const resolvers: Partial<Record<EmailAttachmentKind, (ref: IEmailAttachmentRef) 
   PICKUP_DOCUMENT: resolvePickupDocument
 };
 
+// These first-release operator attachments resolve through tenant-owned models.
+// Pickup requests and rate-card shares remain Swiftline-only until their records
+// have an explicit tenant owner and tenant-scoped access path.
+const operatorAttachmentKinds = new Set<EmailAttachmentKind>([
+  "SHIPMENT_INVOICE_PDF",
+  "LABEL_DOCUMENT",
+  "SHIPMENT_MANIFEST_PDF"
+]);
+
 /**
  * Resolves stored references into MIME parts, newest-value-first and within the
  * size budget. Attachments are ordered by the caller, so when the budget runs
@@ -148,12 +172,19 @@ const resolvers: Partial<Record<EmailAttachmentKind, (ref: IEmailAttachmentRef) 
 export async function resolveAttachments(refs: IEmailAttachmentRef[]): Promise<AttachmentResolution> {
   if (!refs.length) return { attachments: [], dropped: false, droppedReason: "" };
 
+  const tenantContext = getTenantContext();
   const attachments: ResolvedAttachment[] = [];
   let totalBytes = 0;
   let dropped = false;
   let droppedReason = "";
 
   for (const ref of refs) {
+    if (tenantContext?.kind === "OPERATOR" && !operatorAttachmentKinds.has(ref.kind)) {
+      dropped = true;
+      droppedReason = droppedReason || "This attachment type is unavailable in operator emails.";
+      continue;
+    }
+
     const resolver = resolvers[ref.kind];
     if (!resolver) {
       dropped = true;

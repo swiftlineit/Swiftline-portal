@@ -481,16 +481,18 @@ export async function expireStaleReservations(input: { now?: Date; limit?: numbe
     .exec();
 
   let released = 0;
+  let failed = 0;
   for (const reservation of stale) {
     try {
       const result = await expireStaleReservation(reservation._id as mongoose.Types.ObjectId);
       if (result.expired) released += 1;
     } catch (error) {
+      failed += 1;
       console.error("Failed to expire booking reservation", String(reservation._id), error);
     }
   }
 
-  return { scanned: stale.length, released };
+  return { scanned: stale.length, released, failed };
 }
 
 export async function markBookingReservationReviewRequired(input: ReservationTransitionInput) {

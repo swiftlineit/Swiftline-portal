@@ -15,6 +15,8 @@ import { DeliveryAssignment, DeliveryAttempt, PodDispute, PodRevision, deliveryA
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent, shipmentMilestoneKey } from "../models/shipmentEvent.model.js";
 import { User } from "../models/user.model.js";
+import { clientCanAccessShipmentDraft } from "../services/shipmentDraftPolicy.service.js";
+import { resolveClientAccountBranchScopes } from "../utils/clientScope.js";
 import { matchesDeclaredType } from "../services/storage/fileSignature.js";
 import {
   StorageObjectNotFoundError,
@@ -93,8 +95,14 @@ async function requireManager(request: Request, response: Response, next: NextFu
 export { requireManager as requirePodManager };
 
 async function canManage(user: Actor, assignment: { branchId: unknown }) { return user.role === "admin" || user.branches.includes(String(assignment.branchId)); }
-async function canClientAccess(userId: mongoose.Types.ObjectId, assignment: { businessAccountId: unknown }) {
-  return Boolean(await BusinessAccountMember.exists({ user: userId, businessAccount: assignment.businessAccountId as mongoose.Types.ObjectId, status: "active" }));
+async function canClientAccess(userId: mongoose.Types.ObjectId, assignment: { businessAccountId: unknown; branchId: unknown }) {
+  return clientCanAccessShipmentDraft({
+    userId,
+    draft: {
+      businessAccountId: assignment.businessAccountId as mongoose.Types.ObjectId,
+      branchId: assignment.branchId as mongoose.Types.ObjectId
+    }
+  });
 }
 async function loadDetail(id: string) {
   if (!mongoose.Types.ObjectId.isValid(id)) fail(404, "Delivery assignment was not found.");
@@ -557,22 +565,18 @@ export async function viewPodEvidence(request: Request, response: Response, next
  * supplied to widen it.
  */
 async function clientPodScope(userId: mongoose.Types.ObjectId) {
-  const memberships = await BusinessAccountMember.find({ user: userId, status: "active" })
-    .select("businessAccount")
-    .lean()
-    .exec();
-  return memberships.map((membership) => membership.businessAccount as mongoose.Types.ObjectId);
+  return resolveClientAccountBranchScopes(userId);
 }
 
 export async function listClientPodCentre(request: Request, response: Response, next: NextFunction) {
   try {
     const user = actor(request);
     if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
-    const businessAccountIds = await clientPodScope(user.id);
-    if (!businessAccountIds.length) return response.json({ success: true, pods: [] });
+    const accountScopes = await clientPodScope(user.id);
+    if (!accountScopes.some((scope) => scope.branchIds.length > 0)) return response.json({ success: true, pods: [] });
 
     const pods = await listClientPods({
-      businessAccountIds,
+      accountScopes,
       search: typeof request.query.search === "string" ? request.query.search.slice(0, 80) : "",
       dateFrom: typeof request.query.dateFrom === "string" ? request.query.dateFrom : "",
       dateTo: typeof request.query.dateTo === "string" ? request.query.dateTo : "",
@@ -609,14 +613,14 @@ export async function downloadClientPodPdf(request: Request, response: Response,
   try {
     const user = actor(request);
     if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
-    const businessAccountIds = await clientPodScope(user.id);
-    if (!businessAccountIds.length) fail(404, "No proof of delivery was found.");
+    const accountScopes = await clientPodScope(user.id);
+    if (!accountScopes.some((scope) => scope.branchIds.length > 0)) fail(404, "No proof of delivery was found.");
 
     const requested = String(request.query.ids ?? "").split(",").map((id) => id.trim()).filter(Boolean);
     const pods = requested.length
-      ? await loadClientPodsByIds({ businessAccountIds, assignmentIds: requested })
+      ? await loadClientPodsByIds({ accountScopes, assignmentIds: requested })
       : await listClientPods({
-        businessAccountIds,
+        accountScopes,
         search: typeof request.query.search === "string" ? request.query.search.slice(0, 80) : "",
         dateFrom: typeof request.query.dateFrom === "string" ? request.query.dateFrom : "",
         dateTo: typeof request.query.dateTo === "string" ? request.query.dateTo : "",
@@ -625,7 +629,7 @@ export async function downloadClientPodPdf(request: Request, response: Response,
 
     if (!pods.length) fail(404, "No proof of delivery was found for that selection.");
 
-    const account = await BusinessAccount.findById(businessAccountIds[0]).select("accountId company.companyName").lean().exec();
+    const account = await BusinessAccount.findById(accountScopes[0]?.businessAccountId).select("accountId company.companyName").lean().exec();
     const label = account ? `${account.company?.companyName ?? ""} (${account.accountId})` : "Swiftline";
     const pdf = await buildPodPdf(pods, label);
 
@@ -648,12 +652,13 @@ export async function emailClientPod(request: Request, response: Response, next:
   try {
     const user = actor(request);
     if (!user) return response.status(401).json({ success: false, message: "Unauthorized" });
-    const businessAccountIds = await clientPodScope(user.id);
+    const accountScopes = await clientPodScope(user.id);
     const requested = z.object({ assignmentIds: z.array(z.string()).min(1).max(50) }).parse(request.body);
-    const pods = await loadClientPodsByIds({ businessAccountIds, assignmentIds: requested.assignmentIds });
+    const pods = await loadClientPodsByIds({ accountScopes, assignmentIds: requested.assignmentIds });
     if (!pods.length) fail(404, "No proof of delivery was found for that selection.");
 
-    const businessAccountId = businessAccountIds[0] as mongoose.Types.ObjectId;
+    const businessAccountId = accountScopes[0]?.businessAccountId as mongoose.Types.ObjectId | undefined;
+    if (!businessAccountId) fail(404, "No proof of delivery was found.");
     const recipients = await BusinessAccountMember.find({
       businessAccount: businessAccountId,
       status: "active",

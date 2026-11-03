@@ -1,12 +1,12 @@
-import crypto from "crypto";
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { z } from "zod";
-import { env } from "../config/env.js";
 import { AuditLog, type AuditEntityType } from "../models/auditLog.model.js";
 import { Branch } from "../models/branch.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
+import { OperatorSupportSession } from "../models/operatorSupportSession.model.js";
+import { Tenant } from "../models/tenant.model.js";
 import { CarrierTrackingEvent } from "../models/carrierTrackingEvent.model.js";
 import { allowedBranchIds, canAccessBranch } from "../middleware/branchAccess.middleware.js";
 import { labelContentType, labelFileExtension } from "../services/labelStorage.service.js";
@@ -62,8 +62,10 @@ import {
 } from "../services/dpdShipment.service.js";
 import {
   readShipmentBookingSnapshot,
-  serializeShipmentBookingConfirmation
+  serializeShipmentBookingConfirmation,
+  serializeShipmentConsignor
 } from "../services/shipmentBookingSnapshot.service.js";
+import { serializeKycDocuments } from "./shipmentKyc.controller.js";
 import { objectExists, streamObjectToResponse } from "../services/storage/storage.service.js";
 import { buildPricingHash, ShipmentPriceChangedError } from "../services/shipmentCostEstimate.service.js";
 import { RateCardRequiredError } from "../services/shipmentPricing.service.js";
@@ -91,6 +93,13 @@ import {
   recordShipmentOperationsScan,
   ShipmentOperationsScanError
 } from "../services/shipmentOperationsScan.service.js";
+import {
+  createLabelAccessToken,
+  verifyLabelAccessToken,
+  type VerifiedLabelAccessToken
+} from "../services/shipmentLabelAccessToken.service.js";
+import { getTenantContext, runWithTenantContext, type TenantContext } from "../services/tenantScope.service.js";
+import { getSwiftlineTenantId } from "../services/swiftlineTenant.service.js";
 
 // Where the scan happened. Optional on every action: Operations records it when
 // they know it, and an event without one is still a valid event.
@@ -360,6 +369,84 @@ function serializeShipmentDraftSummary(draft: {
   };
 }
 
+function serializeOperatorShipmentDraftSummary(draftValue: unknown, snapshotValue?: unknown) {
+  const draft = draftValue as {
+    _id: unknown;
+    branchId: unknown;
+    consigneeEnteredAddress: {
+      companyName?: string;
+      contactName?: string;
+      postcode: string;
+      townOrCity?: string;
+      [key: string]: unknown;
+    };
+    consigneeValidatedAddress?: Record<string, unknown> | null;
+    consignorAddress?: Parameters<typeof serializeShipmentConsignor>[0];
+    serviceType?: string;
+    serviceCode?: string;
+    status: string;
+    addressValidationStatus: string;
+    kycUseForAllParcels?: boolean;
+    kycDocuments?: Parameters<typeof serializeKycDocuments>[0];
+    parcelList?: Array<{
+      sequence: number;
+      weightKg: number;
+      lengthCm?: number | null;
+      widthCm?: number | null;
+      heightCm?: number | null;
+      shipmentContentType?: string;
+      items?: Array<{
+        description?: string;
+        hsnCode?: string;
+        unitType?: string;
+        quantity?: number;
+        unitRate?: number;
+      }>;
+      declaredGoodsValueMinor?: number | null;
+      contentsDescription?: string;
+      shipmentReference1?: string;
+      shipmentReference2?: string;
+      kycDocuments?: Parameters<typeof serializeKycDocuments>[0];
+    }>;
+  };
+  const bookingSnapshot = readShipmentBookingSnapshot(snapshotValue);
+  const consignor = bookingSnapshot?.consignor ?? serializeShipmentConsignor(draft.consignorAddress);
+  const parcels = (draft.parcelList ?? []).map((parcel) => ({
+    sequence: parcel.sequence,
+    weightKg: parcel.weightKg,
+    lengthCm: parcel.lengthCm ?? null,
+    widthCm: parcel.widthCm ?? null,
+    heightCm: parcel.heightCm ?? null,
+    shipmentContentType: parcel.shipmentContentType ?? "PARCEL",
+    items: (parcel.items ?? []).map((item) => ({
+      description: item.description ?? "",
+      hsnCode: item.hsnCode ?? "",
+      unitType: item.unitType ?? "",
+      quantity: item.quantity ?? 0,
+      unitRate: item.unitRate ?? 0
+    })),
+    declaredGoodsValueMinor: parcel.declaredGoodsValueMinor ?? null,
+    contentsDescription: parcel.contentsDescription ?? "",
+    shipmentReference1: parcel.shipmentReference1 ?? "",
+    shipmentReference2: parcel.shipmentReference2 ?? "",
+    kycDocuments: serializeKycDocuments(parcel.kycDocuments)
+  }));
+
+  return {
+    ...serializeShipmentDraftSummary(draft, snapshotValue),
+    serviceType: bookingSnapshot?.service.type ?? draft.serviceType ?? "",
+    serviceCode: bookingSnapshot?.service.code ?? draft.serviceCode ?? "",
+    consignee: bookingSnapshot?.consignee
+      ?? draft.consigneeValidatedAddress
+      ?? draft.consigneeEnteredAddress,
+    consignor,
+    parcelCount: parcels.length,
+    parcelList: parcels,
+    kycUseForAllParcels: Boolean(draft.kycUseForAllParcels),
+    kycDocuments: serializeKycDocuments(draft.kycDocuments)
+  };
+}
+
 function serializeBranchSummary(branch: {
   _id: unknown;
   name: string;
@@ -486,67 +573,6 @@ function serializeAuditLog(log: {
   };
 }
 
-function encodeBase64Url(value: string) {
-  return Buffer.from(value, "utf8").toString("base64url");
-}
-
-function signLabelAccessPayload(payload: string) {
-  return crypto.createHmac("sha256", env.JWT_SECRET).update(payload).digest("base64url");
-}
-
-function createLabelAccessToken(params: {
-  dpdShipmentId: string;
-  labelId: string;
-  userId: string;
-  expiresAt: Date;
-}) {
-  const payload = encodeBase64Url(JSON.stringify({
-    dpdShipmentId: params.dpdShipmentId,
-    labelId: params.labelId,
-    userId: params.userId,
-    expiresAt: params.expiresAt.toISOString()
-  }));
-  const signature = signLabelAccessPayload(payload);
-
-  return `${payload}.${signature}`;
-}
-
-function verifyLabelAccessToken(token: string) {
-  const [payload, signature] = token.split(".");
-  if (!payload || !signature) return null;
-
-  const expectedSignature = signLabelAccessPayload(payload);
-  const signatureBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expectedSignature);
-
-  if (signatureBuffer.length !== expectedBuffer.length) return null;
-  if (!crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) return null;
-
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
-      dpdShipmentId?: unknown;
-      labelId?: unknown;
-      userId?: unknown;
-      expiresAt?: unknown;
-    };
-    const expiresAt = typeof parsed.expiresAt === "string" ? new Date(parsed.expiresAt) : null;
-
-    if (!expiresAt || Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) return null;
-    if (typeof parsed.dpdShipmentId !== "string" || !mongoose.Types.ObjectId.isValid(parsed.dpdShipmentId)) return null;
-    if (typeof parsed.labelId !== "string" || !mongoose.Types.ObjectId.isValid(parsed.labelId)) return null;
-    if (typeof parsed.userId !== "string" || !mongoose.Types.ObjectId.isValid(parsed.userId)) return null;
-
-    return {
-      dpdShipmentId: parsed.dpdShipmentId,
-      labelId: parsed.labelId,
-      userId: new mongoose.Types.ObjectId(parsed.userId),
-      expiresAt
-    };
-  } catch {
-    return null;
-  }
-}
-
 export function buildAbsoluteUrl(
   request: Pick<Request, "protocol" | "host">,
   path: string,
@@ -556,6 +582,42 @@ export function buildAbsoluteUrl(
   // the internal localhost address. This keeps signed label links on the
   // public HTTPS origin behind nginx and VS Code development tunnels.
   return `${request.protocol}://${request.host}${path}`;
+}
+
+async function resolveLabelAccessTenantContext(payload: VerifiedLabelAccessToken): Promise<TenantContext | null> {
+  if (payload.tenantId && payload.tenantKind) {
+    const activeTenant = await Tenant.findOne({
+      _id: payload.tenantId,
+      kind: payload.tenantKind,
+      status: "ACTIVE"
+    }).select("_id").lean().exec();
+    if (!activeTenant) return null;
+
+    if (payload.readOnly) {
+      if (!payload.supportSessionId) return null;
+      const supportSession = await OperatorSupportSession.findOne({
+        _id: payload.supportSessionId,
+        operatorTenantId: payload.tenantId,
+        actorUserId: payload.userId,
+        endedAt: null,
+        expiresAt: { $gt: new Date() }
+      }).select("_id").lean().exec();
+      if (!supportSession) return null;
+    }
+
+    return {
+      tenantId: payload.tenantId,
+      kind: payload.tenantKind,
+      readOnly: payload.readOnly,
+      ...(payload.supportSessionId ? { supportSessionId: payload.supportSessionId } : {})
+    };
+  }
+
+  // Older signed links had no tenant claims and were issued only by Swiftline
+  // routes. Keep those links valid for their existing five-minute expiry.
+  const currentContext = getTenantContext();
+  if (currentContext) return currentContext.kind === "SWIFTLINE" && !currentContext.readOnly ? currentContext : null;
+  return { tenantId: await getSwiftlineTenantId(), kind: "SWIFTLINE" };
 }
 
 export async function buildStoredLabelAccess(params: {
@@ -576,11 +638,18 @@ export async function buildStoredLabelAccess(params: {
   if (!label) return null;
 
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  const tenantContext = getTenantContext();
   const token = createLabelAccessToken({
     dpdShipmentId: params.dpdShipmentId,
     labelId: params.labelId,
     userId: String(params.userId),
-    expiresAt
+    expiresAt,
+    ...(tenantContext ? {
+      tenantId: tenantContext.tenantId,
+      tenantKind: tenantContext.kind,
+      readOnly: tenantContext.readOnly,
+      ...(tenantContext.supportSessionId ? { supportSessionId: tenantContext.supportSessionId } : {})
+    } : {})
   });
   const path = `/api/v1/dpd-shipments/${params.dpdShipmentId}/label-file?token=${encodeURIComponent(token)}&disposition=${params.disposition}`;
 
@@ -608,9 +677,13 @@ async function sendStoredLabel(params: {
     });
   }
 
-  label.downloadCount += 1;
-  label.lastDownloadedAt = new Date();
-  await label.save();
+  const tenantContext = getTenantContext();
+  const readOnlySupport = tenantContext?.readOnly === true;
+  if (!readOnlySupport) {
+    label.downloadCount += 1;
+    label.lastDownloadedAt = new Date();
+    await label.save();
+  }
 
   await AuditLog.create({
     action: "LABEL_DOWNLOADED",
@@ -622,8 +695,11 @@ async function sendStoredLabel(params: {
       dpdShipmentId,
       parcelNumber: label.parcelNumber,
       labelType: label.labelType,
-      downloadCount: label.downloadCount,
-      accessMode
+      ...(readOnlySupport ? {} : { downloadCount: label.downloadCount }),
+      accessMode: readOnlySupport ? "platform_support" : accessMode,
+      ...(readOnlySupport && tenantContext.supportSessionId
+        ? { supportSessionId: String(tenantContext.supportSessionId) }
+        : {})
     }
   });
 
@@ -1379,18 +1455,19 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
     originHubFallback: branch?.address?.city ? `${branch.address.city} Hub` : ""
   });
   const currentEvent = getCurrentShipmentEvent(events);
+  const currentSnapshot = (shipmentInvoice?.revision ?? 1) <= (shipment.snapshotRevision || 1)
+    ? shipment.currentShipmentSnapshot || shipment.bookingSnapshot
+    : null;
+  const operatorTenant = getTenantContext()?.kind === "OPERATOR";
 
   return response.status(200).json({
     success: true,
     shipment: {
       dpdShipment: serializeDpdShipment(shipment),
       bookingConfirmation: serializeShipmentBookingConfirmation(shipment.bookingSnapshot),
-      shipmentDraft: serializeShipmentDraftSummary(
-        draft,
-        (shipmentInvoice?.revision ?? 1) <= (shipment.snapshotRevision || 1)
-          ? shipment.currentShipmentSnapshot || shipment.bookingSnapshot
-          : null
-      ),
+      shipmentDraft: operatorTenant
+        ? serializeOperatorShipmentDraftSummary(draft, currentSnapshot)
+        : serializeShipmentDraftSummary(draft, currentSnapshot),
       branch: serializeBranchSummary(branch),
       shipmentInvoice: shipmentInvoice ? {
         invoiceNumber: shipmentInvoice.invoiceNumber,
@@ -1930,18 +2007,33 @@ export async function downloadDpdLabelWithToken(request: Request, response: Resp
     return response.status(401).json({ success: false, message: "Label link has expired or is invalid." });
   }
 
-  const label = await LabelDocument.findOne({
-    _id: new mongoose.Types.ObjectId(tokenPayload.labelId),
-    dpdShipmentId: new mongoose.Types.ObjectId(dpdShipmentId)
-  }).exec();
-  if (!label) return response.status(404).json({ success: false, message: "Label not found" });
+  const tenantContext = await resolveLabelAccessTenantContext(tokenPayload);
+  if (!tenantContext) {
+    return response.status(401).json({ success: false, message: "Label link has expired or is invalid." });
+  }
 
-  return sendStoredLabel({
-    label,
-    userId: tokenPayload.userId,
-    response,
-    dpdShipmentId,
-    accessMode: "signed",
-    disposition: request.query.disposition === "attachment" ? "attachment" : "inline"
+  return runWithTenantContext(tenantContext, async () => {
+    const shipmentId = new mongoose.Types.ObjectId(dpdShipmentId);
+    const shipment = await DpdShipment.findOne({ _id: shipmentId, tenantId: tenantContext.tenantId })
+      .select("_id")
+      .lean()
+      .exec();
+    if (!shipment) return response.status(404).json({ success: false, message: "Label not found" });
+
+    const label = await LabelDocument.findOne({
+      _id: new mongoose.Types.ObjectId(tokenPayload.labelId),
+      dpdShipmentId: shipmentId,
+      tenantId: tenantContext.tenantId
+    }).exec();
+    if (!label) return response.status(404).json({ success: false, message: "Label not found" });
+
+    return sendStoredLabel({
+      label,
+      userId: tokenPayload.userId,
+      response,
+      dpdShipmentId,
+      accessMode: "signed",
+      disposition: request.query.disposition === "attachment" ? "attachment" : "inline"
+    });
   });
 }

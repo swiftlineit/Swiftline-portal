@@ -1,8 +1,30 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export type AuditAction =
   | "OPERATOR_DRAFT_CREATED"
   | "OPERATOR_SLUG_CHANGED"
+  | "OPERATOR_COMPANY_UPDATED"
+  | "OPERATOR_BRANDING_LOGO_UPDATED"
+  | "OPERATOR_BRANDING_LOGO_REMOVED"
+  | "OPERATOR_BANNER_CREATED"
+  | "OPERATOR_BANNER_REMOVED"
+  | "OPERATOR_ADMIN_INVITED"
+  | "OPERATOR_ADMIN_INVITATION_REISSUED"
+  | "OPERATOR_MEMBERSHIP_ACTIVATED"
+  | "OPERATOR_TENANT_ACTIVATED"
+  | "OPERATOR_TENANT_SUSPENDED"
+  | "OPERATOR_TENANT_REACTIVATED"
+  | "OPERATOR_CONTACT_QUERY_SUBMITTED"
+  | "PLATFORM_OPERATOR_SUPPORT_STARTED"
+  | "PLATFORM_OPERATOR_SUPPORT_DATA_VIEWED"
+  | "PLATFORM_OPERATOR_SUPPORT_ENDED"
+  | "OPERATOR_SHIPMENT_BOOKING_STARTED"
+  | "OPERATOR_SHIPMENT_BOOKING_COMPLETED"
+  | "OPERATOR_SHIPMENT_BOOKING_REVIEW_REQUIRED"
+  | "OPERATOR_SHIPMENT_BOOKING_FAILED"
+  | "OPERATOR_SHIPMENT_DOCUMENTS_RECONCILED"
+  | "OPERATOR_SHIPMENT_TRACKING_UPDATED"
   | "BRANCH_CREATED"
   | "BRANCH_DRAFT_CREATED"
   | "BRANCH_DRAFT_DELETED"
@@ -163,6 +185,8 @@ export type AuditAction =
   | "BUSINESS_ACCOUNT_SUBMITTED"
   | "BUSINESS_ACCOUNT_DRAFT_DELETED"
   | "BUSINESS_ACCOUNT_STATUS_CHANGED"
+  | "OPERATOR_CLIENT_ACCESS_INVITED"
+  | "OPERATOR_CLIENT_ACCESS_ACTIVATED"
   | "BUSINESS_ACCOUNT_RATE_CARD_ASSIGNED"
   | "BUSINESS_ACCOUNT_RATE_CARD_MIGRATED"
   | "BUSINESS_ACCOUNT_GST_BILLING_REQUESTED"
@@ -229,10 +253,12 @@ export type AuditAction =
   | "FLIGHT_EXCEPTION_RESOLVED";
 export type AuditEntityType =
   | "TENANT"
+  | "TENANT_MEMBERSHIP"
   | "BRANCH"
   | "DPD_CONFIGURATION"
   | "SHIPMENT_IMPORT_BATCH"
   | "SHIPMENT_DRAFT"
+  | "SHIPMENT"
   | "DPD_SHIPMENT"
   | "LABEL_DOCUMENT"
   | "SHIPMENT_AMENDMENT"
@@ -283,7 +309,7 @@ export type AuditEntityType =
   | "FLIGHT_EXCEPTION"
   | "FLIGHT_DOCUMENT";
 
-export interface IAuditLog extends mongoose.Document {
+export interface IAuditLog extends mongoose.Document, TenantOwnedFields {
   action: AuditAction;
   entityType: AuditEntityType;
   entityId: mongoose.Types.ObjectId;
@@ -303,5 +329,7 @@ const auditLogSchema = new mongoose.Schema<IAuditLog>(
   },
   { timestamps: false }
 );
+
+addTenantOwnership(auditLogSchema, { allowReadOnlyAuditAppend: true });
 
 export const AuditLog = mongoose.model<IAuditLog>("AuditLog", auditLogSchema);

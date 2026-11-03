@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { IShipmentDraft } from "../models/shipmentDraft.model.js";
 import { maxParcelItemAmountExclusive, maxParcelItems } from "../services/parcelItems.service.js";
-import { validateShipmentPayload, type ShipmentPayload } from "../services/shipmentPayload.service.js";
+import {
+  buildShipmentPayload,
+  OPERATOR_INTERNAL_SERVICE_CODE,
+  SWIFTLINE_SERVICE_CODE,
+  validateShipmentPayload,
+  type ShipmentPayload
+} from "../services/shipmentPayload.service.js";
 import { validateShipmentDraftFields } from "../services/shipmentValidation.service.js";
 
 function payload(parcelCount: number): ShipmentPayload {
@@ -31,6 +37,25 @@ function payload(parcelCount: number): ShipmentPayload {
 
 test("uses a 50-item per-parcel limit", () => {
   assert.equal(maxParcelItems, 50);
+});
+
+test("keeps Swiftline's carrier service and allows the operator internal service to be explicit", () => {
+  const draft = {
+    _id: "64b000000000000000000001",
+    consigneeEnteredAddress: {
+      contactName: "Consignee",
+      mobileCountryCode: "+44",
+      mobileNumber: "7123456789",
+      countryCode: "GB",
+      postcode: "SW1A 1AA",
+      addressLine1: "1 Test Street",
+      townOrCity: "London"
+    },
+    parcelList: [{ shipmentReference1: "REF-100" }]
+  } as never;
+
+  assert.equal(buildShipmentPayload(draft).serviceCode, SWIFTLINE_SERVICE_CODE);
+  assert.equal(buildShipmentPayload(draft, OPERATOR_INTERNAL_SERVICE_CODE).serviceCode, "INTERNAL SHIPMENT");
 });
 
 test("enforces the per-item derived amount limit for CSB-IV while allowing higher CSB-V values", () => {

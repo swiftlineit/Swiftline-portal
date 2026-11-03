@@ -9,11 +9,11 @@ import { CreditLimitIncreaseRequest } from "../models/creditLimitIncreaseRequest
 import { maxCreditLimitLabel, maxCreditLimitMinor } from "../models/financialTypes.js";
 import {
   appendCreditLedgerEntry, ensureCreditAccount, getCurrentPaymentTerms,
-  getMemberCreditPermissions, serializeCreditAccount, serializeLimitIncrease
+  canAccessCreditFinancials, getMemberCreditPermissions, serializeCreditAccount, serializeLimitIncrease
 } from "../services/creditAccount.service.js";
 import { getCreditRestrictionState } from "../services/creditOverdue.service.js";
 import { getCreditBillingSummary } from "../services/creditBilling.summary.service.js";
-import { notifyActiveAdmins } from "../services/portalNotification.service.js";
+import { notifyCreditFacilityReviewers } from "../services/portalNotification.service.js";
 import { formatMinorRupees } from "../services/prepaid/dailyTopUpLimit.service.js";
 
 const requestCreditSchema = z.object({
@@ -96,6 +96,7 @@ export async function getClientCreditSummary(request: Request, response: Respons
   return response.status(200).json({
     success: true,
     permissions,
+    financialAccess: canAccessCreditFinancials(membership.role),
     creditAccount: canViewBalances ? {
       ...serialized,
       billing,
@@ -162,7 +163,7 @@ export async function requestClientCredit(request: Request, response: Response):
       result = serializeCreditAccount(account);
     });
 
-    await notifyActiveAdmins({
+    await notifyCreditFacilityReviewers({
       type: "CREDIT_REQUEST_SUBMITTED",
       title: "Credit facility requested",
       message: `${businessAccount.company.companyName || businessAccount.accountId} requested a credit facility and is awaiting review.`,
@@ -292,7 +293,7 @@ export async function requestClientCreditLimitIncrease(request: Request, respons
   });
 
   const business = await BusinessAccount.findById(membership.businessAccount).select("accountId company.companyName").lean().exec();
-  await notifyActiveAdmins({
+  await notifyCreditFacilityReviewers({
     type: "CREDIT_REQUEST_SUBMITTED",
     title: "Credit limit increase requested",
     message: `${business?.company?.companyName || business?.accountId} asked to raise their credit limit from `

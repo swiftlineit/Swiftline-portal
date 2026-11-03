@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const shipmentImportEntryStatusValues = [
   "READY",
@@ -10,7 +11,7 @@ export const shipmentImportEntryStatusValues = [
 
 export type ShipmentImportEntryStatus = (typeof shipmentImportEntryStatusValues)[number];
 
-export interface IShipmentImportEntry extends mongoose.Document {
+export interface IShipmentImportEntry extends mongoose.Document, TenantOwnedFields {
   batchId: mongoose.Types.ObjectId;
   position: number;
   originalFilename: string;
@@ -42,5 +43,7 @@ const shipmentImportEntrySchema = new mongoose.Schema<IShipmentImportEntry>(
 );
 
 shipmentImportEntrySchema.index({ batchId: 1, position: 1 }, { unique: true });
+
+addTenantOwnership(shipmentImportEntrySchema);
 
 export const ShipmentImportEntry = mongoose.model<IShipmentImportEntry>("ShipmentImportEntry", shipmentImportEntrySchema);

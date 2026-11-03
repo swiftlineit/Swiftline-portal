@@ -1,11 +1,12 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import { isMinorUnitInteger } from "./financialTypes.js";
 import type { ShipmentInvoiceTaxTreatment } from "./shipmentInvoice.model.js";
 
 export const shipmentCancellationStatusValues = ["REQUESTED", "COMPLETED", "REJECTED"] as const;
 export type ShipmentCancellationStatus = (typeof shipmentCancellationStatusValues)[number];
 
-export interface IShipmentCancellation extends mongoose.Document {
+export interface IShipmentCancellation extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
   dpdShipmentId: mongoose.Types.ObjectId;
   shipmentInvoiceId: mongoose.Types.ObjectId;
@@ -26,6 +27,7 @@ export interface IShipmentCancellation extends mongoose.Document {
   refundableAmountMinor?: number | null;
   feeReason: string;
   carrierConfirmed: boolean;
+  carrierConfirmationRequired: boolean;
   settlementConfirmed: boolean;
   carrierReference: string;
   reviewNote: string;
@@ -74,6 +76,7 @@ const shipmentCancellationSchema = new mongoose.Schema<IShipmentCancellation>({
   refundableAmountMinor: optionalMinorAmount,
   feeReason: { type: String, trim: true, maxlength: 500, default: "" },
   carrierConfirmed: { type: Boolean, default: false },
+  carrierConfirmationRequired: { type: Boolean, default: true },
   settlementConfirmed: { type: Boolean, default: false },
   carrierReference: { type: String, trim: true, maxlength: 120, default: "" },
   reviewNote: { type: String, trim: true, maxlength: 500, default: "" },
@@ -91,6 +94,8 @@ shipmentCancellationSchema.index(
   { shipmentDraftId: 1, status: 1 },
   { unique: true, partialFilterExpression: { status: "REQUESTED" } }
 );
+
+addTenantOwnership(shipmentCancellationSchema);
 
 export const ShipmentCancellation = mongoose.model<IShipmentCancellation>(
   "ShipmentCancellation",

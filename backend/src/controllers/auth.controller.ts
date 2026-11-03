@@ -9,10 +9,23 @@ import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { AuditLog } from "../models/auditLog.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountInvitation } from "../models/businessAccountInvitation.model.js";
 import { DriverInvitation } from "../models/driverInvitation.model.js";
 import { DriverProfile } from "../models/driverProfile.model.js";
 import { hashDriverInvitationToken } from "../services/driverInvitation.service.js";
+import {
+  acceptExistingOperatorAdminInvitation,
+  activateNewOperatorAdmin,
+  lookupOperatorInvitation,
+  OperatorInvitationError
+} from "../services/operatorInvitation.service.js";
+import {
+  acceptExistingOperatorClientInvitation,
+  activateNewOperatorClientInvitation,
+  lookupOperatorClientInvitation,
+  OperatorClientInvitationError
+} from "../services/operatorClientInvitation.service.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { sendLoginOtpEmail, sendPasswordResetEmail } from "../services/mail.service.js";
 import { normalizePortalRole } from "../utils/portalRole.js";
@@ -121,6 +134,9 @@ const activationSchema = z.object({
     });
   }
 });
+const acceptOperatorInvitationSchema = z.object({
+  token: z.string().trim().min(20).max(256)
+}).strict();
 const forgotPasswordSchema = z.object({
   email: z.string().trim().email().toLowerCase()
 });
@@ -730,6 +746,47 @@ export async function getInvitation(req: Request, res: Response): Promise<Respon
   const token = typeof req.params.token === "string" ? req.params.token : "";
   if (!token) return res.status(400).json({ success: false, message: "Invitation token is required." });
 
+  if (env.OPERATOR_PORTAL_ENABLED) {
+    const clientLookup = await lookupOperatorClientInvitation(token);
+    if (clientLookup.matched) {
+      if (!clientLookup.invitation) {
+        return res.status(400).json({ success: false, message: clientLookup.message });
+      }
+      return res.status(200).json({
+        success: true,
+        invitation: {
+          kind: "BUSINESS",
+          email: clientLookup.invitation.email,
+          name: clientLookup.invitation.name,
+          businessAccountId: clientLookup.invitation.businessAccountId,
+          companyName: clientLookup.invitation.companyName,
+          operatorSlug: clientLookup.invitation.tenantSlug,
+          requiresSignIn: clientLookup.invitation.requiresSignIn,
+          expiresAt: clientLookup.invitation.expiresAt
+        }
+      });
+    }
+    const operatorLookup = await lookupOperatorInvitation(token);
+    if (operatorLookup.matched) {
+      if (!operatorLookup.invitation) {
+        return res.status(400).json({ success: false, message: operatorLookup.message });
+      }
+      return res.status(200).json({
+        success: true,
+        invitation: {
+          kind: "OPERATOR",
+          email: operatorLookup.invitation.email,
+          name: operatorLookup.invitation.name,
+          companyName: operatorLookup.invitation.companyName,
+          operatorSlug: operatorLookup.invitation.tenantSlug,
+          role: operatorLookup.invitation.role,
+          requiresSignIn: operatorLookup.invitation.requiresSignIn,
+          expiresAt: operatorLookup.invitation.expiresAt
+        }
+      });
+    }
+  }
+
   const { kind, invitation, message } = await findUsableInvitation(token);
   if (!invitation) return res.status(400).json({ success: false, message });
 
@@ -771,6 +828,71 @@ export async function activateInvitation(req: Request, res: Response): Promise<R
     return res.status(400).json({ success: false, errors: parsed.error.format() });
   }
 
+  if (env.OPERATOR_PORTAL_ENABLED) {
+    const clientLookup = await lookupOperatorClientInvitation(parsed.data.token);
+    if (clientLookup.matched) {
+      if (!clientLookup.invitation) {
+        return res.status(400).json({ success: false, message: clientLookup.message });
+      }
+      if (clientLookup.invitation.requiresSignIn) {
+        return res.status(409).json({
+          success: false,
+          code: "SIGN_IN_REQUIRED",
+          message: "This email already has a portal login. Sign in to that client account, then accept the operator invitation."
+        });
+      }
+      try {
+        const passwordHash = await hashPassword(parsed.data.password);
+        const result = await activateNewOperatorClientInvitation({ token: parsed.data.token, passwordHash });
+        return res.status(200).json({
+          success: true,
+          message: "Your client account is active for this operator portal.",
+          operator: { slug: result?.tenantSlug }
+        });
+      } catch (error) {
+        if (error instanceof OperatorClientInvitationError) {
+          return res.status(error.statusCode).json({
+            success: false,
+            message: error.message,
+            ...(error.code ? { code: error.code } : {})
+          });
+        }
+        throw error;
+      }
+    }
+    const operatorLookup = await lookupOperatorInvitation(parsed.data.token);
+    if (operatorLookup.matched) {
+      if (!operatorLookup.invitation) {
+        return res.status(400).json({ success: false, message: operatorLookup.message });
+      }
+      if (operatorLookup.invitation.requiresSignIn) {
+        return res.status(409).json({
+          success: false,
+          code: "SIGN_IN_REQUIRED",
+          message: "This email already has a portal login. Sign in to that account, then accept the operator invitation."
+        });
+      }
+      try {
+        const passwordHash = await hashPassword(parsed.data.password);
+        const result = await activateNewOperatorAdmin({ token: parsed.data.token, passwordHash });
+        return res.status(200).json({
+          success: true,
+          message: "Your account is active. The Swiftline platform administrator will finish setting up this operator portal.",
+          operator: { slug: result.tenantSlug }
+        });
+      } catch (error) {
+        if (error instanceof OperatorInvitationError) {
+          return res.status(error.statusCode).json({
+            success: false,
+            message: error.message,
+            ...(error.code ? { code: error.code } : {})
+          });
+        }
+        throw error;
+      }
+    }
+  }
+
   const { kind, invitation, message } = await findUsableInvitation(parsed.data.token);
   if (!invitation) return res.status(400).json({ success: false, message });
 
@@ -800,11 +922,20 @@ export async function activateInvitation(req: Request, res: Response): Promise<R
     return res.status(400).json({ success: false, message: "Invitation access record is no longer valid." });
   }
 
-  const conflictingMembership = await BusinessAccountMember.exists({
+  const businessAccount = await BusinessAccount.findById(member.businessAccount).select("tenantId").exec();
+  if (!businessAccount) {
+    return res.status(400).json({ success: false, message: "Invitation access record is no longer valid." });
+  }
+
+  const conflictingMembershipFilter: Record<string, unknown> = {
     _id: { $ne: member._id },
     user: user._id,
     status: { $in: ["invited", "active", "suspended"] }
-  }).exec();
+  };
+  // The same global login may join one business account in Swiftline and one
+  // in each operator tenant. Keep this legacy conflict rule tenant-local.
+  if (businessAccount.tenantId) conflictingMembershipFilter.tenantId = businessAccount.tenantId;
+  const conflictingMembership = await BusinessAccountMember.exists(conflictingMembershipFilter).exec();
   if (conflictingMembership) {
     return res.status(409).json({
       success: false,
@@ -831,4 +962,70 @@ export async function activateInvitation(req: Request, res: Response): Promise<R
   ]);
 
   return res.status(200).json({ success: true, message: "Account activated successfully." });
+}
+
+export async function acceptOperatorInvitation(req: Request, res: Response): Promise<Response> {
+  if (!env.OPERATOR_PORTAL_ENABLED) {
+    return res.status(404).json({ success: false, message: "Operator invitations are unavailable." });
+  }
+  const parsed = acceptOperatorInvitationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ success: false, message: "Operator invitation token is invalid." });
+  }
+  const user = (req as Request & { user?: { _id?: unknown; role?: string } }).user;
+  if (!user?._id || !mongoose.Types.ObjectId.isValid(String(user._id))) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+  if (user.role !== "client") {
+    return res.status(403).json({ success: false, message: "Only a client login can accept operator access." });
+  }
+  try {
+    const result = await acceptExistingOperatorAdminInvitation({
+      token: parsed.data.token,
+      userId: new mongoose.Types.ObjectId(String(user._id))
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Operator administrator access is active. The platform administrator will activate the operator portal after setup.",
+      operator: { slug: result.tenantSlug }
+    });
+  } catch (error) {
+    if (error instanceof OperatorInvitationError) {
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
+    throw error;
+  }
+}
+
+export async function acceptOperatorClientInvitation(req: Request, res: Response): Promise<Response> {
+  if (!env.OPERATOR_PORTAL_ENABLED) {
+    return res.status(404).json({ success: false, message: "Operator client invitations are unavailable." });
+  }
+  const parsed = acceptOperatorInvitationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ success: false, message: "Operator invitation token is invalid." });
+  }
+  const user = (req as Request & { user?: { _id?: unknown; role?: string } }).user;
+  if (!user?._id || !mongoose.Types.ObjectId.isValid(String(user._id))) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+  if (user.role !== "client") {
+    return res.status(403).json({ success: false, message: "Only the invited client login can accept this access." });
+  }
+  try {
+    const result = await acceptExistingOperatorClientInvitation({
+      token: parsed.data.token,
+      userId: new mongoose.Types.ObjectId(String(user._id))
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Client access is active for this operator portal.",
+      operator: { slug: result?.tenantSlug }
+    });
+  } catch (error) {
+    if (error instanceof OperatorClientInvitationError) {
+      return res.status(error.statusCode).json({ success: false, message: error.message, ...(error.code ? { code: error.code } : {}) });
+    }
+    throw error;
+  }
 }

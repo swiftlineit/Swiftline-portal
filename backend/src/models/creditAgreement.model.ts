@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { isMinorUnitInteger, maxCreditLimitMinor } from "./financialTypes.js";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const creditAgreementStatusValues = [
   "DRAFT", "GENERATED", "SENT", "VIEWED", "SIGNED", "DECLINED", "EXPIRED", "SUPERSEDED"
@@ -44,7 +45,7 @@ export type CreditAgreementSnapshot = {
   };
 };
 
-export interface ICreditAgreement extends mongoose.Document {
+export interface ICreditAgreement extends mongoose.Document, TenantOwnedFields {
   agreementNumber: string;
   businessAccountId: mongoose.Types.ObjectId;
   creditAccountId: mongoose.Types.ObjectId;
@@ -122,7 +123,7 @@ const signerSchema = new mongoose.Schema({
 }, { _id: false });
 
 const creditAgreementSchema = new mongoose.Schema<ICreditAgreement>({
-  agreementNumber: { type: String, required: true, unique: true, immutable: true, trim: true, maxlength: 80, index: true },
+  agreementNumber: { type: String, required: true, immutable: true, trim: true, maxlength: 80 },
   businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, immutable: true, index: true },
   creditAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessCreditAccount", required: true, immutable: true, index: true },
   version: { type: Number, required: true, min: 1, immutable: true },
@@ -142,15 +143,24 @@ const creditAgreementSchema = new mongoose.Schema<ICreditAgreement>({
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }
 }, { timestamps: true });
 
-creditAgreementSchema.index({ businessAccountId: 1, version: 1 }, { unique: true });
+creditAgreementSchema.index(
+  { tenantId: 1, agreementNumber: 1 },
+  { unique: true, name: "uniq_tenant_credit_agreement_number" }
+);
+creditAgreementSchema.index(
+  { tenantId: 1, businessAccountId: 1, version: 1 },
+  { unique: true, name: "uniq_tenant_credit_agreement_version" }
+);
 creditAgreementSchema.index({ businessAccountId: 1, createdAt: -1 });
 creditAgreementSchema.index(
-  { businessAccountId: 1 },
+  { tenantId: 1, businessAccountId: 1 },
   {
-    name: "one_open_credit_agreement_per_business",
+    name: "one_open_credit_agreement_per_tenant_business",
     unique: true,
     partialFilterExpression: { status: { $in: ["DRAFT", "GENERATED", "SENT", "VIEWED"] } }
   }
 );
+
+addTenantOwnership(creditAgreementSchema);
 
 export const CreditAgreement = mongoose.model<ICreditAgreement>("CreditAgreement", creditAgreementSchema);

@@ -88,6 +88,7 @@ export const storageModules = {
   shipmentImport: "shipment-imports",
   claim: "claims",
   dashboardBanner: "dashboard-banners",
+  operatorBranding: "operator-branding",
   flightLinehaul: "flight-linehauls",
   operationsManifestArchive: "operations-manifest-archives"
 } as const;
@@ -175,6 +176,22 @@ export function operationsManifestArchiveKey(manifestId: string, originalName: s
 
 export function dashboardBannerKey(originalName: string) {
   return joinKey(storageModules.dashboardBanner, generatedFilename(originalName));
+}
+
+export function operatorBrandLogoKey(tenantId: string, originalName: string) {
+  return joinKey(storageModules.operatorBranding, tenantId, "logo", generatedFilename(originalName));
+}
+
+export function operatorBrandLogoPrefix(tenantId: string) {
+  return `${joinKey(storageModules.operatorBranding, tenantId, "logo")}/`;
+}
+
+export function operatorBrandBannerKey(tenantId: string, originalName: string) {
+  return joinKey(storageModules.operatorBranding, tenantId, "banners", generatedFilename(originalName));
+}
+
+export function operatorBrandBannerPrefix(tenantId: string) {
+  return `${joinKey(storageModules.operatorBranding, tenantId, "banners")}/`;
 }
 
 export function flightLinehaulDocumentKey(flightId: string, originalName: string) {

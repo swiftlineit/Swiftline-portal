@@ -11,13 +11,15 @@ import {
   formatManifestOrigin,
   hydrateMissingManifestParcelChargeableWeights,
   manifestBusinessAccountName,
-  resolveClientManifestAccountScope,
+  resolveClientManifestBranchScope,
+  shipmentManifestCounterId,
   shipmentManifestCounterKey,
   shipmentManifestNumberPrefix,
   shipmentManifestSearchConditions,
   type ManifestPartySnapshot
 } from "../services/shipmentManifest.service.js";
 import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
+import { getTenantContext, runWithTenantContext } from "../services/tenantScope.service.js";
 import {
   shipmentManifestAssignmentAvailability,
   shipmentManifestAssignmentClaimFilter,
@@ -38,6 +40,14 @@ describe("shipment manifest identifiers and search", () => {
     assert.equal(shipmentManifestNumberPrefix("routes"), "routes");
     assert.equal(shipmentManifestNumberPrefix(""), "SLC");
     assert.equal(shipmentManifestCounterKey("routes"), "shipment-manifest:ROUTES");
+    const swiftlineTenant = { tenantId: new mongoose.Types.ObjectId(), kind: "SWIFTLINE" as const };
+    const operatorTenant = { tenantId: new mongoose.Types.ObjectId(), kind: "OPERATOR" as const };
+    assert.equal(shipmentManifestCounterId("SLC", swiftlineTenant), "shipment-manifest");
+    assert.equal(shipmentManifestCounterId("routes", swiftlineTenant), "shipment-manifest:ROUTES");
+    assert.equal(
+      shipmentManifestCounterId("SLC", operatorTenant),
+      `${operatorTenant.tenantId}:shipment-manifest:SLC`
+    );
     assert.equal(new ShipmentManifest({ manifestNumber: "routes-001" }).manifestNumber, "routes-001");
   });
 
@@ -51,14 +61,24 @@ describe("shipment manifest identifiers and search", () => {
     assert.deepEqual(shipmentManifestSearchConditions("  "), []);
   });
 
-  it("keeps an explicitly requested client account inside their active membership scope", () => {
+  it("keeps client manifest reads inside active account and branch membership", () => {
     const ownAccountId = new mongoose.Types.ObjectId();
     const otherAccountId = new mongoose.Types.ObjectId();
-    const ownScope = resolveClientManifestAccountScope([ownAccountId], String(ownAccountId));
+    const ownBranchId = new mongoose.Types.ObjectId();
+    const otherBranchId = new mongoose.Types.ObjectId();
+    const scopes = [
+      { businessAccountId: ownAccountId, branchIds: [ownBranchId] },
+      { businessAccountId: otherAccountId, branchIds: [otherBranchId] }
+    ];
+    const ownScope = resolveClientManifestBranchScope(scopes, String(ownAccountId));
     assert.equal(ownScope.allowed, true);
-    assert.equal(String(ownScope.filter.businessAccountId), String(ownAccountId));
-    assert.equal(resolveClientManifestAccountScope([ownAccountId], String(otherAccountId)).allowed, false);
-    assert.equal(resolveClientManifestAccountScope([]).allowed, false);
+    assert.deepEqual(ownScope.filter, {
+      $or: [{ businessAccountId: ownAccountId, branchId: { $in: [ownBranchId] } }]
+    });
+    assert.equal(resolveClientManifestBranchScope(scopes, String(new mongoose.Types.ObjectId())).allowed, false);
+    assert.equal(resolveClientManifestBranchScope(scopes, "not-an-id").allowed, false);
+    assert.equal(resolveClientManifestBranchScope([]).allowed, false);
+    assert.equal(resolveClientManifestBranchScope([{ businessAccountId: ownAccountId, branchIds: [] }]).allowed, false);
   });
 
   it("allocates atomic prefix sequences and seeds the legacy SLC counter without reusing old numbers", async () => {
@@ -77,8 +97,12 @@ describe("shipment manifest identifiers and search", () => {
     });
 
     (ShipmentManifestCounter as any).findById = (id: string) => query(counters.get(id) ?? null);
-    (ShipmentManifest as any).find = (filter: { manifestNumber: RegExp }) =>
-      query(existingNumbers.filter((manifestNumber) => filter.manifestNumber.test(manifestNumber)).map((manifestNumber) => ({ manifestNumber })));
+    (ShipmentManifest as any).find = (filter: { manifestNumber: RegExp }) => {
+      const visibleNumbers = getTenantContext()?.kind === "OPERATOR" ? [] : existingNumbers;
+      return query(visibleNumbers
+        .filter((manifestNumber) => filter.manifestNumber.test(manifestNumber))
+        .map((manifestNumber) => ({ manifestNumber })));
+    };
     (ShipmentManifestCounter as any).updateOne = (filter: { _id: string }, update: { $max: { sequence: number } }) => ({
       exec: async () => {
         const current = counters.get(filter._id);
@@ -100,6 +124,13 @@ describe("shipment manifest identifiers and search", () => {
       assert.equal(await allocateShipmentManifestNumber("SITARAM EXPORT"), "SE-001");
       assert.equal(await allocateShipmentManifestNumber("routes"), "routes-001");
       assert.equal(await allocateShipmentManifestNumber("Swiftline Line Cargo"), "SLC-046");
+
+      const operatorTenantId = new mongoose.Types.ObjectId();
+      await runWithTenantContext({ tenantId: operatorTenantId, kind: "OPERATOR" }, async () => {
+        assert.equal(await allocateShipmentManifestNumber("Swiftline Line Cargo"), "SLC-001");
+      });
+      assert.equal(counters.get("shipment-manifest")?.sequence, 46);
+      assert.equal(counters.get(`${operatorTenantId}:shipment-manifest:SLC`)?.sequence, 1);
     } finally {
       (ShipmentManifestCounter as any).findById = originals.counterFindById;
       (ShipmentManifestCounter as any).findOneAndUpdate = originals.counterFindOneAndUpdate;

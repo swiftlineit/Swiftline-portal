@@ -1,9 +1,10 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const shipmentOperationsParcelScanActionValues = ["RECEIVE", "PROCESS"] as const;
 export type ShipmentOperationsParcelScanAction = (typeof shipmentOperationsParcelScanActionValues)[number];
 
-export interface IShipmentOperationsParcelScan extends mongoose.Document {
+export interface IShipmentOperationsParcelScan extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
   dpdShipmentId: mongoose.Types.ObjectId;
   action: ShipmentOperationsParcelScanAction;
@@ -40,6 +41,8 @@ schema.index(
 );
 schema.index({ scanRequestId: 1 }, { unique: true, name: "uniq_shipment_origin_scan_request" });
 schema.index({ shipmentDraftId: 1, action: 1, scannedAt: 1 });
+
+addTenantOwnership(schema);
 
 export const ShipmentOperationsParcelScan = mongoose.model<IShipmentOperationsParcelScan>(
   "ShipmentOperationsParcelScan",

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import {
   isMinorUnitInteger,
   paymentSourceValues,
@@ -10,7 +11,7 @@ import {
 export const customerChargeStatusValues = ["RESERVED", "COMPLETED", "REVERSED", "REVIEW_REQUIRED", "TEST"] as const;
 export type CustomerChargeStatus = (typeof customerChargeStatusValues)[number];
 
-export interface IShipmentCharge extends mongoose.Document {
+export interface IShipmentCharge extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   branchId: mongoose.Types.ObjectId;
   shipmentId?: mongoose.Types.ObjectId | null;
@@ -67,6 +68,8 @@ const shipmentChargeSchema = new mongoose.Schema<IShipmentCharge>(
 );
 
 shipmentChargeSchema.index({ businessAccountId: 1, branchId: 1, createdAt: -1 });
+
+addTenantOwnership(shipmentChargeSchema);
 
 export const ShipmentCharge = mongoose.model<IShipmentCharge>(
   "ShipmentCharge",

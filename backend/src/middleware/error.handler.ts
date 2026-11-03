@@ -5,6 +5,8 @@ import type {
   Response
 } from "express";
 import { RateCardScopeError } from "../services/rateCardScope.service.js";
+import { getTenantContext } from "../services/tenantScope.service.js";
+import { TenantScopeError } from "../models/plugins/tenantOwnedSchema.plugin.js";
 
 export const notFoundHandler = (
   request: Request,
@@ -24,6 +26,10 @@ export const errorHandler: ErrorRequestHandler = (
 ): void => {
   if (error instanceof RateCardScopeError) {
     response.status(error.statusCode).json({ success: false, code: error.code, message: error.message });
+    return;
+  }
+  if (error instanceof TenantScopeError && getTenantContext()?.readOnly) {
+    response.status(403).json({ success: false, message: error.message });
     return;
   }
   console.error(error);

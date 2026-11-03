@@ -3,12 +3,15 @@ import { BusinessAccountMember, type BusinessAccountMemberRole } from "../models
 import { BusinessCreditAccount } from "../models/businessCreditAccount.model.js";
 import { CreditBillingStatement } from "../models/creditBillingStatement.model.js";
 import { PortalNotification, type PortalNotificationType } from "../models/portalNotification.model.js";
+import { TenantMembership } from "../models/tenantMembership.model.js";
+import { Tenant } from "../models/tenant.model.js";
 import { User } from "../models/user.model.js";
 import { getCreditBalances } from "./creditAccount.service.js";
 import { getCreditRestrictionState } from "./creditOverdue.service.js";
 import { formatIndiaDate } from "../utils/dateFormat.js";
 import type { IEmailAttachmentRef } from "../models/emailOutbox.model.js";
 import { enqueueEmails, resolveUserRecipients, type EmailRecipient } from "./email/enqueue.js";
+import { getTenantContext } from "./tenantScope.service.js";
 
 /**
  * Optional per-event email shaping. Without it a notification still emails,
@@ -43,6 +46,11 @@ async function insertNotifications(
   input: NotificationInput,
   session?: mongoose.ClientSession
 ) {
+  const tenantContext = getTenantContext();
+  if (tenantContext?.kind === "OPERATOR" && !await Tenant.exists({
+    _id: tenantContext.tenantId, kind: "OPERATOR", status: "ACTIVE"
+  }).session(session ?? null)) return;
+
   const uniqueRecipients = [...new Map(recipientUserIds.map((id) => [String(id), id])).values()];
   const operations = uniqueRecipients.map((recipientUserId) => ({
     updateOne: {
@@ -194,6 +202,123 @@ export async function notifyActiveAdmins(input: NotificationInput, session?: mon
     .lean()
     .exec();
   await insertNotifications(admins.map((admin) => admin._id), input, session);
+}
+
+/** Credit requests reach Swiftline admins or the owning operator's reviewers. */
+export async function notifyCreditFacilityReviewers(input: NotificationInput, session?: mongoose.ClientSession) {
+  const tenantContext = getTenantContext();
+  if (!tenantContext) throw new Error("Credit review notifications require an explicit tenant context.");
+  if (tenantContext.kind === "SWIFTLINE") {
+    await notifyActiveAdmins(input, session);
+    return;
+  }
+
+  const [tenant, memberships] = await Promise.all([
+    Tenant.findById(tenantContext.tenantId).select("slug").lean().exec(),
+    TenantMembership.find({
+      tenantId: tenantContext.tenantId,
+      role: { $in: ["OPERATOR_ADMIN", "FINANCE"] },
+      status: "ACTIVE"
+    }).select("userId").session(session ?? null).lean().exec()
+  ]);
+  if (!tenant?.slug) throw new Error("The operator credit review notification has no tenant slug.");
+
+  await insertNotifications(memberships.map((membership) => membership.userId), {
+    ...input,
+    href: `/portal/${tenant.slug}/credit`
+  }, session);
+}
+
+/** Local business-account review notices must reach only the owning operator admins. */
+export async function notifyOperatorAccountReviewers(input: NotificationInput, session?: mongoose.ClientSession) {
+  const tenantContext = getTenantContext();
+  if (!tenantContext || tenantContext.kind !== "OPERATOR") {
+    throw new Error("Operator account review notifications require an operator context.");
+  }
+  const memberships = await TenantMembership.find({
+    tenantId: tenantContext.tenantId,
+    role: "OPERATOR_ADMIN",
+    status: "ACTIVE"
+  }).select("userId").session(session ?? null).lean().exec();
+  await insertNotifications(memberships.map((membership) => membership.userId), input, session);
+}
+
+/** Cancellation requests are reviewed by the owning operator's staff team. */
+export async function notifyOperatorShipmentCancellationReviewers(
+  input: Omit<NotificationInput, "href">,
+  session?: mongoose.ClientSession
+) {
+  const tenantContext = getTenantContext();
+  if (!tenantContext || tenantContext.kind !== "OPERATOR") {
+    throw new Error("Operator cancellation notifications require an operator context.");
+  }
+
+  const [tenant, memberships] = await Promise.all([
+    Tenant.findById(tenantContext.tenantId).select("slug").lean().exec(),
+    TenantMembership.find({
+      tenantId: tenantContext.tenantId,
+      role: { $in: ["OPERATOR_ADMIN", "OPERATIONS", "FINANCE"] },
+      status: "ACTIVE"
+    }).select("userId").session(session ?? null).lean().exec()
+  ]);
+  if (!tenant?.slug) throw new Error("The operator cancellation notification has no tenant slug.");
+
+  const cancellationId = typeof input.metadata?.cancellationId === "string"
+    ? input.metadata.cancellationId
+    : "";
+  const href = `/portal/${encodeURIComponent(tenant.slug)}/cancellations`
+    + (cancellationId ? `#cancellation-${encodeURIComponent(cancellationId)}` : "");
+  await notifyPortalUsers(memberships.map((membership) => membership.userId), { ...input, href }, session);
+}
+
+/** Client amendments are reviewed by the owning operator's admin and operations staff. */
+export async function notifyOperatorShipmentAmendmentReviewers(
+  input: Omit<NotificationInput, "href">,
+  session?: mongoose.ClientSession
+) {
+  const tenantContext = getTenantContext();
+  if (!tenantContext || tenantContext.kind !== "OPERATOR") {
+    throw new Error("Operator amendment notifications require an operator context.");
+  }
+
+  const [tenant, memberships] = await Promise.all([
+    Tenant.findById(tenantContext.tenantId).select("slug").lean().exec(),
+    TenantMembership.find({
+      tenantId: tenantContext.tenantId,
+      role: { $in: ["OPERATOR_ADMIN", "OPERATIONS"] },
+      status: "ACTIVE"
+    }).select("userId").session(session ?? null).lean().exec()
+  ]);
+  if (!tenant?.slug) throw new Error("The operator amendment notification has no tenant slug.");
+
+  const amendmentId = typeof input.metadata?.amendmentId === "string"
+    ? input.metadata.amendmentId
+    : "";
+  const href = `/portal/${encodeURIComponent(tenant.slug)}/amendments`
+    + (amendmentId ? `#amendment-${encodeURIComponent(amendmentId)}` : "");
+  await notifyPortalUsers(memberships.map((membership) => membership.userId), { ...input, href }, session);
+}
+
+/** Credit drift is visible to Swiftline admins or the owning operator's finance team. */
+export async function notifyCreditReconciliationAdmins(input: NotificationInput, session?: mongoose.ClientSession) {
+  const tenantContext = getTenantContext();
+  if (!tenantContext) throw new Error("Credit reconciliation notifications require an explicit tenant context.");
+  if (tenantContext.kind === "SWIFTLINE") {
+    await notifyActiveAdmins(input, session);
+    return;
+  }
+
+  const memberships = await TenantMembership.find({
+    tenantId: tenantContext.tenantId,
+    status: "ACTIVE",
+    role: { $in: ["OPERATOR_ADMIN", "FINANCE"] }
+  })
+    .select("userId")
+    .session(session ?? null)
+    .lean()
+    .exec();
+
+  await insertNotifications(memberships.map((membership) => membership.userId), input, session);
 }
 
 // Shipment floor news reaches the people who work the shipments, not just the

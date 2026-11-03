@@ -21,6 +21,7 @@ import { formatMinorRupees } from "../services/prepaid/dailyTopUpLimit.service.j
 import { notifyBusinessFinancialMembers } from "../services/portalNotification.service.js";
 import { operationsBranchIds } from "../middleware/operationsBranchAccess.middleware.js";
 import { CreditAgreementServiceError, signCreditAgreement } from "../services/creditAgreement.service.js";
+import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 
 const creditClientHref = "/client/credit#credit-summary";
 
@@ -198,7 +199,10 @@ export async function getAdminCreditAccount(request: Request, response: Response
   if (!businessAccountId) return response.status(404).json({ success: false, message: "Business account not found." });
   const business = await BusinessAccount.findById(businessAccountId).exec();
   if (!business) return response.status(404).json({ success: false, message: "Business account not found." });
-  const account = await ensureCreditAccount(businessAccountId);
+  const account = getOperatorContext(request)?.accessMode === "PLATFORM_SUPPORT"
+    ? await BusinessCreditAccount.findOne({ businessAccountId }).exec()
+    : await ensureCreditAccount(businessAccountId);
+  if (!account) return response.status(404).json({ success: false, message: "Credit account not found." });
   const history = await CreditLimitHistory.find({ businessAccountId }).sort({ changedAt: -1 }).limit(50).lean().exec();
   const summary = businessSummary(business);
   return response.status(200).json({
@@ -212,6 +216,8 @@ export async function getAdminCreditAccount(request: Request, response: Response
 }
 
 export async function approveAdminCreditAccount(request: Request, response: Response): Promise<Response> {
+  const operator = getOperatorContext(request);
+  const operatorApproval = operator?.accessMode === "MEMBER";
   const currentUserId = userId(request);
   const businessAccountId = accountId(request);
   if (!currentUserId) return response.status(401).json({ success: false, message: "Please sign in again." });
@@ -241,12 +247,28 @@ export async function approveAdminCreditAccount(request: Request, response: Resp
       if (account.status === "SUSPENDED") throw new Error("CREDIT_SUSPENDED_EDIT");
       const wasActive = account.status === "ACTIVE";
 
+      if (operatorApproval) {
+        const blockers = getCreditActivationBlockers({
+          businessStatus: business.status,
+          kycStatus: business.kycReview.overallStatus,
+          depositStatus: business.depositStatus,
+          securityDepositRequiredMinor: parsed.data.securityDepositRequiredMinor,
+          approvedCreditLimitMinor: parsed.data.approvedCreditLimitMinor,
+          validUntil
+        }, { requireAgreement: false });
+        if (blockers.length) throw new Error(`CREDIT_OPERATOR_ACTIVATION_BLOCKED:${blockers[0]}`);
+      }
+
       // Never let the approved limit drop below what is already committed.
       const usedCreditMinor = account.reservedCreditMinor + account.unbilledCreditMinor + account.invoicedOutstandingMinor;
       if (parsed.data.approvedCreditLimitMinor < usedCreditMinor) throw new Error("CREDIT_LIMIT_BELOW_USED");
 
       const previousLimitMinor = account.approvedCreditLimitMinor;
-      account.status = wasActive ? "ACTIVE" : "APPROVED";
+      account.status = operatorApproval || wasActive ? "ACTIVE" : "APPROVED";
+      if (operatorApproval && !wasActive) {
+        account.activatedBy = currentUserId;
+        account.activatedAt = new Date();
+      }
       account.approvedCreditLimitMinor = parsed.data.approvedCreditLimitMinor;
       account.paymentTermsDays = parsed.data.paymentTermsDays;
       account.billingCycle = parsed.data.billingCycle;
@@ -257,7 +279,10 @@ export async function approveAdminCreditAccount(request: Request, response: Resp
       account.creditWarningThresholdPercent = parsed.data.creditWarningThresholdPercent;
       account.securityDepositRequiredMinor = parsed.data.securityDepositRequiredMinor;
       account.riskCategory = parsed.data.riskCategory;
-      account.internalRemarks = parsed.data.internalRemarks;
+      // Operator reviews do not expose Swiftline's internal-remarks field.
+      // Preserve any existing value when the shared approval handler serves an
+      // operator member; Swiftline staff continue to save the submitted field.
+      if (!operatorApproval) account.internalRemarks = parsed.data.internalRemarks;
       account.reviewedBy = currentUserId;
       account.reviewedAt = new Date();
       account.holdReason = "";
@@ -286,6 +311,18 @@ export async function approveAdminCreditAccount(request: Request, response: Resp
         idempotencyKey: `CREDIT_APPROVAL:${String(account._id)}:${account.version}`,
         createdBy: currentUserId, metadata: { previousLimitMinor, reason: parsed.data.reason }, session
       });
+      if (operatorApproval && !wasActive) {
+        await appendCreditLedgerEntry({
+          account, type: "CREDIT_ACTIVATED", reference: `CREDIT-ACTIVATION-${account.version}`,
+          description: "Operator credit facility activated.", amountMinor: 0,
+          idempotencyKey: `CREDIT_ACTIVATION:${String(account._id)}:${account.version}`,
+          createdBy: currentUserId, session
+        });
+        await AuditLog.create([{
+          action: "CREDIT_ACCOUNT_ACTIVATED", entityType: "BUSINESS_CREDIT_ACCOUNT", entityId: account._id,
+          performedBy: currentUserId, performedAt: new Date(), metadata: { businessAccountId }
+        }], { session });
+      }
       result = { account: serializeCreditAccount(account), wasActive };
     });
     const stayedActive = result?.wasActive ?? false;
@@ -311,8 +348,10 @@ export async function approveAdminCreditAccount(request: Request, response: Resp
         title: stayedActive ? "Credit terms updated" : "Credit facility approved",
         message: stayedActive
           ? `Your credit facility now carries a limit of ${formatMinorRupees(result.account.approvedCreditLimitMinor)}.`
-          : `A credit limit of ${formatMinorRupees(result.account.approvedCreditLimitMinor)} was approved. Complete the remaining activation steps to start using it.`,
-        href: creditClientHref,
+          : operatorApproval
+            ? `Your credit facility is active with a limit of ${formatMinorRupees(result.account.approvedCreditLimitMinor)}.`
+            : `A credit limit of ${formatMinorRupees(result.account.approvedCreditLimitMinor)} was approved. Complete the remaining activation steps to start using it.`,
+        href: operatorApproval ? `/portal/${encodeURIComponent(operator!.slug)}/credit` : creditClientHref,
         idempotencyKey: `CREDIT_APPROVED:${result.account.id}:${result.account.version}`,
         metadata: { approvedCreditLimitMinor: result.account.approvedCreditLimitMinor }
       });
@@ -321,7 +360,9 @@ export async function approveAdminCreditAccount(request: Request, response: Resp
       success: true,
       message: stayedActive
         ? "Credit facility updated. It remains active with the new terms."
-        : "Credit facility approved. Activate it after all requirements are complete.",
+        : operatorApproval
+          ? "Credit facility approved and activated."
+          : "Credit facility approved. Activate it after all requirements are complete.",
       creditAccount: result?.account
     });
   } catch (error) {
@@ -330,6 +371,9 @@ export async function approveAdminCreditAccount(request: Request, response: Resp
       if (error.message === "CREDIT_CLOSED_IMMUTABLE") return response.status(409).json({ success: false, message: "A closed credit facility cannot be modified." });
       if (error.message === "CREDIT_SUSPENDED_EDIT") return response.status(409).json({ success: false, message: "Reactivate the credit facility before changing its terms." });
       if (error.message === "CREDIT_LIMIT_BELOW_USED") return response.status(409).json({ success: false, message: "Approved limit cannot be lower than the credit already in use. Collect payments first." });
+      if (error.message.startsWith("CREDIT_OPERATOR_ACTIVATION_BLOCKED:")) {
+        return response.status(409).json({ success: false, message: error.message.slice("CREDIT_OPERATOR_ACTIVATION_BLOCKED:".length) });
+      }
     }
     throw error;
   } finally { await session.endSession(); }

@@ -8,12 +8,14 @@ import { OperationsManifestConsignment } from "../models/operationsManifestConsi
 import { PickupRequestShipment } from "../models/pickupRequestShipment.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
+import { TenantMembership } from "../models/tenantMembership.model.js";
 import { User } from "../models/user.model.js";
 import {
   ShipmentDraft,
   type IShipmentDraft,
   type ShipmentDraftBookingState
 } from "../models/shipmentDraft.model.js";
+import { getTenantContext } from "./tenantScope.service.js";
 
 // Business-account seats, not portal roles. "operations" appears in both
 // vocabularies and means different things: here it is a client's own staff
@@ -183,7 +185,18 @@ export async function canModifyShipmentDraft(input: {
   if (input.portalRole === "admin") return true;
 
   if (input.portalRole === "operations") {
-    const branchIds = await assignedBranchIds(input.userId);
+    const tenant = getTenantContext();
+    const userId = String(input.userId);
+    const branchIds = tenant?.kind === "OPERATOR"
+      ? mongoose.Types.ObjectId.isValid(userId)
+        ? (await TenantMembership.findOne({
+          tenantId: tenant.tenantId,
+          userId: new mongoose.Types.ObjectId(userId),
+          status: "ACTIVE",
+          role: "OPERATIONS"
+        }).select("assignedBranches").lean().exec())?.assignedBranches.map(String) ?? []
+        : []
+      : await assignedBranchIds(input.userId);
     return branchIds.includes(String(input.draft.branchId));
   }
 

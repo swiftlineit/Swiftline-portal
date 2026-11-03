@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { isMinorUnitInteger } from "./financialTypes.js";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const creditPaymentMethodValues = [
   "RAZORPAY", "BANK_TRANSFER", "UPI", "CASH", "CHEQUE"
@@ -24,7 +25,7 @@ export type CreditPaymentStatementAllocation = {
   invoiceAllocations: CreditPaymentInvoiceAllocation[];
 };
 
-export interface ICreditPayment extends mongoose.Document {
+export interface ICreditPayment extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   creditAccountId: mongoose.Types.ObjectId;
   requestedStatementId?: mongoose.Types.ObjectId | null;
@@ -77,8 +78,8 @@ const creditPaymentSchema = new mongoose.Schema<ICreditPayment>({
   currency: { type: String, enum: ["INR"], required: true, default: "INR" },
   method: { type: String, enum: creditPaymentMethodValues, required: true, index: true },
   status: { type: String, enum: creditPaymentStatusValues, required: true, index: true },
-  internalReference: { type: String, required: true, unique: true, trim: true, maxlength: 120 },
-  idempotencyKey: { type: String, required: true, unique: true, trim: true, maxlength: 240 },
+  internalReference: { type: String, required: true, trim: true, maxlength: 120 },
+  idempotencyKey: { type: String, required: true, trim: true, maxlength: 240 },
   externalReference: { type: String, trim: true, maxlength: 160, default: "" },
   notes: { type: String, trim: true, maxlength: 500, default: "" },
   razorpayOrderId: { type: String, trim: true, maxlength: 120, default: "" },
@@ -101,9 +102,23 @@ creditPaymentSchema.index(
   { unique: true, partialFilterExpression: { razorpayPaymentId: { $type: "string", $gt: "" } } }
 );
 creditPaymentSchema.index(
-  { businessAccountId: 1, method: 1, externalReference: 1 },
-  { unique: true, partialFilterExpression: { externalReference: { $type: "string", $gt: "" } } }
+  { tenantId: 1, internalReference: 1 },
+  { unique: true, name: "uniq_tenant_credit_payment_internal_reference" }
+);
+creditPaymentSchema.index(
+  { tenantId: 1, idempotencyKey: 1 },
+  { unique: true, name: "uniq_tenant_credit_payment_idempotency" }
+);
+creditPaymentSchema.index(
+  { tenantId: 1, businessAccountId: 1, method: 1, externalReference: 1 },
+  {
+    unique: true,
+    name: "uniq_tenant_credit_payment_external_reference",
+    partialFilterExpression: { externalReference: { $type: "string", $gt: "" } }
+  }
 );
 creditPaymentSchema.index({ businessAccountId: 1, createdAt: -1 });
+
+addTenantOwnership(creditPaymentSchema);
 
 export const CreditPayment = mongoose.model<ICreditPayment>("CreditPayment", creditPaymentSchema);

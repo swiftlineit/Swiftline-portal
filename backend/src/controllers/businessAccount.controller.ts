@@ -31,7 +31,7 @@ import {
   putObject,
   streamObjectToResponse
 } from "../services/storage/storage.service.js";
-import { notifyActiveAdmins, notifyBusinessAccountManagers } from "../services/portalNotification.service.js";
+import { notifyActiveAdmins, notifyBusinessAccountManagers, notifyOperatorAccountReviewers } from "../services/portalNotification.service.js";
 import {
   BUSINESS_ACCOUNT_CREDIT_LIMIT_MAX,
   compactRegistrationId,
@@ -74,6 +74,8 @@ import { isValidStateForCountry } from "../services/reference/geography.service.
 
 const idempotencyScope = "business-account-create";
 import { getCountryCodeByName } from "../services/reference/portalCountries.js";
+import { getTenantIdForWrite } from "../services/tenantScope.service.js";
+import { getTenantContext } from "../services/tenantScope.service.js";
 
 const shipmentTypeSchema = z.enum(["international_cargo", "international_courier"]);
 const companyTypeSchema = z.enum(["pvt_ltd", "llp", "enterprise", "proprietorship"]).or(z.literal(""));
@@ -104,6 +106,31 @@ const businessAccountOperationalActionSchema = z.enum([
   "deposit_received",
   "ledger_viewed"
 ]);
+const operatorNoCompanyBillingAddressSchema = z.object({
+  addressLine1: z.string().trim().min(1, "Billing address is required.").max(500),
+  addressLine2: z.string().trim().max(200).optional().default(""),
+  city: z.string().trim().min(1, "Billing city is required.").max(80),
+  stateOrProvince: z.string().trim().min(1, "Billing state or province is required.").max(80),
+  postalCode: z.string().trim().min(1, "Billing postal code is required.").max(20),
+  country: z.string().trim().min(1, "Billing country is required.").max(80)
+}).superRefine((address, context) => {
+  if (!isValidPostalCodeForCountry(address.country, address.postalCode)) {
+    context.addIssue({
+      code: "custom",
+      path: ["postalCode"],
+      message: getPostalCodeValidationMessage(address.country)
+    });
+  }
+
+  const countryCode = getCountryCodeByName(address.country);
+  if (countryCode && !isValidStateForCountry(countryCode, address.stateOrProvince)) {
+    context.addIssue({
+      code: "custom",
+      path: ["stateOrProvince"],
+      message: `Select a valid state or province for ${address.country}.`
+    });
+  }
+});
 const businessKycCheckKeySchema = z.enum([
   "contactDetails",
   "companyDetails",
@@ -365,40 +392,43 @@ const businessAccountBodySchema = z.object({
       });
     }
 
-    // A separate billing address has to be as complete as the company one, or
-    // invoices go somewhere unusable.
-    if (!data.company.useCompanyAddressAsBillingAddress) {
-      const billing = data.company.billingAddress;
-      const requiredBillingFields: [keyof typeof billing, string][] = [
-        ["addressLine1", "Billing address is required"],
-        ["city", "Billing city is required"],
-        ["stateOrProvince", "Billing state or province is required"],
-        ["postalCode", "Billing postal code is required"],
-        ["country", "Billing country is required"]
-      ];
+  }
 
-      for (const [field, message] of requiredBillingFields) {
-        if (!String(billing[field] ?? "").trim()) {
-          context.addIssue({ code: "custom", path: ["company", "billingAddress", field], message });
-        }
-      }
+  // Operator no-company accounts have no registered company address to use on
+  // their invoices, so their account must carry a separate billing address.
+  // Swiftline's existing no-company flow remains unchanged.
+  const operatorNoCompany = noCompany && getTenantContext()?.kind === "OPERATOR";
+  if ((!noCompany && !data.company.useCompanyAddressAsBillingAddress) || operatorNoCompany) {
+    const billing = data.company.billingAddress;
+    const requiredBillingFields: [keyof typeof billing, string][] = [
+      ["addressLine1", "Billing address is required"],
+      ["city", "Billing city is required"],
+      ["stateOrProvince", "Billing state or province is required"],
+      ["postalCode", "Billing postal code is required"],
+      ["country", "Billing country is required"]
+    ];
 
-      if (billing.postalCode.trim() && billing.country.trim() && !isValidPostalCodeForCountry(billing.country, billing.postalCode)) {
-        context.addIssue({
-          code: "custom",
-          path: ["company", "billingAddress", "postalCode"],
-          message: getPostalCodeValidationMessage(billing.country)
-        });
+    for (const [field, message] of requiredBillingFields) {
+      if (!String(billing[field] ?? "").trim()) {
+        context.addIssue({ code: "custom", path: ["company", "billingAddress", field], message });
       }
+    }
 
-      const billingCountryCode = getCountryCodeByName(billing.country);
-      if (billingCountryCode && billing.stateOrProvince.trim() && !isValidStateForCountry(billingCountryCode, billing.stateOrProvince)) {
-        context.addIssue({
-          code: "custom",
-          path: ["company", "billingAddress", "stateOrProvince"],
-          message: `Select a valid state or province for ${billing.country}.`
-        });
-      }
+    if (billing.postalCode.trim() && billing.country.trim() && !isValidPostalCodeForCountry(billing.country, billing.postalCode)) {
+      context.addIssue({
+        code: "custom",
+        path: ["company", "billingAddress", "postalCode"],
+        message: getPostalCodeValidationMessage(billing.country)
+      });
+    }
+
+    const billingCountryCode = getCountryCodeByName(billing.country);
+    if (billingCountryCode && billing.stateOrProvince.trim() && !isValidStateForCountry(billingCountryCode, billing.stateOrProvince)) {
+      context.addIssue({
+        code: "custom",
+        path: ["company", "billingAddress", "stateOrProvince"],
+        message: `Select a valid state or province for ${billing.country}.`
+      });
     }
   }
 });
@@ -484,6 +514,21 @@ export const businessAccountStatusTransitions: Record<BusinessAccountStatus, Bus
   suspended: ["active"],
   rejected: []
 };
+
+export function canTransitionBusinessAccountStatus(
+  currentStatus: BusinessAccountStatus,
+  targetStatus: BusinessAccountStatus,
+  tenantKind: "SWIFTLINE" | "OPERATOR" | undefined = getTenantContext()?.kind
+): boolean {
+  if (currentStatus === targetStatus || businessAccountStatusTransitions[currentStatus].includes(targetStatus)) {
+    return true;
+  }
+
+  // Operator accounts are bookable immediately after approval, so let their
+  // administrator suspend one directly. Swiftline keeps its existing state
+  // machine; reactivation follows the normal suspended -> active transition.
+  return tenantKind === "OPERATOR" && currentStatus === "approved" && targetStatus === "suspended";
+}
 
 // Statuses that may only be reached once the KYC review is fully verified.
 export const kycGatedStatuses: BusinessAccountStatus[] = ["approved", "active"];
@@ -723,6 +768,10 @@ function buildAccountPayload(data: BusinessAccountBody, existingEncryptedRegistr
   });
 
   const registrationStorage = resolveRegistrationIdStorage(data.company, existingEncryptedRegistrationId);
+  const operatorNoCompany = getTenantContext()?.kind === "OPERATOR" && data.company.noCompany;
+  const useCompanyAddressAsBillingAddress = operatorNoCompany
+    ? false
+    : data.company.useCompanyAddressAsBillingAddress;
 
   return {
     contact: data.contact,
@@ -754,10 +803,10 @@ function buildAccountPayload(data: BusinessAccountBody, existingEncryptedRegistr
       stateOrProvince: data.company.stateOrProvince,
       postalCode: data.company.postalCode,
       addressCountry: data.company.addressCountry,
-      useCompanyAddressAsBillingAddress: data.company.useCompanyAddressAsBillingAddress,
+      useCompanyAddressAsBillingAddress,
       // Cleared when the company address is reused, so re-ticking the box cannot
       // leave a stale billing address behind on the record.
-      billingAddress: data.company.useCompanyAddressAsBillingAddress ? null : data.company.billingAddress,
+      billingAddress: useCompanyAddressAsBillingAddress ? null : data.company.billingAddress,
       operatingCountries: data.company.operatingCountries,
       website: data.company.website || null,
       industry: data.company.industry,
@@ -851,10 +900,10 @@ function generateAccountId(): string {
 // Insert the account with a freshly generated ID, retrying only when the random
 // suffix collides with an existing accountId. The retry is on the insert itself,
 // so a concurrent create racing on the same suffix no longer surfaces as a 500.
-async function createBusinessAccountRecord(basePayload: Record<string, unknown>) {
+async function createBusinessAccountRecord(basePayload: Record<string, unknown>, tenantId: mongoose.Types.ObjectId) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      return await BusinessAccount.create({ accountId: generateAccountId(), ...basePayload });
+      return await BusinessAccount.create({ ...basePayload, tenantId, accountId: generateAccountId() });
     } catch (error) {
       const collidedOnAccountId = isDuplicateKeyError(error)
         && Boolean((error as { keyPattern?: Record<string, unknown> }).keyPattern?.accountId);
@@ -1291,6 +1340,31 @@ export async function listBusinessAccounts(request: Request, response: Response)
 }
 
 export async function createBusinessAccount(request: Request, response: Response): Promise<Response> {
+  const operatorSlug = typeof request.params.operatorSlug === "string" ? request.params.operatorSlug : null;
+  const tenantContext = getTenantContext();
+  if (operatorSlug) {
+    const operatorContext = (request as Request & {
+      operatorContext?: { tenantId?: unknown; slug?: string };
+    }).operatorContext;
+    const tenantMatchesRequest = Boolean(
+      operatorContext
+      && operatorContext.slug === operatorSlug
+      && tenantContext?.kind === "OPERATOR"
+      && String(tenantContext.tenantId) === String(operatorContext.tenantId)
+    );
+    if (!tenantMatchesRequest) {
+      return response.status(403).json({
+        success: false,
+        message: "Operator workspace access could not be verified."
+      });
+    }
+  }
+
+  // Capture ownership before multipart uploads or other asynchronous work. If
+  // tenant context is lost later in the request, the record still carries
+  // this verified owner and the model guard can reject a conflicting context.
+  const tenantId = tenantContext?.tenantId ?? await getTenantIdForWrite();
+
   // Uploads arrive as in-memory buffers, so every rejection below can return
   // without cleanup: nothing has been stored yet.
   const files = getUploadedFiles(request);
@@ -1350,7 +1424,7 @@ export async function createBusinessAccount(request: Request, response: Response
       documents,
       createdBy: userId,
       updatedBy: userId
-    });
+    }, tenantId);
 
     if (idempotencyKey) {
       // Best effort: a lost race here only means a retry could create a second
@@ -1506,6 +1580,56 @@ export async function updateBusinessAccount(request: Request, response: Response
   return response.status(200).json({ success: true, account: updatedAccount ?? account });
 }
 
+export async function updateOperatorNoCompanyBillingAddress(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  if (getTenantContext()?.kind !== "OPERATOR") {
+    return response.status(403).json({ success: false, message: "Operator workspace access is required." });
+  }
+
+  const body = request.body && typeof request.body === "object"
+    ? request.body as { billingAddress?: unknown }
+    : {};
+  const parsed = operatorNoCompanyBillingAddressSchema.safeParse(body.billingAddress);
+  if (!parsed.success) {
+    return response.status(400).json({
+      success: false,
+      message: "Enter a complete billing address.",
+      errors: parsed.error.format()
+    });
+  }
+
+  const account = await BusinessAccount.findOne({ accountId: request.params.accountId }).exec();
+  if (!account) return response.status(404).json({ success: false, message: "Business account not found" });
+  if (!account.company.noCompany) {
+    return response.status(409).json({
+      success: false,
+      message: "A separate billing address can only be edited here for a no-company account."
+    });
+  }
+
+  const hadBillingAddress = Boolean(account.company.billingAddress?.addressLine1?.trim());
+  const reusedCompanyAddress = account.company.useCompanyAddressAsBillingAddress;
+  account.company.billingAddress = parsed.data;
+  account.company.useCompanyAddressAsBillingAddress = false;
+  account.updatedBy = userId;
+  await account.save();
+
+  await recordBusinessAccountAudit("BUSINESS_ACCOUNT_UPDATED", account, userId, {
+    "company.billingAddress": {
+      from: hadBillingAddress ? "[existing address]" : "[not set]",
+      to: "[updated address]"
+    },
+    "company.useCompanyAddressAsBillingAddress": {
+      from: Boolean(reusedCompanyAddress),
+      to: false
+    }
+  });
+
+  const updatedAccount = await getPopulatedBusinessAccount(account.accountId);
+  return response.status(200).json({ success: true, account: updatedAccount ?? account });
+}
+
 export async function submitBusinessAccount(request: Request, response: Response): Promise<Response> {
   const userId = getAuthenticatedUserId(request);
   if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
@@ -1557,15 +1681,28 @@ export async function submitBusinessAccount(request: Request, response: Response
 
   await recordBusinessAccountAudit("BUSINESS_ACCOUNT_SUBMITTED", account, userId);
 
-  await notifyActiveAdmins({
-    type: "BUSINESS_ACCOUNT_SUBMITTED",
-    title: "Business account submitted for review",
-    message: `${account.company.companyName || account.accountId} submitted its onboarding documents for KYC review.`,
-    href: `/dashboard/business-accounts/${account.accountId}#kyc`,
-    idempotencyKey: `BUSINESS_ACCOUNT_SUBMITTED:${String(account._id)}:${account.submittedAt.getTime()}`,
-    businessAccountId: account._id as mongoose.Types.ObjectId,
-    metadata: { accountId: account.accountId }
-  });
+  const tenantContext = getTenantContext();
+  if (tenantContext?.kind === "OPERATOR") {
+    await notifyOperatorAccountReviewers({
+      type: "BUSINESS_ACCOUNT_SUBMITTED",
+      title: "Client business account submitted",
+      message: `${account.company.companyName || account.accountId} is ready for local KYC review.`,
+      href: `/portal/${encodeURIComponent(String(request.params.operatorSlug ?? ""))}/business-accounts/${encodeURIComponent(account.accountId)}`,
+      idempotencyKey: `BUSINESS_ACCOUNT_SUBMITTED:${String(account._id)}:${account.submittedAt.getTime()}`,
+      businessAccountId: account._id as mongoose.Types.ObjectId,
+      metadata: { accountId: account.accountId }
+    });
+  } else {
+    await notifyActiveAdmins({
+      type: "BUSINESS_ACCOUNT_SUBMITTED",
+      title: "Business account submitted for review",
+      message: `${account.company.companyName || account.accountId} submitted its onboarding documents for KYC review.`,
+      href: `/dashboard/business-accounts/${account.accountId}#kyc`,
+      idempotencyKey: `BUSINESS_ACCOUNT_SUBMITTED:${String(account._id)}:${account.submittedAt.getTime()}`,
+      businessAccountId: account._id as mongoose.Types.ObjectId,
+      metadata: { accountId: account.accountId }
+    });
+  }
 
   const updatedAccount = await getPopulatedBusinessAccount(account.accountId);
 
@@ -1593,7 +1730,7 @@ export async function updateBusinessAccountStatus(request: Request, response: Re
 
   // Enforce the lifecycle state machine. Re-applying the current status is a
   // harmless no-op; any transition not defined in the map is rejected.
-  if (targetStatus !== currentStatus && !businessAccountStatusTransitions[currentStatus].includes(targetStatus)) {
+  if (!canTransitionBusinessAccountStatus(currentStatus, targetStatus)) {
     return response.status(409).json({
       success: false,
       message: `Cannot change status from ${formatStatusLabel(currentStatus)} to ${formatStatusLabel(targetStatus)}.`
@@ -1635,12 +1772,27 @@ export async function updateBusinessAccountStatus(request: Request, response: Re
   // Only lifecycle decisions the client can act on are worth a notification;
   // moving an account back to draft or into review is internal housekeeping.
   if (targetStatus !== currentStatus && clientVisibleStatusNotices[targetStatus]) {
+    const operatorContext = getTenantContext();
+    const operatorSlug = typeof request.params.operatorSlug === "string" ? request.params.operatorSlug : "";
     const notice = clientVisibleStatusNotices[targetStatus];
+    const operatorNotice = operatorContext?.kind === "OPERATOR"
+      ? {
+          title: targetStatus === "approved" ? "Business account approved" : notice.title,
+          message: targetStatus === "approved"
+            ? "Your business account has been approved by its operator."
+            : targetStatus === "rejected"
+              ? "Your business account was not approved. Contact your operator for details."
+              : "Your business account status has changed."
+        }
+      : null;
+    const activeNotice = operatorNotice ?? notice;
     await notifyBusinessAccountManagers(account._id as mongoose.Types.ObjectId, {
       type: "BUSINESS_ACCOUNT_STATUS_CHANGED",
-      title: notice.title,
-      message: notice.message,
-      href: "/client/dashboard#business-accounts",
+      title: activeNotice.title,
+      message: activeNotice.message,
+      href: operatorContext?.kind === "OPERATOR"
+        ? `/portal/${encodeURIComponent(operatorSlug)}/business-accounts/${encodeURIComponent(account.accountId)}`
+        : "/client/dashboard#business-accounts",
       idempotencyKey: `BUSINESS_ACCOUNT_STATUS:${String(account._id)}:${targetStatus}:${account.updatedAt.getTime()}`,
       metadata: { accountId: account.accountId, fromStatus: currentStatus, toStatus: targetStatus }
     });
@@ -1654,7 +1806,7 @@ export async function updateBusinessAccountStatus(request: Request, response: Re
         recipients: [{ email: account.contact.email.toLowerCase(), name: applicantName, userId: null }],
         businessAccountId: account._id as mongoose.Types.ObjectId,
         subject: notice.title,
-        payload: { title: notice.title, message: notice.message, href: "/request/business-account", accountId: account.accountId }
+        payload: { title: activeNotice.title, message: activeNotice.message, href: operatorContext?.kind === "OPERATOR" ? `/portal/${encodeURIComponent(operatorSlug)}` : "/request/business-account", accountId: account.accountId }
       }).catch(() => undefined);
     }
   }
@@ -1865,13 +2017,21 @@ export async function updateBusinessAccountKycReview(request: Request, response:
 
   if (reviewedAccount) {
     const verified = reviewedAccount.kycReview.overallStatus === "verified";
+    const operatorContext = getTenantContext();
+    const operatorSlug = typeof request.params.operatorSlug === "string" ? request.params.operatorSlug : "";
     await notifyBusinessAccountManagers(reviewedAccount._id as mongoose.Types.ObjectId, {
       type: "BUSINESS_ACCOUNT_KYC_REVIEWED",
       title: verified ? "KYC verified" : "KYC rejected",
-      message: verified
-        ? "Your KYC documents have been verified by Swiftline."
-        : "One or more KYC documents were rejected. Re-upload the corrected documents to continue.",
-      href: "/client/dashboard#business-accounts",
+      message: operatorContext?.kind === "OPERATOR"
+        ? verified
+          ? "Your KYC documents have been verified by your operator."
+          : "One or more KYC documents need correction. Contact your operator for next steps."
+        : verified
+          ? "Your KYC documents have been verified by Swiftline."
+          : "One or more KYC documents were rejected. Re-upload the corrected documents to continue.",
+      href: operatorContext?.kind === "OPERATOR"
+        ? `/portal/${encodeURIComponent(operatorSlug)}/business-accounts/${encodeURIComponent(reviewedAccount.accountId)}`
+        : "/client/dashboard#business-accounts",
       idempotencyKey: `BUSINESS_ACCOUNT_KYC:${String(reviewedAccount._id)}:${reviewedAccount.kycReview.overallStatus}:${reviewedAccount.updatedAt.getTime()}`,
       metadata: { accountId: reviewedAccount.accountId, overallStatus: reviewedAccount.kycReview.overallStatus }
     });

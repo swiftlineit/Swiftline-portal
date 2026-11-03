@@ -10,6 +10,7 @@ import { carrierShipmentSourceIdentity } from "./shipmentSourceIdentity.service.
  * invoices and manifests, and the printed label.
  */
 export const SWIFTLINE_SERVICE_CODE = "EXPRESS WORLDWIDE";
+export const OPERATOR_INTERNAL_SERVICE_CODE = "INTERNAL SHIPMENT";
 
 const supportedShipmentContentTypes = new Set([
   "DOCUMENTS", "PARCEL", "MERCHANDISE", "SAMPLES", "GIFTS", "RETURNS", "OTHER"
@@ -58,14 +59,17 @@ function getConsigneeAddress(draft: IShipmentDraft): ShipmentAddressSnapshot {
  * Built from the validated consignee address when one exists, so a booking
  * records the address that was actually checked rather than what was typed.
  */
-export function buildShipmentPayload(draft: IShipmentDraft): ShipmentPayload {
+export function buildShipmentPayload(
+  draft: IShipmentDraft,
+  serviceCode = SWIFTLINE_SERVICE_CODE
+): ShipmentPayload {
   const address = getConsigneeAddress(draft);
   const firstParcel = draft.parcelList[0];
   const customerReference = firstParcel?.shipmentReference1?.trim() || undefined;
   const sourceIdentity = carrierShipmentSourceIdentity(draft);
 
   return {
-    serviceCode: SWIFTLINE_SERVICE_CODE,
+    serviceCode,
     references: {
       invoiceNumber: sourceIdentity.invoiceNumber,
       shipmentReference: sourceIdentity.shipmentReference,

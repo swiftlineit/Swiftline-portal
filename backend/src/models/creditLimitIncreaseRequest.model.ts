@@ -1,10 +1,11 @@
 import mongoose from "mongoose";
 import { isMinorUnitInteger, maxCreditLimitMinor } from "./financialTypes.js";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const creditLimitIncreaseStatusValues = ["PENDING", "APPROVED", "REJECTED", "WITHDRAWN"] as const;
 export type CreditLimitIncreaseStatus = (typeof creditLimitIncreaseStatusValues)[number];
 
-export interface ICreditLimitIncreaseRequest extends mongoose.Document {
+export interface ICreditLimitIncreaseRequest extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   creditAccountId: mongoose.Types.ObjectId;
   /** The approved limit at the moment of asking, so a later change is visible. */
@@ -68,9 +69,15 @@ const creditLimitIncreaseRequestSchema = new mongoose.Schema<ICreditLimitIncreas
 // One open request per business at a time. Partial, so decided requests accumulate
 // as history rather than blocking the next ask.
 creditLimitIncreaseRequestSchema.index(
-  { businessAccountId: 1 },
-  { unique: true, partialFilterExpression: { status: "PENDING" } }
+  { tenantId: 1, businessAccountId: 1 },
+  {
+    unique: true,
+    name: "uniq_tenant_pending_credit_limit_request_business",
+    partialFilterExpression: { status: "PENDING" }
+  }
 );
+
+addTenantOwnership(creditLimitIncreaseRequestSchema);
 
 export const CreditLimitIncreaseRequest = mongoose.model<ICreditLimitIncreaseRequest>(
   "CreditLimitIncreaseRequest",

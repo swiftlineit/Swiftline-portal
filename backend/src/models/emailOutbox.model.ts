@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const emailOutboxStatusValues = [
   "PENDING",
@@ -42,7 +43,7 @@ export interface IEmailAttachmentRef {
   filename?: string;
 }
 
-export interface IEmailOutbox extends mongoose.Document {
+export interface IEmailOutbox extends mongoose.Document, TenantOwnedFields {
   idempotencyKey: string;
   recipientUserId?: mongoose.Types.ObjectId | null;
   toEmail: string;
@@ -81,7 +82,7 @@ const emailOutboxSchema = new mongoose.Schema<IEmailOutbox>(
   {
     // `${notificationKey}:${userId}:email`. The single guard against a double
     // send across job reruns, retries and concurrent drain workers.
-    idempotencyKey: { type: String, required: true, unique: true, trim: true, maxlength: 400 },
+    idempotencyKey: { type: String, required: true, trim: true, maxlength: 400 },
     recipientUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
     // Resolved at enqueue time. If the user later changes their address we still
     // deliver to the address the event was raised against.
@@ -103,7 +104,7 @@ const emailOutboxSchema = new mongoose.Schema<IEmailOutbox>(
     nextAttemptAt: { type: Date, default: Date.now },
     lastError: { type: String, trim: true, maxlength: 1000, default: "" },
     // Correlates the SNS delivery/bounce/complaint events back to this row.
-    sesMessageId: { type: String, trim: true, maxlength: 200, default: "", index: true },
+    sesMessageId: { type: String, trim: true, maxlength: 200, default: "" },
     // Set when a drain worker claims the row; lets a later sweep reclaim rows
     // abandoned by a worker that crashed mid-send.
     lockedAt: { type: Date, default: null },
@@ -112,9 +113,26 @@ const emailOutboxSchema = new mongoose.Schema<IEmailOutbox>(
   { timestamps: true }
 );
 
-// The drain worker's claim query.
-emailOutboxSchema.index({ status: 1, nextAttemptAt: 1, priority: -1 });
-emailOutboxSchema.index({ businessAccountId: 1, createdAt: -1 });
-emailOutboxSchema.index({ toEmail: 1, createdAt: -1 });
+addTenantOwnership(emailOutboxSchema);
+
+emailOutboxSchema.index(
+  { tenantId: 1, idempotencyKey: 1 },
+  { unique: true, name: "tenant_email_outbox_idempotency_unique" }
+);
+// The drain worker's tenant-scoped claim query.
+emailOutboxSchema.index(
+  { tenantId: 1, status: 1, nextAttemptAt: 1, priority: -1 },
+  { name: "tenant_email_outbox_drain" }
+);
+emailOutboxSchema.index(
+  { tenantId: 1, businessAccountId: 1, createdAt: -1 },
+  { name: "tenant_email_outbox_business_account" }
+);
+emailOutboxSchema.index(
+  { tenantId: 1, toEmail: 1, createdAt: -1 },
+  { name: "tenant_email_outbox_recipient" }
+);
+// SES callbacks discover an owner's tenant from the transport's global message ID.
+emailOutboxSchema.index({ sesMessageId: 1 }, { name: "email_outbox_ses_message_id" });
 
 export const EmailOutbox = mongoose.model<IEmailOutbox>("EmailOutbox", emailOutboxSchema);

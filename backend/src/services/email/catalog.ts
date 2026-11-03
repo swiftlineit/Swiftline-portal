@@ -19,6 +19,7 @@ type CatalogEntry = {
 const catalog: Record<string, CatalogEntry> = {
   // Shipment lifecycle
   SHIPMENT_BOOKED: { category: "TRANSACTIONAL", priority: 85 },
+  OPERATOR_CONTACT_QUERY_SUBMITTED: { category: "TRANSACTIONAL", priority: 70 },
   SHIPMENT_MANIFEST_GENERATED: { category: "OPERATIONAL", priority: 40 },
   SHIPMENT_CHARGE_VERIFIED: { category: "OPERATIONAL", priority: 50 },
   // Staff-facing: a held shipment cannot move until someone looks at this.
@@ -123,6 +124,7 @@ const catalog: Record<string, CatalogEntry> = {
 
   // Account and access mail, raised directly rather than through a notification
   CLIENT_INVITATION: { category: "TRANSACTIONAL", priority: 95 },
+  OPERATOR_INVITATION: { category: "TRANSACTIONAL", priority: 95 },
   PASSWORD_RESET: { category: "TRANSACTIONAL", priority: 95 },
   // Highest priority in the catalogue: someone is sitting on the sign-in screen
   // watching a countdown, so this must overtake every queued invoice and digest.

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import { roleValues, type Role } from "./user.model.js";
 
 export type ShipmentManifestActorRole = "admin" | "client";
@@ -54,7 +55,7 @@ export interface ShipmentManifestParcelSnapshot {
   product: string;
 }
 
-export interface IShipmentManifest extends mongoose.Document {
+export interface IShipmentManifest extends mongoose.Document, TenantOwnedFields {
   manifestNumber: string;
   manifestType: ShipmentManifestType;
   /** Primary account for an account-specific manifest; absent on combined manifests. */
@@ -118,7 +119,7 @@ const shipmentManifestSchema = new mongoose.Schema<IShipmentManifest>({
   // Single-word business accounts retain their full name as a lowercase prefix.
   // Existing manifest numbers are unchanged; the larger limit accommodates a
   // maximum-length company name plus its sequence suffix.
-  manifestNumber: { type: String, required: true, unique: true, index: true, trim: true, maxlength: 140 },
+  manifestNumber: { type: String, required: true, trim: true, maxlength: 140 },
   manifestType: { type: String, enum: ["ACCOUNT", "COMBINED"], default: "ACCOUNT", index: true },
   businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", index: true },
   businessAccountIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount" }],
@@ -139,9 +140,15 @@ shipmentManifestSchema.index({ businessAccountId: 1, branchId: 1, generatedAt: -
 shipmentManifestSchema.index({ businessAccountIds: 1, generatedAt: -1 });
 shipmentManifestSchema.index({ "lineSnapshots.shipmentDraftId": 1, generatedAt: -1 });
 shipmentManifestSchema.index(
-  { shipmentDraftIds: 1, actorRole: 1, manifestType: 1 },
-  { unique: true, name: "shipmentDraftIds_1_actorRole_1_manifestType_1" }
+  { tenantId: 1, manifestNumber: 1 },
+  { unique: true, name: "tenant_manifest_number_unique" }
 );
+shipmentManifestSchema.index(
+  { tenantId: 1, shipmentDraftIds: 1, actorRole: 1, manifestType: 1 },
+  { unique: true, name: "tenant_manifest_shipment_draft_actor_type_unique" }
+);
+
+addTenantOwnership(shipmentManifestSchema);
 
 export const ShipmentManifest = mongoose.model<IShipmentManifest>(
   "ShipmentManifest",

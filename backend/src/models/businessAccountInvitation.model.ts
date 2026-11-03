@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
-export interface IBusinessAccountInvitation extends mongoose.Document {
+export interface IBusinessAccountInvitation extends mongoose.Document, TenantOwnedFields {
   user: mongoose.Types.ObjectId;
   businessAccount: mongoose.Types.ObjectId;
   member: mongoose.Types.ObjectId;
@@ -28,6 +29,8 @@ const businessAccountInvitationSchema = new mongoose.Schema<IBusinessAccountInvi
 );
 
 businessAccountInvitationSchema.index({ businessAccount: 1, user: 1, acceptedAt: 1, revokedAt: 1 });
+
+addTenantOwnership(businessAccountInvitationSchema);
 
 export const BusinessAccountInvitation = mongoose.model<IBusinessAccountInvitation>(
   "BusinessAccountInvitation",

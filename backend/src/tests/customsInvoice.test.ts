@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import ExcelJS from "exceljs";
 import {
@@ -7,7 +8,10 @@ import {
 } from "../services/customsInvoice/customsInvoiceModel.service.js";
 import { customsInvoiceFooterNote } from "../services/customsInvoice/customsInvoiceConstants.js";
 import { buildCustomsInvoiceWorkbook } from "../services/customsInvoice/customsInvoiceWorkbook.service.js";
-import { renderCustomsInvoicePdfBuffer } from "../services/customsInvoice/customsInvoicePdf.service.js";
+import {
+  customsInvoiceIssuerName,
+  renderCustomsInvoicePdfBuffer
+} from "../services/customsInvoice/customsInvoicePdf.service.js";
 import { customsInvoiceFileName } from "../services/customsInvoice/customsInvoice.service.js";
 import { getDeclaredGoodsValue, getParcelItemAmount } from "../services/parcelItems.service.js";
 
@@ -155,6 +159,11 @@ describe("customs invoice model", () => {
 });
 
 describe("customs invoice documents", () => {
+  test("uses the operator company as the invoice issuer while keeping the Swiftline default", () => {
+    assert.equal(customsInvoiceIssuerName({ ...build(), issuerName: "Northstar Cargo" }), "Northstar Cargo");
+    assert.equal(customsInvoiceIssuerName(build()), "Swiftline Cargo and Express Logistics Pvt. Ltd.");
+  });
+
   test("names downloads with the shipment AWB and consignee, for both formats", () => {
     const invoice = build();
     invoice.swiftlineTrackingNumber = "SLC/DEL 123";
@@ -170,11 +179,26 @@ describe("customs invoice documents", () => {
     assert.equal(buffer.subarray(0, 4).toString(), "%PDF");
   });
 
+  test("embeds an operator logo in the shipment invoice PDF", async () => {
+    const logo = readFileSync(new URL("../../assets/swiftline-label-logo.png", import.meta.url));
+    const buffer = await renderCustomsInvoicePdfBuffer({ ...build(), issuerName: "Northstar Cargo" }, logo);
+    assert.ok(buffer.length > 500);
+    assert.equal(buffer.subarray(0, 4).toString(), "%PDF");
+    assert.ok(buffer.includes(Buffer.from("/Subtype /Image")));
+  });
+
   test("produces an .xlsx workbook", async () => {
     const buffer = await buildCustomsInvoiceWorkbook(build());
     assert.ok(buffer.length > 500, `expected a non-trivial workbook, got ${buffer.length} bytes`);
     // XLSX files are ZIP archives, which always start "PK".
     assert.equal(buffer.subarray(0, 2).toString(), "PK");
+  });
+
+  test("uses the operator company as workbook creator", async () => {
+    const buffer = await buildCustomsInvoiceWorkbook({ ...build(), issuerName: "Northstar Cargo" });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as never);
+    assert.equal(workbook.creator, "Northstar Cargo");
   });
 
   test("the workbook carries borders, merges and column widths", async () => {

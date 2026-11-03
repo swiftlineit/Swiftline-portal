@@ -167,7 +167,13 @@ function serializeBranches(branches: BranchSummary[]) {
   }));
 }
 
-function serializeAccount(account: IBusinessAccount, membershipRole: string, joinedAt: Date | null, branches: BranchSummary[]) {
+function serializeAccount(
+  account: IBusinessAccount,
+  membershipRole: string,
+  joinedAt: Date | null,
+  branches: BranchSummary[],
+  accountAssignedBranch: BranchSummary | null
+) {
   const company = account.company;
   const contact = account.contact;
   return {
@@ -178,6 +184,7 @@ function serializeAccount(account: IBusinessAccount, membershipRole: string, joi
     // Only owners and admins maintain the account; everyone else reads it.
     canEdit: accountEditorRoles.has(membershipRole),
     joinedAt,
+    accountAssignedBranch: accountAssignedBranch ? serializeBranches([accountAssignedBranch])[0] ?? null : null,
     assignedBranches: serializeBranches(branches),
     company: {
       companyName: company.companyName ?? "",
@@ -231,7 +238,8 @@ async function loadProfile(userId: mongoose.Types.ObjectId) {
 
   const branchIds = [
     ...(user.assignedBranches ?? []),
-    ...memberships.flatMap((membership) => membership.assignedBranches ?? [])
+    ...memberships.flatMap((membership) => membership.assignedBranches ?? []),
+    ...accounts.flatMap((account) => account.assignedBranch ? [account.assignedBranch] : [])
   ];
   const branches: BranchSummary[] = branchIds.length
     ? await Branch.find({ _id: { $in: branchIds } }).select("name code").lean<BranchSummary[]>().exec()
@@ -273,7 +281,8 @@ async function loadProfile(userId: mongoose.Types.ObjectId) {
         account,
         membership.role,
         membership.joinedAt ?? null,
-        resolveBranches(membership.assignedBranches ?? [])
+        resolveBranches(membership.assignedBranches ?? []),
+        account.assignedBranch ? resolveBranches([account.assignedBranch])[0] ?? null : null
       )];
     })
   };

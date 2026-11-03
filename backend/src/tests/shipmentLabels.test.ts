@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import zlib from "node:zlib";
 import { describe, test } from "node:test";
 import {
@@ -195,6 +196,34 @@ describe("shipment label PDFs", () => {
     assert.ok(!drawn.some((line) => /DPD/i.test(line)), `carrier wording leaked: ${shown}`);
   });
 
+  test("renders an operator company logo and compact operator shipment number", async () => {
+    const pdf = await renderSwiftlineLabelPdf({
+      ...labelData("JKLDEL231026001-01"),
+      companyName: "JK Logistics",
+      serviceName: "INTERNAL SHIPMENT",
+      logoBuffer: fs.readFileSync(new URL("../../assets/swiftline-label-logo.png", import.meta.url))
+    });
+    const rendered = pdf.toString("latin1");
+
+    assert.ok(drawnText(pdf).includes("JK Logistics"));
+    assert.ok(drawnText(pdf).includes("JKLDEL231026001-01"));
+    assert.ok((rendered.match(/\/Subtype\s*\/Image/g) ?? []).length >= 2);
+  });
+
+  test("prints an operator company name and internal service on its own labels", async () => {
+    const drawn = drawnText(await renderSwiftlineLabelPdf({
+      ...labelData("SLCDEL200726001-01"),
+      companyName: "Northstar Logistics",
+      serviceName: "INTERNAL SHIPMENT"
+    }));
+    const shown = drawn.join(" | ");
+
+    assert.ok(drawn.includes("Northstar Logistics"), `operator name missing from ${shown}`);
+    assert.ok(drawn.includes("INTERNAL"), `internal service missing from ${shown}`);
+    assert.ok(drawn.includes("SHIPMENT"), `internal service missing from ${shown}`);
+    assert.equal(drawn.some((line) => /^SWIFTLINE\b/.test(line)), false);
+  });
+
   test("shows the CSB-V shipment number while keeping the internal parcel value separate", async () => {
     const internalParcelNumber = "SLCDEL200726001-02";
     const shipmentNumber = "SLCDEL200726001";
@@ -332,6 +361,13 @@ describe("immutable multi-parcel booking snapshot", () => {
     assert.equal(firstLabel.destination.city, "London");
     assert.equal(secondLabel.parcelNumber, "SLCDEL200726001-02");
     assert.equal(secondLabel.weightKg, 11);
+
+    const operatorLabel = bookingSnapshotToLabelData({
+      ...snapshot,
+      labelBrand: { companyName: "Northstar Logistics", serviceName: "INTERNAL SHIPMENT" }
+    }, 0);
+    assert.equal(operatorLabel.companyName, "Northstar Logistics");
+    assert.equal(operatorLabel.serviceName, "INTERNAL SHIPMENT");
 
     const csbVSecondLabel = bookingSnapshotToLabelData({ ...snapshot, csbType: "CSB_V" }, 1);
     assert.equal(csbVSecondLabel.parcelNumber, "SLCDEL200726001-02");

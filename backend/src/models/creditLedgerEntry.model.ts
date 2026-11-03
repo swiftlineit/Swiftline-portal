@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { isMinorUnitInteger } from "./financialTypes.js";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const creditLedgerEntryTypeValues = [
   "CREDIT_REQUESTED", "CREDIT_APPROVED", "CREDIT_ACTIVATED", "CREDIT_REJECTED",
@@ -15,7 +16,7 @@ export const creditLedgerEntryTypeValues = [
 ] as const;
 export type CreditLedgerEntryType = (typeof creditLedgerEntryTypeValues)[number];
 
-export interface ICreditLedgerEntry extends mongoose.Document {
+export interface ICreditLedgerEntry extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   creditAccountId: mongoose.Types.ObjectId;
   type: CreditLedgerEntryType;
@@ -41,11 +42,17 @@ const creditLedgerEntrySchema = new mongoose.Schema<ICreditLedgerEntry>({
   currency: { type: String, enum: ["INR"], default: "INR" },
   availableCreditAfterMinor: { type: Number, required: true, validate: isMinorUnitInteger },
   availableAdvanceAfterMinor: { type: Number, required: true, validate: isMinorUnitInteger },
-  idempotencyKey: { type: String, trim: true, required: true, unique: true, maxlength: 240 },
+  idempotencyKey: { type: String, trim: true, required: true, maxlength: 240 },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   createdAt: { type: Date, default: Date.now, index: true },
   metadata: { type: mongoose.Schema.Types.Mixed, default: {} }
 });
+
+creditLedgerEntrySchema.index(
+  { tenantId: 1, idempotencyKey: 1 },
+  { unique: true, name: "uniq_tenant_credit_ledger_idempotency" }
+);
+addTenantOwnership(creditLedgerEntrySchema);
 
 creditLedgerEntrySchema.pre(["updateOne", "updateMany", "findOneAndUpdate", "deleteOne", "deleteMany"], function blockMutation() {
   throw new Error("Credit ledger entries are append-only.");

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import { paymentSourceValues, type PaymentSource } from "./financialTypes.js";
 
 // Retained verbatim from when bookings were placed with an external carrier.
@@ -16,7 +17,7 @@ export const dpdShipmentStatusValues = [
 
 export type DpdShipmentStatus = (typeof dpdShipmentStatusValues)[number];
 
-export interface IDpdShipment extends mongoose.Document {
+export interface IDpdShipment extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
   idempotencyKey: string;
   dpdShipmentId?: string;
@@ -29,6 +30,8 @@ export interface IDpdShipment extends mongoose.Document {
   bookingSnapshot: Record<string, unknown>;
   currentShipmentSnapshot: Record<string, unknown>;
   snapshotRevision: number;
+  /** Serializes manual tracking updates for operator-owned shipments. */
+  operatorTrackingRevision?: number;
   requestSnapshot: Record<string, unknown>;
   responseSnapshot: Record<string, unknown>;
   paymentSource: PaymentSource;
@@ -57,6 +60,7 @@ const dpdShipmentSchema = new mongoose.Schema<IDpdShipment>(
     bookingSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} },
     currentShipmentSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} },
     snapshotRevision: { type: Number, min: 1, default: 1 },
+    operatorTrackingRevision: { type: Number, min: 0, default: 0 },
     requestSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} },
     responseSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} },
     paymentSource: { type: String, enum: paymentSourceValues, default: "ADMIN_DIRECT", required: true },
@@ -102,6 +106,8 @@ dpdShipmentSchema.index(
     partialFilterExpression: { forwardingNumber: { $type: "string", $gt: "" } }
   }
 );
+
+addTenantOwnership(dpdShipmentSchema);
 
 export const DpdShipment = mongoose.model<IDpdShipment>(
   "DpdShipment",

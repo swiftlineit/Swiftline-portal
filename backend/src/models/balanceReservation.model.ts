@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import { isMinorUnitInteger, prepaidCurrencyValues, type PrepaidCurrency } from "./financialTypes.js";
 
 export const balanceReservationStatusValues = [
@@ -11,7 +12,7 @@ export const balanceReservationStatusValues = [
 ] as const;
 export type BalanceReservationStatus = (typeof balanceReservationStatusValues)[number];
 
-export interface IBalanceReservation extends mongoose.Document {
+export interface IBalanceReservation extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   branchId: mongoose.Types.ObjectId;
   shipmentDraftId: mongoose.Types.ObjectId;
@@ -90,6 +91,8 @@ balanceReservationSchema.index(
     partialFilterExpression: { status: { $in: ["ACTIVE", "CONSUMING", "REVIEW_REQUIRED"] } }
   }
 );
+
+addTenantOwnership(balanceReservationSchema);
 
 export const BalanceReservation = mongoose.model<IBalanceReservation>(
   "BalanceReservation",

@@ -1,18 +1,19 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const labelFormatValues = ["PDF", "ZPL", "HTML"] as const;
 export const labelSizeValues = ["A4", "A6", "SQUARE"] as const;
 
 export type LabelFormat = (typeof labelFormatValues)[number];
 export type LabelSize = (typeof labelSizeValues)[number];
-// Every parcel gets a SWIFTLINE label. A DPD label is added only for United
-// Kingdom destinations, where ALS books the shipment into the DPD network - see
-// services/als. Queries that mean "the label on the box" must say so explicitly
+// Every parcel gets one tenant-scoped internal label: SWIFTLINE for Swiftline
+// bookings and INTERNAL for operator bookings. A DPD label is added only for
+// United Kingdom Swiftline destinations. Queries must name the label type
 // rather than taking the first row for a parcel.
-export const labelTypeValues = ["SWIFTLINE", "DPD"] as const;
+export const labelTypeValues = ["SWIFTLINE", "INTERNAL", "DPD"] as const;
 export type LabelType = (typeof labelTypeValues)[number];
 
-export interface ILabelDocument extends mongoose.Document {
+export interface ILabelDocument extends mongoose.Document, TenantOwnedFields {
   dpdShipmentId: mongoose.Types.ObjectId;
   parcelNumber: string;
   labelType: LabelType;
@@ -62,6 +63,8 @@ const labelDocumentSchema = new mongoose.Schema<ILabelDocument>(
 );
 
 labelDocumentSchema.index({ dpdShipmentId: 1, labelType: 1, parcelNumber: 1 }, { unique: true });
+
+addTenantOwnership(labelDocumentSchema);
 
 export const LabelDocument = mongoose.model<ILabelDocument>(
   "LabelDocument",

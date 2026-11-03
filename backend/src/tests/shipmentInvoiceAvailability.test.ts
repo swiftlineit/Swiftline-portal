@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { describe, mock, test } from "node:test";
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
-import { getShipmentInvoice } from "../controllers/shipmentInvoice.controller.js";
+import {
+  getShipmentInvoice,
+  isShipmentTaxInvoiceReady
+} from "../controllers/shipmentInvoice.controller.js";
 import { env } from "../config/env.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
@@ -74,6 +77,32 @@ function issuedInvoice(shipmentDraftId: mongoose.Types.ObjectId) {
 }
 
 describe("shipment invoice availability", () => {
+  test("operator internal labels make the tax invoice ready without carrier tracking status", () => {
+    assert.equal(isShipmentTaxInvoiceReady({
+      shipmentStatus: "DPD_CREATED",
+      tenantKind: "OPERATOR",
+      operatorInternalLabelAvailable: true
+    }), true);
+    assert.equal(isShipmentTaxInvoiceReady({
+      shipmentStatus: "DPD_CREATED",
+      tenantKind: "OPERATOR",
+      operatorInternalLabelAvailable: false
+    }), false);
+  });
+
+  test("keeps Swiftline tax invoice readiness tied to its existing label status", () => {
+    assert.equal(isShipmentTaxInvoiceReady({
+      shipmentStatus: "DPD_CREATED",
+      tenantKind: "SWIFTLINE",
+      operatorInternalLabelAvailable: true
+    }), false);
+    assert.equal(isShipmentTaxInvoiceReady({
+      shipmentStatus: "LABEL_RECEIVED",
+      tenantKind: "SWIFTLINE",
+      operatorInternalLabelAvailable: false
+    }), true);
+  });
+
   test("returns an existing issued invoice before applying the label-status gate", async () => {
     const draftId = new mongoose.Types.ObjectId();
     const invoice = issuedInvoice(draftId);

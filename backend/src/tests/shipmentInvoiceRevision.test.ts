@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import mongoose from "mongoose";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
+import { createShipmentInvoicePdf } from "../services/shipmentInvoicePdf.service.js";
 import {
+  resolveInvoiceBillTo,
   resolveShipmentInvoicePaymentAllocation,
   serializeShipmentInvoice
 } from "../services/shipmentInvoice.service.js";
@@ -71,6 +74,38 @@ function invoiceWithAmendment() {
 }
 
 describe("shipment invoice revisions", () => {
+  test("operator no-company invoices use the account contact and billing address", () => {
+    const input = {
+      tenantKind: "OPERATOR" as const,
+      noCompanyAccount: true,
+      accountContactName: "Aman Negi",
+      companyName: "",
+      accountBillingAddress: "12 Market Road, Delhi, 110001, India",
+      existingBillingAddress: ""
+    };
+
+    assert.deepEqual(resolveInvoiceBillTo(input), {
+      companyName: "Aman Negi",
+      billingAddress: "12 Market Road, Delhi, 110001, India"
+    });
+    assert.equal(input.companyName, "");
+    assert.equal(input.existingBillingAddress, "");
+  });
+
+  test("leaves Swiftline Bill To values unchanged for no-company accounts", () => {
+    assert.deepEqual(resolveInvoiceBillTo({
+      tenantKind: "SWIFTLINE",
+      noCompanyAccount: true,
+      accountContactName: "Aman Negi",
+      companyName: "",
+      accountBillingAddress: "Operator-only address",
+      existingBillingAddress: ""
+    }), {
+      companyName: "",
+      billingAddress: ""
+    });
+  });
+
   test("returns the latest invoice with a complete ordered version index", () => {
     const invoice = serializeShipmentInvoice(invoiceWithAmendment());
 
@@ -100,6 +135,39 @@ describe("shipment invoice revisions", () => {
       () => serializeShipmentInvoice(invoiceWithAmendment(), 3),
       /Invoice revision not found/
     );
+  });
+
+  test("keeps operator logo keys private while retaining them on the stored invoice", () => {
+    const invoice = invoiceWithAmendment();
+    const latestLogoKey = "operator-branding/operator-1/logo/current.png";
+    const firstRevisionLogoKey = "operator-branding/operator-1/logo/previous.png";
+    invoice.supplier = { legalName: "Northstar Cargo", operatorLogoStorageKey: latestLogoKey };
+    invoice.revisions[0]!.supplier = { legalName: "Northstar Cargo", operatorLogoStorageKey: firstRevisionLogoKey };
+
+    const latest = serializeShipmentInvoice(invoice);
+    const previous = serializeShipmentInvoice(invoice, 1);
+
+    assert.equal((latest.supplier as Record<string, unknown>).operatorLogoStorageKey, undefined);
+    assert.equal((previous.supplier as Record<string, unknown>).operatorLogoStorageKey, undefined);
+    assert.equal((invoice.supplier as Record<string, unknown>).operatorLogoStorageKey, latestLogoKey);
+    assert.equal((invoice.revisions[0]!.supplier as Record<string, unknown>).operatorLogoStorageKey, firstRevisionLogoKey);
+  });
+
+  test("renders an operator logo in a tax invoice PDF", async () => {
+    const invoice = invoiceWithAmendment();
+    const serialized = serializeShipmentInvoice(invoice);
+    const logo = readFileSync(new URL("../../assets/swiftline-label-logo.png", import.meta.url));
+    const document = createShipmentInvoicePdf(serialized, { tenantKind: "OPERATOR", logoBuffer: logo });
+    const chunks: Buffer[] = [];
+    const pdf = await new Promise<Buffer>((resolve, reject) => {
+      document.on("data", (chunk: Buffer) => chunks.push(chunk));
+      document.on("end", () => resolve(Buffer.concat(chunks)));
+      document.on("error", reject);
+      document.end();
+    });
+
+    assert.equal(pdf.subarray(0, 4).toString(), "%PDF");
+    assert.ok(pdf.includes(Buffer.from("/Subtype /Image")));
   });
 
   test("preserves the amended allocation when a draft invoice refreshes", () => {

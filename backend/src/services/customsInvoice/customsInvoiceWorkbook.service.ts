@@ -68,7 +68,7 @@ function partyBlock(party: CustomsInvoiceParty): string {
 
 export async function buildCustomsInvoiceWorkbook(invoice: CustomsInvoiceModel): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Swiftline Portal";
+  workbook.creator = invoice.issuerName?.trim() || "Swiftline Portal";
   const sheet = workbook.addWorksheet("Invoice", {
     pageSetup: { paperSize: 9, orientation: "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
   });
@@ -272,7 +272,13 @@ export async function buildCustomsInvoiceWorkbook(invoice: CustomsInvoiceModel):
 
   // Matches the footer line the PDF prints.
   addRow(
-    [{ column: 1, value: customsInvoiceFooterNote, align: "center" }],
+    [{
+      column: 1,
+      value: invoice.issuerName?.trim()
+        ? `This is a computer generated invoice from ${invoice.issuerName.trim()}.`
+        : customsInvoiceFooterNote,
+      align: "center"
+    }],
     [[1, lastColumn]],
     rowHeights.generatedBy
   );

@@ -13,12 +13,14 @@ import {
   type LabelType
 } from "../models/labelDocument.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
+import { Tenant } from "../models/tenant.model.js";
 import type { PaymentSource } from "../models/financialTypes.js";
 import { normalizeCsbType } from "./csbType.service.js";
 import { validateShipmentDraftFields } from "./shipmentValidation.service.js";
 import { getParcelDescriptionLimitMessage } from "./parcelItems.service.js";
 import {
   buildShipmentPayload,
+  OPERATOR_INTERNAL_SERVICE_CODE,
   sanitizeShipmentRequestSnapshot,
   validateShipmentPayload
 } from "./shipmentPayload.service.js";
@@ -67,6 +69,13 @@ import {
 } from "./shipmentDraftPolicy.service.js";
 import { isBookingPaused } from "./bookingPause.service.js";
 import { runWithConcurrency } from "../utils/runWithConcurrency.js";
+import { getTenantContext } from "./tenantScope.service.js";
+import { getOperatorShipmentEligibilityError } from "./operatorShipmentPolicy.service.js";
+import {
+  allocateOperatorShipmentTrackingNumber,
+  getOperatorCompanyTrackingPrefix
+} from "./operatorTrackingNumber.service.js";
+import { loadOperatorBrandLogo } from "./operatorBranding.service.js";
 
 // Keeps multi-parcel PDF/S3 work moving without opening an unbounded number of
 // uploads or holding too many generated label buffers in memory.
@@ -202,6 +211,12 @@ type LabelPaymentContext =
       paymentSource: Extract<PaymentSource, "BUSINESS_ACCOUNT">;
     } & AcceptedPricing & DpdLabelChoice)
   | ({
+      actor: "operator";
+      paymentSource: Extract<PaymentSource, "BUSINESS_ACCOUNT">;
+      acceptedPricingHash: string;
+      skipDpdLabel: true;
+    } & AcceptedPricing & DpdLabelChoice)
+  | ({
       actor: "public";
       paymentSource: Extract<PaymentSource, "PUBLIC_RAZORPAY">;
       acceptedPricingHash: string;
@@ -224,6 +239,17 @@ export function hasCompleteSwiftlineLabelSet(input: {
   return isCompleteLabelSet({
     parcelCount: input.parcelCount,
     labelCount: input.labels.filter((label) => label.labelType === "SWIFTLINE").length
+  });
+}
+
+export function hasCompleteInternalLabelSet(input: {
+  parcelCount: number;
+  labels: readonly { labelType?: string }[];
+  labelType: "SWIFTLINE" | "INTERNAL";
+}) {
+  return isCompleteLabelSet({
+    parcelCount: input.parcelCount,
+    labelCount: input.labels.filter((label) => label.labelType === input.labelType).length
   });
 }
 
@@ -287,16 +313,42 @@ async function writeDpdAuditLog(
   });
 }
 
-async function getReusableShipment(existingShipment: IDpdShipment | null, expectedParcelCount: number) {
+async function writeOperatorShipmentAuditLog(
+  action: "OPERATOR_SHIPMENT_BOOKING_STARTED" | "OPERATOR_SHIPMENT_BOOKING_COMPLETED" | "OPERATOR_SHIPMENT_BOOKING_REVIEW_REQUIRED" | "OPERATOR_SHIPMENT_BOOKING_FAILED" | "OPERATOR_SHIPMENT_DOCUMENTS_RECONCILED",
+  entityId: mongoose.Types.ObjectId,
+  userId: mongoose.Types.ObjectId,
+  metadata: Record<string, unknown>
+) {
+  await AuditLog.create({
+    action,
+    entityType: "SHIPMENT",
+    entityId,
+    performedBy: userId,
+    performedAt: new Date(),
+    metadata
+  });
+}
+
+async function getReusableShipment(
+  existingShipment: IDpdShipment | null,
+  expectedParcelCount: number,
+  internalLabelType: "SWIFTLINE" | "INTERNAL"
+) {
   if (!existingShipment) return null;
 
   if (existingShipment.status === "LABEL_RECEIVED") {
     const labels = await LabelDocument.find({ dpdShipmentId: existingShipment._id }).lean().exec();
     // The completeness invariant is per parcel, so it counts Swiftline labels
     // only - a DPD label is one document covering the whole shipment.
-    if (!hasCompleteSwiftlineLabelSet({ parcelCount: expectedParcelCount, labels })) {
+    if (!hasCompleteInternalLabelSet({
+      parcelCount: expectedParcelCount,
+      labels,
+      labelType: internalLabelType
+    })) {
       throw new DpdShipmentServiceError(
-        "This booking exists, but its label set is incomplete. Contact Swiftline Operations; do not book it again.",
+        internalLabelType === "INTERNAL"
+          ? "This operator booking exists, but its internal label set is incomplete. Contact your operator administrator; do not book it again."
+          : "This booking exists, but its label set is incomplete. Contact Swiftline Operations; do not book it again.",
         409
       );
     }
@@ -317,7 +369,9 @@ async function getReusableShipment(existingShipment: IDpdShipment | null, expect
 
   if (existingShipment.status === "DPD_CREATED") {
     throw new DpdShipmentServiceError(
-      "This shipment is booked, but its documents require reconciliation. Contact Swiftline Operations; do not book it again.",
+      internalLabelType === "INTERNAL"
+        ? "This operator shipment is booked, but its documents need reconciliation. Contact your operator administrator; do not book it again."
+        : "This shipment is booked, but its documents require reconciliation. Contact Swiftline Operations; do not book it again.",
       409
     );
   }
@@ -418,7 +472,8 @@ type SwiftlineLabelJob = Omit<GeneratedLabelJob, "buffer" | "format" | "labelSiz
  */
 async function storeGeneratedSwiftlineLabels(
   jobs: readonly SwiftlineLabelJob[],
-  labelData: readonly ShipmentLabelData[]
+  labelData: readonly ShipmentLabelData[],
+  labelType: "SWIFTLINE" | "INTERNAL" = "SWIFTLINE"
 ) {
   if (!jobs.length) return [];
   if (jobs.length !== labelData.length) {
@@ -431,7 +486,26 @@ async function storeGeneratedSwiftlineLabels(
     throw new DpdShipmentServiceError("The parcel label set could not be stored.", 409);
   }
 
-  const buffer = await renderSwiftlineLabelSetPdf(labelData);
+  let renderData = labelData;
+  const tenantContext = getTenantContext();
+  if (labelType === "INTERNAL" && tenantContext?.kind === "OPERATOR") {
+    try {
+      const tenant = await Tenant.findOne({
+        _id: tenantContext.tenantId,
+        kind: "OPERATOR",
+        status: "ACTIVE"
+      }).select("branding.logo.storageKey").lean().exec();
+      const storageKey = tenant?.branding?.logo?.storageKey;
+      const logoBuffer = storageKey
+        ? await loadOperatorBrandLogo(String(tenantContext.tenantId), storageKey)
+        : undefined;
+      if (logoBuffer) renderData = labelData.map((label) => ({ ...label, logoBuffer }));
+    } catch {
+      // Optional branding must not prevent an otherwise valid shipment booking.
+    }
+  }
+
+  const buffer = await renderSwiftlineLabelSetPdf(renderData);
   const labelSize = labelData.length > 1 ? "A4" : "SQUARE";
   const storedLabel = await saveLabelBuffer({
     shipmentDraftId: firstJob.shipmentDraftId.toString(),
@@ -439,7 +513,7 @@ async function storeGeneratedSwiftlineLabels(
     buffer,
     format: "PDF",
     labelSize,
-    labelType: "SWIFTLINE"
+    labelType
   });
 
   return runWithConcurrency(jobs, LABEL_STORAGE_CONCURRENCY, (job) => storeGeneratedLabel({
@@ -447,7 +521,7 @@ async function storeGeneratedSwiftlineLabels(
     buffer,
     format: "PDF",
     labelSize,
-    labelType: "SWIFTLINE",
+    labelType,
     storedLabel
   }));
 }
@@ -500,20 +574,39 @@ async function createLabelForShipmentDraftInternal(
   // a counter sale that was paid before the booking was made, so there is nothing
   // to reserve, convert or release for it.
   const usesBusinessAccountBilling = paymentContext.paymentSource === "BUSINESS_ACCOUNT";
+  const tenantContext = getTenantContext();
+  const operatorBooking = paymentContext.actor === "operator";
+  if (operatorBooking !== (tenantContext?.kind === "OPERATOR")) {
+    throw new DpdShipmentServiceError("Shipment booking must use the authenticated tenant workflow.", 403);
+  }
+  const tenantFilter = operatorBooking && tenantContext
+    ? { tenantId: tenantContext.tenantId }
+    : {};
   const [draft, existingByDraft] = await measureShipmentBookingStage(
     timings,
     "initialReadMs",
     () => Promise.all([
-      ShipmentDraft.findById(shipmentDraftId).exec(),
-      DpdShipment.findOne({ shipmentDraftId }).exec()
+      ShipmentDraft.findOne({ _id: shipmentDraftId, ...tenantFilter }).exec(),
+      DpdShipment.findOne({ shipmentDraftId, ...tenantFilter }).exec()
     ])
   );
   if (!draft) throw new DpdShipmentServiceError("Shipment draft not found", 404);
 
+  const operatorTenant = operatorBooking && tenantContext
+    ? await Tenant.findOne({ _id: tenantContext.tenantId, kind: "OPERATOR", status: "ACTIVE" }).lean().exec()
+    : null;
+  if (operatorBooking && !operatorTenant) {
+    throw new DpdShipmentServiceError("The operator account is not active for shipment booking.", 403);
+  }
+
   const reusable = await measureShipmentBookingStage(
     timings,
     "initialReadMs",
-    () => getReusableShipment(existingByDraft, draft.parcelList.length)
+    () => getReusableShipment(
+      existingByDraft,
+      draft.parcelList.length,
+      operatorBooking ? "INTERNAL" : "SWIFTLINE"
+    )
   );
 
   if (reusable) {
@@ -537,7 +630,9 @@ async function createLabelForShipmentDraftInternal(
       await draft.save();
       console.error("Unable to reconcile the shipment invoice for an existing booking.", error);
       throw new DpdShipmentServiceError(
-        "This shipment is booked, but its invoice requires reconciliation. Contact Swiftline Operations; do not book it again.",
+        operatorBooking
+          ? "This operator shipment is booked, but its invoice requires reconciliation. Contact your operator administrator; do not book it again."
+          : "This shipment is booked, but its invoice requires reconciliation. Contact Swiftline Operations; do not book it again.",
         409
       );
     }
@@ -603,19 +698,30 @@ async function createLabelForShipmentDraftInternal(
     timings,
     "preparationMs",
     () => Promise.all([
-      Branch.findById(draft.branchId).exec(),
-      BusinessAccount.findById(draft.businessAccountId).exec()
+      Branch.findOne({ _id: draft.branchId, ...tenantFilter }).exec(),
+      BusinessAccount.findOne({ _id: draft.businessAccountId, ...tenantFilter }).exec()
     ])
   );
   if (!branch) throw new DpdShipmentServiceError("The shipment branch could not be found.", 409);
   if (!businessAccount) throw new DpdShipmentServiceError("The business account could not be found.", 409);
+  if (operatorBooking) {
+    const eligibilityError = getOperatorShipmentEligibilityError({
+      branchStatus: branch.status,
+      accountStatus: businessAccount.status,
+      assignedBranchId: businessAccount.assignedBranch,
+      shipmentBranchId: branch._id
+    });
+    if (eligibilityError) throw new DpdShipmentServiceError(eligibilityError, 409);
+  }
 
   let stationCode: string;
   try {
     stationCode = resolveStationCode(branch.labelCode, branch.code);
   } catch {
     throw new DpdShipmentServiceError(
-      "The assigned branch needs a valid three-letter station code before shipments can be booked.",
+      operatorBooking
+        ? "The assigned operator branch needs a valid three-letter tracking code before shipments can be booked."
+        : "The assigned branch needs a valid three-letter station code before shipments can be booked.",
       409
     );
   }
@@ -630,7 +736,10 @@ async function createLabelForShipmentDraftInternal(
     lockedDraft._id as mongoose.Types.ObjectId,
     bookingAttemptId
   );
-  const payload = buildShipmentPayload(lockedDraft);
+  const payload = buildShipmentPayload(
+    lockedDraft,
+    operatorBooking ? OPERATOR_INTERNAL_SERVICE_CODE : undefined
+  );
   const payloadIssues = validateShipmentPayload(payload);
   if (payloadIssues.length) {
     lockedDraft.validationIssues = payloadIssues;
@@ -653,7 +762,8 @@ async function createLabelForShipmentDraftInternal(
   // misconfigured integration is reported as a failure, never skipped quietly.
   // Booking a UK shipment without the carrier label is possible only by
   // declining it explicitly after being shown why.
-  const wantsDpdLabel = !paymentContext.skipDpdLabel
+  const wantsDpdLabel = !operatorBooking
+    && !paymentContext.skipDpdLabel
     && isDpdLabelDestination(payload.consignee.countryCode);
 
   const pricing = await measureShipmentBookingStage(
@@ -706,6 +816,19 @@ async function createLabelForShipmentDraftInternal(
             : `Box ${parcel.sequence}: actual weight ${parcel.actualWeightKg.toFixed(2)} kg is over the ${parcel.maxBoxKg} kg maximum box weight.`
         ))
       }
+    );
+  }
+
+  if (operatorBooking && pricing.gstRate > 0 && !branch.gstin?.trim()) {
+    await transitionShipmentDraftBooking({
+      shipmentDraftId: lockedDraft._id as mongoose.Types.ObjectId,
+      bookingAttemptId,
+      bookingState: "EDITABLE"
+    });
+    throw new DpdShipmentServiceError(
+      "Add the operator branch GSTIN before booking taxable shipments.",
+      409,
+      { code: "OPERATOR_INVOICE_CONFIGURATION_REQUIRED" }
     );
   }
 
@@ -812,15 +935,29 @@ async function createLabelForShipmentDraftInternal(
   };
 
   // Reused across retries of the same draft so a rejected attempt does not
-  // consume a fresh number from the station's daily sequence.
+  // consume a fresh number from the tenant and branch daily sequence.
   const generatedAt = new Date();
-  let trackingNumber = lockedDraft.allocatedTrackingNumber;
+  let trackingNumber = lockedDraft.allocatedTrackingNumber ?? "";
+  const operatorTrackingPrefix = operatorTenant
+    ? `${getOperatorCompanyTrackingPrefix(operatorTenant.companyName)}${stationCode}`
+    : "";
+  if (operatorBooking && operatorTenant && !trackingNumber.startsWith(operatorTrackingPrefix)) {
+    trackingNumber = "";
+  }
   if (!trackingNumber) {
     try {
       trackingNumber = await measureShipmentBookingStage(
         timings,
         "preparationMs",
-        () => allocateSwiftlineTrackingNumber({ stationCode, date: generatedAt })
+        () => operatorBooking && operatorTenant
+          ? allocateOperatorShipmentTrackingNumber({
+              tenantId: operatorTenant._id as mongoose.Types.ObjectId,
+              companyName: operatorTenant.companyName,
+              branchId: branch._id as mongoose.Types.ObjectId,
+              stationCode,
+              date: generatedAt
+            })
+          : allocateSwiftlineTrackingNumber({ stationCode, date: generatedAt })
       );
       lockedDraft.allocatedTrackingNumber = trackingNumber;
       await lockedDraft.save();
@@ -841,13 +978,22 @@ async function createLabelForShipmentDraftInternal(
   }
 
   try {
-    await writeDpdAuditLog(
-      "DPD_REQUEST_INITIATED",
-      lockedDraft._id as mongoose.Types.ObjectId,
-      "SHIPMENT_DRAFT",
-      userId,
-      { idempotencyKey, shipmentDraftId: lockedDraft._id, swiftlineTrackingNumber: trackingNumber }
-    );
+    if (operatorBooking) {
+      await writeOperatorShipmentAuditLog(
+        "OPERATOR_SHIPMENT_BOOKING_STARTED",
+        lockedDraft._id as mongoose.Types.ObjectId,
+        userId,
+        { idempotencyKey, shipmentDraftId: lockedDraft._id, swiftlineTrackingNumber: trackingNumber }
+      );
+    } else {
+      await writeDpdAuditLog(
+        "DPD_REQUEST_INITIATED",
+        lockedDraft._id as mongoose.Types.ObjectId,
+        "SHIPMENT_DRAFT",
+        userId,
+        { idempotencyKey, shipmentDraftId: lockedDraft._id, swiftlineTrackingNumber: trackingNumber }
+      );
+    }
 
     // A definite carrier refusal still leaves the draft cleanly retryable. An
     // uncertain carrier result is different: complete the Swiftline booking and
@@ -933,7 +1079,9 @@ async function createLabelForShipmentDraftInternal(
             }
           : dpdDocket
             ? dpdDocket.responseSnapshot
-            : { provider: "SWIFTLINE", outcome: "INTERNAL_LABEL_ONLY" }
+        : operatorBooking
+          ? { provider: "OPERATOR", outcome: "INTERNAL_LABELS_ONLY" }
+          : { provider: "SWIFTLINE", outcome: "INTERNAL_LABEL_ONLY" }
       })
     );
     dpdShipment = booking;
@@ -951,7 +1099,13 @@ async function createLabelForShipmentDraftInternal(
       carrierTransactionId: "",
       carrierParcelNumbers: [],
       advanceAmountMinor,
-      creditAmountMinor
+      creditAmountMinor,
+      ...(operatorTenant ? {
+        labelBrand: {
+          companyName: operatorTenant.companyName,
+          serviceName: "INTERNAL SHIPMENT"
+        }
+      } : {})
     });
 
     booking.bookingSnapshot = bookingSnapshot;
@@ -987,19 +1141,24 @@ async function createLabelForShipmentDraftInternal(
       buffer: dpdLabel.content
     }));
 
+    const internalLabelType = operatorBooking ? "INTERNAL" : "SWIFTLINE";
     const storedLabels = await measureShipmentBookingStage(
       timings,
       "labelMs",
       async () => {
         const [swiftlineLabels, dpdLabels] = await Promise.all([
-          storeGeneratedSwiftlineLabels(swiftlineLabelJobs, swiftlineLabelData),
+          storeGeneratedSwiftlineLabels(swiftlineLabelJobs, swiftlineLabelData, internalLabelType),
           storeGeneratedLabels(dpdLabelJobs)
         ]);
         return [...swiftlineLabels, ...dpdLabels];
       }
     );
     const labels = storedLabels.filter((label): label is NonNullable<typeof label> => Boolean(label));
-    if (!hasCompleteSwiftlineLabelSet({ parcelCount: payload.parcels.length, labels })) {
+    if (!hasCompleteInternalLabelSet({
+      parcelCount: payload.parcels.length,
+      labels,
+      labelType: internalLabelType
+    })) {
       throw new Error("SHIPMENT_LABEL_SET_INCOMPLETE");
     }
 
@@ -1010,30 +1169,40 @@ async function createLabelForShipmentDraftInternal(
         : "LABEL_RECEIVED";
     await measureShipmentBookingStage(timings, "bookingWriteMs", () => booking.save());
 
-    await writeDpdAuditLog(
-      carrierUncertainError || (wantsDpdLabel && dpdLabelJobs.length === 0)
-        ? "DPD_REQUEST_FAILED"
-        : "DPD_REQUEST_SUCCEEDED",
-      booking._id as mongoose.Types.ObjectId,
-      "DPD_SHIPMENT",
-      userId,
-      {
-        swiftlineTrackingNumber: trackingNumber,
-        parcelNumbers: bookingSnapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber),
-        labelCount: labels.length,
-        dpdAwbNumber: dpdDocket?.awbNumber ?? "",
-        dpdLabelCount: dpdDocket?.labels.length ?? 0,
-        ...(carrierUncertainError ? {
-          status: "DPD_STATUS_UNKNOWN",
-          stage: "DPD_LABEL_ONLY",
-          message: carrierUncertainError.message
-        } : wantsDpdLabel && dpdLabelJobs.length === 0 ? {
-          status: "DPD_CREATED",
-          stage: "DPD_LABEL_ONLY",
-          message: "ALS accepted the booking but did not return a label."
-        } : {})
-      }
-    );
+    const bookingAuditMetadata = {
+      swiftlineTrackingNumber: trackingNumber,
+      parcelNumbers: bookingSnapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber),
+      labelCount: labels.length,
+      dpdAwbNumber: dpdDocket?.awbNumber ?? "",
+      dpdLabelCount: dpdDocket?.labels.length ?? 0,
+      ...(carrierUncertainError ? {
+        status: "DPD_STATUS_UNKNOWN",
+        stage: "DPD_LABEL_ONLY",
+        message: carrierUncertainError.message
+      } : wantsDpdLabel && dpdLabelJobs.length === 0 ? {
+        status: "DPD_CREATED",
+        stage: "DPD_LABEL_ONLY",
+        message: "ALS accepted the booking but did not return a label."
+      } : {})
+    };
+    if (operatorBooking) {
+      await writeOperatorShipmentAuditLog(
+        "OPERATOR_SHIPMENT_BOOKING_COMPLETED",
+        booking._id as mongoose.Types.ObjectId,
+        userId,
+        bookingAuditMetadata
+      );
+    } else {
+      await writeDpdAuditLog(
+        carrierUncertainError || (wantsDpdLabel && dpdLabelJobs.length === 0)
+          ? "DPD_REQUEST_FAILED"
+          : "DPD_REQUEST_SUCCEEDED",
+        booking._id as mongoose.Types.ObjectId,
+        "DPD_SHIPMENT",
+        userId,
+        bookingAuditMetadata
+      );
+    }
 
     if (usesBusinessAccountBilling) {
       await measureShipmentBookingStage(
@@ -1067,16 +1236,18 @@ async function createLabelForShipmentDraftInternal(
     // Queues the client and operations emails with the invoice and labels
     // attached. Swallows its own errors: the booking is complete and must not be
     // undone or retried because a notification could not be raised.
-    await measureShipmentBookingStage(
-      timings,
-      "notificationMs",
-      () => notifyShipmentBooked({
-        draft: lockedDraft,
-        dpdShipment: booking,
-        shipmentInvoice,
-        bookedBy: userId
-      })
-    );
+    if (!operatorBooking) {
+      await measureShipmentBookingStage(
+        timings,
+        "notificationMs",
+        () => notifyShipmentBooked({
+          draft: lockedDraft,
+          dpdShipment: booking,
+          shipmentInvoice,
+          bookedBy: userId
+        })
+      );
+    }
 
     return {
       dpdShipment: booking,
@@ -1130,7 +1301,9 @@ async function createLabelForShipmentDraftInternal(
     // the funds stay reserved rather than being silently released.
     if (bookingRecorded && dpdShipment) {
       const booking = dpdShipment;
-      const message = "The shipment was created, but its invoice or labels could not be finalized. Do not submit it again; contact Swiftline Operations.";
+      const message = operatorBooking
+        ? "The shipment was booked, but its invoice or labels need reconciliation. Do not submit it again; contact your operator administrator."
+        : "The shipment was created, but its invoice or labels could not be finalized. Do not submit it again; contact Swiftline Operations.";
       const outcomeStillUnknown = booking.status === "DPD_STATUS_UNKNOWN";
       booking.status = outcomeStillUnknown ? "DPD_STATUS_UNKNOWN" : "DPD_CREATED";
       booking.responseSnapshot = {
@@ -1139,13 +1312,22 @@ async function createLabelForShipmentDraftInternal(
       };
       await booking.save();
 
-      await writeDpdAuditLog(
-        "DPD_REQUEST_FAILED",
-        booking._id as mongoose.Types.ObjectId,
-        "DPD_SHIPMENT",
-        userId,
-        { status: booking.status, message }
-      );
+      if (operatorBooking) {
+        await writeOperatorShipmentAuditLog(
+          "OPERATOR_SHIPMENT_BOOKING_REVIEW_REQUIRED",
+          booking._id as mongoose.Types.ObjectId,
+          userId,
+          { status: booking.status, message }
+        );
+      } else {
+        await writeDpdAuditLog(
+          "DPD_REQUEST_FAILED",
+          booking._id as mongoose.Types.ObjectId,
+          "DPD_SHIPMENT",
+          userId,
+          { status: booking.status, message }
+        );
+      }
 
       if (usesBusinessAccountBilling) {
         await markShipmentBookingChargeReviewRequired({
@@ -1169,18 +1351,28 @@ async function createLabelForShipmentDraftInternal(
     // draft, which returns to being editable.
     const message = "The shipment could not be created.";
 
-    await writeDpdAuditLog(
-      "DPD_REQUEST_FAILED",
-      lockedDraft._id as mongoose.Types.ObjectId,
-      "SHIPMENT_DRAFT",
-      userId,
-      {
-        status: "DPD_REJECTED",
-        message,
-        reason: error instanceof Error ? error.message : String(error),
-        swiftlineTrackingNumber: trackingNumber
-      }
-    );
+    const failureMetadata = {
+      status: "DPD_REJECTED",
+      message,
+      reason: error instanceof Error ? error.message : String(error),
+      swiftlineTrackingNumber: trackingNumber
+    };
+    if (operatorBooking) {
+      await writeOperatorShipmentAuditLog(
+        "OPERATOR_SHIPMENT_BOOKING_FAILED",
+        lockedDraft._id as mongoose.Types.ObjectId,
+        userId,
+        failureMetadata
+      );
+    } else {
+      await writeDpdAuditLog(
+        "DPD_REQUEST_FAILED",
+        lockedDraft._id as mongoose.Types.ObjectId,
+        "SHIPMENT_DRAFT",
+        userId,
+        failureMetadata
+      );
+    }
 
     if (usesBusinessAccountBilling) {
       await releaseShipmentBookingCharge({
@@ -1207,10 +1399,14 @@ export async function reconcileShipmentDocuments(
     throw new DpdShipmentServiceError("Shipment booking not found.", 404);
   }
 
-  const dpdShipment = await DpdShipment.findById(dpdShipmentId).exec();
+  const tenantContext = getTenantContext();
+  const operatorBooking = tenantContext?.kind === "OPERATOR";
+  const tenantFilter = operatorBooking && tenantContext ? { tenantId: tenantContext.tenantId } : {};
+  const internalLabelType = operatorBooking ? "INTERNAL" : "SWIFTLINE";
+  const dpdShipment = await DpdShipment.findOne({ _id: dpdShipmentId, ...tenantFilter }).exec();
   if (!dpdShipment) throw new DpdShipmentServiceError("Shipment booking not found.", 404);
   if (dpdShipment.status === "LABEL_RECEIVED") {
-    const labels = await LabelDocument.find({ dpdShipmentId: dpdShipment._id }).exec();
+    const labels = await LabelDocument.find({ dpdShipmentId: dpdShipment._id, ...tenantFilter }).exec();
     await completeShipmentBookingCharge({
       shipmentDraftId: dpdShipment.shipmentDraftId,
       dpdShipmentId: dpdShipment._id as mongoose.Types.ObjectId,
@@ -1222,7 +1418,7 @@ export async function reconcileShipmentDocuments(
       userId
     });
     await ShipmentDraft.updateOne(
-      { _id: dpdShipment.shipmentDraftId, bookingState: { $in: ["REVIEW_REQUIRED", "BOOKING"] } },
+      { _id: dpdShipment.shipmentDraftId, ...tenantFilter, bookingState: { $in: ["REVIEW_REQUIRED", "BOOKING"] } },
       { $set: { bookingState: "BOOKED", lockedAt: new Date() } },
       { runValidators: true }
     ).exec();
@@ -1238,9 +1434,10 @@ export async function reconcileShipmentDocuments(
   // A carrier reference means ALS already accepted a label-only request. It is
   // not safe to turn that into LABEL_RECEIVED while the carrier document is
   // missing locally, because that would hide an operational document failure.
-  if (dpdShipment.dpdShipmentId?.trim()) {
+  if (!operatorBooking && dpdShipment.dpdShipmentId?.trim()) {
     const carrierLabels = await LabelDocument.countDocuments({
       dpdShipmentId: dpdShipment._id,
+      ...tenantFilter,
       labelType: "DPD"
     }).exec();
     if (!carrierLabels) {
@@ -1260,11 +1457,13 @@ export async function reconcileShipmentDocuments(
     );
   }
 
-  // Only the Swiftline labels are re-rendered here; a DPD label can only come
-  // from the carrier and is never regenerated locally.
+  // Internal labels are rendered from the frozen booking snapshot. Operator
+  // bookings use their own label type; Swiftline's DPD label remains carrier
+  // supplied and is never regenerated locally.
   const existingLabels = await LabelDocument.find({
     dpdShipmentId: dpdShipment._id,
-    labelType: "SWIFTLINE"
+    ...tenantFilter,
+    labelType: internalLabelType
   }).exec();
   const expectedLabelVersion = dpdShipment.snapshotRevision || 1;
 
@@ -1286,13 +1485,15 @@ export async function reconcileShipmentDocuments(
       });
     }
   }
-  await storeGeneratedSwiftlineLabels(repairedLabelJobs, repairedLabelData);
+  await storeGeneratedSwiftlineLabels(repairedLabelJobs, repairedLabelData, internalLabelType);
 
   const labels = await LabelDocument.find({
     dpdShipmentId: dpdShipment._id,
+    ...tenantFilter,
+    labelType: internalLabelType,
     labelVersion: expectedLabelVersion
   }).exec();
-  if (!hasCompleteSwiftlineLabelSet({ parcelCount: snapshot.parcels.length, labels })) {
+  if (!hasCompleteInternalLabelSet({ parcelCount: snapshot.parcels.length, labels, labelType: internalLabelType })) {
     throw new DpdShipmentServiceError("The complete parcel label set could not be finalized.", 409);
   }
 
@@ -1310,10 +1511,19 @@ export async function reconcileShipmentDocuments(
   dpdShipment.status = "LABEL_RECEIVED";
   await dpdShipment.save();
   await ShipmentDraft.updateOne(
-    { _id: dpdShipment.shipmentDraftId, bookingState: { $in: ["REVIEW_REQUIRED", "BOOKING"] } },
+    { _id: dpdShipment.shipmentDraftId, ...tenantFilter, bookingState: { $in: ["REVIEW_REQUIRED", "BOOKING"] } },
     { $set: { bookingState: "BOOKED", lockedAt: new Date() } },
     { runValidators: true }
   ).exec();
+
+  if (operatorBooking) {
+    await writeOperatorShipmentAuditLog(
+      "OPERATOR_SHIPMENT_DOCUMENTS_RECONCILED",
+      dpdShipment._id as mongoose.Types.ObjectId,
+      userId,
+      { status: dpdShipment.status, labelCount: labels.length }
+    );
+  }
   await writeDpdAuditLog(
     "DPD_REQUEST_SUCCEEDED",
     dpdShipment._id as mongoose.Types.ObjectId,
@@ -1925,6 +2135,10 @@ export async function regenerateShipmentLabels(
   dpdShipmentId: mongoose.Types.ObjectId,
   userId: mongoose.Types.ObjectId
 ) {
+  const tenantContext = getTenantContext();
+  const operatorBooking = tenantContext?.kind === "OPERATOR";
+  const labelType = operatorBooking ? "INTERNAL" : "SWIFTLINE";
+  const tenantFilter = operatorBooking ? { tenantId: tenantContext.tenantId } : {};
   const dpdShipment = await DpdShipment.findById(dpdShipmentId).exec();
   if (!dpdShipment) throw new DpdShipmentServiceError("Shipment booking not found.", 404);
 
@@ -1944,28 +2158,43 @@ export async function regenerateShipmentLabels(
       labelVersion: dpdShipment.snapshotRevision || 1
     });
   }
-  await storeGeneratedSwiftlineLabels(labelJobs, labelDataSet);
+  await storeGeneratedSwiftlineLabels(labelJobs, labelDataSet, labelType);
 
   const labels = await LabelDocument.find({
     dpdShipmentId,
+    labelType,
     labelVersion: dpdShipment.snapshotRevision || 1
   }).exec();
-  if (!hasCompleteSwiftlineLabelSet({ parcelCount: snapshot.parcels.length, labels })) {
-    throw new DpdShipmentServiceError("The amended parcel label set could not be finalized.", 409);
+  if (!hasCompleteInternalLabelSet({ parcelCount: snapshot.parcels.length, labels, labelType })) {
+    throw new DpdShipmentServiceError(
+      operatorBooking
+        ? "The amended operator internal label set could not be finalized."
+        : "The amended parcel label set could not be finalized.",
+      409
+    );
   }
 
   dpdShipment.status = "LABEL_RECEIVED";
   await dpdShipment.save();
   await ShipmentDraft.updateOne(
-    { _id: dpdShipment.shipmentDraftId },
+    { _id: dpdShipment.shipmentDraftId, ...tenantFilter },
     { $set: { bookingState: "BOOKED", lockedAt: new Date() } },
     { runValidators: true }
   ).exec();
-  await writeDpdAuditLog("DPD_REQUEST_SUCCEEDED", dpdShipmentId, "DPD_SHIPMENT", userId, {
-    labelsRegenerated: true,
-    snapshotRevision: dpdShipment.snapshotRevision,
-    parcelCount: snapshot.parcels.length
-  });
+  if (operatorBooking) {
+    await writeOperatorShipmentAuditLog(
+      "OPERATOR_SHIPMENT_DOCUMENTS_RECONCILED",
+      dpdShipmentId,
+      userId,
+      { labelsRegenerated: true, snapshotRevision: dpdShipment.snapshotRevision, parcelCount: snapshot.parcels.length }
+    );
+  } else {
+    await writeDpdAuditLog("DPD_REQUEST_SUCCEEDED", dpdShipmentId, "DPD_SHIPMENT", userId, {
+      labelsRegenerated: true,
+      snapshotRevision: dpdShipment.snapshotRevision,
+      parcelCount: snapshot.parcels.length
+    });
+  }
   return labels;
 }
 

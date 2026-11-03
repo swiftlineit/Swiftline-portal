@@ -1,9 +1,10 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const shipmentAmendmentStatusValues = ["REQUESTED", "APPROVED", "REJECTED", "APPLIED"] as const;
 export type ShipmentAmendmentStatus = (typeof shipmentAmendmentStatusValues)[number];
 
-export interface IShipmentAmendment extends mongoose.Document {
+export interface IShipmentAmendment extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
   dpdShipmentId: mongoose.Types.ObjectId;
   businessAccountId: mongoose.Types.ObjectId;
@@ -107,6 +108,8 @@ const shipmentAmendmentSchema = new mongoose.Schema<IShipmentAmendment>(
 
 shipmentAmendmentSchema.index({ shipmentDraftId: 1, requestedAt: -1 });
 shipmentAmendmentSchema.index({ dpdShipmentId: 1, requestedAt: -1 });
+
+addTenantOwnership(shipmentAmendmentSchema);
 
 export const ShipmentAmendment = mongoose.model<IShipmentAmendment>(
   "ShipmentAmendment",

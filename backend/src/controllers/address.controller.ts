@@ -23,6 +23,7 @@ import {
   assertShipmentDraftMutationAllowed,
   ShipmentDraftPolicyError
 } from "../services/shipmentDraftPolicy.service.js";
+import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 
 const autocompleteSchema = z.object({
   input: z.string().trim().min(2).max(120)
@@ -58,6 +59,13 @@ function getAuthenticatedUserId(request: Request): mongoose.Types.ObjectId | nul
 }
 
 function getAuthenticatedPortalRole(request: Request) {
+  const operator = getOperatorContext(request);
+  if (operator) {
+    if (operator.role === "OPERATOR_ADMIN") return "admin";
+    if (operator.role === "OPERATIONS") return "operations";
+    if (operator.role === "CLIENT") return "client";
+    return "finance";
+  }
   const user = (request as Request & { user?: { role?: unknown } }).user;
   return typeof user?.role === "string" ? user.role : "";
 }
@@ -289,6 +297,9 @@ export async function getPlaceAddress(request: Request, response: Response): Pro
   if (!parsed.success) return response.status(400).json({ success: false, message: "Invalid place id" });
 
   const shipmentDraftId = typeof request.query.shipmentDraftId === "string" ? request.query.shipmentDraftId : "";
+  if (shipmentDraftId && getOperatorContext(request)?.accessMode === "PLATFORM_SUPPORT") {
+    return response.status(403).json({ success: false, message: "Operator support access is read-only." });
+  }
 
   try {
     const place = await getPlaceAddressDetails(parsed.data);
@@ -383,6 +394,9 @@ export async function getConsignorPlaceAddress(request: Request, response: Respo
   if (!parsed.success) return response.status(400).json({ success: false, message: "Invalid place id" });
 
   const shipmentDraftId = typeof request.query.shipmentDraftId === "string" ? request.query.shipmentDraftId : "";
+  if (shipmentDraftId && getOperatorContext(request)?.accessMode === "PLATFORM_SUPPORT") {
+    return response.status(403).json({ success: false, message: "Operator support access is read-only." });
+  }
 
   try {
     const place = await getGooglePlaceAddressDetails(parsed.data, "in");

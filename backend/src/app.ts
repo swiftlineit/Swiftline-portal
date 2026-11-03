@@ -60,6 +60,7 @@ import { publicBusinessAccountRouter } from "./routes/publicBusinessAccount.rout
 import { publicShipmentBookingRouter } from "./routes/publicShipmentBooking.routes.js";
 import { platformOperatorRouter } from "./routes/platformOperator.routes.js";
 import { operatorRouter } from "./routes/operator.routes.js";
+import { establishSwiftlineTenantContext } from "./middleware/swiftlineTenantContext.middleware.js";
 
 export const app = express();
 
@@ -99,12 +100,14 @@ app.use(
 app.use(
   "/api/v1/webhooks/razorpay",
   express.raw({ type: "application/json", limit: "2mb" }),
+  establishSwiftlineTenantContext,
   razorpayWebhookRouter,
 );
 // SNS posts its envelope as text/plain, so this must parse ahead of express.json.
 app.use(
   "/api/v1/webhooks/ses",
   express.text({ type: "*/*", limit: "1mb" }),
+  establishSwiftlineTenantContext,
   sesWebhookRouter,
 );
 app.use(express.json({ limit: "2mb" }));
@@ -125,10 +128,16 @@ app.get("/", (_request, response) => {
 
 app.use("/api/v1/health", healthRouter);
 if (env.OPERATOR_PORTAL_ENABLED) {
-  app.use("/api/v1/platform/operators", platformOperatorRouter);
   app.use("/api/v1/operators/:operatorSlug", operatorRouter);
 }
+// Every legacy Swiftline API route below resolves inside the root tenant.
+// Operator requests are mounted above and establish their membership context
+// independently; public endpoints below remain Swiftline-only.
+app.use("/api/v1", establishSwiftlineTenantContext);
 app.use("/api/v1/auth", authRouter);
+if (env.OPERATOR_PORTAL_ENABLED) {
+  app.use("/api/v1/platform/operators", platformOperatorRouter);
+}
 app.use("/api/v1/users", userRouter);
 app.use("/api/v1/profile", profileRouter);
 app.use("/api/v1/business-accounts", businessAccountRouter);

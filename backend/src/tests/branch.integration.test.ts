@@ -9,6 +9,8 @@ import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { OperationsManifest } from "../models/operationsManifest.model.js";
+import { Tenant } from "../models/tenant.model.js";
+import { TenantSlug } from "../models/tenantSlug.model.js";
 import { User } from "../models/user.model.js";
 
 // Kept short: Atlas caps database names at 38 bytes.
@@ -117,8 +119,18 @@ before(async () => {
     BusinessAccountMember.init(),
     OperationsManifest.init(),
     AuditLog.init(),
+    Tenant.init(),
+    TenantSlug.init(),
     User.init()
   ]);
+  const swiftlineTenant = await Tenant.create({
+    kind: "SWIFTLINE",
+    status: "ACTIVE",
+    companyName: "Swiftline Test",
+    slug: "swiftline",
+    createdBy: null
+  });
+  await TenantSlug.create({ slug: "swiftline", tenantId: swiftlineTenant._id, isCurrent: true });
 });
 
 after(async () => {

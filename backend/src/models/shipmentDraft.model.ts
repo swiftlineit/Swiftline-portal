@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 import { csbTypeValues, type CsbType } from "../services/csbType.service.js";
 import {
   composeContentsDescription,
@@ -167,7 +168,7 @@ export interface ShipmentParcel {
   kycDocuments?: Partial<Record<ShipmentKycDocumentType, ShipmentKycDocument>>;
 }
 
-export interface IShipmentDraft extends mongoose.Document {
+export interface IShipmentDraft extends mongoose.Document, TenantOwnedFields {
   creationSource: ShipmentDraftSource;
   shipmentImportEntryId?: mongoose.Types.ObjectId | null;
   /** The booked shipment draft this editable draft was copied from. */
@@ -662,6 +663,8 @@ shipmentDraftSchema.pre("validate", function syncParcelSummary() {
   });
   this.parcelCount = this.parcelList.length || 1;
 });
+
+addTenantOwnership(shipmentDraftSchema);
 
 export const ShipmentDraft = mongoose.model<IShipmentDraft>(
   "ShipmentDraft",

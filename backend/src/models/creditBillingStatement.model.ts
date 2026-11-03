@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { isMinorUnitInteger } from "./financialTypes.js";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const creditBillingStatementStatusValues = [
   "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID"
@@ -26,7 +27,7 @@ export type CreditBillingStatementAdjustment = {
   affectsAmountDue: boolean;
 };
 
-export interface ICreditBillingStatement extends mongoose.Document {
+export interface ICreditBillingStatement extends mongoose.Document, TenantOwnedFields {
   statementNumber: string;
   businessAccountId: mongoose.Types.ObjectId;
   creditAccountId: mongoose.Types.ObjectId;
@@ -76,7 +77,7 @@ const statementAdjustmentSchema = new mongoose.Schema<CreditBillingStatementAdju
 }, { _id: false });
 
 const creditBillingStatementSchema = new mongoose.Schema<ICreditBillingStatement>({
-  statementNumber: { type: String, required: true, unique: true, immutable: true, trim: true, maxlength: 32, index: true },
+  statementNumber: { type: String, required: true, immutable: true, trim: true, maxlength: 32 },
   businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, immutable: true, index: true },
   creditAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessCreditAccount", required: true, immutable: true, index: true },
   billingCycle: { type: String, enum: ["WEEKLY", "MONTHLY"], required: true, immutable: true },
@@ -96,8 +97,12 @@ const creditBillingStatementSchema = new mongoose.Schema<ICreditBillingStatement
 }, { timestamps: true });
 
 creditBillingStatementSchema.index(
-  { businessAccountId: 1, billingCycle: 1, periodStart: 1, periodEnd: 1 },
-  { unique: true }
+  { tenantId: 1, statementNumber: 1 },
+  { unique: true, name: "uniq_tenant_credit_statement_number" }
+);
+creditBillingStatementSchema.index(
+  { tenantId: 1, businessAccountId: 1, billingCycle: 1, periodStart: 1, periodEnd: 1 },
+  { unique: true, name: "uniq_tenant_credit_statement_period" }
 );
 creditBillingStatementSchema.index({ businessAccountId: 1, status: 1, dueAt: 1 });
 
@@ -135,6 +140,8 @@ creditBillingStatementSchema.pre("validate", function validateStatementTotals() 
     this.invalidate("outstandingAmountMinor", "Statement payment allocation must match its total.");
   }
 });
+
+addTenantOwnership(creditBillingStatementSchema);
 
 export const CreditBillingStatement = mongoose.model<ICreditBillingStatement>(
   "CreditBillingStatement",

@@ -63,6 +63,8 @@ export type ShipmentListingFilter = {
   limit: number;
   /** Manifest assignments are per actor role, so eligibility is role-scoped. */
   actorRole: "admin" | "client";
+  /** Operator workspace lists can reveal weights for each parcel in their dialog. */
+  includeParcelWeights?: boolean;
   /**
    * Which carrier booking states belong in this list.
    *
@@ -826,6 +828,11 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
       weightKg: Number((parcels.length
         ? parcels.reduce((sum, parcel) => sum + parcel.actualWeightKg, 0)
         : draft.parcelList.reduce((sum, parcel) => sum + (parcel.weightKg || 0), 0)).toFixed(3)),
+      ...(filter.includeParcelWeights ? {
+        parcelWeightsKg: parcels.length
+          ? parcels.map((parcel) => parcel.actualWeightKg)
+          : draft.parcelList.map((parcel) => typeof parcel.weightKg === "number" ? parcel.weightKg : null)
+      } : {}),
       status: currentStatus,
       statusLabel: formatShipmentStatusLabel(currentStatus, currentEvent),
       // The newest scan, so a support agent can see where the shipment last was

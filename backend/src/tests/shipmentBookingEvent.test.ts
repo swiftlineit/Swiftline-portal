@@ -32,10 +32,11 @@ describe("shipment booking timeline event", () => {
       note: "Shipment booked with carrier.",
       source: "SYSTEM",
       sourceReference: "PUBLIC_SHIPMENT_BOOKING:booking-1",
-      customerVisible: true,
       createdBy: userId,
       eventAt,
     });
+    assert.equal(update.$set.customerVisible, true);
+    assert.equal(Object.hasOwn(update.$setOnInsert, "customerVisible"), false);
   });
 
   it("defaults new public events to the system source without changing the event time", () => {

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { AuditLog } from "../models/auditLog.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
+import { LabelDocument } from "../models/labelDocument.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import {
   ensureShipmentInvoiceForDraft,
@@ -10,6 +11,10 @@ import {
 } from "../services/shipmentInvoice.service.js";
 import { createShipmentInvoicePdf } from "../services/shipmentInvoicePdf.service.js";
 import { RateCardRequiredError } from "../services/shipmentPricing.service.js";
+import { getTenantContext } from "../services/tenantScope.service.js";
+import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
+import { isOperatorBrandLogoStorageKey } from "../services/operatorBranding.service.js";
+import { assertValidStorageKey, getObjectBuffer } from "../services/storage/storage.service.js";
 
 function getAuthenticatedUserId(request: Request) {
   const user = (request as Request & { user?: { _id?: unknown } }).user;
@@ -32,6 +37,15 @@ function getRequestedRevision(request: Request) {
   return Number(value);
 }
 
+export function isShipmentTaxInvoiceReady(input: {
+  shipmentStatus: string;
+  tenantKind?: "SWIFTLINE" | "OPERATOR";
+  operatorInternalLabelAvailable: boolean;
+}) {
+  return input.shipmentStatus === "LABEL_RECEIVED"
+    || (input.tenantKind === "OPERATOR" && input.operatorInternalLabelAvailable);
+}
+
 async function resolveInvoice(request: Request) {
   const userId = getAuthenticatedUserId(request);
   if (!userId) throw new ShipmentInvoiceServiceError("Unauthorized", 401);
@@ -44,9 +58,26 @@ async function resolveInvoice(request: Request) {
 
   let invoice = await ShipmentInvoice.findOne({ shipmentDraftId, status: "ISSUED" }).exec();
   if (!invoice) {
+    if (getOperatorContext(request)?.accessMode === "PLATFORM_SUPPORT") {
+      throw new ShipmentInvoiceServiceError("Invoice has not been issued yet.", 409);
+    }
     // Only new issuance consumes a statutory GST number. A later carrier-label
     // failure must not hide an invoice that was already issued for this draft.
-    if (dpdShipment.status !== "LABEL_RECEIVED") {
+    const tenantContext = getTenantContext();
+    const operatorInternalLabelAvailable = tenantContext?.kind === "OPERATOR"
+      ? Boolean(await LabelDocument.exists({
+        tenantId: tenantContext.tenantId,
+        dpdShipmentId: dpdShipment._id,
+        labelType: "INTERNAL",
+        labelVersion: dpdShipment.snapshotRevision || 1,
+        voidedAt: null
+      }))
+      : false;
+    if (!isShipmentTaxInvoiceReady({
+      shipmentStatus: dpdShipment.status,
+      tenantKind: tenantContext?.kind,
+      operatorInternalLabelAvailable
+    })) {
       throw new ShipmentInvoiceServiceError(
         "Invoice is available once the shipment is booked and its labels are issued.",
         409
@@ -72,6 +103,11 @@ function sendInvoiceError(response: Response, error: unknown) {
     return response.status(error.statusCode).json({ success: false, message: error.message });
   }
   throw error;
+}
+
+function supplierForRevision(invoice: InstanceType<typeof ShipmentInvoice>, revision: number) {
+  if (revision === invoice.revision) return invoice.supplier;
+  return invoice.revisions.find((item) => item.revision === revision)?.supplier;
 }
 
 export async function getShipmentInvoice(request: Request, response: Response): Promise<Response> {
@@ -107,7 +143,25 @@ export async function downloadShipmentInvoicePdf(request: Request, response: Res
     const filename = `${persistedInvoice.invoiceNumber.replaceAll("/", "-")}-Invoice-${selectedInvoice.revision}.pdf`;
     response.setHeader("Content-Type", "application/pdf");
     response.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    const document = createShipmentInvoicePdf(selectedInvoice);
+    const tenantContext = getTenantContext();
+    let logoBuffer: Buffer | undefined;
+    const supplier = supplierForRevision(persistedInvoice, selectedInvoice.revision);
+    const logoKey = supplier && typeof supplier === "object"
+      ? (supplier as Record<string, unknown>).operatorLogoStorageKey
+      : null;
+    if (tenantContext?.kind === "OPERATOR" && typeof logoKey === "string"
+      && isOperatorBrandLogoStorageKey(String(tenantContext.tenantId), logoKey)) {
+      try {
+        assertValidStorageKey(logoKey);
+        logoBuffer = await getObjectBuffer(logoKey);
+      } catch {
+        // Missing optional branding falls back to the recorded company name.
+      }
+    }
+    const document = createShipmentInvoicePdf(selectedInvoice, {
+      tenantKind: tenantContext?.kind ?? "SWIFTLINE",
+      logoBuffer
+    });
     document.pipe(response);
     document.end();
   } catch (error) {

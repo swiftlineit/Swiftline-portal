@@ -4,6 +4,7 @@ import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { resolveInlineEmailImages } from "../services/email/inlineImages.js";
 import { renderEmail } from "../services/email/layout.js";
 import { getEmailTemplate, hasEmailTemplate } from "../services/email/templates/index.js";
+import { getEmailPolicy } from "../services/email/catalog.js";
 
 const shipmentPayload = {
   trackingNumber: "SWL000123456",
@@ -24,6 +25,26 @@ const shipmentPayload = {
   href: "/client/shipments/665f0b2c1a",
   staffHref: "/dashboard/dpd-labels/665f0b2c1a"
 };
+
+test("operator client query email carries the account, contact and operator link", () => {
+  const { html, text } = render("OPERATOR_CONTACT_QUERY_STAFF", {
+    kind: "ISSUE",
+    subject: "Missing shipment update",
+    message: "Please check the latest parcel scan.",
+    businessAccountName: "Harbor Exports",
+    contactName: "Asha Mehta",
+    contactEmail: "asha@example.test",
+    contactPhone: "+91 9876543210",
+    awbNumbers: ["HAREXP12345"],
+    href: "/portal/harbor/queries/665f0b2c1a"
+  });
+  assert.match(html, /Harbor Exports/);
+  assert.match(html, /Asha Mehta/);
+  assert.match(html, /HAREXP12345/);
+  assert.match(text, /Please check the latest parcel scan/);
+  assert.match(html, /https:\/\/portal\.swiftline\.example\/portal\/harbor\/queries\/665f0b2c1a/);
+  assert.doesNotMatch(html, /\/dashboard\/support/);
+});
 
 function render(templateKey: string, payload: Record<string, unknown>, recipientName = "Priya Raman") {
   const content = getEmailTemplate(templateKey)({
@@ -63,6 +84,12 @@ test("shipment booked no-GST email calls the attachment an invoice and shows GST
   assert.match(staff.html, /GST[\s\S]*?-/);
 });
 
+test("email layout escapes an operator brand name", () => {
+  const { html } = renderEmail({ subject: "Update", heading: "Update", blocks: [] }, "Footer note.", "Harbor & Cargo");
+  assert.match(html, /Harbor &amp; Cargo/);
+  assert.doesNotMatch(html, /<span[^>]*>Harbor & Cargo<\/span>/);
+});
+
 test("shipment booked client template does not claim labels are attached when they are not", () => {
   const attached = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, labelsAttached: true });
   const dropped = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, labelsAttached: false });
@@ -91,6 +118,26 @@ test("shipment booked staff template names the account and the booker", () => {
   assert.match(html, /\/dashboard\/dpd-labels\/665f0b2c1a/);
 });
 
+test("operator booking emails link to one operator workspace and describe only attached documents", () => {
+  const payload = {
+    ...shipmentPayload,
+    operatorName: "JK Logistics",
+    href: "/portal/jk-logistics/shipments/665f0b2c1a",
+    invoiceAttached: true,
+    labelsAttached: false
+  };
+  const client = render("OPERATOR_SHIPMENT_BOOKED_CLIENT", payload);
+  const staff = render("OPERATOR_SHIPMENT_BOOKED_STAFF", payload);
+
+  assert.match(client.html, /invoice is attached/i);
+  assert.match(client.html, /Download your internal parcel labels/i);
+  assert.doesNotMatch(client.html, /Swiftline shipping labels|\/track\/SWL/);
+  assert.match(client.html, /https:\/\/portal\.swiftline\.example\/portal\/jk-logistics\/shipments\/665f0b2c1a/);
+  assert.doesNotMatch(client.html, /\/portal\/jk-logistics\/portal\//);
+  assert.match(staff.html, /https:\/\/portal\.swiftline\.example\/portal\/jk-logistics\/shipments\/665f0b2c1a/);
+  assert.doesNotMatch(staff.html, /attached/i);
+});
+
 test("generic template covers any notification type without a bespoke file", () => {
   assert.equal(hasEmailTemplate("SUPPORT_TICKET_REPLY"), false);
 
@@ -104,6 +151,24 @@ test("generic template covers any notification type without a bespoke file", () 
   assert.match(html, /Operations replied to your ticket/);
   assert.match(html, /https:\/\/portal\.swiftline\.example\/client\/tickets\/abc#ticket-conversation/);
   assert.match(text, /Operations replied to your ticket/);
+});
+
+test("operator administrator invitation is transactional and escapes supplied company text", () => {
+  const { content, html, text } = render("OPERATOR_INVITATION", {
+    companyName: "<Northstar Cargo>",
+    activationUrl: "https://portal.swiftline.example/auth/activate?token=secret-token",
+    expiresAt: "2026-10-22T12:00:00.000Z"
+  });
+
+  assert.equal(hasEmailTemplate("OPERATOR_INVITATION"), true);
+  assert.equal(getEmailPolicy("OPERATOR_INVITATION")?.category, "TRANSACTIONAL");
+  assert.match(content.subject, /Northstar Cargo/);
+  assert.doesNotMatch(html, /<Northstar Cargo>/);
+  assert.match(html, /&lt;Northstar Cargo&gt;/);
+  assert.match(html, /separate from Swiftline staff permissions/);
+  assert.match(html, /does not grant access to Swiftline&#39;s operational portal/);
+  assert.match(html, /auth\/activate\?token=secret-token/);
+  assert.match(text, /Accept invitation/);
 });
 
 const pickupPayload = {

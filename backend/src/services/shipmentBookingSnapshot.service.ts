@@ -12,6 +12,11 @@ import { publicShipmentSourceIdentity } from "./shipmentSourceIdentity.service.j
 export type ShipmentBookingSnapshot = {
   version: 1;
   bookedAt: string;
+  /** Frozen branding for operator-created internal labels. */
+  labelBrand?: {
+    companyName: string;
+    serviceName: string;
+  };
   /** Optional for compatibility with snapshots created before CSB selection was stored. */
   csbType?: CsbType;
   source: {
@@ -123,7 +128,7 @@ export function snapshotDeclaredGoodsValueMinor(snapshot: Pick<ShipmentBookingSn
  * Booking snapshots feed labels, invoices, and manifests. The full Aadhaar number
  * stays on the draft only; the snapshot keeps the masked form for reconciliation.
  */
-function redactConsignorAadhaar(consignor: IShipmentDraft["consignorAddress"] | undefined) {
+export function serializeShipmentConsignor(consignor: IShipmentDraft["consignorAddress"] | undefined) {
   if (!consignor) return undefined;
 
   return {
@@ -198,12 +203,14 @@ export function buildShipmentBookingSnapshot(input: {
   carrierParcelNumbers: string[];
   advanceAmountMinor?: number;
   creditAmountMinor?: number;
+  labelBrand?: ShipmentBookingSnapshot["labelBrand"];
 }): ShipmentBookingSnapshot {
   const consignee = input.draft.consigneeValidatedAddress ?? input.draft.consigneeEnteredAddress;
   const sourceIdentity = publicShipmentSourceIdentity(input.draft);
   return plain({
     version: 1,
     bookedAt: input.bookedAt.toISOString(),
+    ...(input.labelBrand ? { labelBrand: input.labelBrand } : {}),
     csbType: normalizeCsbType(input.draft.csbType),
     source: {
       invoiceNumber: sourceIdentity.invoiceNumber,
@@ -220,7 +227,7 @@ export function buildShipmentBookingSnapshot(input: {
       address: input.branch.address,
       contact: input.branch.contact
     },
-    consignor: redactConsignorAadhaar(input.draft.consignorAddress),
+    consignor: serializeShipmentConsignor(input.draft.consignorAddress),
     consignee,
     service: {
       type: input.draft.serviceType,
@@ -334,6 +341,10 @@ export function bookingSnapshotToLabelData(
       : parcelNumber,
     parcelIndex,
     parcelCount: snapshot.parcels.length,
+    ...(snapshot.labelBrand ? {
+      companyName: snapshot.labelBrand.companyName,
+      serviceName: snapshot.labelBrand.serviceName
+    } : {}),
     weightKg: parcel?.actualWeightKg ?? 0,
     generatedAt: new Date(snapshot.bookedAt),
     origin: {

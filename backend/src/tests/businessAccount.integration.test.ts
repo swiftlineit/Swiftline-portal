@@ -4,6 +4,7 @@ import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { env } from "../config/env.js";
 import {
+  createBusinessAccount,
   assignBusinessAccountBranch,
   submitBusinessAccount,
   updateBusinessAccountOperationalAction,
@@ -16,6 +17,9 @@ import { BusinessAccountMember } from "../models/businessAccountMember.model.js"
 import { BusinessAccountInvitation } from "../models/businessAccountInvitation.model.js";
 import { Branch } from "../models/branch.model.js";
 import { User } from "../models/user.model.js";
+import { AuditLog } from "../models/auditLog.model.js";
+import { Tenant } from "../models/tenant.model.js";
+import { TenantSlug } from "../models/tenantSlug.model.js";
 
 // Kept short: Atlas caps database names at 38 bytes.
 const databaseName = `swiftline_ba_test_${Date.now()}`;
@@ -45,6 +49,8 @@ function controllerRequest(input: {
     user: { _id: input.userId, role: "admin" },
     body: input.body ?? {},
     params: input.params ?? {},
+    headers: {},
+    files: {},
     query: {}
   } as unknown as Request;
 }
@@ -106,8 +112,19 @@ before(async () => {
     BusinessAccountMember.init(),
     BusinessAccountInvitation.init(),
     Branch.init(),
-    User.init()
+    User.init(),
+    AuditLog.init(),
+    Tenant.init(),
+    TenantSlug.init()
   ]);
+  const swiftlineTenant = await Tenant.create({
+    kind: "SWIFTLINE",
+    status: "ACTIVE",
+    companyName: "Swiftline Test",
+    slug: "swiftline",
+    createdBy: null
+  });
+  await TenantSlug.create({ slug: "swiftline", tenantId: swiftlineTenant._id, isCurrent: true });
 });
 
 after(async () => {
@@ -119,6 +136,38 @@ after(async () => {
 });
 
 describe("business account lifecycle", () => {
+  test("new staff accounts are assigned to the Swiftline tenant", async () => {
+    const adminId = new mongoose.Types.ObjectId();
+    const email = `tenant-account-${Date.now()}@example.com`;
+    const mobile = `98${String(Date.now()).slice(-8)}`;
+    const recorder = createResponseRecorder();
+
+    await createBusinessAccount(
+      controllerRequest({
+        userId: adminId,
+        body: {
+          saveAsDraft: "true",
+          contact: {
+            firstName: "Tenant",
+            lastName: "Account",
+            email,
+            countryCode: "+91",
+            mobileNumber: mobile
+          },
+          company: { registrationCountry: "India", operatingCountries: ["India"] }
+        }
+      }),
+      recorder.response
+    );
+
+    assert.equal(recorder.statusCode(), 201);
+    const responseBody = recorder.body<{ account: { accountId: string } }>();
+    const stored = await BusinessAccount.findOne({ accountId: responseBody.account.accountId }).lean().exec();
+    assert.ok(stored?.tenantId);
+    const root = await Tenant.findOne({ kind: "SWIFTLINE" }).lean().exec();
+    assert.equal(String(stored?.tenantId), String(root?._id));
+  });
+
   test("persists no-GST approval and rejects a stale review version", async () => {
     const adminId = new mongoose.Types.ObjectId();
     const account = await createDraftAccount(adminId, "BA-2026-200005");

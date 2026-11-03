@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 /**
  * A document the customer supplies for a shipment that is already booked.
@@ -29,7 +30,7 @@ export const shipmentSupportingDocumentLabels: Record<ShipmentSupportingDocument
   OTHER: "Other Supporting Document"
 };
 
-export interface IShipmentSupportingDocument extends mongoose.Document {
+export interface IShipmentSupportingDocument extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
   businessAccountId: mongoose.Types.ObjectId;
   branchId: mongoose.Types.ObjectId;
@@ -65,6 +66,8 @@ const shipmentSupportingDocumentSchema = new mongoose.Schema<IShipmentSupporting
 
 // The shipment view lists these newest first.
 shipmentSupportingDocumentSchema.index({ shipmentDraftId: 1, createdAt: -1 });
+
+addTenantOwnership(shipmentSupportingDocumentSchema);
 
 export const ShipmentSupportingDocument = mongoose.model<IShipmentSupportingDocument>(
   "ShipmentSupportingDocument",

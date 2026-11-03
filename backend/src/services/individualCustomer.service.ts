@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { BusinessAccount } from "../models/businessAccount.model.js";
+import { getSwiftlineTenantId } from "./swiftlineTenant.service.js";
 import { CounterPayment, type CounterPaymentMethod } from "../models/counterPayment.model.js";
 
 /**
@@ -84,13 +85,20 @@ export function isIndividualSentinel(account: { accountKind?: string } | null | 
  * recorded because the schema requires it.
  */
 export async function getOrCreateIndividualSentinel(createdBy: mongoose.Types.ObjectId) {
+  const tenantId = await getSwiftlineTenantId();
   const existing = await BusinessAccount.findOne({ accountKind: "INDIVIDUAL_SENTINEL" }).exec();
   if (existing) {
+    if (existing.tenantId && !existing.tenantId.equals(tenantId)) {
+      throw new Error("The individual customer account belongs to a different tenant.");
+    }
+    if (!existing.tenantId) {
+      throw new Error("The individual customer account has not been assigned to the Swiftline tenant.");
+    }
     if (existing.rateCardBand !== "BAND_D" || !existing.company.noCompany) {
       existing.rateCardBand = "BAND_D";
       existing.company.noCompany = true;
-      await existing.save();
     }
+    if (existing.isModified()) await existing.save();
     return existing;
   }
 
@@ -98,6 +106,7 @@ export async function getOrCreateIndividualSentinel(createdBy: mongoose.Types.Ob
     { accountId: INDIVIDUAL_SENTINEL_ACCOUNT_ID },
     {
       $setOnInsert: {
+        tenantId,
         accountId: INDIVIDUAL_SENTINEL_ACCOUNT_ID,
         accountKind: "INDIVIDUAL_SENTINEL",
         rateCardBand: "BAND_D",

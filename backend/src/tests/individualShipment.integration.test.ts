@@ -10,6 +10,8 @@ import { Branch } from "../models/branch.model.js";
 import { CounterPayment } from "../models/counterPayment.model.js";
 import { ShipmentCharge } from "../models/shipmentCharge.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
+import { Tenant } from "../models/tenant.model.js";
+import { TenantSlug } from "../models/tenantSlug.model.js";
 import { User } from "../models/user.model.js";
 import {
   excludeSentinel,
@@ -72,7 +74,23 @@ async function createBranch() {
 before(async () => {
   await mongoose.connect(env.MONGODB_URI, { dbName: databaseName, family: 4, retryWrites: false });
   assert.equal(mongoose.connection.name, databaseName, "Individual shipment tests must use an isolated database.");
-  await Promise.all([BusinessAccount.init(), Branch.init(), User.init(), ShipmentDraft.init(), CounterPayment.init()]);
+  await Promise.all([
+    BusinessAccount.init(),
+    Branch.init(),
+    User.init(),
+    ShipmentDraft.init(),
+    CounterPayment.init(),
+    Tenant.init(),
+    TenantSlug.init()
+  ]);
+  const swiftlineTenant = await Tenant.create({
+    kind: "SWIFTLINE",
+    status: "ACTIVE",
+    companyName: "Swiftline Test",
+    slug: "swiftline",
+    createdBy: null
+  });
+  await TenantSlug.create({ slug: "swiftline", tenantId: swiftlineTenant._id, isCurrent: true });
   adminId = new mongoose.Types.ObjectId();
   branchId = await createBranch();
 });

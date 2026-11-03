@@ -7,7 +7,7 @@ import { BusinessAccountMember } from "../models/businessAccountMember.model.js"
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
-import { ShipmentDraft, type IShipmentDraft } from "../models/shipmentDraft.model.js";
+import { ShipmentDraft, shipmentDraftStatusValues, type IShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentImportBatch } from "../models/shipmentImportBatch.model.js";
 import {
   buildDeliveryEstimate,
@@ -83,10 +83,13 @@ import {
 import { normalizeParcelItems } from "../services/parcelItems.service.js";
 import { clientCanAccessShipmentDraft } from "../services/shipmentDraftPolicy.service.js";
 import { isDpdBookingEnabled } from "../services/bookingPause.service.js";
+import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 import { isDpdLabelDestination } from "../services/als/alsPayload.service.js";
+import { getTenantContext } from "../services/tenantScope.service.js";
 import {
   readShipmentBookingSnapshot,
-  serializeShipmentBookingConfirmation
+  serializeShipmentBookingConfirmation,
+  serializeShipmentConsignor
 } from "../services/shipmentBookingSnapshot.service.js";
 
 function getAuthenticatedUserId(request: Request) {
@@ -139,7 +142,7 @@ function makeEmptyShipmentSummary(branchId?: string) {
 type ClientShipmentDraftSnapshot = {
   _id: unknown;
   branchId: unknown;
-  parcelList?: Array<{ shipmentReference1?: string }>;
+  parcelList?: Array<{ shipmentReference1?: string; weightKg?: number }>;
   parcelCount?: number;
   status?: string;
   bookingState?: string;
@@ -557,6 +560,16 @@ export async function getClientDashboard(request: Request, response: Response): 
 export async function listClientShipments(request: Request, response: Response): Promise<Response> {
   const userId = getAuthenticatedUserId(request);
   if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  const operatorWorkspace = Boolean(getOperatorContext(request));
+  const requestedStatus = operatorWorkspace && typeof request.query.status === "string"
+    ? request.query.status.trim()
+    : "";
+  const search = operatorWorkspace && typeof request.query.search === "string"
+    ? request.query.search.trim().slice(0, 100)
+    : "";
+  if (requestedStatus && !(shipmentDraftStatusValues as readonly string[]).includes(requestedStatus)) {
+    return response.status(400).json({ success: false, message: "Choose a valid shipment draft status." });
+  }
 
   const businessAccountId = typeof request.query.businessAccountId === "string"
     ? request.query.businessAccountId
@@ -609,12 +622,26 @@ export async function listClientShipments(request: Request, response: Response):
   // booked-shipments list. bookingState (indexed) is the discriminator: a
   // rejected carrier booking can leave a stale DpdShipment pointing at an
   // editable draft, so carrier-row existence alone would misclassify.
-  const query = {
+  const query: Record<string, unknown> = {
     businessAccountId: new mongoose.Types.ObjectId(businessAccountId),
     branchId: { $in: branchObjectIds },
     bookingState: { $in: ["EDITABLE", "BOOKING", "REVIEW_REQUIRED"] as const },
     deletedAt: null
   };
+  if (requestedStatus) query.status = requestedStatus;
+  if (search) {
+    const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(escaped, "i");
+    query.$or = [
+      { "consigneeEnteredAddress.companyName": pattern },
+      { "consigneeEnteredAddress.contactName": pattern },
+      { "consigneeEnteredAddress.townOrCity": pattern },
+      { "consignorAddress.companyName": pattern },
+      { "consignorAddress.contactName": pattern },
+      { "parcelList.shipmentReference1": pattern },
+      { "parcelList.shipmentReference2": pattern }
+    ];
+  }
   const total = await ShipmentDraft.countDocuments(query).exec();
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const page = Math.min(requestedPage, totalPages);
@@ -672,6 +699,10 @@ export async function listClientShipments(request: Request, response: Response):
       branchId: String(draft.branchId),
       invoiceNumber: "",
       shipmentReference: draft.parcelList?.find((parcel) => parcel.shipmentReference1?.trim())?.shipmentReference1 ?? "",
+      ...(operatorWorkspace ? {
+        parcelCount: draft.parcelCount ?? draft.parcelList?.length ?? 0,
+        parcelWeightsKg: draft.parcelList?.map((parcel) => typeof parcel.weightKg === "number" ? parcel.weightKg : null) ?? []
+      } : {}),
       swiftlineTrackingNumber: dpdShipment?.swiftlineTrackingNumber ?? "",
       destination: {
         companyName: draft.consigneeEnteredAddress?.companyName ?? "",
@@ -1140,11 +1171,23 @@ function serializeClientShipmentDetails(params: {
   }>;
   currentInvoiceRevision?: number;
   currentInvoiceNumber?: string;
-  journey?: TrackingJourney;
+  journey?: TrackingJourney | null;
+  includeParcelCollected?: boolean;
+  includeOperatorDetails?: boolean;
 }) {
-  const { draft, dpdShipment, labels, events, currentInvoiceRevision, currentInvoiceNumber, journey } = params;
+  const {
+    draft,
+    dpdShipment,
+    labels,
+    events,
+    currentInvoiceRevision,
+    currentInvoiceNumber,
+    journey,
+    includeParcelCollected = false,
+    includeOperatorDetails = false
+  } = params;
   const currentEvent = resolveCurrentTrackingEvent(
-    events.filter((event) => event.status !== "PARCEL_COLLECTED")
+    includeParcelCollected ? events : events.filter((event) => event.status !== "PARCEL_COLLECTED")
   );
   const originalBookingSnapshot = readShipmentBookingSnapshot(dpdShipment?.bookingSnapshot);
   const snapshotIsCurrent = (currentInvoiceRevision ?? 1) <= (dpdShipment?.snapshotRevision ?? 1);
@@ -1196,6 +1239,9 @@ function serializeClientShipmentDetails(params: {
       parcelCount: parcelList.length,
       parcelList,
       consignee: currentShipmentSnapshot?.consignee ?? draft.consigneeEnteredAddress,
+      ...(includeOperatorDetails ? {
+        consignor: originalBookingSnapshot?.consignor ?? serializeShipmentConsignor(draft.consignorAddress)
+      } : {}),
       createdAt: draft.createdAt,
       updatedAt: draft.updatedAt
     },
@@ -1207,9 +1253,9 @@ function serializeClientShipmentDetails(params: {
       : null,
     taxInvoiceNumber: currentInvoiceNumber ?? "",
     labels: labels.map(serializeClientLabel),
-    currentEvent: currentEvent ? serializeClientShipmentEvent(currentEvent, journey) : null,
-    events: normalizeVisibleTrackingHistory(events, journey)
-      .map((event) => serializeClientShipmentEvent(event, journey)),
+    currentEvent: currentEvent ? serializeClientShipmentEvent(currentEvent, journey ?? undefined) : null,
+    events: normalizeVisibleTrackingHistory(events, journey ?? undefined)
+      .map((event) => serializeClientShipmentEvent(event, journey ?? undefined)),
     trackingJourney: journey ?? null
   };
 }
@@ -1266,7 +1312,8 @@ export async function getClientShipmentDetails(request: Request, response: Respo
    * for shipments booked before routes existed. A lane with no route configured
    * yields null, and the tracking page shows no date rather than a guessed one.
    */
-  const journey = await loadShipmentJourney({
+  const operatorTenant = getTenantContext()?.kind === "OPERATOR";
+  const journey = operatorTenant ? null : await loadShipmentJourney({
     shipmentDraftId: draft._id,
     destinationCountryCode: draft.consigneeEnteredAddress?.countryCode ?? "",
     destinationCountryName: draft.consigneeEnteredAddress?.countryName ?? "",
@@ -1274,11 +1321,35 @@ export async function getClientShipmentDetails(request: Request, response: Respo
     events,
     originHubFallback: originBranch?.address?.city ? `${originBranch.address.city} Hub` : ""
   });
-  const deliveryEstimate = await buildDeliveryEstimate({
+  const deliveryEstimate = operatorTenant ? null : await buildDeliveryEstimate({
     draft,
     events,
     bookingAt: dpdShipment?.createdAt ?? null
   });
+  const trackingEvents = operatorTenant
+    ? events
+    : events.filter((event) => event.status !== "PARCEL_COLLECTED");
+  const currentTrackingEvent = resolveCurrentTrackingEvent(trackingEvents);
+  const trackingPosition = journey
+    ? buildTrackingPosition({
+        events: trackingEvents,
+        journey,
+        destinationCity: draft.consigneeEnteredAddress?.townOrCity ?? "",
+        audience: "AUTHENTICATED"
+      })
+    : currentTrackingEvent?.status && currentTrackingEvent.status !== "SHIPMENT_BOOKED"
+      ? {
+          label: currentTrackingEvent.location?.trim() || formatShipmentEventLabel(currentTrackingEvent.status),
+          source: "RECORDED" as const,
+          basisStatus: currentTrackingEvent.status,
+          holdReasonLabel: ""
+        }
+      : {
+          label: "Awaiting collection from sender",
+          source: "PENDING" as const,
+          basisStatus: currentTrackingEvent?.status ?? "SHIPMENT_BOOKED",
+          holdReasonLabel: ""
+        };
 
   return response.status(200).json({
     success: true,
@@ -1290,7 +1361,9 @@ export async function getClientShipmentDetails(request: Request, response: Respo
         events,
         currentInvoiceRevision: currentInvoice?.revision ?? 1,
         currentInvoiceNumber: currentInvoice?.invoiceNumber ?? "",
-        journey
+        journey,
+        includeParcelCollected: operatorTenant,
+        includeOperatorDetails: operatorTenant
       }),
       deliveryEstimate,
       trackingSummary: buildTrackingSummary({ draft, dpdShipment, events }),
@@ -1308,12 +1381,7 @@ export async function getClientShipmentDetails(request: Request, response: Respo
       })),
       parcelProgress,
       hubReceipt,
-      trackingPosition: buildTrackingPosition({
-        events: events.filter((event) => event.status !== "PARCEL_COLLECTED"),
-        journey,
-        destinationCity: draft.consigneeEnteredAddress?.townOrCity ?? "",
-        audience: "AUTHENTICATED"
-      })
+      trackingPosition
     }
   });
 }

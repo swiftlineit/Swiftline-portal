@@ -1,7 +1,10 @@
 import type { Request, Response } from "express";
+import mongoose from "mongoose";
 import { env } from "../config/env.js";
 import { EmailOutbox, type EmailOutboxStatus } from "../models/emailOutbox.model.js";
 import { EmailSuppression, type EmailSuppressionReason } from "../models/emailSuppression.model.js";
+import { Tenant } from "../models/tenant.model.js";
+import { runWithTenantContext } from "../services/tenantScope.service.js";
 
 type SnsEnvelope = {
   Type?: string;
@@ -64,10 +67,29 @@ async function recordSoftBounce(email: string, detail: string, sesMessageId: str
 
 async function markOutboxStatus(sesMessageId: string, status: EmailOutboxStatus, lastError: string) {
   if (!sesMessageId) return;
-  await EmailOutbox.updateMany(
+
+  // SES message IDs are global to the transport, so discovery is a deliberate
+  // system-level read. Every mutation then re-enters the owner's tenant scope.
+  const rows = await EmailOutbox.collection.find(
     { sesMessageId },
-    { $set: { status, lastError: lastError.slice(0, 1000) } }
-  ).exec();
+    { projection: { _id: 1, tenantId: 1 } }
+  ).toArray();
+
+  for (const row of rows) {
+    if (!mongoose.isValidObjectId(row.tenantId)) {
+      throw new Error("Email outbox row has no valid tenant owner.");
+    }
+    const tenantId = new mongoose.Types.ObjectId(String(row.tenantId));
+    const tenant = await Tenant.findById(tenantId).select("_id kind").lean().exec();
+    if (!tenant) throw new Error("Email outbox tenant owner was not found.");
+
+    await runWithTenantContext({ tenantId, kind: tenant.kind }, async () => {
+      await EmailOutbox.updateOne(
+        { _id: row._id },
+        { $set: { status, lastError: lastError.slice(0, 1000) } }
+      ).exec();
+    });
+  }
 }
 
 async function handleSesEvent(event: SesEvent) {

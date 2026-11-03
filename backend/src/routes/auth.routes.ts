@@ -1,6 +1,8 @@
 import { Router } from "express";
 import {
   activateInvitation,
+  acceptOperatorClientInvitation,
+  acceptOperatorInvitation,
   getInvitation,
   login,
   loginWithGoogle,
@@ -13,7 +15,9 @@ import {
   resetPassword,
   verifyLoginOtp
 } from "../controllers/auth.controller.js";
-import { attachUser } from "../middleware/auth.middleware.js";
+import { attachUser, requireAuthenticated } from "../middleware/auth.middleware.js";
+import { env } from "../config/env.js";
+import { getMyClientWorkspaceAccess, listMyOperatorWorkspaces } from "../controllers/operatorWorkspace.controller.js";
 import {
   googleLoginLimiter,
   otpRequestLimiter,
@@ -36,5 +40,11 @@ authRouter.post("/forgot-password", passwordResetRequestLimiter, requestPassword
 authRouter.post("/reset-password", passwordResetLimiter, resetPassword);
 authRouter.get("/invitations/:token", getInvitation);
 authRouter.post("/activate-invitation", activateInvitation);
+authRouter.post("/accept-operator-invitation", attachUser, requireAuthenticated, acceptOperatorInvitation);
+authRouter.post("/accept-operator-client-invitation", attachUser, requireAuthenticated, acceptOperatorClientInvitation);
 authRouter.get("/me", attachUser, me);
+authRouter.get("/client-workspaces", attachUser, requireAuthenticated, getMyClientWorkspaceAccess);
+if (env.OPERATOR_PORTAL_ENABLED) {
+  authRouter.get("/operator-workspaces", attachUser, requireAuthenticated, listMyOperatorWorkspaces);
+}
 authRouter.patch("/welcome-seen", attachUser, markWelcomeSeen);

@@ -96,10 +96,13 @@ describe("credit agreement snapshot", () => {
     }
   });
 
-  test("defines one open agreement per business and unique version history", () => {
+  test("defines one open agreement per tenant business and unique version history", () => {
     const indexes = CreditAgreement.schema.indexes() as Array<[Record<string, number>, { unique?: boolean; name?: string; partialFilterExpression?: unknown }]>;
-    assert.ok(indexes.some(([fields, options]) => fields.businessAccountId === 1 && fields.version === 1 && options.unique));
-    const openIndex = indexes.find(([, options]) => options.name === "one_open_credit_agreement_per_business");
+    assert.ok(indexes.some(([fields, options]) =>
+      fields.tenantId === 1 && fields.businessAccountId === 1 && fields.version === 1 && options.unique
+    ));
+    const openIndex = indexes.find(([, options]) => options.name === "one_open_credit_agreement_per_tenant_business");
+    assert.deepEqual(openIndex?.[0], { tenantId: 1, businessAccountId: 1 });
     assert.equal(openIndex?.[1].unique, true);
     assert.deepEqual(openIndex?.[1].partialFilterExpression, { status: { $in: ["DRAFT", "GENERATED", "SENT", "VIEWED"] } });
   });

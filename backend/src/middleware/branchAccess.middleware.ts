@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
+import { getOperatorContext } from "./operatorContext.middleware.js";
 
 type BranchScopedUser = {
   _id: mongoose.Types.ObjectId;
@@ -13,6 +14,11 @@ function branchScopedUser(request: Request) {
 
 /** Admin is global; every other internal role is limited to its assignments. */
 export function allowedBranchIds(request: Request): string[] | null {
+  const operator = getOperatorContext(request);
+  if (operator) {
+    if (operator.role === "OPERATOR_ADMIN") return null;
+    return operator.assignedBranches.map(String);
+  }
   const user = branchScopedUser(request);
   if (!user) return [];
   if (user.role === "admin") return null;

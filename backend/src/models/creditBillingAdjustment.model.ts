@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
-export interface ICreditBillingAdjustment extends mongoose.Document {
+export interface ICreditBillingAdjustment extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   creditAccountId: mongoose.Types.ObjectId;
   shipmentInvoiceId: mongoose.Types.ObjectId;
@@ -41,8 +42,13 @@ const creditBillingAdjustmentSchema = new mongoose.Schema<ICreditBillingAdjustme
   billedAt: { type: Date, default: null }
 });
 
-creditBillingAdjustmentSchema.index({ sourceType: 1, sourceId: 1 }, { unique: true });
+creditBillingAdjustmentSchema.index(
+  { tenantId: 1, sourceType: 1, sourceId: 1 },
+  { unique: true, name: "uniq_tenant_credit_adjustment_source" }
+);
 creditBillingAdjustmentSchema.index({ businessAccountId: 1, status: 1, createdAt: 1 });
+
+addTenantOwnership(creditBillingAdjustmentSchema);
 
 export const CreditBillingAdjustment = mongoose.model<ICreditBillingAdjustment>(
   "CreditBillingAdjustment",

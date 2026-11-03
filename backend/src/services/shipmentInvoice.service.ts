@@ -7,6 +7,8 @@ import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentCharge } from "../models/shipmentCharge.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentInvoiceCounter } from "../models/shipmentInvoiceCounter.model.js";
+import { Tenant } from "../models/tenant.model.js";
+import { getTenantContext } from "./tenantScope.service.js";
 import { formatCsbType } from "./csbType.service.js";
 import { resolveGstStateCode } from "./gstin.js";
 import {
@@ -37,14 +39,14 @@ function getFinancialYear(date = new Date()) {
   return `${String(startYear).slice(-2)}-${String(startYear + 1).slice(-2)}`;
 }
 
-async function getNextInvoiceNumber(financialYear: string, session?: mongoose.ClientSession) {
+async function getNextInvoiceNumber(financialYear: string, session?: mongoose.ClientSession, prefix = "SL") {
   const counter = await ShipmentInvoiceCounter.findOneAndUpdate(
     { financialYear },
     { $inc: { sequence: 1 } },
     { returnDocument: "after", upsert: true, runValidators: true, setDefaultsOnInsert: true, session }
   ).exec();
 
-  return `SL/${financialYear}/${String(counter.sequence).padStart(5, "0")}`;
+  return `${prefix}/${financialYear}/${String(counter.sequence).padStart(5, "0")}`;
 }
 
 function normalizeState(value?: string | null) {
@@ -111,6 +113,25 @@ export function resolveShipmentInvoicePaymentAllocation(input: {
 
 function addressLine(parts: Array<string | undefined | null>) {
   return parts.map((part) => part?.trim()).filter(Boolean).join(", ");
+}
+
+export function resolveInvoiceBillTo(input: {
+  tenantKind?: "SWIFTLINE" | "OPERATOR";
+  noCompanyAccount: boolean;
+  accountContactName: string;
+  companyName: string;
+  accountBillingAddress: string;
+  existingBillingAddress: string;
+}) {
+  const operatorNoCompany = input.tenantKind === "OPERATOR" && input.noCompanyAccount;
+  return {
+    companyName: operatorNoCompany
+      ? input.accountContactName || input.companyName
+      : input.companyName,
+    billingAddress: operatorNoCompany
+      ? input.accountBillingAddress
+      : input.existingBillingAddress
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -185,6 +206,10 @@ export async function ensureShipmentInvoiceForDraft(input: {
   const draft = await draftQuery.exec();
   const dpdShipment = await dpdQuery.exec();
   if (!draft || !dpdShipment) throw new ShipmentInvoiceServiceError("Booked shipment information was not found.", 404);
+  const tenantContext = getTenantContext();
+  if (tenantContext?.kind === "OPERATOR" && String(draft.tenantId) !== String(tenantContext.tenantId)) {
+    throw new ShipmentInvoiceServiceError("The shipment tenant does not match the authenticated operator.", 404);
+  }
   // The first legal invoice must use the exact values accepted at booking.
   // Approved amendments deliberately use current draft values and create a revision.
   const bookingSnapshot = input.revise
@@ -194,15 +219,23 @@ export async function ensureShipmentInvoiceForDraft(input: {
   const accountQuery = BusinessAccount.findById(draft.businessAccountId);
   const branchQuery = Branch.findById(draft.branchId);
   const chargeQuery = ShipmentCharge.findOne({ shipmentDraftId: draft._id });
+  const tenantQuery = draft.tenantId
+    ? Tenant.findOne({ _id: draft.tenantId, ...(tenantContext?.kind === "OPERATOR" ? { kind: "OPERATOR" } : {}) })
+    : null;
   if (input.session) {
     accountQuery.session(input.session);
     branchQuery.session(input.session);
     chargeQuery.session(input.session);
+    tenantQuery?.session(input.session);
   }
-  const account = await accountQuery.exec();
-  const branch = await branchQuery.exec();
-  const charge = await chargeQuery.exec();
+  const [account, branch, charge, tenant] = await Promise.all([
+    accountQuery.exec(),
+    branchQuery.exec(),
+    chargeQuery.exec(),
+    tenantQuery?.exec() ?? Promise.resolve(null)
+  ]);
   if (!account || !branch) throw new ShipmentInvoiceServiceError("Invoice master data is incomplete.", 409);
+  if (draft.tenantId && !tenant) throw new ShipmentInvoiceServiceError("The shipment tenant could not be found.", 409);
 
   let pricing: ShipmentPricingEstimate;
   if (input.pricingOverride) {
@@ -261,12 +294,15 @@ export async function ensureShipmentInvoiceForDraft(input: {
   const snapshotContact = asRecord(snapshotAccount.contact);
   const snapshotConsignor = asRecord(bookingSnapshot?.consignor);
   const snapshotConsignee = asRecord(bookingSnapshot?.consignee);
+  const isIndividualCustomer = draft.customerType === "INDIVIDUAL";
+  const operatorNoCompanyCustomer = tenant?.kind === "OPERATOR"
+    && !isIndividualCustomer
+    && Boolean(account.company.noCompany);
   // Every field below falls back to the business account when the snapshot leaves
   // it blank. For a walk-in that account is the shared sentinel, so the fallback
   // would print its bookkeeping identity- "Customers" as a surname, and its
   // internal system email address- onto a real customer's invoice. Individuals
   // are billed from their snapshot alone; a blank field stays blank.
-  const isIndividualCustomer = draft.customerType === "INDIVIDUAL";
   const fallbackContact = isIndividualCustomer
     ? { firstName: "", lastName: "", email: "", countryCode: "", mobileNumber: "" }
     : account.contact;
@@ -288,12 +324,19 @@ export async function ensureShipmentInvoiceForDraft(input: {
   // the supplier's registration number is not a tax invoice. A missing customer
   // GSTIN is ordinary- an unregistered recipient never has one- so the field
   // is left blank on the document and the invoice issues normally.
-  const validationWarnings = supplierGstin ? [] : ["Branch GSTIN is not configured."];
+  const validationWarnings = supplierGstin ? [] : [
+    tenant?.kind === "OPERATOR" ? "Operator branch GSTIN is not configured." : "Branch GSTIN is not configured."
+  ];
   // A shipment with no GST is still a valid completed invoice, so the GST cells
   // are simply left empty rather than marking the whole invoice as a draft.
   const status = validationWarnings.length && totalTaxAmountMinor > 0 ? "DRAFT" : "ISSUED";
   const supplier = {
-    legalName: "Swiftline Cargo and Express Logistics Pvt. Ltd.",
+    legalName: tenant?.kind === "OPERATOR"
+      ? tenant.companyName
+      : "Swiftline Cargo and Express Logistics Pvt. Ltd.",
+    ...(tenant?.kind === "OPERATOR" && tenant.branding?.logo?.storageKey
+      ? { operatorLogoStorageKey: tenant.branding.logo.storageKey }
+      : {}),
     branchName: asString(snapshotSender.name) || branch.name,
     branchCode: asString(snapshotSender.code) || branch.code,
     gstin: supplierGstin,
@@ -318,10 +361,12 @@ export async function ensureShipmentInvoiceForDraft(input: {
       : isIndividualCustomer ? null : account.company.billingAddress
   );
   const hasSeparateSnapshotBillingAddress = Boolean(asString(separateBilling.addressLine1));
-  const usesCompanyAddress = Boolean(
-    snapshotCompany.useCompanyAddressAsBillingAddress
-      ?? (isIndividualCustomer ? false : account.company.useCompanyAddressAsBillingAddress)
-  );
+  const usesCompanyAddress = operatorNoCompanyCustomer
+    ? false
+    : Boolean(
+      snapshotCompany.useCompanyAddressAsBillingAddress
+        ?? (isIndividualCustomer ? false : account.company.useCompanyAddressAsBillingAddress)
+    );
   const separateBillingAddressLine = (isIndividualCustomer && hasSeparateSnapshotBillingAddress) || !usesCompanyAddress
     ? addressLine([
       asString(separateBilling.addressLine1),
@@ -359,18 +404,30 @@ export async function ensureShipmentInvoiceForDraft(input: {
     || (snapshotHasIndividualIdentity ? asString(snapshotContact.email) : "")
     || fallbackContact.email;
   const individualPhone = `${asString(snapshotConsignor.mobileCountryCode) || (snapshotHasIndividualIdentity ? asString(snapshotContact.countryCode) : "") || fallbackContact.countryCode} ${asString(snapshotConsignor.mobileNumber) || (snapshotHasIndividualIdentity ? asString(snapshotContact.mobileNumber) : "") || fallbackContact.mobileNumber}`.trim();
+  const customerCompanyName = isIndividualCustomer
+    ? individualName
+    : asString(snapshotCompany.companyName) || fallbackCompany.companyName;
+  const existingCustomerBillingAddress = separateBillingAddressLine
+    || (isIndividualCustomer ? consignorAddressLine : "")
+    || registeredAddressLine;
+  const invoiceBillTo = resolveInvoiceBillTo({
+    tenantKind: tenant?.kind,
+    noCompanyAccount: operatorNoCompanyCustomer,
+    accountContactName,
+    companyName: customerCompanyName,
+    accountBillingAddress: separateBillingAddressLine,
+    existingBillingAddress: existingCustomerBillingAddress
+  });
   const customer = {
     accountId: asString(snapshotAccount.accountId) || account.accountId,
-    companyName: isIndividualCustomer
-      ? individualName
-      : asString(snapshotCompany.companyName) || fallbackCompany.companyName,
+    companyName: invoiceBillTo.companyName,
     contactName: isIndividualCustomer
       ? individualContactName
       : accountContactName,
     gstin: customerGstin,
     state: customerState,
     stateCode: customerGstin.slice(0, 2),
-    billingAddress: separateBillingAddressLine || (isIndividualCustomer ? consignorAddressLine : "") || registeredAddressLine,
+    billingAddress: invoiceBillTo.billingAddress,
     email: isIndividualCustomer ? individualEmail : asString(snapshotContact.email) || fallbackContact.email,
     phone: isIndividualCustomer
       ? individualPhone
@@ -475,7 +532,11 @@ export async function ensureShipmentInvoiceForDraft(input: {
   const financialYear = getFinancialYear(issuedAt);
   const invoice = new ShipmentInvoice({
     ...nextValues,
-    invoiceNumber: await getNextInvoiceNumber(financialYear, input.session),
+    invoiceNumber: await getNextInvoiceNumber(
+      financialYear,
+      input.session,
+      tenant?.kind === "OPERATOR" ? "OP" : "SL"
+    ),
     financialYear,
     shipmentDraftId: draft._id,
     revision: 1,
@@ -600,6 +661,11 @@ export function serializeShipmentInvoice(
     }
   ].sort((left, right) => left.revision - right.revision);
 
+  const supplier = selected.supplier && typeof selected.supplier === "object" && !Array.isArray(selected.supplier)
+    ? { ...(selected.supplier as Record<string, unknown>) }
+    : selected.supplier;
+  if (supplier && typeof supplier === "object") delete supplier.operatorLogoStorageKey;
+
   return {
     id: String(invoice._id),
     invoiceNumber: invoice.invoiceNumber,
@@ -609,7 +675,7 @@ export function serializeShipmentInvoice(
     businessAccountId: String(invoice.businessAccountId),
     branchId: String(invoice.branchId),
     currency: invoice.currency,
-    supplier: selected.supplier,
+    supplier,
     customer: selected.customer,
     shipment: selected.shipment,
     sacCode: selected.sacCode,
