@@ -1,36 +1,144 @@
-# Operator portal implementation
+# Operator workspace module
 
-This branch builds a tenant-aware operator portal while preserving Swiftline's existing booking, tracking and billing behavior. The operator feature flag is off by default. No operator may be activated until the isolation and regression gates below pass.
+Updated: 3 November 2026
 
-## Confirmed first release
+This document is the current implementation and release reference for operator workspaces. It replaces the earlier chronological implementation notes.
 
-- Swiftline is the platform owner and an operational tenant. An operator is a separate business, not a Swiftline business account.
-- An operator's staff and business-account clients create shipments. Bookings use only that operator's internal label, with no ALS, DPD or Razorpay integration.
-- Bookings create the operator's GST tax invoice for charges and a separate shipment/customs invoice for goods and declared value. Only the tax invoice affects credit.
-- The operator approves credit limits and terms for its clients. Clients book first and pay later. Payments received outside the portal are verified by operator finance staff before balances change.
-- Confirmed operator booking finalizes the charge for its credit statement. Swiftline keeps its current operational charge-finalization trigger.
-- Operator staff create combined and account-level manifests; a client can create manifests only for its own business account.
-- Operator staff enter tracking events manually. An operator client sees only customer-visible events for its account. Swiftline retains its current tracking sources.
-- Operators use `/portal/{operatorSlug}/...` on Swiftline's domain. A slug is a routing identifier, never an authorization credential. Old slugs remain reserved and redirect to the current slug after access checks.
-- Cancellation review accepts an editable fee for each case. Financial changes remain auditable; Swiftline's existing cancellation rules stay unchanged.
+## Purpose and boundaries
 
-## Authorization invariants
+An operator is a tenant that runs its own client accounts, branches, pricing, credit, bookings, documents, manifests, tracking, queries, users, and workspace branding. Operator records remain separate from Swiftline records.
 
-1. A signed-in identity has no operator authority from its global `User.role`. Operator access requires an active `TenantMembership` in the URL tenant, checked on every request.
-2. Platform administrators are Swiftline staff. Operator administrators must never receive the legacy global `admin` role.
-3. A client additionally needs an active business-account membership in the same tenant and any required branch permission. Object IDs, slugs, labels and tracking numbers supplied by the browser cannot select another tenant's records.
-4. Tenant checks must cover list, detail, write, export, download, notification, job, webhook and public routes. Storage access must follow the owning record's authorization.
-5. Swiftline's legacy API routes remain Swiftline-only. Operator records must never be inserted into collections reached by those routes until the routes enforce that boundary.
+Operator workspace pages live under `/portal/{operatorSlug}` and operator APIs under `/api/v1/operators/{operatorSlug}`. The slug selects a workspace; it does not grant access. Every request must resolve an active tenant and an active membership for the authenticated user.
 
-## Implementation sequence and release gates
+Swiftline staff and client routes keep their existing behavior. Shared services or controllers may be used only through the operator tenant context and operator-specific authorization wrappers.
 
-1. **Registry (started):** tenant and slug records, draft-only onboarding, active membership guard and explicit unique-index migration. These routes are behind `OPERATOR_PORTAL_ENABLED=false`. There is no operator activation endpoint.
-2. **Inventory and migration:** classify every model as tenant-owned, Swiftline-only, platform-owned or shared reference data. Add required tenant IDs and compound indexes to each owned collection. Create the Swiftline tenant and run a dry-run backfill with counts and orphan checks before applying it. Preserve existing IDs, tracking references, documents and invoice numbers. Production indexes use reviewed explicit migrations.
-3. **Access boundary:** scope every existing Swiftline route and job to the Swiftline tenant, including public tracking and background carrier sync. Add operator staff and client APIs with mandatory tenant and account scope. Prove denials for changed slugs, IDs, downloads and exports.
-4. **Operator transactions:** implement operator rate cards, credit, booking, internal labels, two invoices, amendments and cancellations. Booking, charge conversion, invoice creation and manual tracking must be idempotent and auditable. Operator invoice and tracking counters are tenant-scoped.
-5. **Manifests and UI:** add operator account and combined manifests with the current account/branch permission model, then responsive operator dashboards and configuration screens. Read the installed Next.js guide and reuse existing components before changing frontend routes.
-6. **Pilot:** run focused and regression suites plus a cross-tenant test matrix on an isolated Atlas test database. Keep the feature flag off in production until the migration and all gates pass. Enable one operator first with monitoring and a rollback path.
+## First release scope
 
-## Scope boundary for the current branch state
+The first release contains:
 
-The registry can create only `DRAFT` operators. No business account, shipment or client account for an operator can yet be created. `OPERATOR_PORTAL_ENABLED` must remain false outside controlled testing while legacy routes and data are being tenantized. The current registry test uses a uniquely named temporary Atlas database and drops only that database.
+- operator onboarding, activation, suspension, reactivation, slug history, and workspace discovery;
+- operator administrator, operations, finance, and client memberships;
+- operator business accounts, KYC review, activation, deactivation, branch assignment, and client invitations;
+- branch, user, profile, settings, logo, and home-banner management;
+- private operator rate cards and client-visible rate-card access;
+- operator-managed credit, statements, and verified offline payments;
+- internal-label shipment booking without a carrier booking;
+- tax invoices, shipment invoices, labels, KYC documents, and protected downloads;
+- shipment lists, details, amendments, reviewed cancellations, manifests, manual tracking, and AWB lookup;
+- tenant-routed booking notifications and email for the booking client and the operator's administrator or operations recipients;
+- a simple client Contact Us form and an operator query inbox; and
+- role-specific home metrics, charts, banners, and recent shipments.
+
+Pickup requests, claims, a full ticketing system, operator online payments, and automated carrier integrations are outside this release.
+
+## Workspace entry behavior
+
+Login routing is based on active memberships rather than the global user role:
+
+- one active operator workspace and no Swiftline client access: open that operator workspace directly;
+- Swiftline client access only: open `/client/dashboard`;
+- more than one available workspace: open `/workspaces` for selection;
+- an approved safe return path: honor it only when the user belongs to that workspace; and
+- no active workspace: open `/workspaces` with no unauthorized fallback.
+
+Operator clients do not need to paste a workspace URL. A direct operator URL remains useful for bookmarks and denial testing, but the server still verifies membership.
+
+## Roles
+
+| Role | First-release responsibilities |
+| --- | --- |
+| Swiftline platform administrator | Create, activate, suspend, and reactivate operator tenants. Review audit history. |
+| Operator administrator | Manage the operator company, accounts, branches, users, pricing, credit, bookings, queries, and settings. |
+| Operations | Work with shipments, manifests, tracking, amendments, cancellations, queries, and permitted settings. |
+| Finance | Review permitted credit, statement, payment, shipment, and branch information. |
+| Client | Use only the linked business account and assigned branch data for booking, documents, tracking, credit visibility, manifests, profile, and Contact Us. |
+
+Route guards remain the source of truth when a page is not available to every role.
+
+## Isolation and security invariants
+
+1. An operator permission comes from an active `TenantMembership`, never from `User.role` alone.
+2. The URL tenant, business account, branch, shipment, invoice, document, notification, query, and manifest must belong to the same tenant context.
+3. Client membership checks must also enforce the linked business account and assigned branches.
+4. List, detail, write, export, download, storage, webhook, notification, and background-job paths must preserve tenant ownership.
+5. Operator booking messages go only to the booking client and eligible staff in that operator. Swiftline booking recipients remain unchanged for Swiftline bookings.
+6. Suspending an operator blocks new operator and client access and prevents new operator notices from being queued. Already queued transactional messages may finish delivery.
+7. Signed or stored document access is authorized from the owning database record before storage is read.
+8. Production index and ownership changes use reviewed explicit migrations; automatic production index creation is not a migration strategy.
+
+## Transaction rules
+
+- Operator bookings use the operator's internal AWB and label. They do not call ALS, DPD, another carrier, or Razorpay.
+- Booking charges use the operator account's rate card and credit terms.
+- A tax invoice records service charges. A shipment invoice records the goods and declared value. Only the tax invoice affects credit.
+- A no-company account uses the approved account/contact identity and account billing address for Bill To data.
+- Operator staff choose the business account when booking. Its assigned branch is resolved automatically. An operator client uses its authenticated account and branch without selecting another account.
+- Amendments and cancellations follow the operator review flow. Financial and status changes remain auditable.
+- Operator tracking events are entered manually and client visibility is limited to customer-visible events.
+
+## Implemented operational controls
+
+Swiftline platform staff can suspend or reactivate one operator without stopping other tenants. Suspension closes operator access, closes support sessions, is audited, and stops new notices. The global feature flags remain the emergency stop for the whole module:
+
+- backend: `OPERATOR_PORTAL_ENABLED`;
+- frontend: `NEXT_PUBLIC_OPERATOR_PORTAL_ENABLED`.
+
+Turning the flags off removes operator entry points while keeping tenant data. Do not delete tenant records, reverse ownership tags, or drop scoped indexes as an incident response.
+
+## Verified test evidence
+
+The following focused Atlas integration results were supplied from the approved test environment during this implementation:
+
+| Suite | Result | Coverage |
+| --- | --- | --- |
+| `operatorShipmentBooking.integration.test.ts` | 1/1 passed | Booking, idempotent reuse, amendment, reviewed cancellation, manifest, tenant-local notices. |
+| `tenantScope.integration.test.ts` | 16/16 passed | Tenant-owned models, API and document denial, jobs, callbacks, invoices, labels, manifests, and KYC scope. |
+| `tenantRegistry.integration.test.ts` | 4/4 passed | Slugs, onboarding, membership access, suspension, reactivation, audit, and notice blocking. |
+| `operatorContact.integration.test.ts` | 1/1 passed | Client query ownership and operator-only staff/email recipients. |
+| `operatorHome.integration.test.ts` | 1/1 passed | Tenant, branch, client, and credit scope for home metrics. |
+| `operatorBranchDirectory.integration.test.ts` | 1/1 passed | Branch detail and assigned-user tenant isolation. |
+
+Development email safelisting may block physical delivery to synthetic addresses while still verifying outbox recipient creation. Live-email acceptance remains a staging check.
+
+## Release gates
+
+Complete these gates before enabling an operator in production:
+
+1. Review and split the coordinated change set into component-based commits without mixing generated output.
+2. Run backend build and focused operator integration tests against the approved test Atlas database.
+3. Run frontend lint/type checking, production build, and the focused browser suite.
+4. Complete the real-identity staging walkthrough in [the manual acceptance guide](./operator-portal-manual-test-guide.md).
+5. Confirm existing Swiftline staff and client login, booking, documents, tracking, credit, and notification workflows are unchanged.
+6. Run a read-only production ownership and data audit, then review any required explicit migration before writing production data.
+7. Verify staging email delivery and recipients with approved addresses.
+8. Confirm monitoring for access denials, booking failures, outbox failures, and tenant suspension.
+9. Rehearse per-operator suspension and the global feature-flag rollback.
+
+Keep both operator feature flags disabled in production until these gates are signed off.
+
+## Reviewable commit boundaries
+
+Keep the release coordinated, but review it in dependency order:
+
+1. tenant ownership models, scope middleware, audits, and explicit migrations;
+2. operator registry, memberships, invitations, discovery, suspension, and support access;
+3. business accounts, KYC, branches, users, and profiles;
+4. rate cards, credit, statements, and offline payments;
+5. booking, AWBs, labels, invoices, documents, and booking notices;
+6. amendments, cancellations, manifests, tracking, and queries;
+7. operator workspace shell, home, settings, and role-specific pages;
+8. integration and browser tests; and
+9. release documentation and environment examples.
+
+Each commit must build against the commits before it. Keep generated Next.js directories, local reports, screenshots, credentials, and test database output outside every commit.
+
+## Deployment order
+
+1. Prepare reviewable backend, frontend, test, migration, and documentation commits.
+2. Deploy backend and frontend with both operator flags disabled.
+3. Apply only reviewed production migrations against the named production database.
+4. Smoke-test existing Swiftline workflows.
+5. Enable the backend flag and frontend flag for the approved staging or pilot release.
+6. Run the acceptance guide with real test identities and synthetic records.
+7. Monitor access, transactions, notifications, email outbox, and audit events.
+8. Expand beyond the pilot only after the release gates remain green.
