@@ -176,6 +176,9 @@ export type ClientShipmentListItem = {
     status: "DRAFT" | "ISSUED";
     revision: number;
   } | null;
+  /** Operator portal only; the draft list includes weights for its parcel dialog. */
+  parcelCount?: number;
+  parcelWeightsKg?: Array<number | null>;
   createdAt?: string | null;
   updatedAt?: string | null;
 };

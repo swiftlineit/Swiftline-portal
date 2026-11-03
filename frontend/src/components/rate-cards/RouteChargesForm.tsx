@@ -64,16 +64,20 @@ export default function RouteChargesForm({
   countryCode,
   countryName,
   target,
+  operatorSlug,
   countryPicker,
   disabled = false,
+  readOnly = false,
   initialService = "COURIER",
   onSaved
 }: {
   countryCode: string;
   countryName: string;
   target: RateCardTarget;
+  operatorSlug?: string;
   countryPicker: ReactNode;
   disabled?: boolean;
+  readOnly?: boolean;
   initialService?: CountryRateService;
   onSaved?: () => void;
 }) {
@@ -106,7 +110,7 @@ export default function RouteChargesForm({
       setError("");
 
       try {
-        const result = await listCountryRouteCharges(target);
+        const result = await listCountryRouteCharges(target, operatorSlug);
         if (!active) return;
         const nextCharges: Partial<Record<CountryRateService, CountryRouteCharge>> = {};
         for (const service of countryRateServices) {
@@ -133,7 +137,7 @@ export default function RouteChargesForm({
     return () => {
       active = false;
     };
-  }, [target, countryCode, reloadKey, selectedServices]);
+  }, [target, operatorSlug, countryCode, reloadKey, selectedServices]);
 
   function handleInput(field: keyof FormState) {
     return (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -142,6 +146,7 @@ export default function RouteChargesForm({
   }
 
   function toggleService(service: CountryRateService) {
+    if (disabled || readOnly) return;
     if (!confirmLeave(JSON.stringify(form) !== JSON.stringify(baseline))) return;
     setSelectedServices((current) => {
       if (current.includes(service)) {
@@ -157,6 +162,7 @@ export default function RouteChargesForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (disabled || readOnly) return;
     if (!selectedServices.length) {
       toast.error("Select at least one service for these route charges.");
       return;
@@ -179,7 +185,7 @@ export default function RouteChargesForm({
           insurancePercent: Number(form.insurancePercent) || 0,
           insuranceMinimum: Number(form.insuranceMinimum) || 0,
           discountPercent: Number(form.discountPercent) || 0
-        });
+        }, operatorSlug);
       setVersion(result.version);
       setBaseline(form);
       toast.success(`Route charges saved for ${countryName} (${selectedServices.map(formatCountryRateService).join(" and ")}).`);
@@ -202,7 +208,7 @@ export default function RouteChargesForm({
             {countryCode ? "These settings apply to every weight slab for this destination." : "Choose a destination to configure its Courier and Cargo charges."}
           </p>
         </div>
-        {countryCode ? (
+        {countryCode && !readOnly ? (
           <button
             type="submit"
             form={formId}
@@ -223,7 +229,7 @@ export default function RouteChargesForm({
             </p>
           ) : null}
 
-          <fieldset disabled={disabled || loading} className="min-w-0">
+          <fieldset disabled={disabled || readOnly || loading} className="min-w-0">
             <legend className="sr-only">Route charges for {countryName}</legend>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-slate-100 pb-4">
               <span className="text-sm font-semibold text-slate-800">Apply to services</span>

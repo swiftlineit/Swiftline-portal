@@ -14,7 +14,11 @@
     "test:shipment-quotes": "tsx --test src/lib/shipmentQuotes.test.ts",
     "sync:countries": "node scripts/sync-country-catalogue.mjs",
     "test:regions": "tsx --test src/lib/rateCardRegions.test.ts",
-    "test:e2e:public-booking": "playwright test e2e/public-shipment-booking.spec.ts"
+    "test:branches:operator": "tsx --test src/lib/branches.operator.test.ts",
+    "test:e2e:public-booking": "playwright test e2e/public-shipment-booking.spec.ts",
+    "test:e2e:operator-directory": "playwright test e2e/operator-directory.spec.ts",
+    "test:e2e:operator-account-review": "playwright test e2e/operator-account-review.spec.ts",
+    "test:e2e:operator-branches": "playwright test e2e/operator-branches.spec.ts"
   },
   "dependencies": {
     "@zxing/browser": "^0.2.1",

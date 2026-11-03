@@ -17,6 +17,9 @@
 
 # next.js
 /.next/
+/.next-validation/
+/.next-playwright/
+/.next-playwright-*/
 /out/
 
 # production

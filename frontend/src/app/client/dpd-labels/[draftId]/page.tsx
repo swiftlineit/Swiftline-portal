@@ -42,6 +42,25 @@ import {
   validateClientAddress
 } from "@/lib/clientDashboard";
 import { getDraftRateCardContext, type ClientCountryRateCard } from "@/lib/countryRateCards";
+import { getOperatorSession } from "@/lib/operatorDirectory";
+import {
+  autocompleteOperatorAddress,
+  autocompleteOperatorConsignorAddress,
+  confirmOperatorAddress,
+  createOperatorShipment,
+  deleteOperatorShipmentKycDocument,
+  deleteOperatorShipmentParcelKycDocument,
+  getOperatorConsignorPlaceAddress,
+  getOperatorPlaceAddress,
+  getOperatorShipmentDraft,
+  openOperatorShipmentKycDocument,
+  openOperatorShipmentParcelKycDocument,
+  updateOperatorShipmentDraft,
+  uploadOperatorShipmentKycDocument,
+  uploadOperatorShipmentParcelKycDocument,
+  validateOperatorAddress,
+  getOperatorDraftRateCardContext
+} from "@/lib/operatorShipments";
 import { findRestrictedCategories } from "@/lib/restrictedGoods";
 import { normalizeCsbType, type CsbType } from "@/lib/csbType";
 import { getCsbVBookingIssues, getCsbVShipmentValueError, type CsbVBookingDetails } from "@/lib/csbVBooking";
@@ -74,6 +93,7 @@ import {
   ShipmentContentType,
   ShipmentDraft,
   type ShipmentDraftPatch,
+  type ShipmentKycDocumentType,
   ShipmentKycDocuments,
   ShipmentServiceType,
   isDpdLabelDestination,
@@ -395,14 +415,22 @@ function findIssue(issues: string[], patterns: string[]) {
   return issues.find((issue) => patterns.every((pattern) => patternMatches(issue.toLowerCase(), pattern)));
 }
 
-export default function ClientDpdDraftReviewPage() {
+export default function ClientDpdDraftReviewPage({
+  operatorSlug,
+  initialDraftId
+}: {
+  operatorSlug?: string;
+  initialDraftId?: string;
+} = {}) {
   const params = useParams<{ draftId: string }>();
+  const draftId = initialDraftId || params.draftId;
   const router = useRouter();
   const searchParams = useSearchParams();
   const addressBookEntryId = searchParams.get("addressBookEntryId") ?? "";
   const appliedAddressBookEntryRef = useRef("");
   const [user, setUser] = useState<ClientShellUser | null>(null);
   const [draft, setDraft] = useState<ShipmentDraft | null>(null);
+  const [supportReadOnly, setSupportReadOnly] = useState(false);
   const [rates, setRates] = useState<ClientCountryRateCard[]>([]);
   const [addressForm, setAddressForm] = useState<AddressForm>({
     countryCode: "GB",
@@ -556,15 +584,31 @@ export default function ClientDpdDraftReviewPage() {
   }), [consignorReviewIssues]);
 
   const consignorKycApi = useMemo(() => ({
-    autocompleteConsignorAddress: autocompleteClientConsignorAddress,
-    getConsignorPlaceAddress: getClientConsignorPlaceAddress,
-    uploadKycDocument: uploadClientShipmentKycDocument,
-    deleteKycDocument: deleteClientShipmentKycDocument,
-    openKycDocument: openClientShipmentKycDocument,
-    uploadParcelKycDocument: uploadClientShipmentParcelKycDocument,
-    deleteParcelKycDocument: deleteClientShipmentParcelKycDocument,
-    openParcelKycDocument: openClientShipmentParcelKycDocument
-  }), []);
+    autocompleteConsignorAddress: (input: string) => operatorSlug
+      ? autocompleteOperatorConsignorAddress(operatorSlug, input)
+      : autocompleteClientConsignorAddress(input),
+    getConsignorPlaceAddress: (placeId: string, shipmentDraftId: string) => operatorSlug
+      ? getOperatorConsignorPlaceAddress(operatorSlug, placeId, shipmentDraftId)
+      : getClientConsignorPlaceAddress(placeId, shipmentDraftId),
+    uploadKycDocument: (input: { shipmentDraftId: string; type: ShipmentKycDocumentType; file: File; documentLabel?: string }) => operatorSlug
+      ? uploadOperatorShipmentKycDocument({ ...input, operatorSlug })
+      : uploadClientShipmentKycDocument(input),
+    deleteKycDocument: (shipmentDraftId: string, type: ShipmentKycDocumentType) => operatorSlug
+      ? deleteOperatorShipmentKycDocument(operatorSlug, shipmentDraftId, type)
+      : deleteClientShipmentKycDocument(shipmentDraftId, type),
+    openKycDocument: (shipmentDraftId: string, type: ShipmentKycDocumentType) => operatorSlug
+      ? openOperatorShipmentKycDocument(operatorSlug, shipmentDraftId, type)
+      : openClientShipmentKycDocument(shipmentDraftId, type),
+    uploadParcelKycDocument: (input: { shipmentDraftId: string; sequence: number; type: ShipmentKycDocumentType; file: File; documentLabel?: string }) => operatorSlug
+      ? uploadOperatorShipmentParcelKycDocument({ ...input, operatorSlug })
+      : uploadClientShipmentParcelKycDocument(input),
+    deleteParcelKycDocument: (shipmentDraftId: string, sequence: number, type: ShipmentKycDocumentType) => operatorSlug
+      ? deleteOperatorShipmentParcelKycDocument(operatorSlug, shipmentDraftId, sequence, type)
+      : deleteClientShipmentParcelKycDocument(shipmentDraftId, sequence, type),
+    openParcelKycDocument: (shipmentDraftId: string, sequence: number, type: ShipmentKycDocumentType) => operatorSlug
+      ? openOperatorShipmentParcelKycDocument(operatorSlug, shipmentDraftId, sequence, type)
+      : openClientShipmentParcelKycDocument(shipmentDraftId, sequence, type)
+  }), [operatorSlug]);
 
   const parcelKycStates = useMemo<ParcelKycState[]>(
     () => parcelForms.map((parcel) => ({
@@ -614,10 +658,11 @@ export default function ClientDpdDraftReviewPage() {
     refresh: refreshCostEstimate,
     acceptEstimate
   } = useShipmentCostEstimate({
-    shipmentDraftId: params.draftId,
-    audience: "client",
+    shipmentDraftId: draftId,
+    audience: operatorSlug ? "operator" : "client",
+    operatorSlug,
     values: estimateValues,
-    enabled: Boolean(draft)
+    enabled: Boolean(draft && !supportReadOnly)
   });
 
   const draftPatch = useMemo<ShipmentDraftPatch>(() => ({
@@ -714,12 +759,14 @@ export default function ClientDpdDraftReviewPage() {
     status: draftAutosaveStatus,
     flush: flushDraftChanges
   } = useShipmentDraftAutosave({
-    enabled: Boolean(draft && draftChanged && !busy && !addressBusy),
+    enabled: Boolean(draft && !supportReadOnly && draftChanged && !busy && !addressBusy),
     changeKey: draftPatchKey,
     patch: draftPatch,
     save: async (patch) => {
       if (!draft) throw new Error("Shipment draft is not loaded.");
-      const data = await updateClientShipmentDraft(draft._id, patch);
+      const data = operatorSlug
+        ? await updateOperatorShipmentDraft(operatorSlug, draft._id, patch)
+        : await updateClientShipmentDraft(draft._id, patch);
       return data.shipmentDraft;
     },
     onSaved: (nextDraft, isLatest) => {
@@ -735,7 +782,7 @@ export default function ClientDpdDraftReviewPage() {
 
   // This form used to lose everything on navigation: nothing was stored until the
   // whole form validated, and there was no guard on the way out.
-  useUnsavedChanges(draftChanged, {
+  useUnsavedChanges(draftChanged && !supportReadOnly, {
     label: "this shipment",
     saveDraft: async () => {
       if (!draftChanged) return;
@@ -801,32 +848,59 @@ export default function ClientDpdDraftReviewPage() {
       setError("");
 
       try {
-        const currentUser = await loadCurrentUser();
+        const operatorSession = operatorSlug ? await getOperatorSession(operatorSlug) : null;
+        const currentUser = operatorSlug
+          ? ({ email: "", role: "client" } as ClientShellUser)
+          : await loadCurrentUser();
         if (!currentUser) {
           await logout();
-          router.replace("/");
+          router.replace(operatorSlug ? `/?next=${encodeURIComponent(`/portal/${operatorSlug}/shipments`)}` : "/");
           return;
         }
 
-        if (currentUser.role !== "client") {
-          router.replace("/dashboard");
+        if (operatorSlug
+          ? !operatorSession || !["CLIENT", "OPERATOR_ADMIN", "OPERATIONS"].includes(operatorSession.membership.role)
+          : currentUser.role !== "client") {
+          router.replace(operatorSlug ? `/portal/${encodeURIComponent(operatorSlug)}/shipments` : "/dashboard");
           return;
         }
 
-        const [data, rateData] = await Promise.all([
-          getClientShipmentDraft(params.draftId),
-          getDraftRateCardContext(params.draftId, "client")
-        ]);
+        let data: Awaited<ReturnType<typeof getClientShipmentDraft>>;
+        let loadedRates: ClientCountryRateCard[] = [];
+        if (operatorSession?.access.readOnly) {
+          data = await getOperatorShipmentDraft(operatorSlug!, draftId);
+        } else {
+          const [draftResult, rateData] = await Promise.all([
+            operatorSlug
+              ? getOperatorShipmentDraft(operatorSlug, draftId)
+              : getClientShipmentDraft(draftId),
+            operatorSlug
+              ? getOperatorDraftRateCardContext(operatorSlug, draftId)
+              : getDraftRateCardContext(draftId, "client")
+          ]);
+          data = draftResult;
+          loadedRates = rateData.rates;
+        }
         if (!mounted) return;
 
         if (data.shipmentDraft.bookingState && data.shipmentDraft.bookingState !== "EDITABLE") {
           toast.info("This shipment is already locked for booking. Opening its shipment details.");
-          router.replace(`/client/shipments/${data.shipmentDraft._id}`);
+          router.replace(operatorSlug
+            ? `/portal/${encodeURIComponent(operatorSlug)}/shipments/${data.shipmentDraft._id}`
+            : `/client/shipments/${data.shipmentDraft._id}`);
+          return;
+        }
+
+        if (operatorSession?.access.readOnly) {
+          setUser(currentUser);
+          setSupportReadOnly(true);
+          setShipmentImport(data.shipmentImport ?? null);
+          syncDraft(data.shipmentDraft);
           return;
         }
 
         setUser(currentUser);
-        setRates(rateData.rates);
+        setRates(loadedRates);
         setShipmentImport(data.shipmentImport ?? null);
         syncDraft(data.shipmentDraft);
       } catch (caughtError) {
@@ -841,9 +915,10 @@ export default function ClientDpdDraftReviewPage() {
     return () => {
       mounted = false;
     };
-  }, [params.draftId, router]);
+  }, [operatorSlug, draftId, router]);
 
   useEffect(() => {
+    if (operatorSlug) return;
     let active = true;
     async function loadPauses() {
       try {
@@ -856,16 +931,16 @@ export default function ClientDpdDraftReviewPage() {
     void loadPauses();
     const id = window.setInterval(() => void loadPauses(), 60_000);
     return () => { active = false; window.clearInterval(id); };
-  }, []);
+  }, [operatorSlug]);
 
   useEffect(() => {
-    if (!draft || !addressBookEntryId || appliedAddressBookEntryRef.current === addressBookEntryId) return;
+    if (operatorSlug || !draft || !addressBookEntryId || appliedAddressBookEntryRef.current === addressBookEntryId) return;
     appliedAddressBookEntryRef.current = addressBookEntryId;
     void getAddressBookEntry(addressBookEntryId)
       .then(({ entry }) => prepareAddressBookEntryForShipment(entry))
       .then((entry) => applySavedAddress(entry, false))
       .catch((caught) => toast.error(caught instanceof Error ? caught.message : "The saved address could not be applied."));
-  }, [addressBookEntryId, applySavedAddress, draft]);
+  }, [addressBookEntryId, applySavedAddress, draft, operatorSlug]);
 
   function handleContactChange(field: keyof ContactForm) {
     return (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -926,7 +1001,9 @@ export default function ClientDpdDraftReviewPage() {
     setReviewIssues([]);
 
     try {
-      const data = await autocompleteClientAddress(addressQuery);
+      const data = operatorSlug
+        ? await autocompleteOperatorAddress(operatorSlug, addressQuery)
+        : await autocompleteClientAddress(addressQuery);
       setPredictions(data.predictions);
     } catch (caughtError) {
       setPredictions([]);
@@ -942,7 +1019,9 @@ export default function ClientDpdDraftReviewPage() {
     setReviewIssues([]);
 
     try {
-      const data = await getClientPlaceAddress(prediction.placeId, draft?._id);
+      const data = operatorSlug
+        ? await getOperatorPlaceAddress(operatorSlug, prediction.placeId, draft?._id)
+        : await getClientPlaceAddress(prediction.placeId, draft?._id);
       setAddressForm((current) => ({
         countryCode: current.countryCode,
         countryName: current.countryName,
@@ -1106,9 +1185,9 @@ export default function ClientDpdDraftReviewPage() {
   }
 
   const currentCountryCode = draft?.consigneeEnteredAddress?.countryCode || addressForm.countryCode || "";
-  const isCurrentCountryPaused = isCountryPaused(currentCountryCode, bookingPauses);
+  const isCurrentCountryPaused = !operatorSlug && isCountryPaused(currentCountryCode, bookingPauses);
   const dpdLabelDestination = isDpdLabelDestination(addressForm.countryCode);
-  const clientDpdBookingDisabled = dpdLabelDestination && !dpdBookingEnabled;
+  const clientDpdBookingDisabled = !operatorSlug && dpdLabelDestination && !dpdBookingEnabled;
 
   async function handleCreateLabel(
     // Supplied when re-booking after the customer accepted a changed price.
@@ -1118,7 +1197,7 @@ export default function ClientDpdDraftReviewPage() {
   ) {
     if (!draft) return;
 
-    if (isCountryPaused(draft.consigneeEnteredAddress?.countryCode || addressForm.countryCode, bookingPauses)) {
+    if (!operatorSlug && isCountryPaused(draft.consigneeEnteredAddress?.countryCode || addressForm.countryCode, bookingPauses)) {
       const msg = "Bookings for this destination are temporarily paused. Please check the booking pause notice for details.";
       setError(msg);
       toast.error(msg);
@@ -1191,10 +1270,13 @@ export default function ClientDpdDraftReviewPage() {
       if (!currentDraft) return;
 
       if (currentDraft.addressValidationStatus !== "VALIDATED") {
-        const addressValidation = await validateClientAddress({
+        const addressInput = {
           shipmentDraftId: currentDraft._id,
           address: addressForm
-        });
+        };
+        const addressValidation = operatorSlug
+          ? await validateOperatorAddress(operatorSlug, addressInput)
+          : await validateClientAddress(addressInput);
 
         if (addressValidation.validation.outcome !== "VALID") {
           setManualAddressConfirmationRequired(true);
@@ -1203,11 +1285,15 @@ export default function ClientDpdDraftReviewPage() {
         }
       }
 
-      const result = await createClientShipment(currentDraft._id, acceptedPricingHash, skipDpdLabel);
+      const result = operatorSlug
+        ? await createOperatorShipment(operatorSlug, currentDraft._id, acceptedPricingHash ?? costEstimate.pricingHash)
+        : await createClientShipment(currentDraft._id, acceptedPricingHash, skipDpdLabel);
       setPriceChange(null);
       setNotice(result.reused ? "Existing shipment label found for this draft." : "Shipment request created.");
       toast.success(result.reused ? "Existing booked shipment opened." : "Shipment booked successfully.");
-      router.push(`/client/shipments/${currentDraft._id}`);
+      router.push(operatorSlug
+        ? `/portal/${encodeURIComponent(operatorSlug)}/shipments/${currentDraft._id}`
+        : `/client/shipments/${currentDraft._id}`);
     } catch (caughtError) {
       // Nothing was booked or reserved. The customer is shown what moved and has
       // to accept the new price explicitly before this can be retried.
@@ -1256,10 +1342,13 @@ export default function ClientDpdDraftReviewPage() {
 
     setPendingAction("ADDRESS");
     try {
-      const data = await confirmClientAddress({
+      const addressInput = {
         shipmentDraftId: draft._id,
         decision: "KEEP_ENTERED"
-      });
+      } as const;
+      const data = operatorSlug
+        ? await confirmOperatorAddress(operatorSlug, addressInput)
+        : await confirmClientAddress(addressInput);
       syncDraft(data.shipmentDraft);
       setManualAddressConfirmationRequired(false);
       toast.success("Address confirmed. You can now create the shipment.");
@@ -1272,8 +1361,60 @@ export default function ClientDpdDraftReviewPage() {
 
   if (loading || !user) return <ClientDashboardLoading />;
 
+  if (supportReadOnly && draft) {
+    const addressText = (address: ShipmentDraft["consigneeEnteredAddress"] | NonNullable<ShipmentDraft["consignorAddress"]>) => [
+      address.addressLine1,
+      address.addressLine2,
+      address.townOrCity,
+      address.county,
+      address.postcode,
+      address.countryName || address.countryCode
+    ].filter(Boolean).join(", ");
+    const formatDeclaredValue = (minor: number | null | undefined) => minor == null
+      ? "Not provided"
+      : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(minor / 100);
+
+    return (
+      <div className="h-full overflow-y-auto bg-[#EEEDED] px-4 py-5 text-slate-900 sm:px-6 sm:py-7">
+        <main className="mx-auto max-w-6xl space-y-5">
+          <button type="button" onClick={() => router.push(`/portal/${encodeURIComponent(operatorSlug!)}/shipments`)} className="inline-flex min-h-10 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">
+            Back to shipments
+          </button>
+          {error ? <div role="alert" className="rounded-md border border-rose-200 bg-white p-4 text-sm text-rose-800">{error}</div> : null}
+          <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Read-only shipment draft</p><h1 className="mt-1 break-all text-xl font-semibold text-slate-950">{draft._id}</h1></div>
+              <div className="text-right text-sm"><p className="font-semibold text-slate-900">{draft.status.replaceAll("_", " ")}</p><p className="mt-1 text-slate-600">{(draft.bookingState ?? "EDITABLE").replaceAll("_", " ")}</p></div>
+            </div>
+            <dl className="mt-5 grid gap-4 border-t border-slate-200 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div><dt className="text-xs font-medium uppercase text-slate-500">Created</dt><dd className="mt-1 text-sm text-slate-900">{draft.createdAt ? new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" }).format(new Date(draft.createdAt)) : "Not recorded"}</dd></div>
+              <div><dt className="text-xs font-medium uppercase text-slate-500">Source</dt><dd className="mt-1 text-sm text-slate-900">{draft.creationSource.replaceAll("_", " ")}</dd></div>
+              <div><dt className="text-xs font-medium uppercase text-slate-500">Service</dt><dd className="mt-1 text-sm text-slate-900">{draft.serviceType ?? "COURIER"}{draft.serviceCode ? ` · ${draft.serviceCode}` : ""}</dd></div>
+              <div><dt className="text-xs font-medium uppercase text-slate-500">Boxes</dt><dd className="mt-1 text-sm text-slate-900">{draft.parcelList.length}</dd></div>
+            </dl>
+          </section>
+
+          <section className="grid gap-5 lg:grid-cols-2">
+            {draft.consignorAddress ? <article className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><h2 className="text-base font-semibold text-slate-950">Consignor</h2><dl className="mt-3 space-y-3 text-sm"><div><dt className="text-xs font-medium uppercase text-slate-500">Company and contact</dt><dd className="mt-1 text-slate-900">{[draft.consignorAddress.companyName, draft.consignorAddress.contactName].filter(Boolean).join(" · ") || "Not provided"}</dd></div><div><dt className="text-xs font-medium uppercase text-slate-500">Email and phone</dt><dd className="mt-1 break-all text-slate-900">{[draft.consignorAddress.email, [draft.consignorAddress.mobileCountryCode, draft.consignorAddress.mobileNumber].filter(Boolean).join(" ")].filter(Boolean).join(" · ") || "Not provided"}</dd></div><div><dt className="text-xs font-medium uppercase text-slate-500">Address</dt><dd className="mt-1 text-slate-900">{addressText(draft.consignorAddress)}</dd></div></dl></article> : null}
+            <article className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><h2 className="text-base font-semibold text-slate-950">Consignee</h2><dl className="mt-3 space-y-3 text-sm"><div><dt className="text-xs font-medium uppercase text-slate-500">Company and contact</dt><dd className="mt-1 text-slate-900">{[draft.consigneeEnteredAddress.companyName, draft.consigneeEnteredAddress.contactName].filter(Boolean).join(" · ") || "Not provided"}</dd></div><div><dt className="text-xs font-medium uppercase text-slate-500">Email and phone</dt><dd className="mt-1 break-all text-slate-900">{[draft.consigneeEnteredAddress.email, [draft.consigneeEnteredAddress.mobileCountryCode, draft.consigneeEnteredAddress.mobileNumber].filter(Boolean).join(" ")].filter(Boolean).join(" · ") || "Not provided"}</dd></div><div><dt className="text-xs font-medium uppercase text-slate-500">Address</dt><dd className="mt-1 text-slate-900">{addressText(draft.consigneeEnteredAddress)}</dd></div></dl></article>
+          </section>
+
+          <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 px-4 py-4 sm:px-5"><h2 className="text-base font-semibold text-slate-950">Goods and parcels</h2><p className="mt-1 text-sm text-slate-600">{draft.parcelList.length} box{draft.parcelList.length === 1 ? "" : "es"}</p></div>
+            <div className="divide-y divide-slate-200">
+              {draft.parcelList.map((parcel) => <article key={parcel.sequence} className="grid gap-3 px-4 py-4 sm:grid-cols-[8rem_minmax(0,1fr)] sm:px-5">
+                <div><h3 className="font-semibold text-slate-950">Box {parcel.sequence}</h3><p className="mt-1 text-sm text-slate-600">{parcel.weightKg} kg{parcel.lengthCm && parcel.widthCm && parcel.heightCm ? ` · ${parcel.lengthCm} × ${parcel.widthCm} × ${parcel.heightCm} cm` : ""}</p><p className="mt-1 text-xs text-slate-500">Declared value: {formatDeclaredValue(parcel.declaredGoodsValueMinor)}</p></div>
+                <div><p className="text-sm font-medium text-slate-900">{parcel.contentsDescription || "Goods description not provided"}</p>{parcel.items?.length ? <ul className="mt-2 space-y-1 text-sm text-slate-600">{parcel.items.map((item, index) => <li key={`${parcel.sequence}-${index}`}>{item.description}{item.hsnCode ? ` · HSN ${item.hsnCode}` : ""}{item.quantity ? ` · Qty ${item.quantity}` : ""}</li>)}</ul> : null}</div>
+              </article>)}
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
-      <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
+      <div className={operatorSlug ? "min-w-0 pb-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden xl:pb-0" : "lg:flex lg:h-full lg:min-h-0 lg:flex-col"}>
         {/* <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-slate-950">Review Shipment Draft</h1>
@@ -1285,9 +1426,11 @@ export default function ClientDpdDraftReviewPage() {
           <div className="mb-5 border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div>
         ) : null}
 
-        <div className="mb-5">
-          <BookingPausedNotice variant="client" pauses={bookingPauses} countryCode={currentCountryCode} />
-        </div>
+        {!operatorSlug ? (
+          <div className="mb-5">
+            <BookingPausedNotice variant="client" pauses={bookingPauses} countryCode={currentCountryCode} />
+          </div>
+        ) : null}
 
         {notice ? (
           <div className="mb-5 border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">{notice}</div>
@@ -1296,8 +1439,12 @@ export default function ClientDpdDraftReviewPage() {
         {!draft ? (
           <div className="border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500">Draft not found.</div>
         ) : (
-          <div className="grid gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-5 no-scrollbar lg:min-h-0 lg:overflow-y-auto lg:pr-2">
+          <div data-testid={operatorSlug ? "operator-booking-columns" : undefined} className={operatorSlug
+            ? "grid gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_320px] xl:grid-rows-[minmax(0,1fr)]"
+            : "grid gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_320px]"}>
+            <div data-testid={operatorSlug ? "operator-booking-fields" : undefined} className={operatorSlug
+              ? "min-w-0 space-y-6 xl:min-h-0 xl:overflow-y-auto xl:pr-2 [scrollbar-width:thin] [scrollbar-color:#94a3b8_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400"
+              : "space-y-5 no-scrollbar lg:min-h-0 lg:overflow-y-auto lg:pr-2"}>
               <ShipmentImportBanner summary={shipmentImport} />
 
               {/* Customs route, first because CSB-V changes what is charged. */}
@@ -1353,19 +1500,19 @@ export default function ClientDpdDraftReviewPage() {
                 }}
                 onParcelKycChange={(sequence, documents) => setParcelKyc((current) => ({ ...current, [sequence]: documents }))}
                 api={consignorKycApi}
-                headerAction={(
+                headerAction={!operatorSlug ? (
                   <button type="button" onClick={() => setAddressBookPicker("SENDER")} className="inline-flex h-9 items-center gap-2 rounded-xl border border-[#0D1282]/25 bg-white px-3 text-xs font-semibold text-[#0D1282] hover:border-[#0D1282]">
                     <FiMapPin className="h-4 w-4" /> Choose Saved Sender
                   </button>
-                )}
+                ) : undefined}
               />
 
               <section className="border border-slate-200 bg-white rounded-2xl">
-                <SectionHeader title="Consignee Details" action={(
+                <SectionHeader title="Consignee Details" action={!operatorSlug ? (
                   <button type="button" onClick={() => setAddressBookPicker("RECIPIENT")} className="inline-flex h-9 items-center gap-2 rounded-xl border border-[#0D1282]/25 bg-white px-3 text-xs font-semibold text-[#0D1282] hover:border-[#0D1282]">
                     <FiMapPin className="h-4 w-4" /> Choose Saved Recipient
                   </button>
-                )} />
+                ) : undefined} />
                 <div className="grid gap-4 p-4 md:grid-cols-2">
                   <ShipmentTextField label="Consignee Company" value={contactForm.companyName} onChange={handleContactChange("companyName")} />
                   <ShipmentTextField label="Consignee Contact Name" required value={contactForm.contactName} onChange={handleContactChange("contactName")} error={findIssue(currentReviewIssues, ["contact name"])} revealError={submitAttempted} />
@@ -1611,15 +1758,17 @@ export default function ClientDpdDraftReviewPage() {
 
                   <div className="grid max-w-sm gap-3">
                     <ShipmentSelectField label="Service Type" required value={contactForm.serviceType} onChange={handleContactChange("serviceType")}>
-                        <option value="COURIER"> Swiftline Courier</option>
-                        <option value="CARGO"> Swiftline Cargo</option>
+                        <option value="COURIER">{operatorSlug ? "Operator Courier" : "Swiftline Courier"}</option>
+                        <option value="CARGO">{operatorSlug ? "Operator Cargo" : "Swiftline Cargo"}</option>
                     </ShipmentSelectField>
                   </div>
                 </div>
               </section>
             </div>
 
-            <aside className="space-y-4 no-scrollbar lg:min-h-0 lg:overflow-y-auto lg:pr-2">
+            <aside data-testid={operatorSlug ? "operator-booking-summary" : undefined} className={operatorSlug
+              ? "min-w-0 space-y-4 xl:min-h-0 xl:overflow-y-auto xl:pr-2 [scrollbar-width:thin] [scrollbar-color:#94a3b8_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400"
+              : "space-y-4 no-scrollbar lg:min-h-0 lg:overflow-y-auto lg:pr-2"}>
               <section className="border border-slate-200 bg-white p-4 rounded-2xl">
                 {isCurrentCountryPaused ? (
                   <div className="mb-3 rounded-xl border border-[#D71313]/20 bg-[#FFF1F1] px-3 py-2 text-xs font-semibold text-[#991B1B]">
@@ -1639,12 +1788,12 @@ export default function ClientDpdDraftReviewPage() {
                     title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
                     className="inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                   >
-                    <FiTruck aria-hidden="true" className="h-4 w-4" />
-                    {pendingAction === "BOOKING" ? "Processing..." : "Create Shipment"}
+                    {!operatorSlug ? <FiTruck aria-hidden="true" className="h-4 w-4" /> : null}
+                    {pendingAction === "BOOKING" ? "Processing..." : operatorSlug ? "Book Shipment" : "Create Shipment"}
                   </button>
                 ) : null}
                 {/* Available as an explicit alternative for destinations where DPD labels apply. */}
-                {dpdLabelDestination ? (
+                {!operatorSlug && dpdLabelDestination ? (
                   <button
                     type="button"
                     onClick={() => void handleCreateLabel(undefined, true)}
@@ -1715,7 +1864,7 @@ export default function ClientDpdDraftReviewPage() {
           />
         ) : null}
 
-        {draft && addressBookPicker ? (
+        {!operatorSlug && draft && addressBookPicker ? (
           <AddressBookPicker
             open
             businessAccountId={draft.businessAccountId}

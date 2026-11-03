@@ -161,7 +161,7 @@ export type ShipmentCostEstimateInput = {
 };
 
 /** Whether the estimate is for a client's own draft or an admin's. */
-export type ShipmentEstimateAudience = "admin" | "client";
+export type ShipmentEstimateAudience = "admin" | "client" | "operator";
 
 /**
  * Raised when a booking is refused because its price moved after the customer
@@ -205,10 +205,14 @@ async function fetchWithAuth(input: string, init: RequestInit = {}) {
   });
 }
 
-function costEstimateUrl(shipmentDraftId: string, audience: ShipmentEstimateAudience) {
+function costEstimateUrl(shipmentDraftId: string, audience: ShipmentEstimateAudience, operatorSlug?: string) {
+  if (audience === "operator") {
+    if (!operatorSlug) throw new Error("An operator URL is required to estimate this shipment.");
+    return apiUrl(`/api/v1/operators/${encodeURIComponent(operatorSlug)}/dpd-labels/drafts/${encodeURIComponent(shipmentDraftId)}/cost-estimate`);
+  }
   return apiUrl(audience === "client"
-    ? `/api/v1/client/dpd-labels/drafts/${shipmentDraftId}/cost-estimate`
-    : `/api/v1/shipment-drafts/${shipmentDraftId}/cost-estimate`);
+    ? `/api/v1/client/dpd-labels/drafts/${encodeURIComponent(shipmentDraftId)}/cost-estimate`
+    : `/api/v1/shipment-drafts/${encodeURIComponent(shipmentDraftId)}/cost-estimate`);
 }
 
 /**
@@ -222,9 +226,10 @@ export async function fetchShipmentCostEstimate(
   shipmentDraftId: string,
   audience: ShipmentEstimateAudience,
   input: ShipmentCostEstimateInput,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  operatorSlug?: string
 ) {
-  const response = await fetchWithAuth(costEstimateUrl(shipmentDraftId, audience), {
+  const response = await fetchWithAuth(costEstimateUrl(shipmentDraftId, audience, operatorSlug), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

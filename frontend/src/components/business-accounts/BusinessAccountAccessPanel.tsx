@@ -76,7 +76,7 @@ function describeEmailOutcome(result: { emailSent: boolean; emailSkipped: boolea
   return "Invitation email could not be sent. Use “Copy invite link” to share access manually.";
 }
 
-export function BusinessAccountAccessPanel({ account }: { account: BusinessAccount }) {
+export function BusinessAccountAccessPanel({ account, operatorSlug }: { account: BusinessAccount; operatorSlug?: string }) {
   const [members, setMembers] = useState<BusinessAccountMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -102,7 +102,7 @@ export function BusinessAccountAccessPanel({ account }: { account: BusinessAccou
       setError("");
 
       try {
-        const memberResult = await listBusinessAccountMembers(account.accountId);
+        const memberResult = await listBusinessAccountMembers(account.accountId, operatorSlug);
 
         if (!mounted) return;
         setMembers(memberResult.members);
@@ -118,7 +118,7 @@ export function BusinessAccountAccessPanel({ account }: { account: BusinessAccou
     return () => {
       mounted = false;
     };
-  }, [account.accountId]);
+  }, [account.accountId, operatorSlug]);
 
   function updateForm<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -142,7 +142,7 @@ export function BusinessAccountAccessPanel({ account }: { account: BusinessAccou
       const result = await createBusinessAccountClientAccess(account.accountId, {
         ...form,
         assignedBranches: assignedBranch?._id ? [assignedBranch._id] : []
-      });
+      }, operatorSlug);
       setMembers((current) => [result.member, ...current]);
       setEmailNotice(describeEmailOutcome(result));
       setForm(emptyForm);
@@ -160,7 +160,7 @@ export function BusinessAccountAccessPanel({ account }: { account: BusinessAccou
     setEmailNotice("");
 
     try {
-      const result = await resendBusinessAccountInvitation(account.accountId, memberId);
+      const result = await resendBusinessAccountInvitation(account.accountId, memberId, operatorSlug);
       setEmailNotice(describeEmailOutcome(result));
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to resend invitation.");
@@ -175,7 +175,7 @@ export function BusinessAccountAccessPanel({ account }: { account: BusinessAccou
     setEmailNotice("");
 
     try {
-      const result = await getBusinessAccountInvitationLink(account.accountId, memberId);
+      const result = await getBusinessAccountInvitationLink(account.accountId, memberId, operatorSlug);
 
       try {
         await navigator.clipboard.writeText(result.activationUrl);
@@ -324,25 +324,25 @@ export function BusinessAccountAccessPanel({ account }: { account: BusinessAccou
                           </MemberActionButton>
                         </>
                       ) : null}
-                      {member.status === "active" ? (
+                      {!operatorSlug && member.status === "active" ? (
                         <MemberActionButton onClick={() => void handleMemberStatusChange(member._id, "suspended")} disabled={saving}>
                           Suspend
                         </MemberActionButton>
                       ) : null}
-                      {member.status === "suspended" ? (
+                      {!operatorSlug && member.status === "suspended" ? (
                         <MemberActionButton onClick={() => void handleMemberStatusChange(member._id, "active")} disabled={saving}>
                           Reactivate
                         </MemberActionButton>
                       ) : null}
-                      {member.status === "removed" ? (
+                      {!operatorSlug && member.status === "removed" ? (
                         <MemberActionButton onClick={() => void handleMemberStatusChange(member._id, "restore")} disabled={saving}>
                           Restore access
                         </MemberActionButton>
-                      ) : (
+                      ) : !operatorSlug ? (
                         <MemberActionButton onClick={() => void handleMemberStatusChange(member._id, "removed")} disabled={saving} tone="danger">
                           Remove
                         </MemberActionButton>
-                      )}
+                      ) : null}
                     </div>
                   </td>
                 </tr>

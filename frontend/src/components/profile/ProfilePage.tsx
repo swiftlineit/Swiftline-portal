@@ -3,7 +3,8 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { FiBriefcase, FiCamera, FiChevronDown, FiEye, FiEyeOff, FiLock, FiMail, FiMapPin, FiPhone, FiTrash2, FiUser, FiX } from "react-icons/fi";
+import { useRouter } from "next/navigation";
+import { FiBriefcase, FiCamera, FiChevronDown, FiEye, FiEyeOff, FiExternalLink, FiLock, FiMail, FiMapPin, FiPhone, FiTrash2, FiUser, FiX } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { BiSolidEdit } from "react-icons/bi";
 import { SearchableSelect } from "@/components/business-accounts/FormFieldControls";
@@ -23,11 +24,14 @@ import {
   contactTitles,
   formatProfileRole,
   getProfile,
+  getOperatorProfile,
   deleteProfileImage,
   loadProfileImageUrl,
   uploadProfileImage,
   updateProfileBusinessAccount,
   updateProfileDetails,
+  updateOperatorProfileBusinessAccount,
+  updateOperatorProfileDetails,
   validateProfileAccount,
   validateProfileUser,
   type EditableCompany,
@@ -35,6 +39,8 @@ import {
   type ProfileBusinessAccount,
   type ProfileContact
 } from "@/lib/profile";
+import { getOperatorSession, type OperatorSession } from "@/lib/operatorDirectory";
+import { OperatorLoadingIndicator } from "@/components/operators/OperatorLoadingState";
 
 const emptyPassword = { currentPassword: "", newPassword: "", confirmPassword: "" };
 const toOptions = (values: string[]) => values.map((value) => ({ value, label: value }));
@@ -321,8 +327,11 @@ const emergencyRelationshipOptions = [
   { value: "other", label: "Other" }
 ];
 
-export default function ProfilePage() {
+export default function ProfilePage({ operatorSlug }: { operatorSlug?: string } = {}) {
+  const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [operatorSession, setOperatorSession] = useState<OperatorSession | null>(null);
+  const [operatorWorkspace, setOperatorWorkspace] = useState(Boolean(operatorSlug));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editingUser, setEditingUser] = useState(false);
@@ -350,23 +359,51 @@ export default function ProfilePage() {
   const [profilePhotoDialogOpen, setProfilePhotoDialogOpen] = useState(false);
   const profilePhotoDialogRef = useRef<HTMLDialogElement>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestedOperatorSlug?: string) => {
     setLoading(true);
     setError("");
     try {
-      const data = await getProfile();
+      let data: Awaited<ReturnType<typeof getProfile>>;
+      if (requestedOperatorSlug) {
+        const session = await getOperatorSession(requestedOperatorSlug);
+        if (session.access.mode !== "MEMBER") {
+          throw new Error("Operator workspace access could not be verified.");
+        }
+
+        if (operatorSlug) {
+          if (session.membership.role !== "CLIENT") {
+            throw new Error("This profile is available to operator business account clients.");
+          }
+          setOperatorSession(session);
+          data = await getOperatorProfile(requestedOperatorSlug);
+        } else {
+          if (session.membership.role === "CLIENT") {
+            router.replace(`/portal/${encodeURIComponent(requestedOperatorSlug)}/profile`);
+            return;
+          }
+          setOperatorSession(session);
+          data = await getProfile();
+        }
+      } else {
+        setOperatorSession(null);
+        data = await getProfile();
+      }
       setProfile({ user: data.user, businessAccounts: data.businessAccounts });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to load your profile.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [operatorSlug, router]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
+    const contextualSlug = operatorSlug || new URLSearchParams(window.location.search).get("operatorSlug") || undefined;
+    const timer = window.setTimeout(() => {
+      setOperatorWorkspace(Boolean(contextualSlug));
+      void load(contextualSlug);
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [load]);
+  }, [load, operatorSlug]);
 
   useEffect(() => {
     let active = true;
@@ -477,11 +514,14 @@ export default function ProfilePage() {
 
     setBusy(true);
     try {
-      const data = await updateProfileDetails(
-        profile?.user.staffProfile
-          ? userForm
-          : { firstName: userForm.firstName, lastName: userForm.lastName, phone: userForm.phone }
-      );
+      const personalDetails = {
+        firstName: userForm.firstName,
+        lastName: userForm.lastName,
+        phone: userForm.phone
+      };
+      const data = operatorSlug
+        ? await updateOperatorProfileDetails(operatorSlug, personalDetails)
+        : await updateProfileDetails(profile?.user.staffProfile ? userForm : personalDetails);
       setProfile({ user: data.user, businessAccounts: data.businessAccounts });
       setEditingUser(false);
       toast.success(data.message);
@@ -504,7 +544,9 @@ export default function ProfilePage() {
 
     setBusy(true);
     try {
-      const data = await updateProfileBusinessAccount(account.id, accountForm);
+      const data = operatorSlug
+        ? await updateOperatorProfileBusinessAccount(operatorSlug, account.id, accountForm)
+        : await updateProfileBusinessAccount(account.id, accountForm);
       setProfile({ user: data.user, businessAccounts: data.businessAccounts });
       setEditingAccountId("");
       setAccountForm(null);
@@ -530,8 +572,24 @@ export default function ProfilePage() {
     }
   }
 
-  if (loading) return <p className="text-sm font-semibold text-[#0D1282]">Loading your profile...</p>;
+  if (loading) {
+    if (!operatorWorkspace) return <p className="text-sm font-semibold text-[#0D1282]">Loading your profile...</p>;
+    return (
+      <div className="mx-auto flex min-h-[calc(100dvh-5rem)] w-full max-w-[1440px] px-3 py-6 sm:px-6 lg:px-8">
+        <OperatorLoadingIndicator label="Loading your profile…" className="flex-1" />
+      </div>
+    );
+  }
   if (error || !profile) {
+    if (operatorWorkspace) {
+      return (
+        <div className="mx-auto w-full max-w-[1440px] px-3 py-6 sm:px-6 lg:px-8">
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+            {error || "Profile not found."}
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
         {error || "Profile not found."}
@@ -543,7 +601,7 @@ export default function ProfilePage() {
   const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.name || user.email;
 
   return (
-    <div className="mx-auto max-w-8xl space-y-5">
+    <div className={`mx-auto w-full space-y-5 ${operatorWorkspace ? "max-w-[1440px] px-3 py-6 sm:px-6 lg:px-8" : "max-w-8xl"}`}>
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div data-profile-hero className="h-20 bg-linear-to-r from-blue-400 via-blue-300 to-blue-300" />
         <div className="px-4 pb-5 sm:px-6">
@@ -582,13 +640,15 @@ export default function ProfilePage() {
               </div>
             </div>
           </div>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 pt-4">
-            <div>
-              <p className="text-sm font-semibold text-slate-900">Appearance</p>
-              <p className="mt-0.5 text-xs text-slate-500">Choose the theme for your dashboard.</p>
+          {!operatorSlug ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 pt-4">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Appearance</p>
+                <p className="mt-0.5 text-xs text-slate-500">Choose the theme for your dashboard.</p>
+              </div>
+              <PortalThemeToggle />
             </div>
-            <PortalThemeToggle />
-          </div>
+          ) : null}
         </div>
       </section>
 
@@ -650,6 +710,36 @@ export default function ProfilePage() {
           </div>
         </div>
       </dialog>
+
+      {operatorSession?.access.mode === "MEMBER" && operatorSession.membership.role !== "CLIENT" ? (
+        <Section
+          icon={FiBriefcase}
+          title="Operator details"
+          subtitle="Your operator role is separate from your Swiftline client profile."
+          action={(
+            <Link
+              href={`/portal/${encodeURIComponent(operatorSession.operator.slug)}`}
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-[#0D1282] px-4 text-sm font-semibold text-white transition hover:bg-[#0D1282]/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]"
+            >
+              <FiExternalLink aria-hidden="true" className="h-4 w-4" />
+              Open workspace
+            </Link>
+          )}
+        >
+          <dl className={grid}>
+            <ReadOnlyField label="Operator" value={operatorSession.operator.companyName} />
+            <ReadOnlyField
+              label="Your operator role"
+              value={{
+                OPERATOR_ADMIN: "Operator administrator",
+                OPERATIONS: "Operations",
+                FINANCE: "Finance",
+                CLIENT: "Business account client"
+              }[operatorSession.membership.role]}
+            />
+          </dl>
+        </Section>
+      ) : null}
 
       <Section
         icon={FiUser}
@@ -830,6 +920,16 @@ export default function ProfilePage() {
                     <ReadOnlyField label="Member Since" value={formatDashboardDate(account.joinedAt)} />
                   </dl>
                 </div>
+                {operatorSlug ? (
+                  <dl className={grid}>
+                    <ReadOnlyField
+                      label="Operator Assigned Branch"
+                      value={account.accountAssignedBranch
+                        ? `${account.accountAssignedBranch.name} (${account.accountAssignedBranch.code})`
+                        : "Not assigned"}
+                    />
+                  </dl>
+                ) : null}
                 {account.assignedBranches.length ? (
                   <p className="flex items-center gap-2 text-xs text-slate-500">
                     <FiMapPin aria-hidden="true" className="h-3.5 w-3.5" />

@@ -1,6 +1,7 @@
 import { apiUrl } from "@/lib/api";
 import { setDateRangeParams, type DateRange } from "@/lib/dateRange";
 import { getAccessToken, readJsonSafely, refreshAccessToken } from "@/lib/auth";
+import { operatorSupportHeaders } from "@/lib/operatorSupport";
 import type { CsbType } from "@/lib/csbType";
 import type { ShipmentDestinationRegionCode } from "@/lib/shipmentDestinationRegions";
 
@@ -40,6 +41,8 @@ export type ShipmentListItem = {
   } | null;
   pieces: number;
   weightKg: number;
+  /** Operator portal only; source of each parcel's booked weight. */
+  parcelWeightsKg?: Array<number | null>;
   status: string;
   statusLabel: string;
   /** The newest scan. Null until Operations records one. */
@@ -137,13 +140,13 @@ export async function fetchWithAuth(path: string, init?: RequestInit) {
   if (!token) throw new Error("Your session has expired. Please sign in again.");
   const send = () => fetch(apiUrl(path), {
     ...init,
-    headers: {
+    headers: operatorSupportHeaders(path, {
       ...(init?.body && !(typeof FormData !== "undefined" && init.body instanceof FormData)
         ? { "Content-Type": "application/json" }
         : {}),
       ...init?.headers,
       Authorization: `Bearer ${token}`
-    }
+    })
   });
 
   let response = await send();

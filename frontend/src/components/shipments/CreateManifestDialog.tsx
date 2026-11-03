@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { FiX } from "react-icons/fi";
+import { FiChevronDown, FiX } from "react-icons/fi";
 
 export type ManifestDialogValues = {
   origin: string;
@@ -24,6 +24,7 @@ export default function CreateManifestDialog({
   totalWeightKg,
   defaults,
   busy,
+  error,
   onCancel,
   onConfirm
 }: {
@@ -33,6 +34,7 @@ export default function CreateManifestDialog({
   totalWeightKg: number;
   defaults: ManifestDialogValues;
   busy: boolean;
+  error?: string;
   onCancel: () => void;
   onConfirm: (values: ManifestDialogValues) => void;
 }) {
@@ -58,11 +60,14 @@ export default function CreateManifestDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-manifest-title"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl"
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>
-            <h2 className="text-base font-semibold text-[#0D1282]">{title}</h2>
+            <h2 id="create-manifest-title" className="text-base font-semibold text-[#0D1282]">{title}</h2>
             <p className="mt-1 text-xs text-slate-500">
               {shipmentCount} {shipmentCount === 1 ? "shipment" : "shipments"} · {totalPieces} pcs · {totalWeightKg.toFixed(2)} kg
             </p>
@@ -71,7 +76,7 @@ export default function CreateManifestDialog({
             type="button"
             onClick={onCancel}
             aria-label="Close"
-            className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:border-slate-400"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-300 text-slate-600 transition hover:border-slate-500 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]"
           >
             <FiX aria-hidden="true" className="h-4 w-4" />
           </button>
@@ -109,29 +114,34 @@ export default function CreateManifestDialog({
           </label>
           <label className="block">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Payment Type</span>
-            <select
-              value={values.paymentType}
-              onChange={(event) => update("paymentType", event.target.value)}
-              className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-[#0D1282] focus:outline-none"
-            >
-              <option value="">Not specified</option>
-              {paymentTypes.map((option) => <option key={option} value={option}>{option}</option>)}
-            </select>
+            <span className="relative mt-2 block">
+              <select
+                value={values.paymentType}
+                onChange={(event) => update("paymentType", event.target.value)}
+                className="h-11 w-full appearance-none rounded-md border border-slate-300 bg-white py-2 pl-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20"
+              >
+                <option value="">Not specified</option>
+                {paymentTypes.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+              <FiChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
+            </span>
           </label>
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+        {error ? <p role="alert" className="mx-5 mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p> : null}
+
+        <div className="flex flex-col-reverse justify-end gap-2 border-t border-slate-200 px-5 py-4 sm:flex-row">
           <button
             type="button"
             onClick={onCancel}
-            className="h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:border-slate-500"
+            className="min-h-11 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 transition hover:border-slate-500 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={!canSubmit}
-            className="h-10 rounded-lg bg-[#0D1282] px-4 text-sm font-semibold text-white transition hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:bg-slate-400"
+            className="min-h-11 rounded-md bg-[#0D1282] px-4 text-sm font-semibold text-white transition hover:bg-[#0D1282]/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282] disabled:cursor-not-allowed disabled:bg-slate-400"
           >
             {busy ? "Creating..." : title}
           </button>

@@ -23,7 +23,13 @@ function relativeTime(value: string) {
   return `${Math.floor(hours / 24)} days ago`;
 }
 
-export default function NotificationBell() {
+export default function NotificationBell({
+  operatorSlug,
+  operatorHeader = false,
+}: {
+  operatorSlug?: string;
+  operatorHeader?: boolean;
+}) {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -58,14 +64,14 @@ export default function NotificationBell() {
 
   const load = useCallback(async () => {
     try {
-      const result = await listNotifications();
+      const result = await listNotifications(operatorSlug);
       setNotifications(result.notifications);
       setUnreadCount(result.unreadCount);
       setError("");
     } catch {
       setError("Notifications could not be loaded.");
     }
-  }, []);
+  }, [operatorSlug]);
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0);
@@ -75,7 +81,7 @@ export default function NotificationBell() {
       window.clearTimeout(initialLoad);
       window.clearInterval(interval);
     };
-  }, [load]);
+  }, [load, operatorSlug]);
 
   // The panel is a popover, not a modal: a click anywhere outside it or Escape
   // dismisses it, matching how the rest of the header chrome behaves.
@@ -100,7 +106,7 @@ export default function NotificationBell() {
 
   async function openNotification(notification: PortalNotification) {
     if (!notification.readAt) {
-      await markNotificationRead(notification.id);
+      await markNotificationRead(notification.id, operatorSlug);
       setUnreadCount((count) => Math.max(count - 1, 0));
       setNotifications((items) =>
         items.map((item) =>
@@ -120,7 +126,7 @@ export default function NotificationBell() {
   }
 
   async function readAll() {
-    await markAllNotificationsRead();
+    await markAllNotificationsRead(operatorSlug);
     const readAt = new Date().toISOString();
 
     setUnreadCount(0);
@@ -133,15 +139,18 @@ export default function NotificationBell() {
   }
 
   return (
-    <div ref={containerRef} className="relative group">
+    <div ref={containerRef} className={`relative group ${operatorHeader ? "shrink-0" : ""}`}>
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
         aria-label="Notifications"
         aria-expanded={open}
-        className="relative flex h-10 w-10 items-center justify-center rounded-4xl border border-slate-300 bg-white text-slate-700 transition hover:border-blue-800 hover:text-blue-900"
+        className={`relative flex items-center justify-center border bg-white text-slate-700 transition ${operatorHeader
+          ? "h-14 w-14 rounded-lg border-slate-200 hover:border-[#0D1282] hover:text-[#0D1282] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]"
+          : "h-10 w-10 rounded-4xl border-slate-300 hover:border-blue-800 hover:text-blue-900"
+        }`}
       >
-        <FiBell className="h-4 w-4" />
+        <FiBell aria-hidden="true" className={operatorHeader ? "h-5 w-5" : "h-4 w-4"} />
 
         {unreadCount ? (
           <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
@@ -166,7 +175,10 @@ export default function NotificationBell() {
       )}
 
       {open ? (
-        <div className="fixed inset-x-4 top-[76px] z-50 border border-slate-200 bg-white shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-90 sm:max-w-[calc(100vw-2rem)]">
+        <div className={`fixed inset-x-4 z-50 border border-slate-200 bg-white shadow-xl ${operatorHeader
+          ? "top-[84px] sm:top-14"
+          : "top-[76px] sm:top-12"
+        } sm:absolute sm:inset-x-auto sm:right-0 sm:w-90 sm:max-w-[calc(100vw-2rem)]`}>
           <div className="flex h-12 items-center justify-between border-b border-slate-200 px-4">
             <p className="text-sm font-semibold text-slate-950">
               Notifications
@@ -209,8 +221,9 @@ export default function NotificationBell() {
               <div className="px-6 py-8 text-center">
                 <p className="text-sm font-semibold text-slate-700">You are all caught up</p>
                 <p className="mx-auto mt-1 max-w-xs text-xs leading-5 text-slate-500">
-                  Holds, delivery exceptions, claim decisions, payment reminders and replies from
-                  Swiftline all arrive here.
+                  {operatorSlug
+                    ? "Shipment, account, credit and other operator updates appear here."
+                    : "Holds, delivery exceptions, claim decisions, payment reminders and replies from Swiftline all arrive here."}
                 </p>
               </div>
             ) : null}

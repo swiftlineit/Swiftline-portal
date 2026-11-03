@@ -89,10 +89,18 @@ function ParcelStatusList({ rows }: { rows: ParcelRow[] }) {
  * horizontal scroll never clips it; dismissed on page scroll, resize, or
  * pointer leave. Tap toggles it for touch screens.
  */
-function HoverCard({ label, card, children }: { label: string; card: ReactNode; children: ReactNode }) {
+export function ShipmentHoverCard({
+  label,
+  card,
+  children,
+  fitContent = false,
+  persistOnTouch = false
+}: { label: string; card: ReactNode; children: ReactNode; fitContent?: boolean; persistOnTouch?: boolean }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
   const cardRef = useRef<HTMLSpanElement>(null);
   const hideTimeoutRef = useRef<number | null>(null);
+  const touchPinnedRef = useRef(false);
+  const touchClickRef = useRef(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const open = rect !== null;
 
@@ -102,6 +110,8 @@ function HoverCard({ label, card, children }: { label: string; card: ReactNode; 
       // Scrolling the parcel list should not dismiss the card that owns it.
       const target = event.target;
       if (target instanceof Node && cardRef.current?.contains(target)) return;
+      touchPinnedRef.current = false;
+      touchClickRef.current = false;
       setRect(null);
     };
     window.addEventListener("scroll", dismiss, true);
@@ -125,11 +135,28 @@ function HoverCard({ label, card, children }: { label: string; card: ReactNode; 
   };
 
   const scheduleHide = () => {
+    if (persistOnTouch && touchPinnedRef.current) return;
     cancelHide();
     hideTimeoutRef.current = window.setTimeout(() => {
       setRect(null);
       hideTimeoutRef.current = null;
     }, 150);
+  };
+
+  const toggleTouchCard = () => {
+    touchClickRef.current = true;
+    touchPinnedRef.current = !touchPinnedRef.current;
+    if (touchPinnedRef.current) show();
+    else setRect(null);
+  };
+
+  const handleClick = () => {
+    if (persistOnTouch && touchClickRef.current) {
+      touchClickRef.current = false;
+      return;
+    }
+    if (open) scheduleHide();
+    else show();
   };
 
   useEffect(() => () => {
@@ -138,8 +165,9 @@ function HoverCard({ label, card, children }: { label: string; card: ReactNode; 
     }
   }, []);
 
-  const cardWidth = 300;
-  const left = rect ? Math.max(8, Math.min(rect.left, window.innerWidth - cardWidth - 8)) : 0;
+  const viewportWidth = typeof window === "undefined" ? 1024 : window.innerWidth;
+  const cardWidth = fitContent ? Math.min(300, Math.max(0, viewportWidth - 16)) : 300;
+  const left = rect ? Math.max(8, Math.min(rect.left, viewportWidth - cardWidth - 8)) : 0;
   const above = rect ? rect.bottom + 8 + 200 > window.innerHeight && rect.top > 240 : false;
   // Arrow tracks the anchor's centre, clamped inside the card.
   const arrowLeft = rect ? Math.min(Math.max(rect.left + rect.width / 2 - left, 16), cardWidth - 16) : 16;
@@ -151,9 +179,10 @@ function HoverCard({ label, card, children }: { label: string; card: ReactNode; 
       tabIndex={0}
       onMouseEnter={show}
       onMouseLeave={scheduleHide}
+      onTouchStart={persistOnTouch ? toggleTouchCard : undefined}
       onFocus={show}
       onBlur={scheduleHide}
-      onClick={() => (open ? scheduleHide() : show())}
+      onClick={handleClick}
       className="inline-flex min-w-0 cursor-default outline-none"
     >
       {children}
@@ -164,13 +193,18 @@ function HoverCard({ label, card, children }: { label: string; card: ReactNode; 
             left,
             top: above ? rect.top - 8 : rect.bottom + 8,
             transform: above ? "translateY(-100%)" : undefined,
-            width: cardWidth
+            width: fitContent ? "max-content" : cardWidth,
+            maxWidth: fitContent ? "min(300px, calc(100vw - 16px))" : undefined
           }}
           className="fixed z-50"
         >
           <span
             aria-hidden="true"
-            style={{ left: arrowLeft }}
+            style={{
+              left: fitContent
+                ? `clamp(16px, ${arrowLeft}px, calc(100% - 16px))`
+                : arrowLeft
+            }}
             className={`absolute h-2.5 w-2.5 rotate-45 border-slate-700 bg-slate-900 ${
               above ? "-bottom-[5px] border-b border-r" : "-top-[5px] border-l border-t"
             }`}
@@ -287,7 +321,7 @@ export default function ParcelManifestCell({ shipment }: { shipment: ShipmentLis
     <div className="flex min-w-0 flex-col gap-2">
       {groups.map((group) => {
         return (
-          <HoverCard
+      <ShipmentHoverCard
             key={group.manifestId}
             label={`${group.parcels.length} of ${total} parcels scanned into manifest ${group.manifestNumber}`}
             card={
@@ -319,11 +353,11 @@ export default function ParcelManifestCell({ shipment }: { shipment: ShipmentLis
                 </span>
               </span>
             </span>
-          </HoverCard>
+          </ShipmentHoverCard>
         );
       })}
       {!groups.length && awaiting.length ? (
-        <HoverCard
+        <ShipmentHoverCard
           label={`${awaiting.length} of ${total} parcels awaiting scan`}
           card={
             <>
@@ -341,7 +375,7 @@ export default function ParcelManifestCell({ shipment }: { shipment: ShipmentLis
               {awaiting.length}/{total}
             </span>
           </span>
-        </HoverCard>
+        </ShipmentHoverCard>
       ) : null}
     </div>
   );

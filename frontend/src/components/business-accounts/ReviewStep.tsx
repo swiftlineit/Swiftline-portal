@@ -20,7 +20,8 @@ export function ReviewStep({
   confirmation,
   validationErrors,
   onConfirmationChange,
-  onEditStep
+  onEditStep,
+  operatorName
 }: {
   formData: BusinessAccountFormData;
   documentFields: { type: DocumentType; required: boolean; helper: string }[];
@@ -30,6 +31,7 @@ export function ReviewStep({
   validationErrors: Record<string, string>;
   onConfirmationChange: (checked: boolean) => void;
   onEditStep: (step: number) => void;
+  operatorName?: string;
 }) {
   return (
     <div className="space-y-6">
@@ -88,52 +90,39 @@ export function ReviewStep({
         onEdit={() => onEditStep(2)}
       />
       <div className="flex items-start gap-3">
-  <input
-    id="business-account-confirmation"
-    type="checkbox"
-    checked={confirmation}
-    onChange={(event) => onConfirmationChange(event.target.checked)}
-    className="mt-1 h-4 w-4"
-  />
-
-  <label
-    htmlFor="business-account-confirmation"
-    className="text-sm font-medium leading-6 text-slate-700"
-  >
-    I understand and acknowledge that by requesting a Swiftline business
-    account, I have also read, understood and accepted Swiftline&apos;s{" "}
-    <Link
-      href="/privacy-policy"
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-blue-600 hover:underline"
-    >
-      Terms of Use
-    </Link>
-    ,{" "}
-    <Link
-      href="/privacy-policy"
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-blue-600 hover:underline"
-    >
-      Privacy Notice
-    </Link>{" "}
-    and{" "}
-    <Link
-      href="/privacy-policy"
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-blue-600 hover:underline"
-    >
-      Data Privacy Policy
-    </Link>
-    .
-  </label>
-</div>
+        <input
+          id="business-account-confirmation"
+          type="checkbox"
+          checked={confirmation}
+          onChange={(event) => onConfirmationChange(event.target.checked)}
+          className="mt-1 h-4 w-4"
+        />
+        <label htmlFor="business-account-confirmation" className="text-sm font-medium leading-6 text-slate-700">
+          {operatorName ? (
+            `I confirm that the details and documents for this business account have been reviewed for ${operatorName}.`
+          ) : (
+            <>
+              I understand and acknowledge that by requesting a Swiftline business
+              account, I have also read, understood and accepted Swiftline&apos;s{" "}
+              <Link href="/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                Terms of Use
+              </Link>
+              ,{" "}
+              <Link href="/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                Privacy Notice
+              </Link>{" "}
+              and{" "}
+              <Link href="/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                Data Privacy Policy
+              </Link>
+              .
+            </>
+          )}
+        </label>
+      </div>
       <p className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
-        What happens after you submit
-        <InfoTooltip text={reviewTooltips.confirmation} />
+        {operatorName ? "What happens after you save" : "What happens after you submit"}
+        <InfoTooltip text={operatorName ? "The account is saved as a draft in this operator workspace." : reviewTooltips.confirmation} />
       </p>
       {validationErrors.confirmation ? <p className="text-xs font-semibold text-red-600">{validationErrors.confirmation}</p> : null}
     </div>

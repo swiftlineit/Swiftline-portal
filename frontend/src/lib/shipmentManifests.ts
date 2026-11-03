@@ -1,6 +1,7 @@
 import { apiUrl } from "@/lib/api";
 import { setDateRangeParams, type DateRange } from "@/lib/dateRange";
 import { getAccessToken, refreshAccessToken } from "@/lib/auth";
+import { operatorSupportHeaders } from "@/lib/operatorSupport";
 
 export type ShipmentManifestAudience = "admin" | "client";
 
@@ -93,14 +94,14 @@ async function fetchWithAuth(input: string, init?: RequestInit) {
   if (!token) throw new Error("Your session has expired. Please sign in again.");
   let response = await fetch(input, {
     ...init,
-    headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${token}` }
+    headers: operatorSupportHeaders(input, { ...(init?.headers ?? {}), Authorization: `Bearer ${token}` })
   });
   if (response.status === 401) {
     token = await refreshAccessToken();
     if (!token) throw new Error("Your session has expired. Please sign in again.");
     response = await fetch(input, {
       ...init,
-      headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${token}` }
+      headers: operatorSupportHeaders(input, { ...(init?.headers ?? {}), Authorization: `Bearer ${token}` })
     });
   }
   return response;
@@ -112,14 +113,17 @@ async function readJson<T>(response: Response): Promise<T> {
   return payload as T;
 }
 
-function manifestRoot(audience: ShipmentManifestAudience) {
+function manifestRoot(audience: ShipmentManifestAudience, operatorSlug?: string) {
+  if (operatorSlug) return "/api/v1/operators/" + encodeURIComponent(operatorSlug) + "/manifests";
   return audience === "client" ? "/api/v1/client/shipment-manifests" : "/api/v1/shipment-manifests";
 }
 
-function paths(audience: ShipmentManifestAudience, draftId?: string, manifestId?: string) {
-  const root = manifestRoot(audience);
+function paths(audience: ShipmentManifestAudience, draftId?: string, manifestId?: string, operatorSlug?: string) {
+  const root = manifestRoot(audience, operatorSlug);
   return {
-    context: audience === "client"
+    context: operatorSlug
+      ? root + "/drafts/" + encodeURIComponent(draftId ?? "") + "/context"
+      : audience === "client"
       ? `/api/v1/client/shipments/${draftId}/manifests/context`
       : `/api/v1/shipment-manifests/drafts/${draftId}/context`,
     create: root,
@@ -128,13 +132,13 @@ function paths(audience: ShipmentManifestAudience, draftId?: string, manifestId?
   };
 }
 
-export async function getShipmentManifestContext(draftId: string, audience: ShipmentManifestAudience) {
-  const response = await fetchWithAuth(apiUrl(paths(audience, draftId).context));
+export async function getShipmentManifestContext(draftId: string, audience: ShipmentManifestAudience, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(paths(audience, draftId, undefined, operatorSlug).context));
   return readJson<{ success: true } & ShipmentManifestContext>(response);
 }
 
-export async function createShipmentManifest(input: CreateShipmentManifestInput, audience: ShipmentManifestAudience) {
-  const response = await fetchWithAuth(apiUrl(paths(audience).create), {
+export async function createShipmentManifest(input: CreateShipmentManifestInput, audience: ShipmentManifestAudience, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(paths(audience, undefined, undefined, operatorSlug).create), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
@@ -144,9 +148,10 @@ export async function createShipmentManifest(input: CreateShipmentManifestInput,
 
 export async function createBulkShipmentManifest(
   input: CreateBulkShipmentManifestInput,
-  audience: ShipmentManifestAudience
+  audience: ShipmentManifestAudience,
+  operatorSlug?: string
 ) {
-  const response = await fetchWithAuth(apiUrl(paths(audience).createBulk), {
+  const response = await fetchWithAuth(apiUrl(paths(audience, undefined, undefined, operatorSlug).createBulk), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
@@ -154,8 +159,9 @@ export async function createBulkShipmentManifest(
   return readJson<{ success: true; manifest: ShipmentManifestSummary }>(response);
 }
 
-export async function createCombinedShipmentManifest(input: CreateBulkShipmentManifestInput) {
-  const response = await fetchWithAuth(apiUrl("/api/v1/shipment-manifests/combined"), {
+export async function createCombinedShipmentManifest(input: CreateBulkShipmentManifestInput, operatorSlug?: string) {
+  const root = manifestRoot("admin", operatorSlug);
+  const response = await fetchWithAuth(apiUrl(root + "/combined"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
@@ -169,14 +175,14 @@ export async function listShipmentManifests(audience: ShipmentManifestAudience, 
   businessAccountId?: string;
   dateRange?: DateRange;
   search?: string;
-} = {}) {
+} = {}, operatorSlug?: string) {
   const params = new URLSearchParams();
   params.set("page", String(input.page ?? 1));
   params.set("limit", String(input.limit ?? 15));
   if (input.businessAccountId) params.set("businessAccountId", input.businessAccountId);
   if (input.search?.trim()) params.set("search", input.search.trim().slice(0, 80));
   setDateRangeParams(params, input.dateRange);
-  const response = await fetchWithAuth(apiUrl(`${manifestRoot(audience)}?${params.toString()}`));
+  const response = await fetchWithAuth(apiUrl(manifestRoot(audience, operatorSlug) + "?" + params.toString()));
   return readJson<{
     success: true;
     manifests: ShipmentManifestListItem[];
@@ -187,9 +193,10 @@ export async function listShipmentManifests(audience: ShipmentManifestAudience, 
 /** Downloads the existing courier-manifest workbook without changing its layout. */
 export async function downloadShipmentManifestExcel(
   manifest: Pick<ShipmentManifestSummary, "id" | "manifestNumber">,
-  audience: ShipmentManifestAudience
+  audience: ShipmentManifestAudience,
+  operatorSlug?: string
 ) {
-  const response = await fetchWithAuth(apiUrl(`${manifestRoot(audience)}/${manifest.id}/xlsx`));
+  const response = await fetchWithAuth(apiUrl(manifestRoot(audience, operatorSlug) + "/" + encodeURIComponent(manifest.id) + "/xlsx"));
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { message?: string };
     throw new Error(payload.message || "Manifest Excel file could not be downloaded.");
@@ -208,10 +215,11 @@ export async function downloadShipmentManifestExcel(
 export async function downloadShipmentManifest(
   manifest: Pick<ShipmentManifestSummary, "id" | "manifestNumber">,
   audience: ShipmentManifestAudience,
-  view = false
+  view = false,
+  operatorSlug?: string
 ) {
   const response = await fetchWithAuth(
-    apiUrl(`${manifestRoot(audience)}/${manifest.id}/pdf${view ? "?view=1" : ""}`)
+    apiUrl(manifestRoot(audience, operatorSlug) + "/" + encodeURIComponent(manifest.id) + "/pdf" + (view ? "?view=1" : ""))
   );
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { message?: string };
@@ -233,10 +241,11 @@ export async function downloadShipmentManifest(
 
 export async function deleteShipmentManifest(
   manifestId: string,
-  audience: ShipmentManifestAudience
+  audience: ShipmentManifestAudience,
+  operatorSlug?: string
 ) {
   if (audience === "client") throw new Error("Manifest deletion is not available for this account.");
-  const response = await fetchWithAuth(apiUrl(`${manifestRoot(audience)}/${manifestId}`), {
+  const response = await fetchWithAuth(apiUrl(manifestRoot(audience, operatorSlug) + "/" + encodeURIComponent(manifestId)), {
     method: "DELETE"
   });
   return readJson<{ success: true; message: string }>(response);
@@ -244,10 +253,11 @@ export async function deleteShipmentManifest(
 
 export async function deleteBulkShipmentManifests(
   manifestIds: string[],
-  audience: ShipmentManifestAudience
+  audience: ShipmentManifestAudience,
+  operatorSlug?: string
 ) {
   if (audience === "client") throw new Error("Manifest deletion is not available for this account.");
-  const response = await fetchWithAuth(apiUrl(`${manifestRoot(audience)}/bulk-delete`), {
+  const response = await fetchWithAuth(apiUrl(manifestRoot(audience, operatorSlug) + "/bulk-delete"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ manifestIds })
@@ -255,6 +265,7 @@ export async function deleteBulkShipmentManifests(
   return readJson<{ success: true; message: string; deletedCount: number }>(response);
 }
 
-export function manifestsHref(audience: ShipmentManifestAudience) {
+export function manifestsHref(audience: ShipmentManifestAudience, operatorSlug?: string) {
+  if (operatorSlug) return "/portal/" + encodeURIComponent(operatorSlug) + "/manifests";
   return audience === "client" ? "/client/manifests" : "/dashboard/shipment-manifests";
 }

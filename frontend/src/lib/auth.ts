@@ -227,11 +227,17 @@ export async function getInvitation(token: string) {
   return parseAuthResponse<{
     success: true;
     invitation: {
+      kind?: "BUSINESS" | "DRIVER" | "OPERATOR";
       email: string;
       name: string;
-      businessAccountId: string;
+      businessAccountId?: string;
       companyName: string;
       expiresAt: string;
+      operatorSlug?: string;
+      role?: "OPERATOR_ADMIN";
+      requiresSignIn?: boolean;
+      deliverySubrole?: string;
+      engagementType?: string;
     };
   }>(response);
 }

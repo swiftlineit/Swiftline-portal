@@ -150,7 +150,15 @@ function getDocumentFileError(file: File) {
   return "";
 }
 
-export default function BusinessAccountForm({ account }: { account?: BusinessAccount }) {
+export default function BusinessAccountForm({
+  account,
+  operatorSlug,
+  operatorName
+}: {
+  account?: BusinessAccount;
+  operatorSlug?: string;
+  operatorName?: string;
+}) {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [formData, setFormData] = useState<BusinessAccountFormData>(() => fromAccount(account));
@@ -173,6 +181,9 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
     && (JSON.stringify(formData) !== initialSnapshot || Object.values(files).some(Boolean));
 
   const existingDocuments = account?.documents ?? {};
+  const accountsHref = operatorSlug
+    ? `/portal/${encodeURIComponent(operatorSlug)}/business-accounts`
+    : "/dashboard/business-accounts";
   const steps = businessAccountSteps;
   const isEdit = Boolean(account);
   const isDraftEdit = account?.status === "draft";
@@ -195,7 +206,9 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
   // The whole form's field state, recomputed on every keystroke. One call feeds
   // the live tick/warning on each control, the per-step gate, and the submit
   // gate, so the three cannot drift apart.
-  const validation = useMemo(() => validateBusinessAccountForm(formData), [formData]);
+  const validation = useMemo(() => validateBusinessAccountForm(formData, {
+    requireBillingAddressForNoCompany: Boolean(operatorSlug)
+  }), [formData, operatorSlug]);
 
   // A field only turns red once the user has left it (or a button revealed the
   // whole step). Green needs no such gate- a tick the moment the value becomes
@@ -410,7 +423,7 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
         ...(field === "mobileNumber" ? { countryCode: formData.contact.countryCode.trim() } : {}),
         ...(field === "registrationId" ? { registrationIdType: formData.company.registrationIdType ?? "" } : {}),
         excludeAccountId: account?.accountId
-      });
+      }, operatorSlug);
 
       if (getUniqueFieldValue(field) !== value) return true;
 
@@ -556,13 +569,15 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
 
       const result = isEdit && account
         ? await updateBusinessAccount(account.accountId, formData, files)
-        : await createBusinessAccount(formData, files, idempotencyKeyRef.current);
+        : await createBusinessAccount(formData, files, idempotencyKeyRef.current, {
+          ...(operatorSlug ? { saveAsDraft: true, operatorSlug } : {})
+        });
 
       // Saved on the server from here on, so leaving no longer loses anything-
       // including on the submit-failure path below, which navigates away.
       setPersisted(true);
 
-      if (!isEdit || isDraftEdit) {
+      if (!operatorSlug && (!isEdit || isDraftEdit)) {
         try {
           await submitBusinessAccount(result.account.accountId);
         } catch (submitError) {
@@ -574,7 +589,7 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
         }
       }
 
-      router.push(`/dashboard/business-accounts/${result.account.accountId}`);
+      router.push(accountsHref);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to save business account.");
     } finally {
@@ -595,13 +610,24 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
   async function saveAsDraft({ navigateAfterSave = true } = {}): Promise<boolean> {
     // The identity fields are what the server needs to de-duplicate the account,
     // so they are the one thing a draft cannot skip.
+    // Lock operator draft saves while their required identity checks are running
+    // so a second click cannot submit the same form concurrently.
+    const isOperatorDraft = Boolean(operatorSlug);
+    if (isOperatorDraft) {
+      setSavingDraft(true);
+      setError("");
+    }
+
     if (!(await validateStep(0, { fieldsRequiredForDraft: true }))) {
       setStep(0);
+      if (isOperatorDraft) setSavingDraft(false);
       return false;
     }
 
-    setSavingDraft(true);
-    setError("");
+    if (!isOperatorDraft) {
+      setSavingDraft(true);
+      setError("");
+    }
 
     try {
       idempotencyKeyRef.current ||= createIdempotencyKey();
@@ -609,14 +635,17 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
       if (isEdit && account) {
         await updateBusinessAccount(account.accountId, formData, files, { saveAsDraft: true });
       } else {
-        await createBusinessAccount(formData, files, idempotencyKeyRef.current, { saveAsDraft: true });
+        await createBusinessAccount(formData, files, idempotencyKeyRef.current, {
+          saveAsDraft: true,
+          ...(operatorSlug ? { operatorSlug } : {})
+        });
       }
 
       setPersisted(true);
       // Back to the list, not the account page. A draft is an unfinished form,
       // not an onboarded customer, and landing on its detail page reads as though
       // a real account had just been created.
-      if (navigateAfterSave) router.push("/dashboard/business-accounts");
+      if (navigateAfterSave) router.push(accountsHref);
       return true;
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to save this draft.");
@@ -663,7 +692,7 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
             // Goes through the shared prompt so Cancel offers to keep the work
             // as a draft, exactly as leaving via the sidebar does.
             void requestLeave().then((canLeave) => {
-              if (canLeave) router.push("/dashboard/business-accounts");
+              if (canLeave) router.push(accountsHref);
             });
           }}
           className="rounded-xl border border-[#EEEDED] bg-white px-4 py-2.5 text-sm font-semibold text-[#0D1282] shadow-sm transition hover:border-[#0D1282]/30 hover:bg-[#EEEDED]/60 focus:outline-none focus:ring-2 focus:ring-[#F0DE36]/40"
@@ -714,6 +743,7 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
             onShipmentTypeChange={updateShipmentType}
             onValidateUniqueField={validateUniqueField}
             onFieldBlur={markTouched}
+            operatorDraftMode={Boolean(operatorSlug)}
           />
         ) : null}
 
@@ -729,6 +759,7 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
             onGstBillingChange={updateGstBilling}
             onValidateUniqueField={validateUniqueField}
             onFieldBlur={markTouched}
+            operatorBillingAddressForNoCompany={Boolean(operatorSlug)}
           />
         ) : null}
 
@@ -752,6 +783,7 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
             validationErrors={validationErrors}
             onConfirmationChange={setConfirmation}
             onEditStep={setStep}
+            operatorName={operatorName}
           />
         ) : null}
 
@@ -760,7 +792,7 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
         {outstandingIssues.length ? (
           <div className="mt-8 rounded-2xl border border-[#F0DE36] bg-[#F0DE36]/10 px-4 py-3">
             <p className="text-sm font-bold text-[#0D1282]">
-              {step === 3 ? "Complete these before submitting" : "Complete these to continue"}
+              {step === 3 ? operatorSlug ? "Complete these before saving the account" : "Complete these before submitting" : "Complete these to continue"}
             </p>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
               {outstandingIssues.map((issue) => (
@@ -806,7 +838,7 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
               </button>
             ) : (
               <span className="inline-flex items-center gap-2">
-              <InfoTooltip text={reviewTooltips.submit} />
+              <InfoTooltip text={operatorSlug ? "Saves this business account as a draft in your operator workspace." : reviewTooltips.submit} />
               <button
                 type="button"
                 onClick={submitForReview}
@@ -814,9 +846,9 @@ export default function BusinessAccountForm({ account }: { account?: BusinessAcc
                 className="rounded-xl bg-[#0D1282] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0D1282]/90 focus:outline-none focus:ring-2 focus:ring-[#F0DE36]/50 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#0D1282]/55"
               >
                 {saving
-                  ? isEdit && !isDraftEdit ? "Saving..." : "Submitting..."
+                  ? operatorSlug || isEdit && !isDraftEdit ? "Saving..." : "Submitting..."
                   : isCheckingUnique ? "Checking..."
-                    : isEdit && !isDraftEdit ? "Save Changes" : "Submit for Review"}
+                    : operatorSlug ? "Create Draft" : isEdit && !isDraftEdit ? "Save Changes" : "Submit for Review"}
               </button>
               </span>
             )}

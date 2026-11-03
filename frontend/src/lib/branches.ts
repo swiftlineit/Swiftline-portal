@@ -190,6 +190,14 @@ function findFirstApiError(value: unknown): string {
   return "";
 }
 
+function branchApiPath(resource = "", operatorSlug?: string): string {
+  const base = operatorSlug
+    ? `/api/v1/operators/${encodeURIComponent(operatorSlug)}/branches`
+    : "/api/v1/branches";
+  const suffix = resource.replace(/^\/+/, "");
+  return suffix ? `${base}/${suffix}` : base;
+}
+
 // Pagination is opt-in: pass a page to receive a bounded window plus the total
 // count; omit it (e.g. branch pickers) to receive every matching branch.
 export async function listBranches(search = "", status = "", page?: number, pageSize?: number) {
@@ -210,14 +218,14 @@ export async function listBranches(search = "", status = "", page?: number, page
   }>(response);
 }
 
-export async function getBranch(branchId: string) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/branches/${branchId}`));
+export async function getBranch(branchId: string, operatorSlug?: string, signal?: AbortSignal) {
+  const response = await fetchWithAuth(apiUrl(branchApiPath(encodeURIComponent(branchId), operatorSlug)), { signal });
 
   return parseApiResponse<{ success: true; branch: Branch }>(response);
 }
 
-export async function validateBranchCode(code: string) {
-  const url = new URL(apiUrl("/api/v1/branches/validate-code"));
+export async function validateBranchCode(code: string, operatorSlug?: string) {
+  const url = new URL(apiUrl(branchApiPath("validate-code", operatorSlug)));
   url.searchParams.set("code", code);
 
   const response = await fetchWithAuth(url.toString());
@@ -225,8 +233,8 @@ export async function validateBranchCode(code: string) {
   return parseApiResponse<{ success: true; exists: boolean; valid: boolean }>(response);
 }
 
-export async function validateBranchCodeForEdit(code: string, branchId: string) {
-  const url = new URL(apiUrl("/api/v1/branches/validate-code"));
+export async function validateBranchCodeForEdit(code: string, branchId: string, operatorSlug?: string) {
+  const url = new URL(apiUrl(branchApiPath("validate-code", operatorSlug)));
   url.searchParams.set("code", code);
   url.searchParams.set("excludeBranchId", branchId);
 
@@ -269,8 +277,8 @@ export function branchToFormData(branch: Branch): BranchFormData {
   };
 }
 
-export async function createBranch(data: BranchFormData, status: "DRAFT" | "ACTIVE") {
-  const response = await fetchWithAuth(apiUrl("/api/v1/branches"), {
+export async function createBranch(data: BranchFormData, status: "DRAFT" | "ACTIVE", operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(branchApiPath("", operatorSlug)), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...data, status })
@@ -280,8 +288,8 @@ export async function createBranch(data: BranchFormData, status: "DRAFT" | "ACTI
 }
 
 // Updates branch fields only. Lifecycle status is changed through updateBranchStatus.
-export async function updateBranch(branchId: string, data: BranchFormData) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/branches/${branchId}`), {
+export async function updateBranch(branchId: string, data: BranchFormData, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(branchApiPath(encodeURIComponent(branchId), operatorSlug)), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data)
@@ -290,8 +298,8 @@ export async function updateBranch(branchId: string, data: BranchFormData) {
   return parseApiResponse<{ success: true; branch: Branch }>(response);
 }
 
-export async function updateBranchStatus(branchId: string, status: BranchStatus) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/branches/${branchId}/status`), {
+export async function updateBranchStatus(branchId: string, status: BranchStatus, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(branchApiPath(`${encodeURIComponent(branchId)}/status`, operatorSlug)), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status })
@@ -306,8 +314,8 @@ export async function updateBranchStatus(branchId: string, status: BranchStatus)
  * Draft branches only- an activated branch is closed instead, so its history
  * survives. The server refuses the delete if anything still points at it.
  */
-export async function deleteBranchDraft(branchId: string) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/branches/${branchId}`), {
+export async function deleteBranchDraft(branchId: string, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(branchApiPath(encodeURIComponent(branchId), operatorSlug)), {
     method: "DELETE"
   });
 
@@ -320,12 +328,12 @@ export async function deleteBranchDraft(branchId: string) {
  * Addressed by branch and position rather than by a storage path, so the server
  * can apply the same branch-access check it applies to the rest of the record.
  */
-export function branchImageUrl(branchId: string, index: number) {
-  return `/api/v1/branches/${branchId}/images/${index}`;
+export function branchImageUrl(branchId: string, index: number, operatorSlug?: string) {
+  return branchApiPath(`${encodeURIComponent(branchId)}/images/${index}`, operatorSlug);
 }
 
-export function branchDocumentUrl(branchId: string, index: number) {
-  return `/api/v1/branches/${branchId}/documents/${index}`;
+export function branchDocumentUrl(branchId: string, index: number, operatorSlug?: string) {
+  return branchApiPath(`${encodeURIComponent(branchId)}/documents/${index}`, operatorSlug);
 }
 
 // These endpoints require a Bearer token, which a plain <img src> or <a href>
@@ -338,11 +346,11 @@ export async function fetchBranchFileObjectUrl(fileUrl: string) {
   return URL.createObjectURL(await response.blob());
 }
 
-export async function uploadBranchImages(branchId: string, files: File[]) {
+export async function uploadBranchImages(branchId: string, files: File[], operatorSlug?: string) {
   const formData = new FormData();
   files.forEach((file) => formData.append("images", file));
 
-  const response = await fetchWithAuth(apiUrl(`/api/v1/branches/${branchId}/images`), {
+  const response = await fetchWithAuth(apiUrl(branchApiPath(`${encodeURIComponent(branchId)}/images`, operatorSlug)), {
     method: "POST",
     body: formData
   });
@@ -350,8 +358,8 @@ export async function uploadBranchImages(branchId: string, files: File[]) {
   return parseApiResponse<{ success: true; branch: Branch }>(response);
 }
 
-export async function deleteBranchImage(branchId: string, imageIndex: number) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/branches/${branchId}/images/${imageIndex}`), {
+export async function deleteBranchImage(branchId: string, imageIndex: number, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(branchApiPath(`${encodeURIComponent(branchId)}/images/${imageIndex}`, operatorSlug)), {
     method: "DELETE"
   });
 
@@ -362,14 +370,15 @@ export async function uploadBranchDocument(
   branchId: string,
   type: BranchDocumentType,
   title: string,
-  file: File
+  file: File,
+  operatorSlug?: string
 ) {
   const formData = new FormData();
   formData.append("document", file);
   formData.append("type", type);
   formData.append("title", title);
 
-  const response = await fetchWithAuth(apiUrl(`/api/v1/branches/${branchId}/documents`), {
+  const response = await fetchWithAuth(apiUrl(branchApiPath(`${encodeURIComponent(branchId)}/documents`, operatorSlug)), {
     method: "POST",
     body: formData
   });
@@ -377,8 +386,8 @@ export async function uploadBranchDocument(
   return parseApiResponse<{ success: true; branch: Branch }>(response);
 }
 
-export async function deleteBranchDocument(branchId: string, docIndex: number) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/branches/${branchId}/documents/${docIndex}`), {
+export async function deleteBranchDocument(branchId: string, docIndex: number, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(branchApiPath(`${encodeURIComponent(branchId)}/documents/${docIndex}`, operatorSlug)), {
     method: "DELETE"
   });
 

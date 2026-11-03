@@ -100,7 +100,8 @@ export function ContactStep({
   onContactChange,
   onShipmentTypeChange,
   onValidateUniqueField,
-  onFieldBlur
+  onFieldBlur,
+  operatorDraftMode = false
 }: {
   formData: BusinessAccountFormData;
   validationErrors: Record<string, string>;
@@ -111,6 +112,8 @@ export function ContactStep({
   onShipmentTypeChange: (value: string) => void;
   onValidateUniqueField: (field: UniqueField) => Promise<boolean>;
   onFieldBlur: (...keys: string[]) => void;
+  /** Defer duplicate lookups until the operator explicitly saves the draft. */
+  operatorDraftMode?: boolean;
 }) {
   return (
     <div className="grid gap-6">
@@ -160,7 +163,7 @@ export function ContactStep({
         onChange={(value) => onContactChange("email", value)}
         onBlur={() => {
           onFieldBlur("email");
-          void onValidateUniqueField("email");
+          if (!operatorDraftMode) void onValidateUniqueField("email");
         }}
         error={validationErrors.email || fieldErrors.email}
         status={fieldStatus.email}
@@ -196,7 +199,7 @@ export function ContactStep({
           onChange={(value) => onContactChange("mobileNumber", value)}
           onBlur={() => {
             onFieldBlur("mobileNumber");
-            void onValidateUniqueField("mobileNumber");
+            if (!operatorDraftMode) void onValidateUniqueField("mobileNumber");
           }}
           error={validationErrors.mobileNumber || fieldErrors.mobileNumber}
           status={fieldStatus.mobileNumber}

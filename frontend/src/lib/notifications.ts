@@ -12,6 +12,12 @@ export type PortalNotification = {
   createdAt: string;
 };
 
+function notificationBasePath(operatorSlug?: string) {
+  return operatorSlug
+    ? `/api/v1/operators/${encodeURIComponent(operatorSlug)}/notifications`
+    : "/api/v1/notifications";
+}
+
 async function request(path: string, init?: RequestInit) {
   let token = getAccessToken() ?? await refreshAccessToken();
   const headers = new Headers(init?.headers);
@@ -29,18 +35,18 @@ async function request(path: string, init?: RequestInit) {
   return data;
 }
 
-export async function listNotifications() {
-  return request("/api/v1/notifications") as Promise<{
+export async function listNotifications(operatorSlug?: string) {
+  return request(notificationBasePath(operatorSlug)) as Promise<{
     success: true;
     notifications: PortalNotification[];
     unreadCount: number;
   }>;
 }
 
-export async function markNotificationRead(notificationId: string) {
-  return request(`/api/v1/notifications/${notificationId}/read`, { method: "PATCH" });
+export async function markNotificationRead(notificationId: string, operatorSlug?: string) {
+  return request(`${notificationBasePath(operatorSlug)}/${encodeURIComponent(notificationId)}/read`, { method: "PATCH" });
 }
 
-export async function markAllNotificationsRead() {
-  return request("/api/v1/notifications/read-all", { method: "PATCH" });
+export async function markAllNotificationsRead(operatorSlug?: string) {
+  return request(`${notificationBasePath(operatorSlug)}/read-all`, { method: "PATCH" });
 }

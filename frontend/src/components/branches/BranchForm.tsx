@@ -488,11 +488,13 @@ export default function BranchForm({
   branchId,
   initialData,
   initialStatus = "DRAFT",
-  identityLocked = false
+  identityLocked = false,
+  operatorSlug
 }: {
   branchId?: string;
   initialData?: BranchFormData;
   initialStatus?: BranchStatus;
+  operatorSlug?: string;
   // True once the branch has been activated: its code and station code are baked
   // into issued tracking numbers and can no longer change.
   identityLocked?: boolean;
@@ -562,8 +564,8 @@ export default function BranchForm({
     const timeout = window.setTimeout(async () => {
       try {
         const result = branchId
-          ? await validateBranchCodeForEdit(form.code, branchId)
-          : await validateBranchCode(form.code);
+          ? await validateBranchCodeForEdit(form.code, branchId, operatorSlug)
+          : await validateBranchCode(form.code, operatorSlug);
         if (!cancelled) setCodeExists(result.exists);
       } catch {
         if (!cancelled) setCodeExists(null);
@@ -574,7 +576,7 @@ export default function BranchForm({
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [branchId, form.code]);
+  }, [branchId, form.code, operatorSlug]);
 
   function updateForm(update: Partial<BranchFormData>) {
     setForm((current) => ({ ...current, ...update }));
@@ -740,14 +742,14 @@ export default function BranchForm({
       let branch;
 
       if (!branchId) {
-        const result = await createBranch(form, mode === "activate" ? "ACTIVE" : "DRAFT");
+        const result = await createBranch(form, mode === "activate" ? "ACTIVE" : "DRAFT", operatorSlug);
         branch = result.branch;
       } else {
-        const result = await updateBranch(branchId, form);
+        const result = await updateBranch(branchId, form, operatorSlug);
         branch = result.branch;
 
         if (mode === "activate") {
-          const statusResult = await updateBranchStatus(branchId, "ACTIVE");
+          const statusResult = await updateBranchStatus(branchId, "ACTIVE", operatorSlug);
           branch = statusResult.branch;
         }
       }
@@ -756,7 +758,7 @@ export default function BranchForm({
       // a failure there must not be reported as "the branch could not be saved".
       try {
         if (imageFiles.length) {
-          branch = (await uploadBranchImages(branch._id, imageFiles)).branch;
+          branch = (await uploadBranchImages(branch._id, imageFiles, operatorSlug)).branch;
           toast.success("Branch images uploaded successfully.");
         }
 
@@ -764,15 +766,15 @@ export default function BranchForm({
         // server, so they run in sequence; in parallel they overwrite each other
         // and only the last one to save would survive.
         if (documentFiles.pan) {
-          branch = (await uploadBranchDocument(branch._id, "PAN", "PAN Card", documentFiles.pan)).branch;
+          branch = (await uploadBranchDocument(branch._id, "PAN", "PAN Card", documentFiles.pan, operatorSlug)).branch;
           toast.success("PAN document uploaded successfully.");
         }
         if (documentFiles.gst) {
-          branch = (await uploadBranchDocument(branch._id, "GST", "GST Certificate", documentFiles.gst)).branch;
+          branch = (await uploadBranchDocument(branch._id, "GST", "GST Certificate", documentFiles.gst, operatorSlug)).branch;
           toast.success("GST document uploaded successfully.");
         }
         if (documentFiles.other) {
-          branch = (await uploadBranchDocument(branch._id, "OTHER", documentFiles.other.title, documentFiles.other.file)).branch;
+          branch = (await uploadBranchDocument(branch._id, "OTHER", documentFiles.other.title, documentFiles.other.file, operatorSlug)).branch;
           toast.success("Additional document uploaded successfully.");
         }
       } catch (uploadError) {
@@ -803,7 +805,10 @@ export default function BranchForm({
       if (navigateAfterSave) {
         // A draft goes back to the list, where its row carries the edit action
         // that resumes it. Only a real save opens the branch itself.
-        router.push(mode === "draft" ? "/dashboard/branches" : `/dashboard/branches/${branch._id}`);
+        const branchListPath = operatorSlug
+          ? `/portal/${encodeURIComponent(operatorSlug)}/branches`
+          : "/dashboard/branches";
+        router.push(operatorSlug || mode === "draft" ? branchListPath : `/dashboard/branches/${branch._id}`);
       }
       return true;
     } catch (caughtError) {
@@ -1097,12 +1102,12 @@ export default function BranchForm({
               {existingImages.map((image, index) => (
                 <div key={`existing-${index}`} className="group relative overflow-hidden rounded-xl border border-[#EEEDED] bg-[#EEEDED]/40">
                   <BranchImage
-                    fileUrl={branchImageUrl(branchId ?? "", index)}
+                    fileUrl={branchImageUrl(branchId ?? "", index, operatorSlug)}
                     alt={image.fileName || `Existing branch image ${index + 1}`}
                     className="h-32 w-full object-cover"
                   />
                   <BranchFileLink
-                    fileUrl={branchImageUrl(branchId ?? "", index)}
+                    fileUrl={branchImageUrl(branchId ?? "", index, operatorSlug)}
                     className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-lg bg-white/95 px-2.5 py-1.5 text-xs font-semibold text-[#0D1282] shadow-sm hover:bg-white"
                   >
                     <FiExternalLink className="h-3.5 w-3.5" /> Preview
@@ -1114,7 +1119,7 @@ export default function BranchForm({
                       if (!branchId) return;
                       setDeletingImages((prev) => new Set(prev).add(index));
                       try {
-                        await deleteBranchImage(branchId, index);
+                        await deleteBranchImage(branchId, index, operatorSlug);
                         setExistingImages((prev) => prev.filter((_, i) => i !== index));
                         toast.success("Image deleted.");
                       } catch (caught) {
@@ -1188,7 +1193,7 @@ export default function BranchForm({
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500"><FiFileText className="h-5 w-5" /></span>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-slate-700">{doc.fileName}</p>
-                      <BranchFileLink fileUrl={branchDocumentUrl(branchId ?? "", docIndex)} className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold text-[#0D1282] hover:underline"><FiExternalLink className="h-3.5 w-3.5" /> Preview</BranchFileLink>
+                      <BranchFileLink fileUrl={branchDocumentUrl(branchId ?? "", docIndex, operatorSlug)} className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold text-[#0D1282] hover:underline"><FiExternalLink className="h-3.5 w-3.5" /> Preview</BranchFileLink>
                     </div>
                   </div>
                   <button
@@ -1198,7 +1203,7 @@ export default function BranchForm({
                       if (!branchId) return;
                       setDeletingDocs((prev) => new Set(prev).add(docIndex));
                       try {
-                        await deleteBranchDocument(branchId, docIndex);
+                        await deleteBranchDocument(branchId, docIndex, operatorSlug);
                         setExistingDocuments((prev) => prev.filter((_, i) => i !== docIndex));
                         toast.success("PAN document deleted.");
                       } catch (caught) {
@@ -1249,7 +1254,7 @@ export default function BranchForm({
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500"><FiFileText className="h-5 w-5" /></span>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-slate-700">{doc.fileName}</p>
-                      <BranchFileLink fileUrl={branchDocumentUrl(branchId ?? "", docIndex)} className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold text-[#0D1282] hover:underline"><FiExternalLink className="h-3.5 w-3.5" /> Preview</BranchFileLink>
+                      <BranchFileLink fileUrl={branchDocumentUrl(branchId ?? "", docIndex, operatorSlug)} className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold text-[#0D1282] hover:underline"><FiExternalLink className="h-3.5 w-3.5" /> Preview</BranchFileLink>
                     </div>
                   </div>
                   <button
@@ -1259,7 +1264,7 @@ export default function BranchForm({
                       if (!branchId) return;
                       setDeletingDocs((prev) => new Set(prev).add(docIndex));
                       try {
-                        await deleteBranchDocument(branchId, docIndex);
+                        await deleteBranchDocument(branchId, docIndex, operatorSlug);
                         setExistingDocuments((prev) => prev.filter((_, i) => i !== docIndex));
                         toast.success("GST document deleted.");
                       } catch (caught) {
@@ -1310,7 +1315,7 @@ export default function BranchForm({
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-slate-700">{doc.title || doc.type}</p>
                       <p className="truncate text-xs text-slate-500">{doc.fileName}</p>
-                      <BranchFileLink fileUrl={branchDocumentUrl(branchId ?? "", docIndex)} className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold text-[#0D1282] hover:underline"><FiExternalLink className="h-3.5 w-3.5" /> Preview</BranchFileLink>
+                      <BranchFileLink fileUrl={branchDocumentUrl(branchId ?? "", docIndex, operatorSlug)} className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold text-[#0D1282] hover:underline"><FiExternalLink className="h-3.5 w-3.5" /> Preview</BranchFileLink>
                     </div>
                   </div>
                   <button
@@ -1320,7 +1325,7 @@ export default function BranchForm({
                       if (!branchId) return;
                       setDeletingDocs((prev) => new Set(prev).add(docIndex));
                       try {
-                        await deleteBranchDocument(branchId, docIndex);
+                        await deleteBranchDocument(branchId, docIndex, operatorSlug);
                         setExistingDocuments((prev) => prev.filter((_, i) => i !== docIndex));
                         toast.success("Document deleted.");
                       } catch (caught) {

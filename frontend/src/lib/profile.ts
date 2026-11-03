@@ -70,6 +70,7 @@ export type ProfileBusinessAccount = {
   membershipRole: string;
   canEdit: boolean;
   joinedAt: string | null;
+  accountAssignedBranch: ProfileBranch | null;
   assignedBranches: ProfileBranch[];
   company: ProfileCompany;
   contact: ProfileContact;
@@ -113,6 +114,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getProfile() {
   return request<{ success: true } & Profile>("/api/v1/profile");
+}
+
+function operatorProfilePath(operatorSlug: string, resource = "profile") {
+  return `/api/v1/operators/${encodeURIComponent(operatorSlug)}/${resource}`;
+}
+
+/** Operator-client profiles are served inside their verified operator tenant. */
+export function getOperatorProfile(operatorSlug: string) {
+  return request<{ success: true } & Profile>(operatorProfilePath(operatorSlug));
+}
+
+export function updateOperatorProfileDetails(operatorSlug: string, input: {
+  firstName: string;
+  lastName: string;
+  phone: string;
+}) {
+  return request<{ success: true; message: string } & Profile>(operatorProfilePath(operatorSlug), {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
+}
+
+export function updateOperatorProfileBusinessAccount(
+  operatorSlug: string,
+  accountId: string,
+  input: { company: EditableCompany; contact: ProfileContact }
+) {
+  return request<{ success: true; message: string } & Profile>(
+    operatorProfilePath(operatorSlug, `profile/business-accounts/${encodeURIComponent(accountId)}`),
+    { method: "PATCH", body: JSON.stringify(input) }
+  );
 }
 
 export function uploadProfileImage(file: File) {

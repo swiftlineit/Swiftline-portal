@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { FiAlertTriangle, FiBriefcase } from "react-icons/fi";
 import {
   ClientDashboardLoading,
@@ -23,6 +24,7 @@ import {
   NeedsAttention
 } from "@/components/client/dashboard/ClientControlTower";
 import { getClientOverview, type ClientOverview } from "@/lib/clientOverview";
+import { listOperatorWorkspaces, type OperatorWorkspace } from "@/lib/operatorWorkspaces";
 import {
   canCreateShipment,
   hasQuoteAccess
@@ -95,6 +97,7 @@ export default function ClientDashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<ClientShellUser | null>(null);
   const [accounts, setAccounts] = useState<ClientDashboardAccount[]>([]);
+  const [operatorWorkspaces, setOperatorWorkspaces] = useState<OperatorWorkspace[]>([]);
   const [walletsByAccountId, setWalletsByAccountId] = useState<Record<string, ClientPrepaidAccount>>({});
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedBranchId, setSelectedBranchId] = useState("");
@@ -149,7 +152,12 @@ export default function ClientDashboardPage() {
         return;
       }
 
-      const dashboard = await getClientDashboard();
+      const [dashboard, workspaces] = await Promise.all([
+        getClientDashboard(),
+        process.env.NEXT_PUBLIC_OPERATOR_PORTAL_ENABLED === "true"
+          ? listOperatorWorkspaces().catch(() => ({ workspaces: [] as OperatorWorkspace[] }))
+          : Promise.resolve({ workspaces: [] as OperatorWorkspace[] })
+      ]);
       const walletEntries = await Promise.all(
         dashboard.accounts.map(async (item) => {
           try {
@@ -177,6 +185,7 @@ export default function ClientDashboardPage() {
 
       setUser(currentUser);
       setAccounts(dashboard.accounts);
+      setOperatorWorkspaces(workspaces.workspaces);
       setWalletsByAccountId(Object.fromEntries(walletEntries.filter((entry): entry is readonly [string, ClientPrepaidAccount] => Boolean(entry))));
       setExtras(nextExtras);
       selectedAccountIdRef.current = nextSelectedAccount?.account.id ?? "";
@@ -262,7 +271,7 @@ export default function ClientDashboardPage() {
   return (
       <div className="flex w-full flex-col gap-6">
         <OperationsMarquee variant="client" />
-            <ClientQuickAccess account={selectedAccount} />
+        {selectedAccount ? <ClientQuickAccess account={selectedAccount} /> : null}
 
         <ClientDashboardHeader
           user={user}
@@ -273,6 +282,26 @@ export default function ClientDashboardPage() {
           onAccountChange={(id) => void handleAccountChange(id)}
           onBranchChange={handleBranchChange}
         />
+
+        {operatorWorkspaces.length ? (
+          <section aria-label="Your operator workspaces" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <h2 className="text-base font-semibold text-slate-900">Your operator workspaces</h2>
+            <p className="mt-1 text-sm text-slate-600">Choose a company to work in its separate portal.</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {operatorWorkspaces.map((workspace) => (
+                <div key={workspace.slug} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-3">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-900">{workspace.companyName}</p>
+                    <p className="text-xs text-slate-600">{workspace.role === "OPERATOR_ADMIN" ? "Operator administrator" : workspace.role === "CLIENT" ? "Operator client" : workspace.role === "FINANCE" ? "Finance" : "Operations"} · /portal/{workspace.slug}</p>
+                  </div>
+                  {workspace.status === "ACTIVE"
+                    ? <Link href={`/portal/${encodeURIComponent(workspace.slug)}`} className="inline-flex min-h-10 items-center rounded-md bg-[#0D1282] px-4 text-sm font-semibold text-white">Open workspace</Link>
+                    : <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-900">Awaiting activation</span>}
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         {error ? (
           <p className="flex items-start gap-2 rounded-xl border border-[#D71313]/25 bg-[#D71313]/[0.06] px-4 py-3 text-sm font-medium text-[#D71313]">

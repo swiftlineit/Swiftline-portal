@@ -830,7 +830,7 @@ export default function PublicBusinessAccountPage() {
       setOtpError(emailValidationMessage);
       return;
     }
-    // Block OTP if email already taken â€” don't spam inbox for an account that can't be created
+    // Block OTP if email already taken” don't spam inbox for an account that can't be created
     const uniqueOk = await validateUniqueField("email");
     if (!uniqueOk) {
       setOtpError(fieldErrors.email || duplicateMessages.email);
@@ -863,7 +863,7 @@ export default function PublicBusinessAccountPage() {
         caught instanceof Error
           ? caught.message
           : "Unable to send verification code.";
-      // 409 from backend means live account exists â€” surface as field error too
+      // 409 from backend means live account exists surface as field error too
       if (msg.toLowerCase().includes("already exists")) {
         setFieldErrors((c) => ({ ...c, email: duplicateMessages.email }));
       }

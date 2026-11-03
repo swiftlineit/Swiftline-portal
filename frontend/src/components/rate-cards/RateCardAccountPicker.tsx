@@ -141,7 +141,7 @@ export default function RateCardAccountPicker({
           aria-controls={`${id}-options`}
           aria-activedescendant={open && options[active] ? `${id}-option-${active}` : undefined}
           autoComplete="off"
-          value={open ? query : `${selected.name}${selected.accountId ? ` — ${selected.accountId}` : ""}`}
+          value={open ? query : `${selected.name}${selected.accountId ? ` - ${selected.accountId}` : ""}`}
           placeholder="Search business name or account number"
           onFocus={() => setOpen(true)}
           onChange={(event) => {

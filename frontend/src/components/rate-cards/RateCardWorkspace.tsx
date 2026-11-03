@@ -13,6 +13,7 @@ import { FiChevronRight, FiDownload, FiSearch, FiShare2, FiTrash2, FiUploadCloud
 import { MdOutlineKeyboardDoubleArrowRight } from "react-icons/md";
 
 import { DashboardLoading } from "@/components/DashboardShell";
+import { useOperatorSupportReadOnly } from "@/components/operators/OperatorSupportBoundary";
 import { BiSolidEdit } from "react-icons/bi";
 import ShareRateCardDialog from "@/components/rate-cards/ShareRateCardDialog";
 import RateCardImportDialog from "@/components/rate-cards/RateCardImportDialog";
@@ -96,9 +97,10 @@ function toPayload(form: FormState, countryCode: string, target: RateCardTarget,
   };
 }
 
-export default function RateCardWorkspace({ businessAccountId, cardName, accountSelector }: { businessAccountId?: string; cardName: string; accountSelector?: ReactNode }) {
+export default function RateCardWorkspace({ businessAccountId, cardName, accountSelector, operatorSlug }: { businessAccountId?: string; cardName: string; accountSelector?: ReactNode; operatorSlug?: string }) {
+  const supportReadOnly = useOperatorSupportReadOnly();
   const target = useMemo<RateCardTarget>(() => businessAccountId ? { businessAccountId } : { band: "BAND_D" }, [businessAccountId]);
-  const { user, loading } = useAdminUser(RATE_CARD_AREA);
+  const { user, loading } = useAdminUser(operatorSlug ? ["client"] : RATE_CARD_AREA);
   const [rates, setRates] = useState<CountryRateCard[]>([]);
   const [routeCharges, setRouteCharges] = useState<CountryRouteCharge[]>([]);
   const [version, setVersion] = useState(0);
@@ -216,8 +218,8 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
 
       try {
         const [rateResult, routeChargeResult] = await Promise.all([
-          listCountryRateCards(target),
-          listCountryRouteCharges(target)
+          listCountryRateCards(target, operatorSlug),
+          listCountryRouteCharges(target, operatorSlug)
         ]);
         if (!active) return;
         setRates(rateResult.rates);
@@ -238,7 +240,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
 
     void loadRates();
     return () => { active = false; };
-  }, [user, target]);
+  }, [user, target, operatorSlug]);
 
   // Debounced so a long rate card is not regrouped on every keystroke, matching
   // the shipments list.
@@ -341,8 +343,8 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
 
   async function refreshRates() {
     const [rateResult, { routeCharges: nextRouteCharges }] = await Promise.all([
-      listCountryRateCards(target),
-      listCountryRouteCharges(target)
+      listCountryRateCards(target, operatorSlug),
+      listCountryRouteCharges(target, operatorSlug)
     ]);
     setRates(rateResult.rates);
     setVersion(rateResult.version ?? 0);
@@ -370,7 +372,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
     setMessage("");
 
     try {
-      await saveCountryRateCard(toPayload(form, countryCode, target, version), editingRateId || undefined);
+      await saveCountryRateCard(toPayload(form, countryCode, target, version), editingRateId || undefined, operatorSlug);
       await refreshRates();
       resetForm();
       toast.success(editingRateId ? "Rate card updated." : "Rate card added.");
@@ -393,7 +395,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
     setMessage("");
 
     try {
-      await deleteCountryRateCard(rateId, version);
+      await deleteCountryRateCard(rateId, version, operatorSlug);
       await refreshRates();
       if (editingRateId === rateId) resetForm();
       setMessage("Rate card removed.");
@@ -427,16 +429,16 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
         <div className={`grid gap-4 ${accountSelector ? "lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end" : ""}`}>
           {accountSelector ? <div className="min-w-0 max-w-xl">{accountSelector}</div> : null}
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button type="button" onClick={() => void openRateCardDialog("import")} disabled={migrationRequired || dataLoading || busy} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"><FiUploadCloud aria-hidden="true" />Import Excel</button>
+            {!operatorSlug ? <button type="button" onClick={() => void openRateCardDialog("import")} disabled={migrationRequired || dataLoading || busy} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"><FiUploadCloud aria-hidden="true" />Import Excel</button> : null}
             <button type="button" onClick={exportRates} disabled={!rates.length || dataLoading} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"><FiDownload aria-hidden="true" />Export CSV</button>
-            <button type="button" onClick={() => void openRateCardDialog("share")} disabled={!rates.length || migrationRequired || dataLoading || busy} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"><FiShare2 aria-hidden="true" />Share</button>
+            {!operatorSlug ? <button type="button" onClick={() => void openRateCardDialog("share")} disabled={!rates.length || migrationRequired || dataLoading || busy} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"><FiShare2 aria-hidden="true" />Share</button> : null}
           </div>
         </div>
         <div className="mt-5 flex flex-col gap-3 border-b border-slate-200 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex gap-5" role="tablist" aria-label="Rate card sections">
             {(["rates", "charges"] as const).map((key) => <button key={key} type="button" role="tab" aria-selected={section === key} aria-controls={`card-${businessAccountId || "individual"}-${key}`} onClick={() => void switchSection(key)} disabled={busy} className={`border-b-2 px-1 pb-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#0D1282] ${section === key ? "border-[#0D1282] text-[#0D1282]" : "border-transparent text-slate-600 hover:text-slate-900"}`}>{key === "rates" ? "Rates" : "Route Charges"}</button>)}
           </div>
-          {section === "rates" && !showForm ? <button type="button" disabled={migrationRequired || dataLoading || busy} onClick={() => void startNewRate()} className="mb-2 ml-auto inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0a0e66] disabled:opacity-50"><FiPlus aria-hidden="true" />Add rate</button> : null}
+          {section === "rates" && !showForm && !supportReadOnly ? <button type="button" disabled={migrationRequired || dataLoading || busy} onClick={() => void startNewRate()} className="mb-2 ml-auto inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0a0e66] disabled:opacity-50"><FiPlus aria-hidden="true" />Add rate</button> : null}
         </div>
         {migrationRequired ? <p role="status" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Your existing rates are available to view. Editing will be enabled after this business account&apos;s private card has been migrated.</p> : null}
       </section>
@@ -469,7 +471,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
 
 
 
-      {section === "rates" && showForm ? <form
+      {section === "rates" && showForm && !supportReadOnly ? <form
         onSubmit={handleSubmit}
         className="mb-6 rounded-xl border border-slate-200 bg-white p-4 sm:p-5"
       >
@@ -605,11 +607,13 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
         <RouteChargesForm
           key={chargeResetKey}
           target={target}
+          operatorSlug={operatorSlug}
           countryCode={resolvedChargeCountryCode === chargeCountryCode ? chargeCountryCode : ""}
           countryName={resolvedChargeCountryCode === chargeCountryCode && chargeCountryCode ? countryName(chargeCountryCode) : ""}
           initialService={chargeService}
           countryPicker={<RateCardCountryPicker value={chargeCountryQuery} onChange={handleChargeCountryInput} />}
-          disabled={migrationRequired}
+          disabled={migrationRequired || supportReadOnly}
+          readOnly={supportReadOnly}
           onSaved={() => void refreshRates()}
         />
         {routeCharges.length ? (
@@ -620,7 +624,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
                   <th className="px-4 py-3">Country</th>
                   <th className="px-4 py-3">Service</th>
                   <th className="px-4 py-3">Configured charges</th>
-                  <th className="px-4 py-3">Action</th>
+                  {!supportReadOnly ? <th className="px-4 py-3">Action</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -629,9 +633,9 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
                     <td className="px-4 py-3 font-medium">{countryName(charge.countryCode)}</td>
                     <td className="px-4 py-3">{formatCountryRateService(charge.service)}</td>
                     <td className="px-4 py-3 text-slate-600">{formatRouteChargeSummary(charge)}</td>
-                    <td className="px-4 py-3">
+                    {!supportReadOnly ? <td className="px-4 py-3">
                       <button type="button" disabled={migrationRequired} onClick={() => void selectChargeCountry(countryName(charge.countryCode), charge.service)} className="font-semibold text-[#0D1282] hover:underline disabled:opacity-50">Edit charges</button>
-                    </td>
+                    </td> : null}
                   </tr>
                 ))}
               </tbody>
@@ -687,19 +691,19 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
               <th className="px-4 py-3">Charges / KG</th>
               <th className="px-4 py-3">Max Box KG</th>
               <th className="px-4 py-3">Route Charges</th>
-              <th className="px-4 py-3">Action</th>
+              {!supportReadOnly ? <th className="px-4 py-3">Action</th> : null}
             </tr>
           </thead>
           <tbody>
             {dataLoading ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={supportReadOnly ? 6 : 7} className="px-4 py-8 text-center text-slate-500">
                   Loading rate cards...
                 </td>
               </tr>
             ) : groups.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={supportReadOnly ? 6 : 7} className="px-4 py-8 text-center text-slate-500">
                   {rates.length ? "No rates match this search." : "No rates yet. Add a rate or import an Excel file to configure this card."}
                 </td>
               </tr>
@@ -723,6 +727,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
                     cheapest={cheapest}
                     dearest={dearest}
                     busy={busy || migrationRequired}
+                    readOnly={supportReadOnly}
                     onEdit={(rate) => { void requestLeave().then((canLeave) => { if (canLeave) editRate(rate); }); }}
                     onRemove={(rateId) => void removeRate(rateId)}
                   />
@@ -745,6 +750,7 @@ function GroupRows({
   cheapest,
   dearest,
   busy,
+  readOnly,
   onEdit,
   onRemove,
 }: {
@@ -755,13 +761,14 @@ function GroupRows({
   cheapest: number;
   dearest: number;
   busy: boolean;
+  readOnly: boolean;
   onEdit: (rate: CountryRateCard) => void;
   onRemove: (rateId: string) => void;
 }) {
   return (
     <>
       <tr className="border-b border-slate-100 bg-slate-50/70">
-        <td colSpan={7} className="p-0">
+        <td colSpan={readOnly ? 6 : 7} className="p-0">
           <button
             type="button"
             onClick={onToggle}
@@ -807,7 +814,7 @@ function GroupRows({
               </td>
               <td className="px-4 py-3">{rate.maxBoxKg}</td>
               <td className="px-4 py-3 max-w-5 text-xs text-slate-600">{routeChargeSummary}</td>
-              <td className="px-4 py-3">
+              {!readOnly ? <td className="px-4 py-3">
                 <div className="flex flex-wrap gap-3">
                   <button
                     type="button"
@@ -828,7 +835,7 @@ function GroupRows({
                     Remove
                   </button>
                 </div>
-              </td>
+              </td> : null}
             </tr>
           ))
         : null}

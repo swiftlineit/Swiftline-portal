@@ -23,6 +23,7 @@ const estimateDebounceMs = 400;
 export function useShipmentCostEstimate(input: {
   shipmentDraftId: string;
   audience: ShipmentEstimateAudience;
+  operatorSlug?: string;
   /** The values to price. Rebuilt on each render; compared by content, not identity. */
   values: ShipmentCostEstimateInput;
   /** Held off until the draft has loaded, so the first request is not priced against an empty form. */
@@ -38,7 +39,7 @@ export function useShipmentCostEstimate(input: {
   // the request would never fire. Serializing also gives the effect a stable value
   // to read the payload back from, with no ref to keep in step.
   const serializedValues = JSON.stringify(input.values);
-  const { shipmentDraftId, audience, enabled } = input;
+  const { shipmentDraftId, audience, operatorSlug, enabled } = input;
 
   useEffect(() => {
     if (!enabled || !shipmentDraftId) return;
@@ -54,7 +55,8 @@ export function useShipmentCostEstimate(input: {
         shipmentDraftId,
         audience,
         JSON.parse(serializedValues) as ShipmentCostEstimateInput,
-        controller.signal
+        controller.signal,
+        operatorSlug
       )
         .then((result) => {
           if (controller.signal.aborted) return;
@@ -75,7 +77,7 @@ export function useShipmentCostEstimate(input: {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [shipmentDraftId, audience, enabled, serializedValues, reloadKey]);
+  }, [shipmentDraftId, audience, operatorSlug, enabled, serializedValues, reloadKey]);
 
   /** Re-prices immediately- used after a booking is refused for a changed price. */
   const refresh = useCallback(() => setReloadKey((current) => current + 1), []);

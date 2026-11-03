@@ -176,7 +176,10 @@ function getContactNameError(label: string, value: string) {
   return "";
 }
 
-export function validateBusinessAccountForm(formData: BusinessAccountFormData): BusinessAccountValidation {
+export function validateBusinessAccountForm(
+  formData: BusinessAccountFormData,
+  { requireBillingAddressForNoCompany = false }: { requireBillingAddressForNoCompany?: boolean } = {}
+): BusinessAccountValidation {
   const { contact, company } = formData;
   const noCompany = Boolean(company.noCompany);
   const canSkipRegistration = !countryRequiresRegistrationId(company.registrationCountry)
@@ -217,7 +220,8 @@ export function validateBusinessAccountForm(formData: BusinessAccountFormData): 
   // invoices are issued to somewhere unusable. When the company address is
   // reused these fields are not required and carry no messages.
   const billing = company.billingAddress ?? null;
-  const needsBillingAddress = !noCompany && !company.useCompanyAddressAsBillingAddress;
+  const needsBillingAddress = (!noCompany && !company.useCompanyAddressAsBillingAddress)
+    || (noCompany && requireBillingAddressForNoCompany);
   const billingCountry = billing?.country?.trim() ?? "";
   const billingPostalCode = billing?.postalCode?.trim() ?? "";
 

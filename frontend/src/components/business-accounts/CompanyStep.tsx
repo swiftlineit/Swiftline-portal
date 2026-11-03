@@ -84,6 +84,7 @@ export function CompanyStep({
   onValidateUniqueField,
   onFieldBlur,
   hideGstTreatmentSection = false,
+  operatorBillingAddressForNoCompany = false,
 }: {
   formData: BusinessAccountFormData;
   validationErrors: Record<string, string>;
@@ -99,6 +100,7 @@ export function CompanyStep({
   onValidateUniqueField: (field: UniqueField) => Promise<boolean>;
   onFieldBlur: (...keys: string[]) => void;
   hideGstTreatmentSection?: boolean;
+  operatorBillingAddressForNoCompany?: boolean;
 }) {
   const selectedRegistrationCountry = formData.company.registrationCountry;
   const selectedRegistrationConfig =
@@ -572,6 +574,15 @@ export function CompanyStep({
                 onCompanyChange("noCompanyRegistration", true);
                 onCompanyChange("registrationId", "");
                 onCompanyChange("secondaryRegistrationId", "");
+                if (operatorBillingAddressForNoCompany) {
+                  onCompanyChange("useCompanyAddressAsBillingAddress", false);
+                  if (!billingAddress.country) {
+                    onCompanyChange("billingAddress", {
+                      ...billingAddress,
+                      country: selectedAddressCountry
+                    });
+                  }
+                }
               }
 
               // A US account still needs a taxpayer ID either way, but which one
@@ -871,17 +882,24 @@ export function CompanyStep({
             />
           </div>
         </div>
-        <CheckboxField
-          label="Use company address as billing address"
-          info={companyTooltips.useCompanyAddressAsBillingAddress}
-          checked={usesCompanyAddressForBilling}
-          disabled={noCompanyChecked}
-          onChange={(checked) =>
-            onCompanyChange("useCompanyAddressAsBillingAddress", checked)
-          }
-        />
+        {operatorBillingAddressForNoCompany && noCompanyChecked ? (
+          <p className="text-sm leading-5 text-slate-600">
+            Add the address that should appear on this account&apos;s tax invoices.
+          </p>
+        ) : (
+          <CheckboxField
+            label="Use company address as billing address"
+            info={companyTooltips.useCompanyAddressAsBillingAddress}
+            checked={usesCompanyAddressForBilling}
+            disabled={noCompanyChecked}
+            onChange={(checked) =>
+              onCompanyChange("useCompanyAddressAsBillingAddress", checked)
+            }
+          />
+        )}
 
-        {!usesCompanyAddressForBilling && !noCompanyChecked ? (
+        {(!usesCompanyAddressForBilling && !noCompanyChecked)
+          || (operatorBillingAddressForNoCompany && noCompanyChecked) ? (
           <div className="grid gap-5 rounded-2xl border border-[#EEEDED] bg-[#EEEDED]/25 p-5 md:grid-cols-2">
             <div className="md:col-span-2">
               <h4 className="text-sm font-bold text-slate-950">

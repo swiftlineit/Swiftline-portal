@@ -1,5 +1,6 @@
 import { apiUrl } from "@/lib/api";
 import { getAccessToken, refreshAccessToken } from "@/lib/auth";
+import { operatorSupportHeaders } from "@/lib/operatorSupport";
 import type { RateCardBand } from "@/lib/countryRateCards";
 
 export type ShipmentType = "international_cargo" | "international_courier";
@@ -273,7 +274,7 @@ async function fetchWithAuth(input: string, init: RequestInit = {}) {
   const token = getAccessToken() ?? await refreshAccessToken();
   const response = await fetch(input, {
     ...init,
-    headers: buildAuthHeaders(init.headers, token)
+    headers: operatorSupportHeaders(input, buildAuthHeaders(init.headers, token))
   });
 
   if (response.status !== 401) return response;
@@ -283,7 +284,7 @@ async function fetchWithAuth(input: string, init: RequestInit = {}) {
 
   return fetch(input, {
     ...init,
-    headers: buildAuthHeaders(init.headers, refreshedToken)
+    headers: operatorSupportHeaders(input, buildAuthHeaders(init.headers, refreshedToken))
   });
 }
 
@@ -353,14 +354,37 @@ export async function listBusinessAccounts(search = "", branchId = "", page?: nu
   }>(response);
 }
 
-export async function getBusinessAccount(accountId: string) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}`));
+export async function getBusinessAccount(accountId: string, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}`, operatorSlug)));
 
   return parseApiResponse<{ success: true; account: BusinessAccount }>(response);
 }
 
-export async function validateBusinessAccountUnique(check: BusinessAccountUniqueCheck) {
-  const url = new URL(apiUrl("/api/v1/business-accounts/validate-unique"));
+export async function updateOperatorBusinessAccountBillingAddress(
+  accountId: string,
+  billingAddress: BusinessAddress,
+  operatorSlug: string
+) {
+  const response = await fetchWithAuth(apiUrl(
+    `/api/v1/operators/${encodeURIComponent(operatorSlug)}/business-accounts/${encodeURIComponent(accountId)}/billing-address`
+  ), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ billingAddress })
+  });
+
+  return parseApiResponse<{ success: true; account: BusinessAccount }>(response);
+}
+
+function businessAccountApiPath(resource: string, operatorSlug?: string) {
+  const basePath = operatorSlug
+    ? `/api/v1/operators/${encodeURIComponent(operatorSlug)}/business-accounts`
+    : "/api/v1/business-accounts";
+  return `${basePath}${resource}`;
+}
+
+export async function validateBusinessAccountUnique(check: BusinessAccountUniqueCheck, operatorSlug?: string) {
+  const url = new URL(apiUrl(businessAccountApiPath("/validate-unique", operatorSlug)));
 
   for (const [key, value] of Object.entries(check)) {
     if (value) url.searchParams.set(key, value);
@@ -393,7 +417,7 @@ export async function createBusinessAccount(
   data: BusinessAccountFormData,
   files: BusinessAccountFiles,
   idempotencyKey?: string,
-  { saveAsDraft = false } = {}
+  { saveAsDraft = false, operatorSlug }: { saveAsDraft?: boolean; operatorSlug?: string } = {}
 ) {
   const formData = new FormData();
   appendPayload(formData, data, files);
@@ -401,7 +425,7 @@ export async function createBusinessAccount(
   // can be stored. Completeness is enforced when the account is submitted.
   if (saveAsDraft) formData.append("saveAsDraft", "true");
 
-  const response = await fetchWithAuth(apiUrl("/api/v1/business-accounts"), {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath("", operatorSlug)), {
     method: "POST",
     body: formData,
     ...(idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {})
@@ -449,16 +473,16 @@ export async function deleteBusinessAccountDraft(accountId: string) {
   return parseApiResponse<{ success: true; message: string }>(response);
 }
 
-export async function submitBusinessAccount(accountId: string) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/submit`), {
+export async function submitBusinessAccount(accountId: string, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/submit`, operatorSlug)), {
     method: "POST"
   });
 
   return parseApiResponse<{ success: true; account: BusinessAccount; message: string }>(response);
 }
 
-export async function updateBusinessAccountStatus(accountId: string, status: BusinessAccountStatus) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/status`), {
+export async function updateBusinessAccountStatus(accountId: string, status: BusinessAccountStatus, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/status`, operatorSlug)), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status })
@@ -477,8 +501,8 @@ export async function updateBusinessAccountOperationalAction(accountId: string, 
   return parseApiResponse<{ success: true; account: BusinessAccount; message: string }>(response);
 }
 
-export async function assignBusinessAccountBranch(accountId: string, branchId: string) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/assign-branch`), {
+export async function assignBusinessAccountBranch(accountId: string, branchId: string, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/assign-branch`, operatorSlug)), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ branchId })
@@ -487,8 +511,8 @@ export async function assignBusinessAccountBranch(accountId: string, branchId: s
   return parseApiResponse<{ success: true; account: BusinessAccount; message: string }>(response);
 }
 
-export async function getBusinessAccountDocument(accountId: string, documentType: DocumentType) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/documents/${documentType}`));
+export async function getBusinessAccountDocument(accountId: string, documentType: DocumentType, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/documents/${documentType}`, operatorSlug)));
 
   if (!response.ok) {
     throw new Error("Unable to open business account document.");
@@ -497,8 +521,8 @@ export async function getBusinessAccountDocument(accountId: string, documentType
   return response.blob();
 }
 
-export async function updateBusinessAccountKycReview(accountId: string, update: BusinessKycReviewUpdate) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/kyc-review`), {
+export async function updateBusinessAccountKycReview(accountId: string, update: BusinessKycReviewUpdate, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/kyc-review`, operatorSlug)), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(update)
@@ -507,14 +531,14 @@ export async function updateBusinessAccountKycReview(accountId: string, update: 
   return parseApiResponse<{ success: true; account: BusinessAccount }>(response);
 }
 
-export async function listBusinessAccountMembers(accountId: string) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/members`));
+export async function listBusinessAccountMembers(accountId: string, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/members`, operatorSlug)));
 
   return parseApiResponse<{ success: true; members: BusinessAccountMember[] }>(response);
 }
 
-export async function createBusinessAccountClientAccess(accountId: string, input: CreateClientAccessInput) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/client-access`), {
+export async function createBusinessAccountClientAccess(accountId: string, input: CreateClientAccessInput, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/client-access`, operatorSlug)), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
@@ -523,15 +547,16 @@ export async function createBusinessAccountClientAccess(accountId: string, input
   return parseApiResponse<{
     success: true;
     member: BusinessAccountMember;
-    emailQueued: boolean;
+    emailQueued?: boolean;
     emailSent: boolean;
     emailSkipped: boolean;
     emailError?: string;
+    requiresSignIn?: boolean;
   }>(response);
 }
 
-export async function resendBusinessAccountInvitation(accountId: string, memberId: string) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/members/${memberId}/resend-invitation`), {
+export async function resendBusinessAccountInvitation(accountId: string, memberId: string, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/members/${encodeURIComponent(memberId)}/resend-invitation`, operatorSlug)), {
     method: "POST"
   });
 
@@ -540,8 +565,8 @@ export async function resendBusinessAccountInvitation(accountId: string, memberI
 
 // Regenerate and fetch the activation link on demand (for manual delivery). The
 // raw token is only requested when the admin explicitly asks to copy the link.
-export async function getBusinessAccountInvitationLink(accountId: string, memberId: string) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${accountId}/members/${memberId}/invitation-link`), {
+export async function getBusinessAccountInvitationLink(accountId: string, memberId: string, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/members/${encodeURIComponent(memberId)}/invitation-link`, operatorSlug)), {
     method: "POST"
   });
 

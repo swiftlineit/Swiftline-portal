@@ -31,6 +31,9 @@ import {
 } from "@/lib/auth";
 import { LoginBrandPanel } from "@/components/auth/LoginBrandPanel";
 import { OTP_LENGTH, OtpCodeInput } from "@/components/auth/OtpCodeInput";
+import { getClientWorkspaceAccess } from "@/lib/clientWorkspaceAccess";
+import { resolveClientLoginDestination } from "@/lib/clientWorkspaceRouting";
+import { getOperatorInvitationReturnPath } from "@/lib/operatorInvitationRouting";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY || "";
@@ -68,10 +71,21 @@ function getSafeInternalDestination(value: string | null) {
   }
 }
 
-/** Same post-login destination rule for the password, code and Google paths. */
-function destinationFor(role: string | undefined) {
+/** Same membership-aware destination rule for password, code and Google sign-in. */
+async function destinationFor(role: string | undefined) {
   const requestedDestination = getSafeInternalDestination(new URLSearchParams(window.location.search).get("next"));
-  if (role === "client") return "/client/dashboard";
+  if (role === "client") {
+    const invitationPath = getOperatorInvitationReturnPath(requestedDestination, window.location.origin);
+    if (invitationPath) return invitationPath;
+    try {
+      const access = await getClientWorkspaceAccess();
+      return resolveClientLoginDestination(access, requestedDestination, window.location.origin);
+    } catch {
+      // Never guess that a client belongs to Swiftline when workspace access
+      // could not be verified. The workspace page can retry the lookup safely.
+      return "/workspaces";
+    }
+  }
   if (role === "delivery") return "/driver";
   return requestedDestination || "/dashboard";
 }
@@ -152,7 +166,7 @@ export default function Home() {
     try {
       const data = await loginWithGoogle(credential);
       setAccessToken(data.accessToken);
-      router.push(destinationFor(data.user?.role));
+      router.push(await destinationFor(data.user?.role));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to sign in with Google.");
       setLoading(false);
@@ -286,7 +300,7 @@ export default function Home() {
       setAccessToken(data.accessToken);
       // Deliberately stays in the loading state: the route change is the next
       // thing that happens, and re-enabling the form would flash it first.
-      router.push(destinationFor(data.user?.role));
+      router.push(await destinationFor(data.user?.role));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to verify this code. Please try again.");
       setOtp("");
@@ -314,7 +328,7 @@ export default function Home() {
         recaptchaToken
       });
       setAccessToken(data.accessToken);
-      router.push(destinationFor(data.user?.role));
+      router.push(await destinationFor(data.user?.role));
     } catch (caught) {
       setError(getLoginErrorMessage(caught));
       setLoading(false);

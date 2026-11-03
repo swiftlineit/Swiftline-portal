@@ -21,10 +21,14 @@ import Link from "next/dist/client/link";
 
 export default function ManifestsListPage({
   audience,
+  operatorSlug,
+  canManage,
 }: {
   audience: ShipmentManifestAudience;
+  operatorSlug?: string;
+  canManage?: boolean;
 }) {
-  const canDelete = audience !== "client";
+  const canDelete = canManage ?? audience !== "client";
   const [manifests, setManifests] = useState<ShipmentManifestListItem[]>([]);
   const [pagination, setPagination] = useState({
     page: 1,
@@ -51,7 +55,7 @@ export default function ManifestsListPage({
     setLoading(true);
     setError("");
     try {
-      const data = await listShipmentManifests(audience, { page, dateRange, search });
+      const data = await listShipmentManifests(audience, { page, dateRange, search }, operatorSlug);
       if (requestSequence !== loadSequence.current) return;
       setManifests(data.manifests);
       setPagination(data.pagination);
@@ -63,7 +67,7 @@ export default function ManifestsListPage({
     } finally {
       if (requestSequence === loadSequence.current) setLoading(false);
     }
-  }, [audience, dateRange, page, search]);
+  }, [audience, dateRange, operatorSlug, page, search]);
 
   useEffect(() => {
     const nextSearch = searchInput.trim().slice(0, 80);
@@ -85,7 +89,7 @@ export default function ManifestsListPage({
     setBusyId(manifest.id);
     setBusyFormat("pdf");
     try {
-      await downloadShipmentManifest(manifest, audience, view);
+      await downloadShipmentManifest(manifest, audience, view, operatorSlug);
     } catch (caught) {
       toast.error(
         caught instanceof Error
@@ -102,7 +106,7 @@ export default function ManifestsListPage({
     setBusyId(manifest.id);
     setBusyFormat("xlsx");
     try {
-      await downloadShipmentManifestExcel(manifest, audience);
+      await downloadShipmentManifestExcel(manifest, audience, operatorSlug);
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : "Manifest Excel file could not be downloaded.");
     } finally {
@@ -142,7 +146,7 @@ export default function ManifestsListPage({
     if (!pendingDelete) return;
     setDeleting(true);
     try {
-      const result = await deleteShipmentManifest(pendingDelete.id, audience);
+      const result = await deleteShipmentManifest(pendingDelete.id, audience, operatorSlug);
       toast.success(result.message || `${pendingDelete.manifestNumber} deleted.`);
       setPendingDelete(null);
       setSelectedIds((prev) => {
@@ -157,14 +161,14 @@ export default function ManifestsListPage({
     } finally {
       setDeleting(false);
     }
-  }, [audience, load, manifests.length, page, pendingDelete]);
+  }, [audience, load, manifests.length, operatorSlug, page, pendingDelete]);
 
   const confirmBulkDelete = useCallback(async () => {
     if (!selectedIds.size) return;
     setDeleting(true);
     try {
       const ids = [...selectedIds];
-      const result = await deleteBulkShipmentManifests(ids, audience);
+      const result = await deleteBulkShipmentManifests(ids, audience, operatorSlug);
       toast.success(result.message || `${ids.length} manifest(s) deleted.`);
       setPendingBulkDelete(false);
       clearSelection();
@@ -179,14 +183,14 @@ export default function ManifestsListPage({
     } finally {
       setDeleting(false);
     }
-  }, [audience, clearSelection, load, manifests, page, selectedIds]);
+  }, [audience, clearSelection, load, manifests, operatorSlug, page, selectedIds]);
 
   const allSelected = manifests.length > 0 && manifests.every((item) => selectedIds.has(item.id));
   const someSelected = manifests.some((item) => selectedIds.has(item.id));
 
   return (
     <div className="mx-auto max-w-8xl">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className={`mb-5 flex flex-wrap items-start justify-between gap-4 ${operatorSlug ? "rounded-lg" : "rounded-2xl"} border border-slate-200 bg-white p-5 shadow-sm`}>
         <div>
           <h1 className="text-2xl font-semibold text-[#0D1282]">Manifests</h1>
           <p className="mt-1 text-sm text-slate-500">
@@ -228,11 +232,9 @@ export default function ManifestsListPage({
         }}
       />
       <Link
-  href={
-    audience === "client"
-      ? "/client/shipments"
-      : "/dashboard/shipments"
-  }
+  href={operatorSlug
+    ? `/portal/${encodeURIComponent(operatorSlug)}/shipments`
+    : audience === "client" ? "/client/shipments" : "/dashboard/shipments"}
   className="inline-flex items-center justify-center rounded-4xl bg-[#0D1282] px-4 py-2 text-sm font-medium text-white hover:bg-[#0D1282]/90"
 >
   <FiPlus className="mr-1" />
@@ -287,7 +289,7 @@ export default function ManifestsListPage({
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className={`overflow-hidden ${operatorSlug ? "rounded-lg" : "rounded-2xl"} border border-slate-200 bg-white shadow-sm`}>
         <div className="overflow-x-auto">
           <table className="w-full min-w-250 text-left text-sm">
             <thead className="bg-slate-200 text-xs uppercase text-slate-600 py-4">

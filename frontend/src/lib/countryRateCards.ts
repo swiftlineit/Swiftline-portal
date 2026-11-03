@@ -1,5 +1,6 @@
 import { apiUrl } from "@/lib/api";
 import { getAccessToken, refreshAccessToken } from "@/lib/auth";
+import { operatorSupportHeaders } from "@/lib/operatorSupport";
 
 export const countryRateServices = ["COURIER", "CARGO"] as const;
 export type CountryRateService = (typeof countryRateServices)[number];
@@ -20,6 +21,13 @@ export type RateCardTarget = { businessAccountId?: string; band?: RateCardBand }
 function targetQuery(target: RateCardTarget | RateCardBand = { band: "BAND_D" }) {
   const scope = typeof target === "string" ? { band: target } : target;
   return new URLSearchParams(scope.businessAccountId ? { businessAccountId: scope.businessAccountId } : { band: scope.band ?? "BAND_D" }).toString();
+}
+
+function countryRateCardPath(operatorSlug: string | undefined, suffix = "") {
+  const base = operatorSlug
+    ? `/api/v1/operators/${encodeURIComponent(operatorSlug)}/country-rate-cards`
+    : "/api/v1/country-rate-cards";
+  return `${base}${suffix}`;
 }
 
 export type CountryRateCard = {
@@ -120,7 +128,7 @@ async function fetchWithAuth(input: string, init: RequestInit = {}) {
   const token = getAccessToken() ?? await refreshAccessToken();
   const response = await fetch(input, {
     ...init,
-    headers: buildAuthHeaders(init.headers, token)
+    headers: operatorSupportHeaders(input, buildAuthHeaders(init.headers, token))
   });
 
   if (response.status !== 401) return response;
@@ -130,7 +138,7 @@ async function fetchWithAuth(input: string, init: RequestInit = {}) {
 
   return fetch(input, {
     ...init,
-    headers: buildAuthHeaders(init.headers, refreshedToken)
+    headers: operatorSupportHeaders(input, buildAuthHeaders(init.headers, refreshedToken))
   });
 }
 
@@ -181,8 +189,8 @@ export function rateCardDisplay(rate: {
   };
 }
 
-export async function listCountryRateCards(target?: RateCardTarget | RateCardBand) {
-  const path = `/api/v1/country-rate-cards?${targetQuery(target)}`;
+export async function listCountryRateCards(target?: RateCardTarget | RateCardBand, operatorSlug?: string) {
+  const path = `${countryRateCardPath(operatorSlug)}?${targetQuery(target)}`;
   const response = await fetchWithAuth(apiUrl(path));
 
   return parseApiResponse<{
@@ -193,10 +201,13 @@ export async function listCountryRateCards(target?: RateCardTarget | RateCardBan
   }>(response);
 }
 
-export async function listClientCountryRateCards(businessAccountId?: string) {
-  const path = businessAccountId
-    ? `/api/v1/client/country-rate-cards?businessAccountId=${encodeURIComponent(businessAccountId)}`
+export async function listClientCountryRateCards(businessAccountId?: string, operatorSlug?: string) {
+  const base = operatorSlug
+    ? countryRateCardPath(operatorSlug, "/client")
     : "/api/v1/client/country-rate-cards";
+  const path = businessAccountId
+    ? `${base}?businessAccountId=${encodeURIComponent(businessAccountId)}`
+    : base;
   const response = await fetchWithAuth(apiUrl(path));
 
   return parseApiResponse<{
@@ -224,8 +235,11 @@ export async function getDraftRateCardContext(draftId: string, audience: "admin"
   }>(response);
 }
 
-export async function saveCountryRateCard(input: CountryRateCardInput, rateId?: string) {
-  const response = await fetchWithAuth(apiUrl(rateId ? `/api/v1/country-rate-cards/${rateId}` : "/api/v1/country-rate-cards"), {
+export async function saveCountryRateCard(input: CountryRateCardInput, rateId?: string, operatorSlug?: string) {
+  const path = rateId
+    ? countryRateCardPath(operatorSlug, `/${encodeURIComponent(rateId)}`)
+    : countryRateCardPath(operatorSlug);
+  const response = await fetchWithAuth(apiUrl(path), {
     method: rateId ? "PATCH" : "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
@@ -237,8 +251,8 @@ export async function saveCountryRateCard(input: CountryRateCardInput, rateId?: 
   }>(response);
 }
 
-export async function listCountryRouteCharges(target?: RateCardTarget | RateCardBand) {
-  const path = `/api/v1/country-rate-cards/route-charges?${targetQuery(target)}`;
+export async function listCountryRouteCharges(target?: RateCardTarget | RateCardBand, operatorSlug?: string) {
+  const path = `${countryRateCardPath(operatorSlug, "/route-charges")}?${targetQuery(target)}`;
   const response = await fetchWithAuth(apiUrl(path));
 
   return parseApiResponse<{
@@ -254,8 +268,8 @@ export async function listRateCardBusinessAccountOptions(search = "") {
 }
 
 /** Creates or replaces the configuration for one route, keyed by country + service. */
-export async function saveCountryRouteCharge(input: CountryRouteChargeInput) {
-  const response = await fetchWithAuth(apiUrl("/api/v1/country-rate-cards/route-charges"), {
+export async function saveCountryRouteCharge(input: CountryRouteChargeInput, operatorSlug?: string) {
+  const response = await fetchWithAuth(apiUrl(countryRateCardPath(operatorSlug, "/route-charges")), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
@@ -268,9 +282,9 @@ export async function saveCountryRouteCharge(input: CountryRouteChargeInput) {
   }>(response);
 }
 
-export async function deleteCountryRateCard(rateId: string, expectedVersion?: number) {
+export async function deleteCountryRateCard(rateId: string, expectedVersion?: number, operatorSlug?: string) {
   const query = expectedVersion == null ? "" : `?expectedVersion=${expectedVersion}`;
-  const response = await fetchWithAuth(apiUrl(`/api/v1/country-rate-cards/${rateId}${query}`), {
+  const response = await fetchWithAuth(apiUrl(`${countryRateCardPath(operatorSlug, `/${encodeURIComponent(rateId)}`)}${query}`), {
     method: "DELETE"
   });
 
