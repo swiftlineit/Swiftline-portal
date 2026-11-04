@@ -1,4 +1,4 @@
-import OperatorShipmentDraftForm from "@/components/operators/OperatorShipmentDraftForm";
+import OperatorShipmentCreate from "@/components/operators/OperatorShipmentCreate";
 
 export default async function OperatorShipmentDraftReviewPage({
   params
@@ -6,5 +6,5 @@ export default async function OperatorShipmentDraftReviewPage({
   params: Promise<{ operatorSlug: string; draftId: string }>;
 }) {
   const { operatorSlug, draftId } = await params;
-  return <OperatorShipmentDraftForm key={draftId} operatorSlug={operatorSlug} shipmentDraftId={draftId} />;
+  return <OperatorShipmentCreate key={`${operatorSlug}:${draftId}`} operatorSlug={operatorSlug} initialDraftId={draftId} />;
 }

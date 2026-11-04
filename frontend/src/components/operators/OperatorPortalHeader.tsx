@@ -9,6 +9,7 @@ import { logout } from "@/lib/auth";
 import { getOperatorProfile, getProfile, loadProfileImageUrl, profileHref, type ProfileUser } from "@/lib/profile";
 import { loadOperatorCompanyLogo } from "@/lib/operatorSettings";
 import { getOperatorSession, type OperatorSession } from "@/lib/operatorDirectory";
+import { useOperatorWorkspaceSession } from "@/components/operators/OperatorWorkspaceAvailabilityBoundary";
 import NotificationBell from "@/components/NotificationBell";
 import { OperatorHeaderNavigation } from "@/components/operators/OperatorWorkspaceNavigation";
 
@@ -30,6 +31,7 @@ function formatRole(role: OperatorSession["membership"]["role"]): string {
 export default function OperatorPortalHeader({ operatorSlug }: { operatorSlug: string }) {
   const router = useRouter();
   const profileMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const workspaceSession = useOperatorWorkspaceSession();
   const [operator, setOperator] = useState<OperatorSession | null>(null);
   const [profile, setProfile] = useState<ProfileUser | null>(null);
   const [profileImageUrl, setProfileImageUrl] = useState("");
@@ -63,7 +65,11 @@ export default function OperatorPortalHeader({ operatorSlug }: { operatorSlug: s
     let active = true;
     let logoObjectUrl = "";
 
-    void getOperatorSession(operatorSlug, controller.signal).then((session) => {
+    const sessionRequest = workspaceSession
+      ? Promise.resolve(workspaceSession)
+      : getOperatorSession(operatorSlug, controller.signal);
+
+    void sessionRequest.then((session) => {
       if (!active) return;
       setOperator(session);
       const loadProfile = session.membership.role === "CLIENT"
@@ -103,7 +109,7 @@ export default function OperatorPortalHeader({ operatorSlug }: { operatorSlug: s
       controller.abort();
       if (logoObjectUrl) URL.revokeObjectURL(logoObjectUrl);
     };
-  }, [operatorSlug]);
+  }, [operatorSlug, workspaceSession]);
 
   useEffect(() => {
     const refreshImage = () => setProfileImageVersion((version) => version + 1);

@@ -13,6 +13,7 @@ import {
 } from "react-icons/fi";
 import type { IconType } from "react-icons";
 import OperatorPageLoading from "@/components/operators/OperatorLoadingState";
+import { useReportOperatorWorkspaceIssue } from "@/components/operators/OperatorWorkspaceAvailabilityBoundary";
 import { getOperatorSession, type OperatorSession } from "@/lib/operatorDirectory";
 import { getOperatorHome, type OperatorHomeData } from "@/lib/operatorHome";
 import { loadOperatorBannerImage } from "@/lib/operatorSettings";
@@ -189,6 +190,7 @@ function RecentShipments({ rows, base, client }: { rows: OperatorHomeData["recen
 
 export default function OperatorPortalHome({ operatorSlug }: { operatorSlug: string }) {
   const router = useRouter();
+  const reportWorkspaceIssue = useReportOperatorWorkspaceIssue();
   const [session, setSession] = useState<OperatorSession | null>(null);
   const [home, setHome] = useState<OperatorHomeData | null>(null);
   const [error, setError] = useState("");
@@ -207,10 +209,11 @@ export default function OperatorPortalHome({ operatorSlug }: { operatorSlug: str
         router.replace(`/portal/${encodeURIComponent(requestError.canonicalSlug)}`);
         return;
       }
+      reportWorkspaceIssue?.(typeof requestError?.status === "number" ? requestError.status : undefined);
       setError(cause instanceof Error ? cause.message : "Unable to load this workspace.");
     });
     return () => { active = false; controller.abort(); };
-  }, [operatorSlug, refreshKey, router]);
+  }, [operatorSlug, refreshKey, reportWorkspaceIssue, router]);
 
   useEffect(() => {
     if (!home?.banners?.length) return;

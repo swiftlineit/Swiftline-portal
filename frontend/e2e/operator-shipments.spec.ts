@@ -600,3 +600,41 @@ test("operator client opens the shipment form directly using its assigned accoun
   expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport);
   expect(postedDrafts).toEqual([{ businessAccountId: accountId, branchId }]);
 });
+
+for (const role of ["OPERATOR_ADMIN", "CLIENT"] as const) {
+  test(`saved shipment drafts use the aligned scrollable booking layout for ${role === "CLIENT" ? "operator clients" : "operator staff"}`, async ({ page }) => {
+    await mockOperatorShipmentApi(page, role, []);
+    await page.goto(`/portal/${slug}/shipments/drafts/${draftId}`);
+
+    await expect(page.getByRole("heading", { name: "Create a shipment", exact: true })).toBeVisible();
+    await expect(page.getByText("Consignee Details", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Book Shipment", exact: true })).toBeVisible();
+    await expectOperatorBookingColumnsToFitViewport(page);
+
+    const layout = await page.evaluate(() => {
+      const header = document.querySelector<HTMLElement>("[data-operator-header-content]");
+      const main = document.querySelector<HTMLElement>("main.mx-auto");
+      if (!header || !main) return null;
+      const headerRect = header.getBoundingClientRect();
+      const mainRect = main.getBoundingClientRect();
+      return {
+        viewportWidth: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        headerLeft: headerRect.left,
+        headerRight: headerRect.right,
+        mainLeft: mainRect.left,
+        mainRight: mainRect.right,
+        pageCanScroll: document.documentElement.scrollHeight > window.innerHeight
+      };
+    });
+
+    expect(layout).not.toBeNull();
+    expect(layout?.documentWidth).toBeLessThanOrEqual(layout?.viewportWidth ?? 0);
+    if ((layout?.viewportWidth ?? 0) >= 1280) {
+      expect(Math.abs((layout?.headerLeft ?? 0) - (layout?.mainLeft ?? 0))).toBeLessThanOrEqual(1);
+      expect(Math.abs((layout?.headerRight ?? 0) - (layout?.mainRight ?? 0))).toBeLessThanOrEqual(1);
+    } else {
+      expect(layout?.pageCanScroll).toBe(true);
+    }
+  });
+}

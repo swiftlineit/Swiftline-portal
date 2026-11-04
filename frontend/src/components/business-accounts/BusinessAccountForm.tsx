@@ -681,9 +681,19 @@ export default function BusinessAccountForm({
     <div className="mx-auto w-full max-w-8xl">
       <div className="mb-6 flex items-center justify-between gap-4">
         <div className="border-l-4 border-[#F0DE36] pl-4">
-          <h2 className="mb-2 text-3xl font-bold tracking-tight text-[#0D1282] sm:text-4xl">Let&apos;s Get Started</h2>
+          <h2 className="mb-2 text-3xl font-bold tracking-tight text-[#0D1282] sm:text-4xl">
+            {operatorSlug && step === 0 ? "Client contact details" : "Let's Get Started"}
+          </h2>
           <p className="text-sm leading-6 text-slate-500">
-            Enter your {steps[step]}. Fields marked with asterisk (<span className="text-[#D71313]">*</span>) are mandatory.
+            {operatorSlug && step === 0 ? (
+              <>
+                Enter the name and contact information of the client&apos;s primary contact. Fields marked with an asterisk (<span className="text-[#D71313]">*</span>) are required.
+              </>
+            ) : (
+              <>
+                Enter your {steps[step]}. Fields marked with asterisk (<span className="text-[#D71313]">*</span>) are mandatory.
+              </>
+            )}
           </p>
         </div>
         <button
