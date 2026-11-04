@@ -7,7 +7,7 @@ import { User } from "../models/user.model.js";
 import { env } from "../config/env.js";
 import { sendOperatorInvitationEmail } from "../services/mail.service.js";
 import { inviteInitialOperatorAdmin, OperatorInvitationError, reissueInitialOperatorAdminLink } from "../services/operatorInvitation.service.js";
-import { activateOperatorTenant, changeOperatorSlug, changeOperatorStatus, createDraftOperator, TenantRegistryError } from "../services/tenantRegistry.service.js";
+import { activateOperatorTenant, changeOperatorSlug, changeOperatorStatus, createDraftOperator, deleteDraftOperator, TenantRegistryError } from "../services/tenantRegistry.service.js";
 
 const createSchema = z.object({
   companyName: z.string().trim().min(1).max(160),
@@ -129,6 +129,19 @@ export async function createOperatorDraft(request: Request, response: Response) 
   try {
     const tenant = await createDraftOperator({ ...parsed.data, actorId: actor });
     return response.status(201).json({ success: true, operator: serializeOperator(tenant) });
+  } catch (error) {
+    return sendRegistryError(response, error);
+  }
+}
+
+export async function deleteOperatorDraft(request: Request, response: Response) {
+  const actor = actorId(request);
+  const tenantId = tenantIdFromRequest(request);
+  if (!actor) return response.status(401).json({ success: false, message: "Unauthorized" });
+  if (!tenantId) return response.status(404).json({ success: false, message: "Operator draft not found." });
+  try {
+    const operator = await deleteDraftOperator({ tenantId, actorId: actor });
+    return response.json({ success: true, operator });
   } catch (error) {
     return sendRegistryError(response, error);
   }

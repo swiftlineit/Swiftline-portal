@@ -7,6 +7,7 @@ import { AuditLog } from "../models/auditLog.model.js";
 import { Tenant } from "../models/tenant.model.js";
 import { TenantSlug } from "../models/tenantSlug.model.js";
 import { TenantMembership } from "../models/tenantMembership.model.js";
+import { OperatorInvitation } from "../models/operatorInvitation.model.js";
 import { OperatorSupportSession } from "../models/operatorSupportSession.model.js";
 import { PortalNotification } from "../models/portalNotification.model.js";
 import { EmailOutbox } from "../models/emailOutbox.model.js";
@@ -15,6 +16,7 @@ import {
   changeOperatorSlug,
   changeOperatorStatus,
   createDraftOperator,
+  deleteDraftOperator,
   normalizeTenantSlug,
   resolveTenantSlug,
   TenantRegistryError
@@ -34,7 +36,10 @@ before(async () => {
   await Tenant.createCollection();
   await TenantSlug.createCollection();
   await TenantMembership.createCollection();
-  await Promise.all([Tenant.createIndexes(), TenantSlug.createIndexes(), TenantMembership.createIndexes()]);
+  await OperatorInvitation.createCollection();
+  await Promise.all([
+    Tenant.createIndexes(), TenantSlug.createIndexes(), TenantMembership.createIndexes(), OperatorInvitation.createIndexes()
+  ]);
 });
 
 after(async () => {
@@ -90,6 +95,46 @@ describe("operator tenant registry", () => {
     assert.equal((await resolveTenantSlug("atlas-cargo"))?.redirect, false);
     assert.equal((await resolveTenantSlug("atlas"))?.redirect, true);
     assert.equal(await TenantSlug.countDocuments({ tenantId: atlas._id, isCurrent: true }), 1);
+  });
+
+  test("draft deletion revokes access, releases its URL and preserves active workspaces", async () => {
+    const operator = await createDraftOperator({ companyName: "Discarded Logistics", slug: "discarded-logistics", actorId });
+    const acceptedAdminId = new mongoose.Types.ObjectId();
+    const invitedAdminId = new mongoose.Types.ObjectId();
+    const assignedBranchId = new mongoose.Types.ObjectId();
+    await TenantMembership.create([
+      { tenantId: operator._id, userId: acceptedAdminId, role: "OPERATOR_ADMIN", status: "ACTIVE", assignedBranches: [assignedBranchId] },
+      { tenantId: operator._id, userId: invitedAdminId, role: "OPERATOR_ADMIN", status: "INVITED", assignedBranches: [] }
+    ]);
+    await OperatorInvitation.create({
+      tenantId: operator._id,
+      userId: invitedAdminId,
+      role: "OPERATOR_ADMIN",
+      tokenHash: "b".repeat(64),
+      status: "PENDING",
+      expiresAt: new Date(Date.now() + 60_000),
+      invitedBy: actorId
+    });
+
+    const result = await deleteDraftOperator({ tenantId: operator._id as mongoose.Types.ObjectId, actorId });
+    assert.equal(result.slug, "discarded-logistics");
+    assert.equal(await Tenant.exists({ _id: operator._id }), null);
+    assert.equal(await TenantSlug.countDocuments({ tenantId: operator._id }), 0);
+    assert.equal(await resolveTenantSlug("discarded-logistics"), null);
+    assert.equal(await TenantMembership.countDocuments({ tenantId: operator._id, status: "REMOVED", assignedBranches: { $size: 0 } }), 2);
+    assert.equal(await OperatorInvitation.countDocuments({ tenantId: operator._id, status: "REVOKED" }), 1);
+    assert.equal(await runWithTenantContext({ tenantId: operator._id as mongoose.Types.ObjectId, kind: "OPERATOR" }, () =>
+      AuditLog.countDocuments({ action: "OPERATOR_DRAFT_DELETED", entityId: operator._id, "metadata.slug": "discarded-logistics" }).exec()
+    ), 1);
+
+    const replacement = await createDraftOperator({ companyName: "Replacement Logistics", slug: "discarded-logistics", actorId });
+    assert.equal(replacement.slug, "discarded-logistics");
+    await Tenant.updateOne({ _id: replacement._id }, { $set: { status: "ACTIVE" } }).exec();
+    await assert.rejects(
+      deleteDraftOperator({ tenantId: replacement._id as mongoose.Types.ObjectId, actorId }),
+      (error: unknown) => error instanceof TenantRegistryError && error.statusCode === 409
+    );
+    assert.ok(await Tenant.exists({ _id: replacement._id, status: "ACTIVE" }));
   });
 
   test("operator access requires an active membership in the URL tenant", async () => {

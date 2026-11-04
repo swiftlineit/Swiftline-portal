@@ -3,6 +3,7 @@ import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwne
 
 export type AuditAction =
   | "OPERATOR_DRAFT_CREATED"
+  | "OPERATOR_DRAFT_DELETED"
   | "OPERATOR_SLUG_CHANGED"
   | "OPERATOR_COMPANY_UPDATED"
   | "OPERATOR_BRANDING_LOGO_UPDATED"

@@ -1,10 +1,12 @@
 import mongoose from "mongoose";
 import { AuditLog } from "../models/auditLog.model.js";
+import { OperatorInvitation } from "../models/operatorInvitation.model.js";
 import { Tenant, tenantSlugPattern } from "../models/tenant.model.js";
 import { TenantMembership } from "../models/tenantMembership.model.js";
 import { TenantSlug } from "../models/tenantSlug.model.js";
 import { OperatorSupportSession } from "../models/operatorSupportSession.model.js";
 import { User } from "../models/user.model.js";
+import { assertValidStorageKey, deleteObject, operatorBrandBannerPrefix, operatorBrandLogoPrefix } from "./storage/storage.service.js";
 import { runWithTenantContext } from "./tenantScope.service.js";
 
 const reservedSlugs = new Set(["swiftline", "platform"]);
@@ -99,6 +101,91 @@ export async function createDraftOperator(input: {
   } finally {
     await session.endSession();
   }
+}
+
+/** Permanently removes an operator that has never been activated. */
+export async function deleteDraftOperator(input: {
+  tenantId: mongoose.Types.ObjectId;
+  actorId: mongoose.Types.ObjectId;
+}) {
+  const session = await mongoose.startSession();
+  let brandingKeys: string[] = [];
+  let deleted: { id: string; companyName: string; slug: string } | undefined;
+  try {
+    deleted = await session.withTransaction(async () => {
+      const operator = await Tenant.findOne({ _id: input.tenantId, kind: "OPERATOR" })
+        .session(session)
+        .exec();
+      if (!operator) throw new TenantRegistryError(404, "Operator draft not found.");
+      if (operator.status !== "DRAFT") {
+        throw new TenantRegistryError(409, "Only an operator draft can be deleted.");
+      }
+
+      const tenantId = operator._id as mongoose.Types.ObjectId;
+      const logoKey = operator.branding?.logo?.storageKey;
+      const bannerKeys = operator.branding?.banners?.map((banner) => banner.storageKey) ?? [];
+      const tenantIdString = String(tenantId);
+      brandingKeys = [
+        ...(logoKey?.startsWith(operatorBrandLogoPrefix(tenantIdString)) ? [logoKey] : []),
+        ...bannerKeys.filter((key) => key.startsWith(operatorBrandBannerPrefix(tenantIdString)))
+      ];
+
+      const now = new Date();
+      const memberships = await TenantMembership.updateMany(
+        { tenantId, status: { $ne: "REMOVED" } },
+        { $set: { status: "REMOVED", assignedBranches: [] } },
+        { session }
+      ).exec();
+      const invitations = await OperatorInvitation.updateMany(
+        { tenantId, status: "PENDING" },
+        { $set: { status: "REVOKED", revokedAt: now } },
+        { session }
+      ).exec();
+
+      // A DRAFT has never had routable history; release all of its reserved
+      // slugs so an abandoned setup does not permanently occupy a URL.
+      await TenantSlug.deleteMany({ tenantId }, { session }).exec();
+
+      const removed = await Tenant.deleteOne({ _id: tenantId, kind: "OPERATOR", status: "DRAFT" }, { session }).exec();
+      if (removed.deletedCount !== 1) {
+        throw new TenantRegistryError(409, "The operator status changed. Refresh and try again.");
+      }
+
+      await runWithTenantContext({ tenantId, kind: "OPERATOR" }, () => AuditLog.create([{
+        action: "OPERATOR_DRAFT_DELETED",
+        entityType: "TENANT",
+        entityId: tenantId,
+        performedBy: input.actorId,
+        performedAt: now,
+        metadata: {
+          companyName: operator.companyName,
+          slug: operator.slug,
+          previousStatus: "DRAFT",
+          removedMembershipCount: memberships.modifiedCount,
+          revokedInvitationCount: invitations.modifiedCount
+        }
+      }], { session }));
+
+      return { id: String(tenantId), companyName: operator.companyName, slug: operator.slug };
+    });
+    if (!deleted) throw new Error("OPERATOR_DRAFT_DELETE_FAILED");
+  } finally {
+    await session.endSession();
+  }
+
+  await Promise.all(brandingKeys.map(async (key) => {
+    try {
+      assertValidStorageKey(key);
+      await deleteObject(key);
+    } catch (error) {
+      console.error("Operator draft branding object could not be deleted.", {
+        tenantId: input.tenantId.toString(),
+        message: error instanceof Error ? error.message : "Unknown storage error"
+      });
+    }
+  }));
+
+  return deleted;
 }
 
 /** Activates operational routes only after the invited administrator has accepted access. */

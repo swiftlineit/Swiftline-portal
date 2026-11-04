@@ -4,6 +4,7 @@ import {
   activateOperatorPortal,
   createOperatorAdminInvitation,
   createOperatorAdminInvitationLink,
+  deleteOperatorDraft,
   listDraftOperators,
   updateOperatorSlug,
   updateOperatorStatus,
@@ -18,6 +19,7 @@ export const platformOperatorRouter = Router();
 platformOperatorRouter.use(attachUser, requireRole("admin"));
 platformOperatorRouter.get("/", listDraftOperators);
 platformOperatorRouter.post("/", createOperatorDraft);
+platformOperatorRouter.delete("/:tenantId", deleteOperatorDraft);
 platformOperatorRouter.post("/:tenantId/admin-invitations", createOperatorAdminInvitation);
 platformOperatorRouter.post("/:tenantId/admin-invitations/:userId/link", createOperatorAdminInvitationLink);
 platformOperatorRouter.post("/:tenantId/activate", activateOperatorPortal);
