@@ -57,6 +57,32 @@ export function missingTenantEmailOutboxStatusPipeline(): mongoose.PipelineStage
   ];
 }
 
+/**
+ * Groups each index value under a MongoDB-safe alias. Index paths can contain
+ * dots (for example `contact.email`), but aggregation object keys cannot.
+ * Missing legacy tenant owners are grouped as the Swiftline root because those
+ * rows are assigned to it by the reviewed ownership backfill.
+ */
+export function uniqueTenantKeyDuplicatePipeline(
+  key: Record<string, number>,
+  partialFilterExpression: Record<string, unknown> | undefined,
+  tenantId: unknown,
+  arrayFields: string[]
+): mongoose.PipelineStage[] {
+  const groupKey = Object.fromEntries(Object.keys(key).map((field, position) => [
+    `key${position}`,
+    field === "tenantId" ? { $ifNull: ["$tenantId", tenantId] } : `$${field}`
+  ]));
+
+  return [
+    { $match: partialFilterExpression ?? {} },
+    ...arrayFields.map((field) => ({ $unwind: { path: `$${field}`, preserveNullAndEmptyArrays: true } }) as mongoose.PipelineStage),
+    { $group: { _id: groupKey, count: { $sum: 1 } } },
+    { $match: { count: { $gt: 1 } } },
+    { $count: "duplicateGroups" }
+  ];
+}
+
 export type OrphanSummaryDimension = {
   name: string;
   field: string;

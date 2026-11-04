@@ -11,7 +11,8 @@ import {
   orphanReferenceSummaryPipeline,
   tenantOwnerParentLinks,
   tenantParentIntegrityPipeline,
-  unassignedTenantOwnershipFilter
+  unassignedTenantOwnershipFilter,
+  uniqueTenantKeyDuplicatePipeline
 } from "../scripts/tenantDataAuditHelpers.js";
 
 test("tenant data audit identifies schemas with a Tenant ObjectId owner field", () => {
@@ -65,6 +66,39 @@ test("tenant data audit reports unowned email rows by delivery status only", () 
     { $match: { $expr: { $ne: [{ $type: "$tenantId" }, "objectId"] } } },
     { $group: { _id: "$status", count: { $sum: 1 } } },
     { $sort: { _id: 1 } }
+  ]);
+});
+
+test("tenant-local duplicate audit groups dotted compound index paths under safe aliases", () => {
+  const swiftlineTenantId = new mongoose.Types.ObjectId();
+  const partialFilterExpression = {
+    status: { $in: ["draft", "approved"] },
+    "company.registrationIdKey": { $type: "string", $gt: "" }
+  };
+  const pipeline = uniqueTenantKeyDuplicatePipeline(
+    { tenantId: 1, "contact.email": 1, "company.registrationIdKey": 1 },
+    partialFilterExpression,
+    swiftlineTenantId,
+    []
+  );
+
+  assert.deepEqual(pipeline[0], { $match: partialFilterExpression });
+  assert.deepEqual(pipeline[1], {
+    $group: {
+      _id: {
+        key0: { $ifNull: ["$tenantId", swiftlineTenantId] },
+        key1: "$contact.email",
+        key2: "$company.registrationIdKey"
+      },
+      count: { $sum: 1 }
+    }
+  });
+  const group = pipeline[1];
+  assert.ok(group && "$group" in group);
+  assert.ok(Object.keys(group.$group._id as Record<string, unknown>).every((field) => !field.includes(".")));
+  assert.deepEqual(pipeline.slice(2), [
+    { $match: { count: { $gt: 1 } } },
+    { $count: "duplicateGroups" }
   ]);
 });
 

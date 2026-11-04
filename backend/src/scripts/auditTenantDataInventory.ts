@@ -24,7 +24,8 @@ import {
   unassignedTenantOwnershipFilter,
   type OrphanSummaryDimension,
   tenantOwnerParentLinks,
-  tenantParentIntegrityPipeline
+  tenantParentIntegrityPipeline,
+  uniqueTenantKeyDuplicatePipeline
 } from "./tenantDataAuditHelpers.js";
 
 type ParentLink = {
@@ -366,25 +367,6 @@ function indexEquivalent(
     );
   return sameKey && Boolean(existing.unique) === (expectedOptions.unique === true) &&
     stable(existing.partialFilterExpression ?? {}) === stable(expectedOptions.partialFilterExpression ?? {});
-}
-
-function uniqueTenantKeyDuplicatePipeline(
-  key: Record<string, number>,
-  partialFilterExpression: Record<string, unknown> | undefined,
-  tenantId: unknown,
-  arrayFields: string[]
-): mongoose.PipelineStage[] {
-  const groupKey = Object.fromEntries(Object.keys(key).map((field) => [
-    field,
-    field === "tenantId" ? { $ifNull: ["$tenantId", tenantId] } : `$${field}`
-  ]));
-  return [
-    { $match: partialFilterExpression ?? {} },
-    ...arrayFields.map((field) => ({ $unwind: { path: `$${field}`, preserveNullAndEmptyArrays: true } }) as mongoose.PipelineStage),
-    { $group: { _id: groupKey, count: { $sum: 1 } } },
-    { $match: { count: { $gt: 1 } } },
-    { $count: "duplicateGroups" }
-  ];
 }
 
 const fullIndexAuditModels = new Set([
