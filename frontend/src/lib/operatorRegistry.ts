@@ -36,6 +36,13 @@ export function createOperatorDraft(input: { companyName: string; slug?: string 
   });
 }
 
+export function deleteOperatorDraft(id: string) {
+  return requestJson<{ success: true; operator: Pick<OperatorDraft, "id" | "companyName" | "slug"> }>(
+    `/api/v1/platform/operators/${encodeURIComponent(id)}`,
+    { method: "DELETE" }
+  );
+}
+
 export function updateOperatorSlug(id: string, slug: string) {
   return requestJson<{ success: true; operator: OperatorDraft }>(
     `/api/v1/platform/operators/${encodeURIComponent(id)}/slug`,
