@@ -258,6 +258,18 @@ production audit.
    running an individual migration script in production without this runner is
    rejected. Do not improvise order, reuse an old run ID/log path, or skip a
    migration based on test data.
+
+   The structural preflight has three reviewed reference exceptions. The exact
+   reserved `SYSTEM_ACTOR_ID` is valid only in `CreditLedgerEntry.createdBy`
+   and `CreditBillingStatement.createdBy`. It also preserves one historical
+   email event set: exactly two `SENT` `BUSINESS_ACCOUNT_SUBMITTED` outbox rows
+   created at `2026-10-19T09:48:03.667Z`, both pointing to the same missing
+   business account. These terminal, denormalized email records are retained as
+   delivery history; this does not establish that the account deletion was
+   valid. The audit reports accepted counts separately and blocks if the email
+   count, timestamp, status, type, or distinct missing-account count differs.
+   Every other dangling, malformed, cross-tenant, or identity-mismatched
+   reference remains a migration blocker.
 4. Run the post-migration audit and all dry-run/index audits. Confirm every
    tenant-owned record has a valid owner, no cross-tenant or account/branch
    mismatches remain, scoped unique indexes exist, and no required index is

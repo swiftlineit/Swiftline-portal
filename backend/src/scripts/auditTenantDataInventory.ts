@@ -14,6 +14,8 @@ import { accountCreditTenantOwnershipModelNames } from "./migrateAccountCreditTe
 import { operationalTenantOwnershipModelNames } from "./migrateOperationalTenantOwnership.js";
 import { shipmentTenantOwnershipModelNames } from "./migrateShipmentTenantOwnership.js";
 import {
+  approvedOrphanReferenceException,
+  classifyApprovedOrphanReferenceException,
   hasTenantOwnership,
   invalidObjectIdReferenceFilter,
   missingTenantEmailOutboxStatusPipeline,
@@ -287,7 +289,11 @@ function validateOrphanSummaryDimensions(modelName: string): ValidatedOrphanSumm
   });
 }
 
-async function readOrphanSummary(link: ParentLink, dimensions: ValidatedOrphanSummaryDimension[]) {
+async function readOrphanSummary(
+  link: ParentLink,
+  dimensions: ValidatedOrphanSummaryDimension[],
+  excludedOrphanMatch?: Record<string, unknown>
+) {
   if (!dimensions.length) return [];
   const child = mongoose.model(link.childModel);
   const parent = mongoose.model(link.parentModel);
@@ -295,7 +301,12 @@ async function readOrphanSummary(link: ParentLink, dimensions: ValidatedOrphanSu
     _id: Record<string, string | boolean | null>;
     count: number;
   }>(
-    orphanReferenceSummaryPipeline(link.field, parent.collection.collectionName, dimensions),
+    orphanReferenceSummaryPipeline(
+      link.field,
+      parent.collection.collectionName,
+      dimensions,
+      excludedOrphanMatch
+    ),
     { maxTimeMS: 60_000 }
   ).toArray();
 
@@ -312,7 +323,11 @@ async function readOrphanSummary(link: ParentLink, dimensions: ValidatedOrphanSu
 
 const maximumOrphanDetailRows = 500;
 
-async function readOrphanDetails(link: ParentLink, dimensions: ValidatedOrphanSummaryDimension[]) {
+async function readOrphanDetails(
+  link: ParentLink,
+  dimensions: ValidatedOrphanSummaryDimension[],
+  excludedOrphanMatch?: Record<string, unknown>
+) {
   const child = mongoose.model(link.childModel);
   const parent = mongoose.model(link.parentModel);
   const rows = await child.collection.aggregate<Record<string, unknown>>(
@@ -320,7 +335,8 @@ async function readOrphanDetails(link: ParentLink, dimensions: ValidatedOrphanSu
       link.field,
       parent.collection.collectionName,
       dimensions,
-      link.array || link.nestedArray ? link.nestedArray ?? link.field : undefined
+      link.array || link.nestedArray ? link.nestedArray ?? link.field : undefined,
+      excludedOrphanMatch
     ),
     { maxTimeMS: 60_000 }
   ).toArray();
@@ -415,6 +431,9 @@ async function countOrphans(
   missingOrInvalidReference: number;
   crossTenantParent: number;
   identityMismatch: number;
+  acceptedDanglingParent: number;
+  rejectedExceptionCandidates: number;
+  acceptedExceptionCode?: string;
 }> {
   const child = mongoose.model(link.childModel);
   const parent = mongoose.model(link.parentModel);
@@ -449,10 +468,30 @@ async function countOrphans(
   const compareTenantOwners = hasTenantOwnership(child) && hasTenantOwnership(parent);
   const compareParentIdentity = Boolean(link.identityFields?.length);
   if (!existingCollections.has(child.collection.collectionName)) {
-    return { danglingParent: 0, missingOrInvalidReference: 0, crossTenantParent: 0, identityMismatch: 0 };
+    return {
+      danglingParent: 0,
+      missingOrInvalidReference: 0,
+      crossTenantParent: 0,
+      identityMismatch: 0,
+      acceptedDanglingParent: 0,
+      rejectedExceptionCandidates: 0
+    };
   }
 
   const invalidReferenceMatch = invalidObjectIdReferenceFilter(link.field, expectedRequired);
+  const approvedException = approvedOrphanReferenceException(link.childModel, link.field);
+  const missingParentStages = [
+    { $match: { [link.field]: { $type: "objectId" } } },
+    {
+      $lookup: {
+        from: parent.collection.collectionName,
+        localField: link.field,
+        foreignField: "_id",
+        as: "_tenantAuditParent"
+      }
+    },
+    { $match: { $expr: { $eq: [{ $size: "$_tenantAuditParent" }, 0] } } }
+  ];
   const pipeline = [
     ...(link.array || link.nestedArray
       ? [{ $unwind: { path: `$${link.nestedArray ?? link.field}`, preserveNullAndEmptyArrays: Boolean(link.array && expectedRequired) } }]
@@ -460,18 +499,32 @@ async function countOrphans(
     {
       $facet: {
         dangling: [
-          { $match: { [link.field]: { $type: "objectId" } } },
-          {
-            $lookup: {
-              from: parent.collection.collectionName,
-              localField: link.field,
-              foreignField: "_id",
-              as: "_tenantAuditParent"
-            }
-          },
-          { $match: { $expr: { $eq: [{ $size: "$_tenantAuditParent" }, 0] } } },
+          ...missingParentStages,
+          ...(approvedException ? [{ $match: { $nor: [approvedException.match] } }] : []),
           { $count: "count" }
         ],
+        ...(approvedException
+          ? {
+              approvedException: [
+                ...missingParentStages,
+                { $match: approvedException.match },
+                {
+                  $group: {
+                    _id: null,
+                    count: { $sum: 1 },
+                    references: { $addToSet: `$${link.field}` }
+                  }
+                },
+                {
+                  $project: {
+                    _id: 0,
+                    count: 1,
+                    distinctReferenceCount: { $size: "$references" }
+                  }
+                }
+              ]
+            }
+          : {}),
         invalid: [
           { $match: invalidReferenceMatch },
           { $count: "count" }
@@ -493,12 +546,25 @@ async function countOrphans(
     dangling?: Array<{ count: number }>;
     invalid?: Array<{ count: number }>;
     parentIntegrity?: Array<{ crossTenantParent?: number; identityMismatch?: number }>;
+    approvedException?: Array<{ count?: number; distinctReferenceCount?: number }>;
   } | undefined;
+  const exceptionCandidateCount = Number(results?.approvedException?.[0]?.count ?? 0);
+  const exceptionDistinctReferenceCount = Number(results?.approvedException?.[0]?.distinctReferenceCount ?? 0);
+  const exceptionClassification = approvedException
+    ? classifyApprovedOrphanReferenceException(
+        approvedException,
+        exceptionCandidateCount,
+        exceptionDistinctReferenceCount
+      )
+    : { acceptedCount: 0, rejectedCount: 0 };
   return {
-    danglingParent: Number(results?.dangling?.[0]?.count ?? 0),
+    danglingParent: Number(results?.dangling?.[0]?.count ?? 0) + exceptionClassification.rejectedCount,
     missingOrInvalidReference: Number(results?.invalid?.[0]?.count ?? 0),
     crossTenantParent: Number(results?.parentIntegrity?.[0]?.crossTenantParent ?? 0),
-    identityMismatch: Number(results?.parentIntegrity?.[0]?.identityMismatch ?? 0)
+    identityMismatch: Number(results?.parentIntegrity?.[0]?.identityMismatch ?? 0),
+    acceptedDanglingParent: exceptionClassification.acceptedCount,
+    rejectedExceptionCandidates: exceptionClassification.rejectedCount,
+    acceptedExceptionCode: exceptionClassification.acceptedCount > 0 ? approvedException?.code : undefined
   };
 }
 
@@ -744,19 +810,24 @@ async function run(
 
     console.log("Parent-link audit (orphan count):");
     let orphanTotal = 0;
+    let acceptedOrphanExceptionTotal = 0;
     let crossTenantParentTotal = 0;
     let identityMismatchTotal = 0;
     for (const link of auditedParentLinks) {
       const result = await countOrphans(link, existingCollections);
       const count = result.danglingParent + result.missingOrInvalidReference;
       orphanTotal += count;
+      acceptedOrphanExceptionTotal += result.acceptedDanglingParent;
       crossTenantParentTotal += result.crossTenantParent;
       identityMismatchTotal += result.identityMismatch;
-      console.log(`  ${link.childModel}.${link.field} -> ${link.parentModel}: dangling=${result.danglingParent}, missing-or-invalid=${result.missingOrInvalidReference}, cross-tenant=${result.crossTenantParent}, account-or-branch-mismatch=${result.identityMismatch}`);
+      console.log(`  ${link.childModel}.${link.field} -> ${link.parentModel}: dangling=${result.danglingParent}, missing-or-invalid=${result.missingOrInvalidReference}, cross-tenant=${result.crossTenantParent}, account-or-branch-mismatch=${result.identityMismatch}, accepted-reviewed-exception=${result.acceptedDanglingParent}${result.acceptedExceptionCode ? ` (${result.acceptedExceptionCode})` : ""}`);
       if (includeOrphanSummary && result.danglingParent > 0) {
         const dimensions = validateOrphanSummaryDimensions(link.childModel);
         if (dimensions.length) {
-          const summaries = await readOrphanSummary(link, dimensions);
+          const acceptedException = result.acceptedDanglingParent > 0
+            ? approvedOrphanReferenceException(link.childModel, link.field)
+            : undefined;
+          const summaries = await readOrphanSummary(link, dimensions, acceptedException?.match);
           console.log(`    Aggregate-only lifecycle summary (${dimensions.map((dimension) => dimension.name).join(", ")}; no IDs or personal data):`);
           for (const summary of summaries) {
             const label = Object.entries(summary.values).map(([name, value]) => `${name}=${value}`).join(", ");
@@ -766,7 +837,10 @@ async function run(
       }
       if (includeOrphanDetails && result.danglingParent > 0) {
         const dimensions = validateOrphanSummaryDimensions(link.childModel);
-        const records = await readOrphanDetails(link, dimensions);
+        const acceptedException = result.acceptedDanglingParent > 0
+          ? approvedOrphanReferenceException(link.childModel, link.field)
+          : undefined;
+        const records = await readOrphanDetails(link, dimensions, acceptedException?.match);
         console.log(`    Orphan detail records (ObjectIds and allowlisted lifecycle values only):`);
         for (const record of records) {
           const lifecycle = Object.entries(record.lifecycle).map(([name, value]) => `${name}=${String(value)}`).join(", ");
@@ -778,10 +852,14 @@ async function run(
       } else if (count > 0) {
         blockingFindings.push(`Orphaned or malformed references exist in ${link.childModel}.${link.field}`);
       }
+      if (result.rejectedExceptionCandidates > 0) {
+        blockingFindings.push(`Reviewed reference exception bounds were exceeded in ${link.childModel}.${link.field}`);
+      }
       if (result.crossTenantParent > 0) blockingFindings.push(`Cross-tenant references exist in ${link.childModel}.${link.field}`);
       if (result.identityMismatch > 0) blockingFindings.push(`Account or branch mismatches exist in ${link.childModel}.${link.field}`);
     }
     console.log(`Total orphan references: ${orphanTotal}`);
+    console.log(`Total accepted reviewed orphan exceptions: ${acceptedOrphanExceptionTotal}`);
     console.log(`Total cross-tenant parent references: ${crossTenantParentTotal}`);
     console.log(`Total shipment account/branch identity mismatches: ${identityMismatchTotal}`);
     if (orphanTotal > 0 || missingTenantOwnershipTotal > 0 || crossTenantParentTotal > 0 || identityMismatchTotal > 0) {

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { SYSTEM_ACTOR_ID } from "../utils/systemActor.js";
 
 export function hasTenantOwnership(model: Pick<mongoose.Model<any>, "schema">): boolean {
   const tenantId = model.schema.path("tenantId");
@@ -57,6 +58,72 @@ export function missingTenantEmailOutboxStatusPipeline(): mongoose.PipelineStage
   ];
 }
 
+export type ApprovedOrphanReferenceException = Readonly<{
+  code: "RESERVED_SYSTEM_ACTOR" | "HISTORICAL_SENT_ACCOUNT_SUBMISSION_EMAIL";
+  match: Record<string, unknown>;
+  expectedCount?: number;
+  expectedDistinctReferenceCount: number;
+}>;
+
+const historicalSentAccountSubmissionCreatedAt = new Date("2026-10-19T09:48:03.667Z");
+
+/**
+ * Returns the complete reviewed allowlist for dangling parent references.
+ * Keep this field-specific: the reserved actor is not a general replacement
+ * for a User, and the email exception is one immutable, completed event set.
+ */
+export function approvedOrphanReferenceException(
+  childModel: string,
+  field: string
+): ApprovedOrphanReferenceException | undefined {
+  if (
+    field === "createdBy" &&
+    (childModel === "CreditLedgerEntry" || childModel === "CreditBillingStatement")
+  ) {
+    return {
+      code: "RESERVED_SYSTEM_ACTOR",
+      match: { [field]: SYSTEM_ACTOR_ID },
+      expectedDistinctReferenceCount: 1
+    };
+  }
+
+  if (childModel === "EmailOutbox" && field === "businessAccountId") {
+    return {
+      code: "HISTORICAL_SENT_ACCOUNT_SUBMISSION_EMAIL",
+      match: {
+        [field]: { $type: "objectId" },
+        notificationType: "BUSINESS_ACCOUNT_SUBMITTED",
+        status: "SENT",
+        createdAt: historicalSentAccountSubmissionCreatedAt
+      },
+      expectedCount: 2,
+      expectedDistinctReferenceCount: 1
+    };
+  }
+
+  return undefined;
+}
+
+export function classifyApprovedOrphanReferenceException(
+  exception: ApprovedOrphanReferenceException,
+  candidateCount: number,
+  distinctReferenceCount: number
+): { acceptedCount: number; rejectedCount: number } {
+  const validCounts = Number.isSafeInteger(candidateCount)
+    && candidateCount >= 0
+    && Number.isSafeInteger(distinctReferenceCount)
+    && distinctReferenceCount >= 0;
+  const expectedEmptySet = candidateCount === 0 && distinctReferenceCount === 0;
+  const expectedPopulatedSet = candidateCount > 0
+    && distinctReferenceCount === exception.expectedDistinctReferenceCount
+    && (exception.expectedCount === undefined || candidateCount === exception.expectedCount);
+  const accepted = validCounts && (expectedEmptySet || expectedPopulatedSet);
+  return {
+    acceptedCount: accepted ? candidateCount : 0,
+    rejectedCount: accepted ? 0 : candidateCount
+  };
+}
+
 /**
  * Groups each index value under a MongoDB-safe alias. Index paths can contain
  * dots (for example `contact.email`), but aggregation object keys cannot.
@@ -97,7 +164,8 @@ export type OrphanSummaryDimension = {
 export function orphanReferenceSummaryPipeline(
   field: string,
   parentCollection: string,
-  dimensions: OrphanSummaryDimension[]
+  dimensions: OrphanSummaryDimension[],
+  excludedOrphanMatch?: Record<string, unknown>
 ): mongoose.PipelineStage[] {
   const summaryKey = Object.fromEntries(dimensions.map((dimension) => [
     dimension.name,
@@ -117,6 +185,7 @@ export function orphanReferenceSummaryPipeline(
       }
     },
     { $match: { $expr: { $eq: [{ $size: "$_tenantAuditParent" }, 0] } } },
+    ...(excludedOrphanMatch ? [{ $match: { $nor: [excludedOrphanMatch] } } as mongoose.PipelineStage] : []),
     { $group: { _id: summaryKey, count: { $sum: 1 } } },
     { $sort: { count: -1 } },
     { $limit: 25 }
@@ -132,7 +201,8 @@ export function orphanReferenceDetailsPipeline(
   field: string,
   parentCollection: string,
   dimensions: OrphanSummaryDimension[],
-  unwindPath?: string
+  unwindPath?: string,
+  excludedOrphanMatch?: Record<string, unknown>
 ): mongoose.PipelineStage[] {
   const lifecycleProjection = Object.fromEntries(dimensions.map((dimension) => [
     dimension.name,
@@ -153,6 +223,7 @@ export function orphanReferenceDetailsPipeline(
       }
     },
     { $match: { $expr: { $eq: [{ $size: "$_tenantAuditParent" }, 0] } } },
+    ...(excludedOrphanMatch ? [{ $match: { $nor: [excludedOrphanMatch] } } as mongoose.PipelineStage] : []),
     {
       $project: {
         _id: 1,

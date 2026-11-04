@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import mongoose from "mongoose";
 import {
+  approvedOrphanReferenceException,
+  classifyApprovedOrphanReferenceException,
   hasTenantOwnership,
   invalidObjectIdReferenceFilter,
   malformedTenantOwnershipFilter,
@@ -14,6 +16,7 @@ import {
   unassignedTenantOwnershipFilter,
   uniqueTenantKeyDuplicatePipeline
 } from "../scripts/tenantDataAuditHelpers.js";
+import { SYSTEM_ACTOR_ID } from "../utils/systemActor.js";
 
 test("tenant data audit identifies schemas with a Tenant ObjectId owner field", () => {
   const tenantOwned = new mongoose.Schema({
@@ -67,6 +70,62 @@ test("tenant data audit reports unowned email rows by delivery status only", () 
     { $group: { _id: "$status", count: { $sum: 1 } } },
     { $sort: { _id: 1 } }
   ]);
+});
+
+test("tenant data audit accepts the reserved system actor only for reviewed financial attribution fields", () => {
+  const ledgerException = approvedOrphanReferenceException("CreditLedgerEntry", "createdBy");
+  const statementException = approvedOrphanReferenceException("CreditBillingStatement", "createdBy");
+
+  assert.deepEqual(ledgerException, {
+    code: "RESERVED_SYSTEM_ACTOR",
+    match: { createdBy: SYSTEM_ACTOR_ID },
+    expectedDistinctReferenceCount: 1
+  });
+  assert.deepEqual(statementException, ledgerException);
+  assert.equal(approvedOrphanReferenceException("CreditPayment", "createdBy"), undefined);
+  assert.equal(approvedOrphanReferenceException("CreditLedgerEntry", "businessAccountId"), undefined);
+
+  assert.deepEqual(classifyApprovedOrphanReferenceException(ledgerException!, 40, 1), {
+    acceptedCount: 40,
+    rejectedCount: 0
+  });
+  assert.deepEqual(classifyApprovedOrphanReferenceException(ledgerException!, 40, 2), {
+    acceptedCount: 0,
+    rejectedCount: 40
+  });
+});
+
+test("tenant data audit accepts only the exact reviewed historical sent-email set", () => {
+  const exception = approvedOrphanReferenceException("EmailOutbox", "businessAccountId");
+
+  assert.deepEqual(exception, {
+    code: "HISTORICAL_SENT_ACCOUNT_SUBMISSION_EMAIL",
+    match: {
+      businessAccountId: { $type: "objectId" },
+      notificationType: "BUSINESS_ACCOUNT_SUBMITTED",
+      status: "SENT",
+      createdAt: new Date("2026-10-19T09:48:03.667Z")
+    },
+    expectedCount: 2,
+    expectedDistinctReferenceCount: 1
+  });
+  assert.deepEqual(classifyApprovedOrphanReferenceException(exception!, 2, 1), {
+    acceptedCount: 2,
+    rejectedCount: 0
+  });
+  assert.deepEqual(classifyApprovedOrphanReferenceException(exception!, 1, 1), {
+    acceptedCount: 0,
+    rejectedCount: 1
+  });
+  assert.deepEqual(classifyApprovedOrphanReferenceException(exception!, 3, 1), {
+    acceptedCount: 0,
+    rejectedCount: 3
+  });
+  assert.deepEqual(classifyApprovedOrphanReferenceException(exception!, 2, 2), {
+    acceptedCount: 0,
+    rejectedCount: 2
+  });
+  assert.equal(approvedOrphanReferenceException("EmailOutbox", "recipientUserId"), undefined);
 });
 
 test("tenant-local duplicate audit groups dotted compound index paths under safe aliases", () => {
@@ -129,6 +188,24 @@ test("tenant data audit summarizes orphan references with approved lifecycle fie
     { $sort: { count: -1 } },
     { $limit: 25 }
   ]);
+});
+
+test("tenant data audit omits an accepted orphan signature without hiding other dangling references", () => {
+  const exception = approvedOrphanReferenceException("EmailOutbox", "businessAccountId")!;
+  const pipeline = orphanReferenceSummaryPipeline(
+    "businessAccountId",
+    "businessaccounts",
+    [{ name: "status", field: "status" }],
+    exception.match
+  );
+
+  assert.deepEqual(pipeline[3], { $match: { $nor: [exception.match] } });
+  assert.deepEqual(pipeline[0], {
+    $match: { $expr: { $eq: [{ $type: "$businessAccountId" }, "objectId"] } }
+  });
+  assert.deepEqual(pipeline[2], {
+    $match: { $expr: { $eq: [{ $size: "$_tenantAuditParent" }, 0] } }
+  });
 });
 
 test("tenant data audit detail mode projects only child and parent IDs plus approved lifecycle fields", () => {
