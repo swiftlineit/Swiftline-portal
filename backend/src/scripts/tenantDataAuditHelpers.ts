@@ -32,6 +32,22 @@ export function missingTenantOwnershipFilter() {
   return { $expr: { $ne: [{ $type: "$tenantId" }, "objectId"] } };
 }
 
+export function malformedTenantOwnershipFilter() {
+  return {
+    $expr: {
+      $and: [
+        { $ne: [{ $type: "$tenantId" }, "objectId"] },
+        { $ne: [{ $type: "$tenantId" }, "missing"] },
+        { $ne: [{ $type: "$tenantId" }, "null"] }
+      ]
+    }
+  };
+}
+
+export function unassignedTenantOwnershipFilter() {
+  return { $or: [{ tenantId: { $exists: false } }, { tenantId: null }] };
+}
+
 /** Counts undelivered and terminal email states before legacy rows receive a tenant owner. */
 export function missingTenantEmailOutboxStatusPipeline(): mongoose.PipelineStage[] {
   return [

@@ -1,7 +1,12 @@
 import mongoose from "mongoose";
-import { env } from "../config/env.js";
+import { tenantMigrationEnv } from "./tenantMigrationEnv.js";
 import { OperatorSupportSession } from "../models/operatorSupportSession.model.js";
-import { assertExpectedDatabaseName, assertNonProductionEnvironment } from "./migrationSafety.js";
+import {
+  assertExpectedDatabaseName,
+  assertTenantMigrationExecutionAllowed,
+  isMainModule,
+  type ProductionTenantMigrationAuthorization
+} from "./migrationSafety.js";
 
 function parseArguments(args: string[]) {
   let apply = false;
@@ -31,10 +36,20 @@ function parseArguments(args: string[]) {
   return { apply, expectedDatabase };
 }
 
-async function main() {
-  assertNonProductionEnvironment(env.NODE_ENV, "Operator support session index migration");
-  const { apply, expectedDatabase } = parseArguments(process.argv.slice(2));
-  await mongoose.connect(env.MONGODB_URI, { family: 4, autoIndex: false, autoCreate: false });
+async function main(
+  args = process.argv.slice(2),
+  authorization?: ProductionTenantMigrationAuthorization,
+  mongoUri = tenantMigrationEnv.applicationMongoUri
+) {
+  const { apply, expectedDatabase } = parseArguments(args);
+  assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: tenantMigrationEnv.nodeEnvironment,
+    step: "operator-support-indexes",
+    expectedDatabase,
+    mongoUri,
+    authorization
+  });
+  await mongoose.connect(mongoUri, { family: 4, autoIndex: false, autoCreate: false });
   try {
     assertExpectedDatabaseName(expectedDatabase, mongoose.connection.db?.databaseName);
     const existing = await OperatorSupportSession.collection.indexes().catch(() => []);
@@ -54,7 +69,19 @@ async function main() {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : "Operator support session index migration failed.");
-  process.exitCode = 1;
-});
+export function runAuthorizedProductionMigration(
+  authorization: ProductionTenantMigrationAuthorization,
+  apply: boolean
+) {
+  const args = ["--database", "swiftline", ...(apply ? ["--apply"] : [])];
+  const mongoUri = tenantMigrationEnv.migrationMongoUri;
+  if (!mongoUri) throw new Error("TENANT_MIGRATION_MONGODB_URI is required for production migrations.");
+  return main(args, authorization, mongoUri);
+}
+
+if (isMainModule(import.meta.url)) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "Operator support session index migration failed.");
+    process.exitCode = 1;
+  });
+}

@@ -2,15 +2,26 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import mongoose from "mongoose";
-import { env } from "../config/env.js";
-import { assertExpectedDatabaseName, assertNonProductionEnvironment } from "./migrationSafety.js";
+import { tenantMigrationEnv } from "./tenantMigrationEnv.js";
+import {
+  assertExpectedDatabaseName,
+  assertNonProductionEnvironment,
+  assertProductionTenantAuditTarget,
+  isMainModule
+} from "./migrationSafety.js";
+import { tenantScopedUniqueIndexes } from "./tenantIdentityIndexMigration.js";
+import { accountCreditTenantOwnershipModelNames } from "./migrateAccountCreditTenantOwnership.js";
+import { operationalTenantOwnershipModelNames } from "./migrateOperationalTenantOwnership.js";
+import { shipmentTenantOwnershipModelNames } from "./migrateShipmentTenantOwnership.js";
 import {
   hasTenantOwnership,
   invalidObjectIdReferenceFilter,
   missingTenantEmailOutboxStatusPipeline,
   missingTenantOwnershipFilter,
+  malformedTenantOwnershipFilter,
   orphanReferenceDetailsPipeline,
   orphanReferenceSummaryPipeline,
+  unassignedTenantOwnershipFilter,
   type OrphanSummaryDimension,
   tenantOwnerParentLinks,
   tenantParentIntegrityPipeline
@@ -338,6 +349,72 @@ function expectedDatabaseName(args: string[]): string {
   return args[1].trim();
 }
 
+function indexEquivalent(
+  existing: { key?: Record<string, unknown>; unique?: boolean; partialFilterExpression?: Record<string, unknown> },
+  expectedKey: Record<string, number>,
+  expectedOptions: { unique?: unknown; partialFilterExpression?: Record<string, unknown> }
+) {
+  const stable = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+    if (typeof value !== "object" || value === null) return JSON.stringify(value);
+    return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stable(entry)}`).join(",")}}`;
+  };
+  const sameKey = Boolean(existing.key) && Object.keys(existing.key!).length === Object.keys(expectedKey).length &&
+    Object.entries(expectedKey).every(([field, direction], index) =>
+      Object.entries(existing.key!)[index]?.[0] === field && Object.entries(existing.key!)[index]?.[1] === direction
+    );
+  return sameKey && Boolean(existing.unique) === (expectedOptions.unique === true) &&
+    stable(existing.partialFilterExpression ?? {}) === stable(expectedOptions.partialFilterExpression ?? {});
+}
+
+function uniqueTenantKeyDuplicatePipeline(
+  key: Record<string, number>,
+  partialFilterExpression: Record<string, unknown> | undefined,
+  tenantId: unknown,
+  arrayFields: string[]
+): mongoose.PipelineStage[] {
+  const groupKey = Object.fromEntries(Object.keys(key).map((field) => [
+    field,
+    field === "tenantId" ? { $ifNull: ["$tenantId", tenantId] } : `$${field}`
+  ]));
+  return [
+    { $match: partialFilterExpression ?? {} },
+    ...arrayFields.map((field) => ({ $unwind: { path: `$${field}`, preserveNullAndEmptyArrays: true } }) as mongoose.PipelineStage),
+    { $group: { _id: groupKey, count: { $sum: 1 } } },
+    { $match: { count: { $gt: 1 } } },
+    { $count: "duplicateGroups" }
+  ];
+}
+
+const fullIndexAuditModels = new Set([
+  "Tenant",
+  "TenantSlug",
+  "TenantMembership",
+  "OperatorInvitation",
+  "OperatorClientInvitation",
+  "OperatorShipmentTrackingCounter",
+  "OperatorContactQuery",
+  "OperatorSupportSession"
+]);
+
+const preActivationBackfillModels = new Set([
+  "BusinessAccount",
+  "Branch",
+  ...accountCreditTenantOwnershipModelNames,
+  ...operationalTenantOwnershipModelNames,
+  ...shipmentTenantOwnershipModelNames
+]);
+
+function migrationExpectedIndexes(model: mongoose.Model<any>) {
+  const schemaIndexes = model.schema.indexes() as Array<[Record<string, number>, mongoose.IndexOptions]>;
+  if (fullIndexAuditModels.has(model.modelName)) return schemaIndexes;
+  if (!hasTenantOwnership(model)) return [];
+  return schemaIndexes.filter(([key, options]) =>
+    key.tenantId === 1 && (Object.keys(key).length === 1 || options.unique === true)
+  );
+}
+
 async function importModels() {
   const modelDirectory = path.resolve("src/models");
   const files = fs.readdirSync(modelDirectory)
@@ -443,12 +520,40 @@ async function countOrphans(
   };
 }
 
-async function run() {
-  assertNonProductionEnvironment(env.NODE_ENV, "Tenant data audit");
-  const args = process.argv.slice(2);
+async function run(
+  args = process.argv.slice(2),
+  configuredMongoUri?: string
+): Promise<{ hasFindings: boolean; blockingFindings: string[] }> {
+  const productionSafe = args.includes("--production-safe");
+  const clusterIndex = args.indexOf("--cluster-host");
+  const expectedClusterHost = clusterIndex >= 0 ? args[clusterIndex + 1] ?? "" : "";
+  const selectedMongoUri = configuredMongoUri ?? (productionSafe ? tenantMigrationEnv.auditMongoUri : tenantMigrationEnv.applicationMongoUri);
+  if (productionSafe) {
+    if (tenantMigrationEnv.nodeEnvironment !== "production") throw new Error("--production-safe requires NODE_ENV=production.");
+    if (!selectedMongoUri) throw new Error("TENANT_AUDIT_MONGODB_URI is required and must use a read-only database user.");
+  } else {
+    assertNonProductionEnvironment(tenantMigrationEnv.nodeEnvironment, "Tenant data audit");
+    if (!selectedMongoUri) throw new Error("MONGODB_URI is required for a tenant data audit.");
+  }
   const includeOrphanSummary = args.includes("--orphan-summary");
   const includeOrphanDetails = args.includes("--orphan-details");
-  const databaseArgs = args.filter((argument) => argument !== "--orphan-summary" && argument !== "--orphan-details");
+  const databaseArgs = args.filter((argument, index) =>
+    argument !== "--orphan-summary" && argument !== "--orphan-details" && argument !== "--production-safe" &&
+    !(argument === "--cluster-host" || (clusterIndex >= 0 && index === clusterIndex + 1))
+  );
+  if (productionSafe && includeOrphanDetails) {
+    throw new Error("Production-safe audit does not permit orphan detail output; use aggregate-only results.");
+  }
+  if (productionSafe) {
+    assertProductionTenantAuditTarget({
+      nodeEnvironment: tenantMigrationEnv.nodeEnvironment,
+      expectedDatabase: databaseArgs[1] ?? "",
+      expectedClusterHost,
+      mongoUri: selectedMongoUri!,
+      allowedClusterHost: tenantMigrationEnv.allowedClusterHost,
+      applyRequested: args.includes("--apply")
+    });
+  }
   if (args.filter((argument) => argument === "--orphan-summary").length > 1) {
     throw new Error("The --orphan-summary option may be provided only once.");
   }
@@ -467,6 +572,12 @@ async function run() {
   await importModels();
 
   const models = Object.values(mongoose.models).sort((left, right) => left.modelName.localeCompare(right.modelName));
+  const uncoveredTenantModels = models.filter((model) =>
+    hasTenantOwnership(model) && !preActivationBackfillModels.has(model.modelName) && !fullIndexAuditModels.has(model.modelName)
+  );
+  if (uncoveredTenantModels.length) {
+    throw new Error(`Tenant migration coverage is missing model(s): ${uncoveredTenantModels.map((model) => model.modelName).join(", ")}.`);
+  }
   const tenantOwnerLinks = tenantOwnerParentLinks(models);
   const supplementalParentLinks = parentLinks.filter((link) => !(link.field === "tenantId" && link.parentModel === "Tenant"));
   const auditedParentLinks = [...tenantOwnerLinks, ...supplementalParentLinks];
@@ -477,12 +588,12 @@ async function run() {
   for (const modelName of Object.keys(orphanSummaryFields)) validateOrphanSummaryDimensions(modelName);
   if (schemaOnly) {
     console.log(`Tenant schema audit passed: ${models.length} models, ${tenantOwnerLinks.length} tenant-owner links, ${supplementalParentLinks.length} reviewed parent links.`);
-    return;
+    return { hasFindings: false, blockingFindings: [] };
   }
 
   const expectedDatabase = expectedDatabaseName(databaseArgs);
 
-  await mongoose.connect(env.MONGODB_URI, {
+  await mongoose.connect(selectedMongoUri!, {
     family: 4,
     autoIndex: false,
     autoCreate: false,
@@ -492,6 +603,39 @@ async function run() {
   try {
     const databaseName = mongoose.connection.db?.databaseName;
     assertExpectedDatabaseName(expectedDatabase, databaseName);
+
+    let hasFindings = false;
+    const blockingFindings: string[] = [];
+    const tenantModel = mongoose.model("Tenant");
+    const tenantCollection = tenantModel.collection;
+    const rootTenants = await tenantCollection.find({ kind: "SWIFTLINE" }).limit(3).toArray();
+    const activeRoots = rootTenants.filter((tenant) => tenant.status === "ACTIVE");
+    const currentSwiftlineRoot = activeRoots.length === 1 ? activeRoots[0]!._id : "__MISSING_SWIFTLINE_ROOT__";
+    const tenantSlugModel = mongoose.model("TenantSlug");
+    const currentSlug = await tenantSlugModel.collection.findOne({ slug: "swiftline", isCurrent: true });
+    const nonDraftOperatorCount = await tenantCollection.countDocuments({
+      kind: "OPERATOR",
+      status: { $ne: "DRAFT" }
+    });
+    console.log(`Swiftline root tenants: ${rootTenants.length}; active roots: ${activeRoots.length}; current swiftline slug: ${currentSlug ? "present" : "missing"}`);
+    console.log(`Non-draft operator tenants: ${nonDraftOperatorCount}`);
+    const tenantSlugConflicts = await tenantSlugModel.collection.countDocuments({
+      slug: "swiftline",
+      ...(activeRoots.length === 1 ? { tenantId: { $ne: currentSwiftlineRoot } } : {})
+    });
+    const tenantRootSlugConflicts = await tenantCollection.countDocuments({ slug: "swiftline", kind: { $ne: "SWIFTLINE" } });
+    if (activeRoots.length > 1 || rootTenants.length > 1 || tenantSlugConflicts > 0 || tenantRootSlugConflicts > 0) {
+      console.log("BLOCKER: Swiftline root or reserved slug has conflicting ownership.");
+      blockingFindings.push("Swiftline root or reserved slug conflict");
+      hasFindings = true;
+    } else if (activeRoots.length !== 1 || !currentSlug) {
+      console.log("PLANNED CHANGE: Swiftline root tenant and/or current reserved slug is missing.");
+      hasFindings = true;
+    }
+    if (nonDraftOperatorCount > 0) {
+      blockingFindings.push("An operator tenant is already outside DRAFT status");
+      hasFindings = true;
+    }
 
     const collectionNames = [...new Set(models.map((model) => model.collection.collectionName))];
     const existingCollections = new Set((await mongoose.connection.db!.listCollections({}, { nameOnly: true }).toArray()).map((item) => item.name));
@@ -516,14 +660,93 @@ async function run() {
 
     console.log("Tenant ownership audit (missing or invalid tenantId):");
     let missingTenantOwnershipTotal = 0;
+    let assignedToOtherTenantTotal = 0;
+    let malformedTenantOwnershipTotal = 0;
+    let uncoveredTenantOwnershipTotal = 0;
     for (const model of models.filter(hasTenantOwnership)) {
-      const missing = existingCollections.has(model.collection.collectionName)
-        ? await model.collection.countDocuments(missingTenantOwnershipFilter())
-        : 0;
-      missingTenantOwnershipTotal += missing;
-      console.log(`  ${model.modelName}: ${missing}`);
+      const [missingOrInvalid, unassigned, malformed, assignedToOtherTenant] = existingCollections.has(model.collection.collectionName)
+        ? await Promise.all([
+            model.collection.countDocuments(missingTenantOwnershipFilter()),
+            model.collection.countDocuments(unassignedTenantOwnershipFilter()),
+            model.collection.countDocuments(malformedTenantOwnershipFilter()),
+            preActivationBackfillModels.has(model.modelName)
+              ? activeRoots.length === 1
+                ? model.collection.countDocuments({ tenantId: { $type: "objectId", $ne: currentSwiftlineRoot } })
+                : model.collection.countDocuments({ tenantId: { $type: "objectId" } })
+              : 0
+          ])
+        : [0, 0, 0, 0];
+      missingTenantOwnershipTotal += missingOrInvalid;
+      assignedToOtherTenantTotal += assignedToOtherTenant;
+      malformedTenantOwnershipTotal += malformed;
+      if (unassigned && !preActivationBackfillModels.has(model.modelName)) {
+        uncoveredTenantOwnershipTotal += unassigned;
+        blockingFindings.push(`Unassigned tenant ownership is outside migration coverage for ${model.modelName}`);
+      }
+      console.log(`  ${model.modelName}: unassigned=${unassigned}; malformed=${malformed}`);
     }
     console.log(`Total missing or invalid tenant ownership: ${missingTenantOwnershipTotal}`);
+    console.log(`Malformed tenant ownership values: ${malformedTenantOwnershipTotal}`);
+    console.log(`Unassigned records outside migration coverage: ${uncoveredTenantOwnershipTotal}`);
+    console.log(`Existing tenant assignments outside the Swiftline root: ${assignedToOtherTenantTotal}`);
+    if (missingTenantOwnershipTotal) hasFindings = true;
+    if (malformedTenantOwnershipTotal) {
+      blockingFindings.push("Malformed tenant ownership values must be reviewed before migration");
+      hasFindings = true;
+    }
+    if (uncoveredTenantOwnershipTotal) hasFindings = true;
+    if (assignedToOtherTenantTotal) {
+      blockingFindings.push("Existing tenant assignments do not match the Swiftline root");
+      hasFindings = true;
+    }
+
+    console.log("Schema index and tenant-local uniqueness audit:");
+    let missingExpectedIndexes = 0;
+    let duplicateTenantKeyGroups = 0;
+    for (const model of models) {
+      const existingIndexes = existingCollections.has(model.collection.collectionName)
+        ? await model.collection.listIndexes().toArray().catch((error: unknown) => {
+            const mongoError = error as { code?: number; codeName?: string };
+            if (mongoError.code === 26 || mongoError.codeName === "NamespaceNotFound") return [];
+            throw error;
+          })
+        : [];
+      const expectedIndexes = migrationExpectedIndexes(model);
+      for (const [key, options] of expectedIndexes) {
+        if (!existingIndexes.some((index) => indexEquivalent(index, key, options))) {
+          missingExpectedIndexes += 1;
+          console.log(`  MISSING INDEX: ${model.collection.collectionName}.${options.name ?? Object.keys(key).join("_")}`);
+        }
+      }
+
+      if (!existingCollections.has(model.collection.collectionName)) continue;
+      for (const indexPlan of tenantScopedUniqueIndexes(model)) {
+        const arrayFields = Object.keys(indexPlan.key).filter((field) => model.schema.path(field)?.instance === "Array");
+        if (arrayFields.length > 1) {
+          console.log(`  REVIEW REQUIRED: ${model.modelName} has a tenant unique index across multiple array fields.`);
+          blockingFindings.push(`${model.modelName} has a tenant unique index across multiple array fields`);
+          hasFindings = true;
+          continue;
+        }
+        const rows = await model.collection.aggregate(
+          uniqueTenantKeyDuplicatePipeline(
+            indexPlan.key,
+            indexPlan.options.partialFilterExpression as Record<string, unknown> | undefined,
+            currentSwiftlineRoot,
+            arrayFields
+          ),
+          { maxTimeMS: 60_000 }
+        ).toArray();
+        const groups = Number((rows[0] as { duplicateGroups?: number } | undefined)?.duplicateGroups ?? 0);
+        if (groups) {
+          duplicateTenantKeyGroups += groups;
+          console.log(`  DUPLICATE TENANT KEY: ${model.modelName}.${indexPlan.options.name ?? Object.keys(indexPlan.key).join("_")}: ${groups} group(s)`);
+          blockingFindings.push(`Duplicate tenant-local keys exist for ${model.modelName}`);
+        }
+      }
+    }
+    console.log(`Missing schema indexes: ${missingExpectedIndexes}; duplicate tenant-local key groups: ${duplicateTenantKeyGroups}`);
+    if (missingExpectedIndexes || duplicateTenantKeyGroups) hasFindings = true;
 
     const emailOutbox = mongoose.model("EmailOutbox");
     if (existingCollections.has(emailOutbox.collection.collectionName)) {
@@ -568,19 +791,49 @@ async function run() {
           console.log(`      child=${record.childId}, missingParent=${record.missingParentId}${lifecycle ? `, ${lifecycle}` : ""}`);
         }
       }
+      if (link.field === "tenantId" && link.parentModel === "Tenant") {
+        if (result.danglingParent > 0) blockingFindings.push(`Unresolved tenant-owner references exist in ${link.childModel}`);
+      } else if (count > 0) {
+        blockingFindings.push(`Orphaned or malformed references exist in ${link.childModel}.${link.field}`);
+      }
+      if (result.crossTenantParent > 0) blockingFindings.push(`Cross-tenant references exist in ${link.childModel}.${link.field}`);
+      if (result.identityMismatch > 0) blockingFindings.push(`Account or branch mismatches exist in ${link.childModel}.${link.field}`);
     }
     console.log(`Total orphan references: ${orphanTotal}`);
     console.log(`Total cross-tenant parent references: ${crossTenantParentTotal}`);
     console.log(`Total shipment account/branch identity mismatches: ${identityMismatchTotal}`);
     if (orphanTotal > 0 || missingTenantOwnershipTotal > 0 || crossTenantParentTotal > 0 || identityMismatchTotal > 0) {
-      process.exitCode = 1;
+      hasFindings = true;
     }
+    if (productionSafe) {
+      if (blockingFindings.length) {
+        console.log(`Production migration blockers: ${blockingFindings.length}`);
+        for (const finding of [...new Set(blockingFindings)]) console.log(`  BLOCKER: ${finding}`);
+      } else {
+        console.log("Production migration preflight found no structural blockers. Ownership gaps and missing indexes, if any, remain listed as planned migration work.");
+      }
+    }
+    return { hasFindings, blockingFindings: [...new Set(blockingFindings)] };
   } finally {
     await mongoose.disconnect();
   }
 }
 
-run().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : "Tenant data audit failed.");
-  process.exitCode = 1;
-});
+export function runProductionTenantAudit(input: { expectedClusterHost: string; mongoUri?: string }) {
+  return run([
+    "--production-safe",
+    "--database",
+    "swiftline",
+    "--cluster-host",
+    input.expectedClusterHost
+  ], input.mongoUri);
+}
+
+if (isMainModule(import.meta.url)) {
+  run().then((result) => {
+    if (result.hasFindings) process.exitCode = 1;
+  }).catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "Tenant data audit failed.");
+    process.exitCode = 1;
+  });
+}

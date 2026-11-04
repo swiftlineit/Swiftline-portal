@@ -24,6 +24,8 @@
     "test:tenant-job-runner": "tsx --test src/tests/tenantJobRunner.test.ts",
     "test:credit:reconciliation-audience": "tsx --test src/tests/creditReconciliationAudience.test.ts",
     "audit:tenant-data": "tsx src/scripts/auditTenantDataInventory.ts",
+    "audit:tenant-data:production": "tsx src/scripts/auditTenantDataInventory.ts --production-safe",
+    "migrate:tenant-ownership:production": "tsx src/scripts/runProductionSwiftlineTenantMigration.ts",
     "audit:operator-support-indexes": "tsx src/scripts/migrateOperatorSupportSessionIndexes.ts",
     "migrate:operator-support-indexes": "tsx src/scripts/migrateOperatorSupportSessionIndexes.ts --apply",
     "migrate:swiftline-root-ownership": "tsx src/scripts/migrateSwiftlineRootOwnership.ts",

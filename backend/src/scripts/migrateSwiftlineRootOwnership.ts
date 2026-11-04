@@ -1,11 +1,16 @@
 import mongoose from "mongoose";
-import { env } from "../config/env.js";
+import { tenantMigrationEnv } from "./tenantMigrationEnv.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { Tenant } from "../models/tenant.model.js";
 import { TenantMembership } from "../models/tenantMembership.model.js";
 import { TenantSlug } from "../models/tenantSlug.model.js";
-import { assertExpectedDatabaseName, assertNonProductionEnvironment } from "./migrationSafety.js";
+import {
+  assertExpectedDatabaseName,
+  assertTenantMigrationExecutionAllowed,
+  isMainModule,
+  type ProductionTenantMigrationAuthorization
+} from "./migrationSafety.js";
 
 const swiftlineTenant = {
   kind: "SWIFTLINE" as const,
@@ -149,12 +154,22 @@ async function applyMigration() {
   }
 }
 
-async function run() {
-  assertNonProductionEnvironment(env.NODE_ENV, "Swiftline root ownership migration");
-  const { apply, expectedDatabase } = parseArguments(process.argv.slice(2));
+async function run(
+  args = process.argv.slice(2),
+  authorization?: ProductionTenantMigrationAuthorization,
+  mongoUri = tenantMigrationEnv.applicationMongoUri
+) {
+  const { apply, expectedDatabase } = parseArguments(args);
+  assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: tenantMigrationEnv.nodeEnvironment,
+    step: "swiftline-root-ownership",
+    expectedDatabase,
+    mongoUri,
+    authorization
+  });
   mongoose.set("autoIndex", false);
   mongoose.set("autoCreate", false);
-  await mongoose.connect(env.MONGODB_URI, {
+  await mongoose.connect(mongoUri, {
     family: 4,
     autoIndex: false,
     autoCreate: false,
@@ -195,7 +210,19 @@ async function run() {
   }
 }
 
-run().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : "Swiftline tenant ownership migration failed.");
-  process.exitCode = 1;
-});
+export function runAuthorizedProductionMigration(
+  authorization: ProductionTenantMigrationAuthorization,
+  apply: boolean
+) {
+  const args = ["--database", "swiftline", ...(apply ? ["--apply"] : [])];
+  const mongoUri = tenantMigrationEnv.migrationMongoUri;
+  if (!mongoUri) throw new Error("TENANT_MIGRATION_MONGODB_URI is required for production migrations.");
+  return run(args, authorization, mongoUri);
+}
+
+if (isMainModule(import.meta.url)) {
+  run().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "Swiftline tenant ownership migration failed.");
+    process.exitCode = 1;
+  });
+}

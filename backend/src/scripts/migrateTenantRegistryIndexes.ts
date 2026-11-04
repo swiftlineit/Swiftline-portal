@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { env } from "../config/env.js";
+import { tenantMigrationEnv } from "./tenantMigrationEnv.js";
 import { Tenant } from "../models/tenant.model.js";
 import { TenantSlug } from "../models/tenantSlug.model.js";
 import { TenantMembership } from "../models/tenantMembership.model.js";
@@ -7,7 +7,12 @@ import { OperatorInvitation } from "../models/operatorInvitation.model.js";
 import { OperatorClientInvitation } from "../models/operatorClientInvitation.model.js";
 import { OperatorShipmentTrackingCounter } from "../models/operatorShipmentTrackingCounter.model.js";
 import { OperatorContactQuery } from "../models/operatorContactQuery.model.js";
-import { assertExpectedDatabaseName, assertNonProductionEnvironment } from "./migrationSafety.js";
+import {
+  assertExpectedDatabaseName,
+  assertTenantMigrationExecutionAllowed,
+  isMainModule,
+  type ProductionTenantMigrationAuthorization
+} from "./migrationSafety.js";
 
 function parseArguments(args: string[]) {
   let apply = false;
@@ -37,10 +42,20 @@ function parseArguments(args: string[]) {
   return { apply, expectedDatabase: expectedDatabase.trim() };
 }
 
-async function main() {
-  assertNonProductionEnvironment(env.NODE_ENV, "Tenant registry index migration");
-  const { apply, expectedDatabase } = parseArguments(process.argv.slice(2));
-  await mongoose.connect(env.MONGODB_URI, { family: 4, autoIndex: false, autoCreate: false });
+async function main(
+  args = process.argv.slice(2),
+  authorization?: ProductionTenantMigrationAuthorization,
+  mongoUri = tenantMigrationEnv.applicationMongoUri
+) {
+  const { apply, expectedDatabase } = parseArguments(args);
+  assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: tenantMigrationEnv.nodeEnvironment,
+    step: "tenant-registry-indexes",
+    expectedDatabase,
+    mongoUri,
+    authorization
+  });
+  await mongoose.connect(mongoUri, { family: 4, autoIndex: false, autoCreate: false });
   try {
     assertExpectedDatabaseName(expectedDatabase, mongoose.connection.db?.databaseName);
     const models = [
@@ -75,7 +90,19 @@ async function main() {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : "Tenant registry index migration failed.");
-  process.exitCode = 1;
-});
+export function runAuthorizedProductionMigration(
+  authorization: ProductionTenantMigrationAuthorization,
+  apply: boolean
+) {
+  const args = ["--database", "swiftline", ...(apply ? ["--apply"] : [])];
+  const mongoUri = tenantMigrationEnv.migrationMongoUri;
+  if (!mongoUri) throw new Error("TENANT_MIGRATION_MONGODB_URI is required for production migrations.");
+  return main(args, authorization, mongoUri);
+}
+
+if (isMainModule(import.meta.url)) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "Tenant registry index migration failed.");
+    process.exitCode = 1;
+  });
+}

@@ -4,12 +4,14 @@ import mongoose from "mongoose";
 import {
   hasTenantOwnership,
   invalidObjectIdReferenceFilter,
+  malformedTenantOwnershipFilter,
   missingTenantEmailOutboxStatusPipeline,
   missingTenantOwnershipFilter,
   orphanReferenceDetailsPipeline,
   orphanReferenceSummaryPipeline,
   tenantOwnerParentLinks,
-  tenantParentIntegrityPipeline
+  tenantParentIntegrityPipeline,
+  unassignedTenantOwnershipFilter
 } from "../scripts/tenantDataAuditHelpers.js";
 
 test("tenant data audit identifies schemas with a Tenant ObjectId owner field", () => {
@@ -40,6 +42,21 @@ test("tenant data audit checks each present tenant owner against a Tenant record
 test("tenant data audit matches missing and non-ObjectId tenant owners", () => {
   assert.deepEqual(missingTenantOwnershipFilter(), {
     $expr: { $ne: [{ $type: "$tenantId" }, "objectId"] }
+  });
+});
+
+test("tenant data audit separates unassigned owners from malformed owner values", () => {
+  assert.deepEqual(unassignedTenantOwnershipFilter(), {
+    $or: [{ tenantId: { $exists: false } }, { tenantId: null }]
+  });
+  assert.deepEqual(malformedTenantOwnershipFilter(), {
+    $expr: {
+      $and: [
+        { $ne: [{ $type: "$tenantId" }, "objectId"] },
+        { $ne: [{ $type: "$tenantId" }, "missing"] },
+        { $ne: [{ $type: "$tenantId" }, "null"] }
+      ]
+    }
   });
 });
 

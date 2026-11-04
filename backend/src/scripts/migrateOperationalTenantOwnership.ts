@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { env } from "../config/env.js";
+import { tenantMigrationEnv } from "./tenantMigrationEnv.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { CancellationDocumentCounter } from "../models/cancellationDocumentCounter.model.js";
 import { CancellationFeeInvoice } from "../models/cancellationFeeInvoice.model.js";
@@ -14,7 +14,12 @@ import { ShipmentInvoiceCounter } from "../models/shipmentInvoiceCounter.model.j
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
 import { ShipmentManifestCounter } from "../models/shipmentManifestCounter.model.js";
 import { Tenant } from "../models/tenant.model.js";
-import { assertExpectedDatabaseName, assertNonProductionEnvironment } from "./migrationSafety.js";
+import {
+  assertExpectedDatabaseName,
+  assertTenantMigrationExecutionAllowed,
+  isMainModule,
+  type ProductionTenantMigrationAuthorization
+} from "./migrationSafety.js";
 import { indexKeyEquals, indexSatisfiesPlan } from "./tenantMigrationIndexHelpers.js";
 
 type IndexPlan = {
@@ -109,6 +114,8 @@ const modelPlans: ModelPlan[] = [
   { model: AuditLog, legacyIndexes: [] },
   { model: IdempotencyKey, legacyIndexes: [{ key: { scope: 1, userId: 1, key: 1 }, unique: true }] }
 ];
+
+export const operationalTenantOwnershipModelNames = modelPlans.map((plan) => plan.model.modelName);
 
 function parseArguments(args: string[]): Arguments {
   let apply = false;
@@ -285,12 +292,22 @@ async function replaceLegacyIndexes(plan: CollectionPlan) {
   }
 }
 
-async function run() {
-  assertNonProductionEnvironment(env.NODE_ENV, "Operational tenant ownership migration");
-  const { apply, expectedDatabase } = parseArguments(process.argv.slice(2));
+async function run(
+  args = process.argv.slice(2),
+  authorization?: ProductionTenantMigrationAuthorization,
+  mongoUri = tenantMigrationEnv.applicationMongoUri
+) {
+  const { apply, expectedDatabase } = parseArguments(args);
+  assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: tenantMigrationEnv.nodeEnvironment,
+    step: "operational-tenant-ownership",
+    expectedDatabase,
+    mongoUri,
+    authorization
+  });
   mongoose.set("autoIndex", false);
   mongoose.set("autoCreate", false);
-  await mongoose.connect(env.MONGODB_URI, {
+  await mongoose.connect(mongoUri, {
     family: 4,
     autoIndex: false,
     autoCreate: false,
@@ -384,7 +401,19 @@ async function run() {
   }
 }
 
-run().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : "Operational tenant ownership migration failed.");
-  process.exitCode = 1;
-});
+export function runAuthorizedProductionMigration(
+  authorization: ProductionTenantMigrationAuthorization,
+  apply: boolean
+) {
+  const args = ["--database", "swiftline", ...(apply ? ["--apply"] : [])];
+  const mongoUri = tenantMigrationEnv.migrationMongoUri;
+  if (!mongoUri) throw new Error("TENANT_MIGRATION_MONGODB_URI is required for production migrations.");
+  return run(args, authorization, mongoUri);
+}
+
+if (isMainModule(import.meta.url)) {
+  run().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "Operational tenant ownership migration failed.");
+    process.exitCode = 1;
+  });
+}

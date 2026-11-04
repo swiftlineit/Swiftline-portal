@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { env } from "../config/env.js";
+import { tenantMigrationEnv } from "./tenantMigrationEnv.js";
 import { BalanceReservation } from "../models/balanceReservation.model.js";
 import { CancellationFeeInvoice } from "../models/cancellationFeeInvoice.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
@@ -21,7 +21,12 @@ import { ShipmentProfitability } from "../models/shipmentProfitability.model.js"
 import { ShipmentQuote } from "../models/shipmentQuote.model.js";
 import { ShipmentSupportingDocument } from "../models/shipmentSupportingDocument.model.js";
 import { Tenant } from "../models/tenant.model.js";
-import { assertExpectedDatabaseName, assertNonProductionEnvironment } from "./migrationSafety.js";
+import {
+  assertExpectedDatabaseName,
+  assertTenantMigrationExecutionAllowed,
+  isMainModule,
+  type ProductionTenantMigrationAuthorization
+} from "./migrationSafety.js";
 
 const tenantOwnedShipmentModels = [
   ShipmentDraft,
@@ -45,6 +50,8 @@ const tenantOwnedShipmentModels = [
   ShipmentOperationsParcelScan,
   ShipmentQuote
 ];
+
+export const shipmentTenantOwnershipModelNames = tenantOwnedShipmentModels.map((model) => model.modelName);
 
 type CollectionPlan = {
   modelName: string;
@@ -125,12 +132,22 @@ async function inspect(expectedDatabase: string) {
   return { databaseName, rootTenantId, plans };
 }
 
-async function run() {
-  assertNonProductionEnvironment(env.NODE_ENV, "Shipment tenant ownership migration");
-  const { apply, expectedDatabase } = parseArguments(process.argv.slice(2));
+async function run(
+  args = process.argv.slice(2),
+  authorization?: ProductionTenantMigrationAuthorization,
+  mongoUri = tenantMigrationEnv.applicationMongoUri
+) {
+  const { apply, expectedDatabase } = parseArguments(args);
+  assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: tenantMigrationEnv.nodeEnvironment,
+    step: "shipment-tenant-ownership",
+    expectedDatabase,
+    mongoUri,
+    authorization
+  });
   mongoose.set("autoIndex", false);
   mongoose.set("autoCreate", false);
-  await mongoose.connect(env.MONGODB_URI, {
+  await mongoose.connect(mongoUri, {
     family: 4,
     autoIndex: false,
     autoCreate: false,
@@ -184,7 +201,19 @@ async function run() {
   }
 }
 
-run().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : "Shipment tenant ownership migration failed.");
-  process.exitCode = 1;
-});
+export function runAuthorizedProductionMigration(
+  authorization: ProductionTenantMigrationAuthorization,
+  apply: boolean
+) {
+  const args = ["--database", "swiftline", ...(apply ? ["--apply"] : [])];
+  const mongoUri = tenantMigrationEnv.migrationMongoUri;
+  if (!mongoUri) throw new Error("TENANT_MIGRATION_MONGODB_URI is required for production migrations.");
+  return run(args, authorization, mongoUri);
+}
+
+if (isMainModule(import.meta.url)) {
+  run().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "Shipment tenant ownership migration failed.");
+    process.exitCode = 1;
+  });
+}
