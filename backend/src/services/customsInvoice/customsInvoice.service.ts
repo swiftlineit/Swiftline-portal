@@ -5,6 +5,7 @@ import { DpdShipment } from "../../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../../models/shipmentDraft.model.js";
 import { Tenant } from "../../models/tenant.model.js";
 import { readShipmentBookingSnapshot } from "../shipmentBookingSnapshot.service.js";
+import { formatSwiftlineParcelNumberForDisplay } from "../swiftlineTracking.service.js";
 import { getTenantContext } from "../tenantScope.service.js";
 import { loadOperatorBrandLogo } from "../operatorBranding.service.js";
 import { publicShipmentSourceIdentity } from "../shipmentSourceIdentity.service.js";
@@ -66,11 +67,11 @@ export async function buildCustomsInvoiceForDraft(input: {
       ?? readShipmentBookingSnapshot(booking.bookingSnapshot)
     : null;
   const snapshotNumbers = (snapshot?.parcels ?? [])
-    .map((parcel) => String(parcel.swiftlineParcelNumber ?? "").trim());
+    .map((parcel) => formatSwiftlineParcelNumberForDisplay(String(parcel.swiftlineParcelNumber ?? "").trim(), snapshot?.tracking.swiftlineTrackingNumber));
   const parcelNumbers = snapshotNumbers.some(Boolean)
     ? snapshotNumbers
     : Array.isArray(booking?.parcelNumbers)
-      ? booking.parcelNumbers.map((value) => String(value ?? "").trim())
+      ? booking.parcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(String(value ?? "").trim(), booking.swiftlineTrackingNumber))
       : [];
 
   const invoice = buildCustomsInvoiceModel({

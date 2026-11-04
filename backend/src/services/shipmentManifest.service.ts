@@ -7,6 +7,7 @@ import {
   readShipmentBookingSnapshot,
   type ShipmentBookingSnapshot
 } from "./shipmentBookingSnapshot.service.js";
+import { formatSwiftlineParcelNumberForDisplay, swiftlineParcelNumberAliases } from "./swiftlineTracking.service.js";
 
 export class ShipmentManifestServiceError extends Error {
   constructor(message: string, public readonly statusCode = 400) {
@@ -380,7 +381,7 @@ export function buildHandoverManifestLine(input: ManifestLineInput & { remark?: 
   const line = buildManifestLine(input);
   const parties = buildManifestParties(input.snapshot);
   const parcels = input.snapshot.parcels.map((parcel, index) => ({
-    awbNumber: text(parcel.swiftlineParcelNumber),
+    awbNumber: formatSwiftlineParcelNumberForDisplay(text(parcel.swiftlineParcelNumber), input.snapshot.tracking.swiftlineTrackingNumber),
     forwardingNumber: text(parcel.carrierParcelNumber),
     weightKg: parcel.actualWeightKg,
     chargeableWeightKg: manifestParcelChargeableWeightKg(input.snapshot, parcel.sequence, index, parcel.actualWeightKg),
@@ -439,6 +440,9 @@ export function shipmentManifestSearchConditions(searchValue: string) {
   if (!search) return [];
   const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(escaped, "i");
+  const parcelPatterns = swiftlineParcelNumberAliases(search).map((value) =>
+    new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+  );
   return [
     { manifestNumber: pattern },
     { "headerSnapshot.businessAccountName": pattern },
@@ -446,7 +450,7 @@ export function shipmentManifestSearchConditions(searchValue: string) {
     { "headerSnapshot.mawbNumber": pattern },
     { "lineSnapshots.sectionLabel": pattern },
     { "lineSnapshots.consignmentNumber": pattern },
-    { "lineSnapshots.awbNumbers": pattern },
+    ...parcelPatterns.map((parcelPattern) => ({ "lineSnapshots.awbNumbers": parcelPattern })),
     { "lineSnapshots.forwardingNumbers": pattern }
   ];
 }

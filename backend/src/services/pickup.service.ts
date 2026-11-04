@@ -24,6 +24,12 @@ import { findRecordedLaterMilestones } from "./shipmentStatusSequence.service.js
 import { notifyAssignedPickupBranchStaff, notifyPortalUsers } from "./portalNotification.service.js";
 import { deleteObject, pickupRequestDocumentKey, putObject } from "./storage/storage.service.js";
 import { matchesDeclaredType } from "./storage/fileSignature.js";
+import {
+  displaySwiftlineParcelNumber,
+  formatSwiftlineParcelNumberForDisplay,
+  resolveStoredSwiftlineParcelNumber,
+  swiftlineParcelNumberAliases
+} from "./swiftlineTracking.service.js";
 
 const pickupBlockedStatuses: ShipmentEventStatus[] = [
   "SHIPMENT_CANCELLED", "PARCEL_COLLECTED", "WAREHOUSE_SCAN_IN", "ORIGIN_HUB_PROCESSED",
@@ -537,6 +543,7 @@ export async function getPickupDetail(id: string) {
       ...shipment,
       parcels: shipment.parcels.map((parcel) => ({
         ...parcel,
+        parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.parcelNumber, shipment.trackingNumber),
         hubReceivedAt: receivedAtByParcel.get(`${shipment.shipmentDraftId}:${normalized(parcel.parcelNumber)}`) ?? null
       }))
     })),
@@ -905,8 +912,8 @@ export async function markPickupReceivedAtDelhiHub(input: {
 
       receivedAt = new Date();
       const links = await PickupRequestShipment.find({ pickupRequestId: request._id }).session(session).exec();
-      const expected = new Set(links.flatMap((link) => link.parcels.map((parcel) => `${link.shipmentDraftId}:${normalized(parcel.parcelNumber)}`)));
-      const selected = new Set(input.receivedParcels.map((parcel) => `${parcel.shipmentDraftId}:${normalized(parcel.parcelNumber)}`));
+      const expected = new Set(links.flatMap((link) => link.parcels.map((parcel) => `${link.shipmentDraftId}:${displaySwiftlineParcelNumber(normalized(parcel.parcelNumber))}`)));
+      const selected = new Set(input.receivedParcels.map((parcel) => `${parcel.shipmentDraftId}:${displaySwiftlineParcelNumber(normalized(parcel.parcelNumber))}`));
       if (selected.size !== input.receivedParcels.length || [...selected].some((key) => !expected.has(key))) {
         throw new PickupServiceError("The selected parcels do not match this pickup. Refresh and review the parcel list.", 409);
       }
@@ -917,7 +924,7 @@ export async function markPickupReceivedAtDelhiHub(input: {
         ShipmentEvent.find({ shipmentDraftId: { $in: draftIds } }).select("shipmentDraftId status eventAt").sort({ eventAt: -1, createdAt: -1 }).session(session).lean().exec()
       ]);
       const bookingById = new Map(bookings.map((booking) => [String(booking._id), booking]));
-      const alreadyReceived = new Set(scans.map((scan) => `${scan.shipmentDraftId}:${normalized(scan.parcelNumber)}`));
+      const alreadyReceived = new Set(scans.map((scan) => `${scan.shipmentDraftId}:${displaySwiftlineParcelNumber(normalized(scan.parcelNumber))}`));
       const eventsByDraft = new Map<string, Set<string>>();
       const latestStatusByDraft = new Map<string, string>();
       for (const event of events) {
@@ -950,8 +957,9 @@ export async function markPickupReceivedAtDelhiHub(input: {
           bookingSnapshot: booking.bookingSnapshot,
           parcelNumbers: booking.parcelNumbers
         });
-        const linkedNumbers = link.parcels.map((parcel) => normalized(parcel.parcelNumber));
-        if (expectedNumbers.length !== linkedNumbers.length || expectedNumbers.some((number) => !linkedNumbers.includes(number))) {
+        const linkedNumbers = link.parcels.map((parcel) => displaySwiftlineParcelNumber(normalized(parcel.parcelNumber)));
+        const displayedExpectedNumbers = expectedNumbers.map((number) => displaySwiftlineParcelNumber(number));
+        if (displayedExpectedNumbers.length !== linkedNumbers.length || displayedExpectedNumbers.some((number) => !linkedNumbers.includes(number))) {
           throw new PickupServiceError("A linked shipment's parcel labels have changed. Ask Operations to review it before closing the pickup.", 409);
         }
         const statuses = eventsByDraft.get(draftId) ?? new Set<string>();
@@ -967,7 +975,8 @@ export async function markPickupReceivedAtDelhiHub(input: {
           throw new PickupServiceError("A linked shipment has already moved beyond origin receipt. Ask Operations to reconcile its history before closing the pickup.", 409);
         }
         link.parcels.forEach((parcel, index) => {
-          const number = normalized(parcel.parcelNumber);
+          const storedNumber = normalized(parcel.parcelNumber);
+          const number = displaySwiftlineParcelNumber(storedNumber);
           const key = `${draftId}:${number}`;
           const atHub = selected.has(key);
           if (!atHub && alreadyReceived.has(key)) {
@@ -983,7 +992,7 @@ export async function markPickupReceivedAtDelhiHub(input: {
             if (!alreadyReceived.has(key)) {
               newScans.push({
                 shipmentDraftId: link.shipmentDraftId, dpdShipmentId: link.dpdShipmentId,
-                action: "RECEIVE", parcelNumber: number, location: "Delhi hub",
+                action: "RECEIVE", parcelNumber: storedNumber, location: "Delhi hub",
                 deviceId: "PICKUP_HUB_RECEIPT", scanRequestId: `PICKUP:${link._id}:${index}`,
                 scannedBy: input.actorId, scannedAt: receivedAt
               });
@@ -1397,16 +1406,31 @@ export async function scanPickupParcel(input: { attemptId: string; driverUserId:
   if (existing) return getPickupDetail(String(existing.pickupRequestId));
   const attempt = await PickupAttempt.findOne({ _id: asObjectId(input.attemptId, "Pickup attempt"), assignedDriverUserId: input.driverUserId, status: "COLLECTING" }).exec();
   if (!attempt) throw new PickupServiceError("Start collection before scanning parcels.", 409);
-  const parcelNumber = normalized(input.parcelNumber);
-  const link = await PickupRequestShipment.findOne({ pickupRequestId: attempt.pickupRequestId, "parcels.parcelNumber": parcelNumber, active: true }).exec();
-  if (!link) {
-    await PickupScan.create({ pickupRequestId: attempt.pickupRequestId, pickupAttemptId: attempt._id, shipmentDraftId: null, parcelNumber, scanRequestId: input.scanRequestId, status: "REJECTED", message: "This parcel is not expected for the assigned pickup.", scannedBy: input.driverUserId });
+  const inputParcelNumber = normalized(input.parcelNumber);
+  const parcelAliases = swiftlineParcelNumberAliases(inputParcelNumber);
+  const links = await PickupRequestShipment.find({ pickupRequestId: attempt.pickupRequestId, "parcels.parcelNumber": { $in: parcelAliases }, active: true }).exec();
+  const parcelMatches = links.flatMap((candidateLink) => {
+    const storedNumber = resolveStoredSwiftlineParcelNumber(
+      inputParcelNumber,
+      candidateLink.parcels.map((item) => normalized(item.parcelNumber))
+    );
+    const parcel = storedNumber
+      ? candidateLink.parcels.find((item) => normalized(item.parcelNumber) === storedNumber)
+      : undefined;
+    return storedNumber && parcel ? [{ link: candidateLink, parcel, storedNumber }] : [];
+  });
+  if (parcelMatches.length > 1) {
+    throw new PickupServiceError("This parcel number matches more than one shipment on the pickup.", 409);
+  }
+  const matchedParcel = parcelMatches[0];
+  if (!matchedParcel) {
+    await PickupScan.create({ pickupRequestId: attempt.pickupRequestId, pickupAttemptId: attempt._id, shipmentDraftId: null, parcelNumber: inputParcelNumber, scanRequestId: input.scanRequestId, status: "REJECTED", message: "This parcel is not expected for the assigned pickup.", scannedBy: input.driverUserId });
     throw new PickupServiceError("This parcel is not expected for the assigned pickup.", 409);
   }
-  const duplicate = await PickupScan.exists({ parcelNumber, status: "ACCEPTED" });
+  const { link, parcel, storedNumber: parcelNumber } = matchedParcel;
+  const duplicate = await PickupScan.exists({ parcelNumber: { $in: swiftlineParcelNumberAliases(parcelNumber) }, status: "ACCEPTED" });
   if (duplicate) throw new PickupServiceError("This parcel has already been collected.", 409);
-  const parcel = link.parcels.find((item) => normalized(item.parcelNumber) === parcelNumber);
-  if (!parcel || parcel.status === "COLLECTED") throw new PickupServiceError("This parcel has already been collected.", 409);
+  if (parcel.status === "COLLECTED") throw new PickupServiceError("This parcel has already been collected.", 409);
   parcel.status = "COLLECTED";
   parcel.collectedAt = new Date();
   link.status = link.parcels.every((item) => item.status === "COLLECTED") ? "COLLECTED" : "PARTIAL";
@@ -1423,9 +1447,26 @@ export async function recordPickupParcelException(input: { attemptId: string; dr
   if (!allowed.includes(input.status) || !input.reason.trim()) throw new PickupServiceError("Select an exception and enter the reason.");
   const attempt = await PickupAttempt.findOne({ _id: asObjectId(input.attemptId, "Pickup attempt"), assignedDriverUserId: input.driverUserId, status: "COLLECTING" }).exec();
   if (!attempt) throw new PickupServiceError("Start collection before recording exceptions.", 409);
-  const link = await PickupRequestShipment.findOne({ pickupRequestId: attempt.pickupRequestId, "parcels.parcelNumber": normalized(input.parcelNumber), active: true }).exec();
-  const parcel = link?.parcels.find((item) => normalized(item.parcelNumber) === normalized(input.parcelNumber));
-  if (!link || !parcel || parcel.status === "COLLECTED") throw new PickupServiceError("The parcel is not available for an exception.", 409);
+  const inputParcelNumber = normalized(input.parcelNumber);
+  const parcelAliases = swiftlineParcelNumberAliases(inputParcelNumber);
+  const links = await PickupRequestShipment.find({ pickupRequestId: attempt.pickupRequestId, "parcels.parcelNumber": { $in: parcelAliases }, active: true }).exec();
+  const parcelMatches = links.flatMap((candidateLink) => {
+    const storedNumber = resolveStoredSwiftlineParcelNumber(
+      inputParcelNumber,
+      candidateLink.parcels.map((item) => normalized(item.parcelNumber))
+    );
+    const parcel = storedNumber
+      ? candidateLink.parcels.find((item) => normalized(item.parcelNumber) === storedNumber)
+      : undefined;
+    return storedNumber && parcel ? [{ link: candidateLink, parcel }] : [];
+  });
+  if (parcelMatches.length !== 1) {
+    throw new PickupServiceError(parcelMatches.length
+      ? "This parcel number matches more than one shipment on the pickup."
+      : "The parcel is not available for an exception.", 409);
+  }
+  const { link, parcel } = parcelMatches[0]!;
+  if (parcel.status === "COLLECTED") throw new PickupServiceError("The parcel is not available for an exception.", 409);
   parcel.status = input.status as typeof parcel.status;
   parcel.exceptionReason = input.reason.trim();
   link.status = "PARTIAL";

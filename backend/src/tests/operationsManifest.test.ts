@@ -186,14 +186,21 @@ describe("operations manifest bag status updates", () => {
 });
 
 describe("operations manifest read-only parcel details", () => {
-  it("shows the parcel's actual bag and never assigns an unscanned parcel to a bag", async () => {
+  it("shows the parcel's actual bag and accepts either ID format", async (t) => {
     const manifestId = new mongoose.Types.ObjectId();
     const consignmentId = new mongoose.Types.ObjectId();
     const firstBagId = new mongoose.Types.ObjectId();
     const secondBagId = new mongoose.Types.ObjectId();
+    const trackingNumber = "SLCDEL031126016";
+    const originalFormat = process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+    process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = "COMPACT";
+    t.after(() => {
+      if (originalFormat === undefined) delete process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+      else process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = originalFormat;
+    });
     const originals = {
       manifestFindById: OperationsManifest.findById,
-      consignmentFindOne: OperationsManifestConsignment.findOne,
+      consignmentFind: OperationsManifestConsignment.find,
       scanFind: OperationsManifestScan.find,
       bagFind: OperationsManifestBag.find
     };
@@ -202,45 +209,47 @@ describe("operations manifest read-only parcel details", () => {
     });
     let manifestScope: string | null = null;
     (OperationsManifest as any).findById = () => query({ _id: manifestId, manifestNumber: "SLC031", status: "DISPATCHED" });
-    (OperationsManifestConsignment as any).findOne = (filter: { manifestId: mongoose.Types.ObjectId }) => {
+    (OperationsManifestConsignment as any).find = (filter: { manifestId: mongoose.Types.ObjectId }) => {
       manifestScope = String(filter.manifestId);
-      return query({
+      return query([{
         _id: consignmentId,
-        consignmentNumber: "SLC031",
+        consignmentNumber: trackingNumber,
         serviceInfo: "EXP",
         description: "Shipment contents",
         consigneeSnapshot: { formatted: "Asha Patel\nLondon" },
         parcelWeightSnapshots: [
-          { parcelNumber: "SLC031-01", weightKg: 5, valueMinor: 10000, contentsDescription: "Scarf", items: [{ description: "Scarf" }] },
-          { parcelNumber: "SLC031-03", weightKg: 4, valueMinor: 3000, contentsDescription: "Book", items: [{ description: "Book" }] }
+          { parcelNumber: `${trackingNumber}-01`, weightKg: 5, valueMinor: 10000, contentsDescription: "Scarf", items: [{ description: "Scarf" }] },
+          { parcelNumber: `${trackingNumber}-03`, weightKg: 4, valueMinor: 3000, contentsDescription: "Book", items: [{ description: "Book" }] }
         ],
-        parcelDispositions: [{ parcelNumber: "SLC031-03", disposition: "HELD", reason: "Not at facility" }]
-      });
+        parcelDispositions: [{ parcelNumber: `${trackingNumber}-03`, disposition: "HELD", reason: "Not at facility" }]
+      }]);
     };
     (OperationsManifestScan as any).find = () => query([
-      { parcelNumber: "SLC031-01", bagId: firstBagId, scannedAt: new Date("2026-10-19T00:00:00Z") },
-      { parcelNumber: "SLC031-02", bagId: secondBagId, scannedAt: new Date("2026-10-19T00:01:00Z") }
+      { parcelNumber: `${trackingNumber}-01`, bagId: firstBagId, scannedAt: new Date("2026-10-19T00:00:00Z") },
+      { parcelNumber: `${trackingNumber}-02`, bagId: secondBagId, scannedAt: new Date("2026-10-19T00:01:00Z") }
     ]);
     (OperationsManifestBag as any).find = () => query([
       { _id: firstBagId, bagNumber: "SLC03101", sequence: 1, status: "CLOSED" },
       { _id: secondBagId, bagNumber: "SLC03102", sequence: 2, status: "CLOSED" }
     ]);
     try {
-      const packed = await getOperationsParcelDetails(String(manifestId), "slc031-01");
+      const packed = await getOperationsParcelDetails(String(manifestId), `${trackingNumber}01`);
+      assert.equal(packed.parcelNumber, `${trackingNumber}01`);
       assert.equal(packed.bag?.bagNumber, "SLC03101");
       assert.equal(packed.weightKg, 5);
       assert.equal(packed.valueMinor, 10000);
       assert.deepEqual(packed.otherShipmentBags, ["SLC03102"]);
-      const unscanned = await getOperationsParcelDetails(String(manifestId), "SLC031-03");
+      const unscanned = await getOperationsParcelDetails(String(manifestId), `${trackingNumber}-03`);
+      assert.equal(unscanned.parcelNumber, `${trackingNumber}03`);
       assert.equal(unscanned.packed, false);
       assert.equal(unscanned.bag, null);
       assert.equal(unscanned.disposition, "HELD");
       assert.deepEqual(unscanned.otherShipmentBags, ["SLC03101", "SLC03102"]);
-      assert.deepEqual(await getOperationsParcelDetails(String(manifestId), "SLC031-03"), unscanned);
+      assert.deepEqual(await getOperationsParcelDetails(String(manifestId), `${trackingNumber}-03`), unscanned);
       assert.equal(manifestScope, String(manifestId));
     } finally {
       (OperationsManifest as any).findById = originals.manifestFindById;
-      (OperationsManifestConsignment as any).findOne = originals.consignmentFindOne;
+      (OperationsManifestConsignment as any).find = originals.consignmentFind;
       (OperationsManifestScan as any).find = originals.scanFind;
       (OperationsManifestBag as any).find = originals.bagFind;
     }

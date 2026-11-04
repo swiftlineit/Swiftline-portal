@@ -60,8 +60,75 @@ describe("shipment label numbering", () => {
 
   test("uses stable piece suffixes for one or multiple parcels", () => {
     const trackingNumber = "SLCDEL200726001";
-    assert.equal(formatSwiftlineParcelNumber(trackingNumber, 0), `${trackingNumber}-01`);
-    assert.equal(formatSwiftlineParcelNumber(trackingNumber, 1), `${trackingNumber}-02`);
+    assert.equal(formatSwiftlineParcelNumber(trackingNumber, 0, "LEGACY"), `${trackingNumber}-01`);
+    assert.equal(formatSwiftlineParcelNumber(trackingNumber, 1, "LEGACY"), `${trackingNumber}-02`);
+    assert.equal(formatSwiftlineParcelNumber(trackingNumber, 0, "COMPACT"), `${trackingNumber}01`);
+    assert.equal(formatSwiftlineParcelNumber(trackingNumber, 1, "COMPACT"), `${trackingNumber}02`);
+    assert.equal(formatSwiftlineParcelNumber(trackingNumber, 99, "COMPACT"), `${trackingNumber}100`);
+  });
+
+  test("uses the deployment setting when allocating new parcel numbers", (t) => {
+    const originalFormat = process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+    t.after(() => {
+      if (originalFormat === undefined) delete process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+      else process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = originalFormat;
+    });
+    process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = "COMPACT";
+    assert.equal(formatSwiftlineParcelNumber("SLCDEL200726001", 0), "SLCDEL20072600101");
+    process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = "LEGACY";
+    assert.equal(formatSwiftlineParcelNumber("SLCDEL200726001", 0), "SLCDEL200726001-01");
+  });
+
+  test("accepts old and compact Swiftline parcel numbers as aliases", async () => {
+    const {
+      displaySwiftlineParcelNumber,
+      formatSwiftlineParcelNumberForDisplay,
+      resolveStoredSwiftlineParcelNumber,
+      swiftlineParcelNumberSequence,
+      swiftlineParcelNumberAliases
+    } = await import("../services/swiftlineTracking.service.js");
+    const legacy = "SLCDEL031126016-01";
+    const compact = "SLCDEL03112601601";
+    assert.equal(displaySwiftlineParcelNumber(legacy), compact);
+    assert.equal(formatSwiftlineParcelNumberForDisplay(legacy, undefined, "LEGACY"), legacy);
+    assert.equal(formatSwiftlineParcelNumberForDisplay(legacy, undefined, "COMPACT"), compact);
+    assert.equal(swiftlineParcelNumberSequence(legacy, "SLCDEL031126016"), 1);
+    assert.equal(swiftlineParcelNumberSequence(compact, "SLCDEL031126016"), 1);
+    assert.deepEqual(swiftlineParcelNumberAliases(legacy), [legacy, compact]);
+    assert.deepEqual(swiftlineParcelNumberAliases(compact), [compact, legacy]);
+    assert.equal(resolveStoredSwiftlineParcelNumber(compact, [legacy]), legacy);
+    assert.equal(swiftlineParcelNumberSequence("SLCDEL031126016100", "SLCDEL031126016"), 100);
+    assert.deepEqual(swiftlineParcelNumberAliases("SLCDEL031126016100"), [
+      "SLCDEL031126016100",
+      "SLCDEL031126016-100"
+    ]);
+    assert.equal(displaySwiftlineParcelNumber("DPD-12345"), "DPD-12345");
+    assert.equal(swiftlineParcelNumberSequence("DPD-12345", "SLCDEL031126016"), null);
+    assert.equal(resolveStoredSwiftlineParcelNumber(compact, [legacy, compact]), null);
+  });
+
+  test("preflight detects a compact parcel ID that equals another shipment AWB", async () => {
+    const { findSwiftlineParcelIdentifierCollisions } = await import("../services/swiftlineTracking.service.js");
+    const collisions = findSwiftlineParcelIdentifierCollisions([
+      {
+        shipmentDraftId: "shipment-a",
+        trackingNumber: "SLCDEL031126999",
+        parcelNumbers: ["SLCDEL031126999-01"]
+      },
+      {
+        shipmentDraftId: "shipment-b",
+        trackingNumber: "SLCDEL03112699901",
+        parcelNumbers: []
+      }
+    ]);
+
+    assert.deepEqual(collisions, [{
+      identifier: "SLCDEL03112699901",
+      shipments: [
+        { shipmentDraftId: "shipment-a", sources: ["PARCEL_NUMBER"] },
+        { shipmentDraftId: "shipment-b", sources: ["TRACKING_NUMBER"] }
+      ]
+    }]);
   });
 });
 
@@ -271,7 +338,13 @@ describe("shipment label PDFs", () => {
 });
 
 describe("immutable multi-parcel booking snapshot", () => {
-  test("keeps charges, references, weights and one label identity per parcel aligned", () => {
+  test("keeps charges, references, weights and one label identity per parcel aligned", async (t) => {
+    const originalFormat = process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+    process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = "LEGACY";
+    t.after(() => {
+      if (originalFormat === undefined) delete process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+      else process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = originalFormat;
+    });
     const draft = {
       serviceType: "COURIER",
       csbType: "CSB_IV",
@@ -354,13 +427,27 @@ describe("immutable multi-parcel booking snapshot", () => {
     const firstLabel = bookingSnapshotToLabelData(snapshot, 0);
     const secondLabel = bookingSnapshotToLabelData(snapshot, 1);
     assert.equal(firstLabel.parcelNumber, "SLCDEL200726001-01");
+    assert.equal(firstLabel.barcodeParcelNumber, "SLCDEL200726001-01");
+    assert.equal(firstLabel.displayParcelNumber, "SLCDEL200726001-01");
     assert.equal(firstLabel.consignee.contactName, "Asha Patel");
     assert.equal(firstLabel.weightKg, 7);
     // The station the AWB was allocated against is what the label routes on.
     assert.equal(firstLabel.origin.stationCode, "DEL");
     assert.equal(firstLabel.destination.city, "London");
     assert.equal(secondLabel.parcelNumber, "SLCDEL200726001-02");
+    assert.equal(secondLabel.barcodeParcelNumber, "SLCDEL200726001-02");
     assert.equal(secondLabel.weightKg, 11);
+    const renderedNewLabel = drawnText(await renderSwiftlineLabelPdf(firstLabel));
+    assert.ok(renderedNewLabel.includes("SLCDEL200726001-01"));
+
+    process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = "COMPACT";
+    const compactLabel = bookingSnapshotToLabelData(snapshot, 0);
+    assert.equal(compactLabel.barcodeParcelNumber, "SLCDEL20072600101");
+    assert.equal(compactLabel.displayParcelNumber, "SLCDEL20072600101");
+    assert.ok(drawnText(await renderSwiftlineLabelPdf(compactLabel)).includes("SLCDEL20072600101"));
+    // Existing records keep their stored key through the format switch.
+    assert.equal(compactLabel.parcelNumber, "SLCDEL200726001-01");
+    process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = "LEGACY";
 
     const operatorLabel = bookingSnapshotToLabelData({
       ...snapshot,
@@ -414,6 +501,10 @@ describe("immutable multi-parcel booking snapshot", () => {
     assert.equal(revisedSnapshot.service.type, "CARGO");
     assert.equal(revisedSnapshot.parcels[0]?.actualWeightKg, 8);
     assert.equal(revisedSnapshot.parcels[0]?.reference, "BOX-A-UPDATED");
+    assert.deepEqual(
+      revisedSnapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber),
+      snapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber)
+    );
     // No carrier books these shipments, so no parcel carries a carrier number.
     assert.equal(revisedSnapshot.parcels[0]?.carrierParcelNumber, "");
     assert.equal(revisedSnapshot.parcels[0]?.declaredGoodsValueMinor, 30_000);

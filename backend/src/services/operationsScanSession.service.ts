@@ -5,6 +5,7 @@ import { env } from "../config/env.js";
 import { OperationsManifest } from "../models/operationsManifest.model.js";
 import { OperationsManifestBag } from "../models/operationsManifestBag.model.js";
 import { OperationsManifestScan } from "../models/operationsManifestScan.model.js";
+import { formatSwiftlineParcelNumberForDisplay } from "./swiftlineTracking.service.js";
 import {
   OperationsManifestScanSession,
   type IOperationsManifestScanSession
@@ -97,7 +98,7 @@ async function sessionDetail(session: IOperationsManifestScanSession) {
     } : null,
     lastScannedParcel: lastScan ? {
       scanId: String(lastScan._id),
-      parcelNumber: lastScan.parcelNumber,
+      parcelNumber: formatSwiftlineParcelNumberForDisplay(lastScan.parcelNumber),
       bagNumber: lastScanBag?.bagNumber ?? null,
       scannedAt: lastScan.scannedAt
     } : null

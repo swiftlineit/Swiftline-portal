@@ -6,13 +6,7 @@ import { OperationsManifestServiceError } from "../operationsManifest.service.js
 import type { EdiContext } from "./ediColumns.js";
 import { buildEdiWorkbookBuffer } from "./ediWorkbook.service.js";
 import { withCsbVExportHawb } from "./csbVExportHawb.js";
-
-// A Swiftline parcel barcode ends in "-NN", the 1-based sequence of the parcel on its
-// shipment draft. That links a manifest row back to its parcel's own KYC.
-function parcelSequenceFromBarcode(parcelNumber: string): number | null {
-  const match = /-(\d{1,3})$/.exec(parcelNumber.trim());
-  return match ? Number(match[1]) : null;
-}
+import { swiftlineParcelNumberSequence } from "../swiftlineTracking.service.js";
 
 /**
  * Builds the customs EDI (.xls) for a sealed manifest. Every field comes from the
@@ -49,7 +43,7 @@ export async function buildOperationsManifestEdi(manifest: IOperationsManifest):
     const shared = draft.consignorAddress?.aadhaarNumber ?? "";
     // Per-parcel KYC: resolve the specific parcel by its barcode sequence.
     if (draft.kycUseForAllParcels === false) {
-      const sequence = parcelSequenceFromBarcode(row.parcelNumber);
+      const sequence = swiftlineParcelNumberSequence(row.parcelNumber, row.consignmentNumber);
       if (sequence != null) {
         const parcel = draft.parcelList?.find((item) => item.sequence === sequence) ?? draft.parcelList?.[sequence - 1];
         if (parcel?.aadhaarNumber) return parcel.aadhaarNumber;

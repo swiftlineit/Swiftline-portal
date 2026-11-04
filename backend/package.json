@@ -38,6 +38,7 @@
     "start": "tsx src/server.ts",
     "build:reference-data": "tsx src/scripts/buildReferenceData.ts",
     "build:hs-codes": "tsx src/scripts/buildHsCodeData.ts",
+    "audit:swiftline-parcel-identifiers": "tsx src/scripts/auditSwiftlineParcelIdentifierCollisions.ts",
     "seed:demo-shipment": "tsx src/scripts/createDemoShipment.ts",
     "backfill:shipment-invoices": "tsx src/scripts/backfillShipmentInvoices.ts",
     "audit:shipment-profitability": "tsx src/scripts/backfillShipmentProfitability.ts",

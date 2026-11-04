@@ -44,6 +44,8 @@ const COMPANY_NAME = "SWIFTLINE CARGO";
 
 export interface ShipmentLabelData {
   parcelNumber: string;
+  /** Barcode value may use the current display format while storage keeps a legacy key. */
+  barcodeParcelNumber?: string;
   /** Optional tenant brand for internal labels issued by an operator. */
   companyName?: string;
   /** Optional operator logo; Swiftline labels keep the existing bundled mark. */
@@ -351,7 +353,7 @@ function drawSwiftlineLabel(
 
 /** One square label on a printer-safe square page. */
 export async function renderSwiftlineLabelPdf(data: ShipmentLabelData) {
-  const barcodeImage = await barcode(data.parcelNumber, Boolean(text(data.companyName)));
+  const barcodeImage = await barcode(data.barcodeParcelNumber || data.parcelNumber, Boolean(text(data.companyName)));
   return collectPdf((document) => {
     drawSwiftlineLabel(document, data, barcodeImage, SINGLE_PAGE_INSET, SINGLE_PAGE_INSET);
   }, [SINGLE_PAGE_EDGE, SINGLE_PAGE_EDGE]);
@@ -366,7 +368,7 @@ export async function renderSwiftlineLabelSetPdf(data: readonly ShipmentLabelDat
   if (data.length === 1) return renderSwiftlineLabelPdf(data[0] as ShipmentLabelData);
 
   const barcodeImages = await Promise.all(data.map((label) => barcode(
-    label.parcelNumber,
+    label.barcodeParcelNumber || label.parcelNumber,
     Boolean(text(label.companyName))
   )));
   return collectPdf((document) => {

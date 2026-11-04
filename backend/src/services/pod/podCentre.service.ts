@@ -14,6 +14,7 @@ import mongoose from "mongoose";
 import { DeliveryAssignment, PodRevision } from "../../models/pod.model.js";
 import { DpdShipment } from "../../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../../models/shipmentDraft.model.js";
+import { displaySwiftlineParcelNumber, formatSwiftlineParcelNumberForDisplay } from "../swiftlineTracking.service.js";
 import type { ClientAccountBranchScope } from "../../utils/clientScope.js";
 
 export type PodCentreFilter = {
@@ -113,7 +114,7 @@ export async function listClientPods(filter: PodCentreFilter): Promise<PodCentre
       carrierReference: booking?.dpdShipmentId ?? assignment.partnerReference ?? "",
       consignee: consignee?.companyName || consignee?.contactName || "",
       destination: joinPlace([consignee?.townOrCity, consignee?.countryName || consignee?.countryCode]),
-      parcelNumbers: revision.parcelNumbers ?? [],
+      parcelNumbers: (revision.parcelNumbers ?? []).map((value) => formatSwiftlineParcelNumberForDisplay(value)),
       recipientName: revision.recipientName ?? "",
       recipientRelationship: revision.recipientRelationship ?? "",
       deliveredAt: revision.deliveredAt ?? null,
@@ -137,8 +138,12 @@ export async function listClientPods(filter: PodCentreFilter): Promise<PodCentre
       // two other collections; the assignment set is already account-scoped and
       // bounded, so this cannot reach beyond what the customer may see.
       const needle = filter.search!.trim().toLowerCase();
-      return [row.awb, row.carrierReference, row.recipientName, row.consignee, ...row.parcelNumbers]
-        .some((value) => value.toLowerCase().includes(needle));
+      const normalizedNeedle = displaySwiftlineParcelNumber(filter.search!.trim()).toLowerCase();
+      return [row.awb, row.carrierReference, row.recipientName, row.consignee]
+        .some((value) => value.toLowerCase().includes(needle))
+        || row.parcelNumbers.some((value) =>
+          displaySwiftlineParcelNumber(value).toLowerCase().includes(normalizedNeedle)
+        );
     })
     : rows;
 

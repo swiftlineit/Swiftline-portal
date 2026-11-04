@@ -6,11 +6,7 @@ import { OperationsManifestServiceError } from "../operationsManifest.service.js
 import { buildOpsEdiWorkbookBuffer } from "./opsEdiWorkbook.service.js";
 import { collectOpsEdiWarnings, type OpsEdiContext } from "./opsEdiColumns.js";
 import { withCsbVExportHawb } from "../edi/csbVExportHawb.js";
-
-function parcelSequenceFromBarcode(parcelNumber: string): number | null {
-  const match = /-(\d{1,3})$/.exec(parcelNumber.trim());
-  return match ? Number(match[1]) : null;
-}
+import { swiftlineParcelNumberSequence } from "../swiftlineTracking.service.js";
 
 /**
  * Builds the separate OPS EDI workbook from the sealed manifest snapshot. The
@@ -36,7 +32,7 @@ export async function buildOperationsManifestOpsEdi(manifest: IOperationsManifes
     const shared = draft.consignorAddress?.aadhaarNumber ?? "";
     if (draft.kycUseForAllParcels !== false) return shared;
 
-    const sequence = parcelSequenceFromBarcode(row.parcelNumber) ?? row.parcelIndexInConsignment + 1;
+    const sequence = swiftlineParcelNumberSequence(row.parcelNumber, row.consignmentNumber) ?? row.parcelIndexInConsignment + 1;
     const parcel = draft.parcelList?.find((item) => item.sequence === sequence) ?? draft.parcelList?.[sequence - 1];
     return parcel?.aadhaarNumber || shared;
   };

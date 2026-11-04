@@ -16,6 +16,11 @@ import {
   type ShipmentOperationalStatus
 } from "./shipmentStatusSequence.service.js";
 import { readShipmentBookingSnapshot } from "./shipmentBookingSnapshot.service.js";
+import {
+  formatSwiftlineParcelNumberForDisplay,
+  resolveStoredSwiftlineParcelNumber,
+  swiftlineParcelNumberAliases
+} from "./swiftlineTracking.service.js";
 
 export type ShipmentOperationsScanAction = "RECEIVE" | "PROCESS";
 
@@ -75,7 +80,7 @@ export function resolveOperationsScanParcelNumbers(input: {
 function makeProgress(parcelNumber: string, scannedParcels: number, totalParcels: number, milestoneRecorded: boolean): ShipmentOperationsScanProgress {
   const completed = Math.min(scannedParcels, totalParcels);
   return {
-    parcelNumber,
+    parcelNumber: formatSwiftlineParcelNumberForDisplay(parcelNumber),
     scannedParcels: completed,
     totalParcels,
     remainingParcels: Math.max(0, totalParcels - completed),
@@ -95,11 +100,20 @@ export async function recordShipmentOperationsScan(input: {
   const barcode = input.barcode.trim().toUpperCase();
   if (!barcode) throw new ShipmentOperationsScanError("Scan a Swiftline parcel barcode.");
 
-  const label = await LabelDocument.findOne({ parcelNumber: barcode, labelType: "SWIFTLINE", voidedAt: null })
+  const labels = await LabelDocument.find({
+    parcelNumber: { $in: swiftlineParcelNumberAliases(barcode) },
+    labelType: "SWIFTLINE",
+    voidedAt: null
+  })
     .select("dpdShipmentId parcelNumber")
     .lean()
     .exec();
-  const shipment = await DpdShipment.findOne({
+  const labelShipmentIds = [...new Set(labels.map((candidate) => String(candidate.dpdShipmentId)))];
+  if (labelShipmentIds.length > 1) {
+    throw new ShipmentOperationsScanError("This parcel number matches more than one active label. Contact Swiftline Operations.", 409);
+  }
+  const label = labels.find((candidate) => candidate.parcelNumber.toUpperCase() === barcode) ?? labels[0] ?? null;
+  const shipmentMatches = await DpdShipment.find({
     ...(label?.dpdShipmentId
       ? { _id: label.dpdShipmentId }
       : {
@@ -108,11 +122,18 @@ export async function recordShipmentOperationsScan(input: {
             { dpdShipmentId: barcode },
             { forwardingNumber: barcode },
             { entryNumber: barcode },
-            { parcelNumbers: barcode }
+            { parcelNumbers: { $in: swiftlineParcelNumberAliases(barcode) } },
+            { "currentShipmentSnapshot.parcels.swiftlineParcelNumber": { $in: swiftlineParcelNumberAliases(barcode) } },
+            { "bookingSnapshot.parcels.swiftlineParcelNumber": { $in: swiftlineParcelNumberAliases(barcode) } }
           ]
         }),
     status: { $in: ["DPD_CREATED", "LABEL_RECEIVED"] }
   }).exec();
+  const matchingDraftIds = new Set(shipmentMatches.map((match) => String(match.shipmentDraftId)));
+  if (matchingDraftIds.size > 1) {
+    throw new ShipmentOperationsScanError("This number matches more than one shipment. Contact Swiftline Operations.", 409);
+  }
+  const shipment = shipmentMatches[0] ?? null;
   if (!shipment) throw new ShipmentOperationsScanError("No booked shipment was found for this barcode.", 404);
 
   let parcelNumbers = resolveOperationsScanParcelNumbers({
@@ -133,8 +154,9 @@ export async function recordShipmentOperationsScan(input: {
   }
   if (!parcelNumbers.length) throw new ShipmentOperationsScanError("This shipment has no parcel labels to scan.", 409);
   const labelParcelNumber = String(label?.parcelNumber ?? "").trim().toUpperCase();
-  const parcelNumber = parcelNumbers.find((value) => value === barcode)
-    ?? (labelParcelNumber && parcelNumbers.includes(labelParcelNumber) ? labelParcelNumber : "");
+  const parcelNumber = resolveStoredSwiftlineParcelNumber(barcode, parcelNumbers)
+    ?? (labelParcelNumber ? resolveStoredSwiftlineParcelNumber(labelParcelNumber, parcelNumbers) : null)
+    ?? "";
   if (parcelNumber) return recordResolvedParcelScan({ ...input, shipment, parcelNumbers, parcelNumber });
   if (parcelNumbers.length === 1) {
     // A one-piece shipment can be received using its HAWB. A multi-piece HAWB
@@ -206,7 +228,7 @@ async function recordResolvedParcelScan(input: {
       eventAt: existingMilestone.eventAt,
       location,
       swiftlineTrackingNumber: shipment.swiftlineTrackingNumber ?? "",
-      parcelNumbers,
+      parcelNumbers: parcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value, shipment.swiftlineTrackingNumber ?? "")),
       progress: makeProgress(parcelNumber, parcelNumbers.length, parcelNumbers.length, true)
     };
   }
@@ -324,7 +346,7 @@ async function recordResolvedParcelScan(input: {
       eventAt: savedScan.eventAt,
       location,
       swiftlineTrackingNumber: shipment.swiftlineTrackingNumber ?? "",
-      parcelNumbers,
+      parcelNumbers: parcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value, shipment.swiftlineTrackingNumber ?? "")),
       progress: savedScan.progress
     };
   } catch (error) {
@@ -340,7 +362,7 @@ async function recordResolvedParcelScan(input: {
       eventAt: winner?.eventAt ?? new Date(),
       location,
       swiftlineTrackingNumber: shipment.swiftlineTrackingNumber ?? "",
-      parcelNumbers,
+      parcelNumbers: parcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value, shipment.swiftlineTrackingNumber ?? "")),
       progress: makeProgress(parcelNumber, winner ? parcelNumbers.length : count, parcelNumbers.length, Boolean(winner))
     };
   } finally {

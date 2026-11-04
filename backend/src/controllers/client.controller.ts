@@ -26,6 +26,7 @@ import {
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
 import { loadShipmentHubReceipt } from "../services/shipmentHubReceipt.service.js";
+import { formatSwiftlineParcelNumberForDisplay } from "../services/swiftlineTracking.service.js";
 import {
   loadShipmentParcelActivities,
   loadShipmentParcelProgress
@@ -318,7 +319,9 @@ async function buildClientShipmentDashboard(accountId: string, branchIds: string
         holdReason: currentEvent?.status === "ON_HOLD" ? currentEvent.holdReason ?? "" : "",
         dpdShipmentId: dpdShipment?.dpdShipmentId ?? "",
         swiftlineTrackingNumber: dpdShipment?.swiftlineTrackingNumber ?? "",
-        parcelNumbers: dpdShipment?.parcelNumbers ?? [],
+        parcelNumbers: (dpdShipment?.parcelNumbers ?? []).map((value) =>
+          formatSwiftlineParcelNumberForDisplay(value, dpdShipment?.swiftlineTrackingNumber ?? "")
+        ),
         shipmentInvoice: shipmentInvoice ? {
           invoiceNumber: shipmentInvoice.invoiceNumber,
           currency: shipmentInvoice.currency,
@@ -1040,7 +1043,7 @@ function serializeClientDpdShipment(shipment: {
     forwardingNumber: shipment.forwardingNumber ?? "",
     entryNumber: shipment.entryNumber ?? "",
     swiftlineTrackingNumber: shipment.swiftlineTrackingNumber ?? "",
-    parcelNumbers: shipment.parcelNumbers,
+    parcelNumbers: shipment.parcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value, shipment.swiftlineTrackingNumber)),
     serviceCode: shipment.serviceCode,
     paymentSource: shipment.paymentSource,
     status: shipment.status,
@@ -1062,7 +1065,7 @@ function serializeClientLabel(label: {
   return {
     id: label._id,
     dpdShipmentId: label.dpdShipmentId,
-    parcelNumber: label.parcelNumber,
+    parcelNumber: label.labelType === "SWIFTLINE" ? formatSwiftlineParcelNumberForDisplay(label.parcelNumber) : label.parcelNumber,
     labelType: label.labelType ?? "SWIFTLINE",
     format: label.format,
     labelSize: label.labelSize,
@@ -1374,7 +1377,7 @@ export async function getClientShipmentDetails(request: Request, response: Respo
       // offload reasons, flight identifiers and staff references stay in the
       // operations endpoint.
       parcelActivities: parcelActivities.map((activity) => ({
-        parcelNumber: activity.parcelNumber,
+        parcelNumber: formatSwiftlineParcelNumberForDisplay(activity.parcelNumber, dpdShipment?.swiftlineTrackingNumber ?? ""),
         status: activity.status,
         eventAt: activity.eventAt,
         message: activity.customerMessage

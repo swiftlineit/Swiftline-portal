@@ -61,7 +61,8 @@ const faqs = [
     question: "My shipment has several parcels. Can I track just one?",
     answer:
       "Yes. Every piece carries its own number on its own label - usually the shipment number " +
-      "with a two-digit suffix, such as SLCDEL170826001-02. Searching a piece number shows the " +
+      "with a two-digit suffix, such as SLCDEL17082600102. Older hyphenated numbers are also " +
+      "accepted. Searching a piece number shows the " +
       "timeline for the whole shipment, because scans are recorded against the shipment rather " +
       "than against each parcel.",
   },

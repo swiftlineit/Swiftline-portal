@@ -11,6 +11,7 @@ import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
 import { ShipmentSupportingDocument } from "../models/shipmentSupportingDocument.model.js";
 import { getDataAccessTenantId } from "./tenantScope.service.js";
+import { formatSwiftlineParcelNumberForDisplay, swiftlineParcelNumberAliases } from "./swiftlineTracking.service.js";
 import type { ClientScope } from "../utils/clientScope.js";
 
 export const clientDocumentTypeValues = [
@@ -73,7 +74,11 @@ export type ClientDocumentCentreFilters = {
 };
 
 type AggregateResult = {
-  items: Array<Omit<ClientDocumentCentreItem, "id" | "documentTypeLabel"> & { _id: string }>;
+  items: Array<Omit<ClientDocumentCentreItem, "id" | "documentTypeLabel"> & {
+    _id: string;
+    labelType?: string;
+    parcelNumber?: string;
+  }>;
   metadata: Array<{ total: number }>;
 };
 
@@ -231,6 +236,8 @@ function shippingLabelPipeline(scope: TenantScopedClientScope) {
       $project: {
         _id: { $concat: ["SHIPPING_LABEL:", { $toString: "$_id" }] },
         documentType: { $literal: "SHIPPING_LABEL" },
+        labelType: "$labelType",
+        parcelNumber: "$parcelNumber",
         title: {
           $concat: [{ $cond: [{ $eq: ["$labelType", "DPD"] }, "DPD", "Swiftline"] }, " Shipping Label"]
         },
@@ -583,11 +590,23 @@ export async function listClientDocumentCentre(
     .aggregate<AggregateResult>(pipeline as unknown as PipelineStage[], { allowDiskUse: true })
     .toArray();
   const total = result?.metadata[0]?.total ?? 0;
-  const items = (result?.items ?? []).map(({ _id, ...item }) => ({
-    ...item,
-    id: String(_id),
-    documentTypeLabel: clientDocumentTypeLabels[item.documentType]
-  }));
+  const items = (result?.items ?? []).map(({ _id, labelType, parcelNumber, format, ...item }) => {
+    const displayParcelNumber = labelType === "SWIFTLINE" && parcelNumber
+      ? formatSwiftlineParcelNumberForDisplay(parcelNumber)
+      : parcelNumber;
+    return {
+      ...item,
+      format,
+      ...(displayParcelNumber ? {
+        reference: displayParcelNumber,
+        fileName: labelType === "SWIFTLINE"
+          ? `LABEL-${displayParcelNumber}.${String(format ?? "").toLowerCase()}`
+          : item.fileName
+      } : {}),
+      id: String(_id),
+      documentTypeLabel: clientDocumentTypeLabels[item.documentType]
+    };
+  });
 
   return {
     items,
@@ -630,6 +649,8 @@ export function buildClientDocumentCentrePipeline(
         status: 1,
         downloadPath: 1,
         downloadMode: 1,
+        labelType: 1,
+        parcelNumber: 1,
         searchAwbs: 1,
         searchDestinations: 1
       }
@@ -647,7 +668,16 @@ export function buildClientDocumentCentrePipeline(
       ...(filters.dateTo ? { $lte: filters.dateTo } : {})
     };
   }
-  if (filters.awb) match.searchAwbs = { $regex: filters.awb.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
+  if (filters.awb) {
+    match.$or = [
+      { searchAwbs: { $regex: filters.awb.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } },
+      {
+        documentType: "SHIPPING_LABEL",
+        labelType: "SWIFTLINE",
+        reference: { $in: swiftlineParcelNumberAliases(filters.awb) }
+      }
+    ];
+  }
   if (filters.destination) match.searchDestinations = { $regex: filters.destination.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
   if (Object.keys(match).length) pipeline.push({ $match: match });
 

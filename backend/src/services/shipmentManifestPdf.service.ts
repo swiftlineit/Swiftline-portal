@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import type { IShipmentManifest, ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
 import { formatManifestConsignmentNumber, type ManifestPartySnapshot } from "./shipmentManifest.service.js";
+import { formatSwiftlineParcelNumberForDisplay } from "./swiftlineTracking.service.js";
 
 const border = "#222222";
 const ink = "#111111";
@@ -79,7 +80,7 @@ export function manifestRows(lines: ShipmentManifestLineSnapshot[], startIndex =
 
     if (line.parcels?.length) {
       return line.parcels.map((parcel, parcelIndex) => [
-        parcel.awbNumber || formatManifestConsignmentNumber(line.consignmentNumber),
+        formatSwiftlineParcelNumberForDisplay(parcel.awbNumber || formatManifestConsignmentNumber(line.consignmentNumber), line.consignmentNumber),
         parcel.forwardingNumber,
         shared.destination,
         shared.shipper,
@@ -96,7 +97,7 @@ export function manifestRows(lines: ShipmentManifestLineSnapshot[], startIndex =
     }
 
     return [[
-      line.awbNumbers?.join(", ") || formatManifestConsignmentNumber(line.consignmentNumber),
+      line.awbNumbers?.map((value) => formatSwiftlineParcelNumberForDisplay(value, line.consignmentNumber)).join(", ") || formatManifestConsignmentNumber(line.consignmentNumber),
       line.forwardingNumbers?.join(", ") ?? "",
       shared.destination,
       shared.shipper,

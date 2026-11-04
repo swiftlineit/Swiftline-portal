@@ -54,10 +54,16 @@ describe("shipment manifest identifiers and search", () => {
   it("treats manifest search input literally and searches manifest/account/shipment references", () => {
     const conditions = shipmentManifestSearchConditions("AIC.001");
     assert.equal(conditions.length, 8);
-    const numberPattern = conditions[0]?.manifestNumber as RegExp;
+    const numberCondition = conditions.find((condition) => "manifestNumber" in condition) as { manifestNumber?: RegExp } | undefined;
+    const numberPattern = numberCondition?.manifestNumber as RegExp;
     assert.equal(numberPattern.test("AIC.001"), true);
     assert.equal(numberPattern.test("AICx001"), false);
     assert.ok(conditions.some((condition) => "lineSnapshots.consignmentNumber" in condition));
+    const compactConditions = shipmentManifestSearchConditions("SLCDEL03112601601");
+    const parcelConditions = compactConditions
+      .filter((condition) => "lineSnapshots.awbNumbers" in condition)
+      .map((condition) => (condition as { "lineSnapshots.awbNumbers": RegExp })["lineSnapshots.awbNumbers"]);
+    assert.ok(parcelConditions.some((pattern) => pattern.test("SLCDEL031126016-01")));
     assert.deepEqual(shipmentManifestSearchConditions("  "), []);
   });
 

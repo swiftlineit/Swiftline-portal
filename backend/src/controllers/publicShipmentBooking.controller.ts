@@ -24,6 +24,7 @@ import { publicShipmentDraftPayloadSchema, publicShipmentQuoteAcceptanceSchema }
 import { getPublicShipmentPolicySummary } from "../services/publicShipmentPolicies.service.js";
 import { verifyRecaptcha } from "../services/recaptcha.service.js";
 import { validateShipmentDraftFields } from "../services/shipmentValidation.service.js";
+import { formatSwiftlineParcelNumberForDisplay } from "../services/swiftlineTracking.service.js";
 
 const paymentConfirmationSchema = z.object({
   razorpayOrderId: z.string().trim().min(1).max(100),
@@ -256,7 +257,7 @@ export async function listPublicShipmentLabels(request: Request, response: Respo
       success: true,
       labels: printableLabels.map((label) => ({
         id: String(label._id),
-        parcelNumber: label.parcelNumber,
+        parcelNumber: formatSwiftlineParcelNumberForDisplay(label.parcelNumber),
         parcelCount: labels.filter((candidate) => candidate.storageKey === label.storageKey).length,
         format: label.format,
         downloadUrl: `/api/v1/public/shipment-bookings/status/labels/${label._id}${token ? `?token=${encodeURIComponent(token)}` : ""}`

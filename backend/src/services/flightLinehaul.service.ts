@@ -25,6 +25,7 @@ import { comparableFlightNumber, isValidFlightNumber, normalizeFlightNumber } fr
 import { formatIstDate } from "../utils/indiaDateTime.js";
 import { isValidMawbNumber, normalizeMawbNumber } from "../utils/mawbNumber.js";
 import { describeMissingPrerequisites, findMissingPrerequisites } from "./shipmentStatusSequence.service.js";
+import { displaySwiftlineParcelNumber, formatSwiftlineParcelNumberForDisplay, resolveStoredSwiftlineParcelNumber, swiftlineParcelNumberAliases } from "./swiftlineTracking.service.js";
 
 export class FlightLinehaulServiceError extends Error {
   constructor(message: string, public readonly statusCode = 400) {
@@ -719,10 +720,11 @@ export async function getFlightLinehaulDetail(flightIdValue: string, options?: {
         ...a,
         id: String(a._id),
         flightLinehaulId: String(a.flightLinehaulId),
-        activeParcelNumbers,
-        offloadedParcelNumbers: [...offloadedSet],
+        activeParcelNumbers: activeParcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value)),
+        offloadedParcelNumbers: [...offloadedSet].map((value) => formatSwiftlineParcelNumberForDisplay(value)),
         parcelDetails: flightAllocationParcelDetails(a.snapshot).map((parcel) => ({
           ...parcel,
+          parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.parcelNumber),
           status: offloadedSet.has(parcel.parcelNumber)
             ? "OFFLOADED"
             : activeSet.has(parcel.parcelNumber) ? "ALLOCATED" : "INACTIVE"
@@ -737,6 +739,12 @@ export async function getFlightLinehaulDetail(flightIdValue: string, options?: {
       const bagNumbers = bagsByConsignment.get(String(c._id)) ?? (fallbackBag ? [fallbackBag] : []);
       return {
         ...c,
+        expectedParcelNumbers: c.expectedParcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value)),
+        scannedParcelNumbers: c.scannedParcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value)),
+        parcelDispositions: c.parcelDispositions.map((item) => ({
+          ...item,
+          parcelNumber: formatSwiftlineParcelNumberForDisplay(item.parcelNumber)
+        })),
         id: String(c._id),
         bagNumbers,
         displayConsignmentNumber: (c as unknown as { consignmentNumber: string }).consignmentNumber ?? String(c._id).slice(-8),
@@ -744,7 +752,14 @@ export async function getFlightLinehaulDetail(flightIdValue: string, options?: {
         consignmentNumber: (c as unknown as { consignmentNumber: string }).consignmentNumber
       };
     }),
-    offloads: offloads.map((o) => ({ ...o, id: String(o._id) })),
+    offloads: offloads.map((o) => ({
+      ...o,
+      id: String(o._id),
+      affectedParcels: o.affectedParcels.map((parcel) => ({
+        ...parcel,
+        parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.parcelNumber)
+      }))
+    })),
     exceptions: exceptions.map((e) => ({ ...e, id: String(e._id) })),
     documents: documents.map((d) => ({ ...d, id: String(d._id) })),
     auditHistory: auditHistory.map((a) => ({ ...a, id: String(a._id) }))
@@ -1837,9 +1852,14 @@ export async function searchEligibleShipments(input: {
   const dpdFilter: Record<string, unknown> = { status: { $in: ["DPD_CREATED", "LABEL_RECEIVED"] } };
   if (input.q?.trim()) {
     const term = input.q.trim().toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const parcelAliases = swiftlineParcelNumberAliases(input.q.trim());
     dpdFilter.$or = [
       { swiftlineTrackingNumber: { $regex: term, $options: "i" } },
-      { dpdShipmentId: { $regex: term, $options: "i" } }
+      { dpdShipmentId: { $regex: term, $options: "i" } },
+      { parcelNumbers: { $regex: term, $options: "i" } },
+      { parcelNumbers: { $in: parcelAliases } },
+      { "currentShipmentSnapshot.parcels.swiftlineParcelNumber": { $in: parcelAliases } },
+      { "bookingSnapshot.parcels.swiftlineParcelNumber": { $in: parcelAliases } }
     ];
   }
 
@@ -1862,13 +1882,26 @@ export async function searchEligibleShipments(input: {
     if (!snap) continue;
     if (input.q?.trim()) {
       const term = input.q.trim().toUpperCase();
-      if (!snap.awb.toUpperCase().includes(term) && !String(dpd.swiftlineTrackingNumber ?? "").toUpperCase().includes(term)) continue;
+      const parcelAliases = new Set(swiftlineParcelNumberAliases(term));
+      const matchesParcel = snap.parcelDetails.some((parcel) =>
+        parcelAliases.has(parcel.parcelNumber.toUpperCase())
+        || parcel.parcelNumber.toUpperCase().includes(term)
+      );
+      if (!snap.awb.toUpperCase().includes(term) && !String(dpd.swiftlineTrackingNumber ?? "").toUpperCase().includes(term) && !matchesParcel) continue;
     }
     results.push(snap);
     if (results.length >= limit) break;
   }
 
-  return { shipments: results.map((s) => ({ ...s, shipmentDraftId: String(s.shipmentDraftId), dpdShipmentId: String(s.dpdShipmentId) })) };
+  return { shipments: results.map((s) => ({
+    ...s,
+    parcelDetails: s.parcelDetails.map((parcel) => ({
+      ...parcel,
+      parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.parcelNumber)
+    })),
+    shipmentDraftId: String(s.shipmentDraftId),
+    dpdShipmentId: String(s.dpdShipmentId)
+  })) };
 }
 
 export async function allocateShipments(input: {
@@ -2513,10 +2546,10 @@ export async function createOffload(input: {
   if (input.affectedParcels.length > 100) throw new FlightLinehaulServiceError("Cannot offload more than 100 parcels at once.", 400);
   const requestedParcels = input.affectedParcels.map((item) => ({
     shipmentDraftId: asObjectId(item.shipmentDraftId, "Shipment"),
-    parcelNumber: item.parcelNumber.trim().toUpperCase()
+    parcelNumber: displaySwiftlineParcelNumber(item.parcelNumber)
   }));
   if (requestedParcels.some((item) => !item.parcelNumber)) throw new FlightLinehaulServiceError("Every selected parcel must have a parcel number.", 400);
-  const requestedKeys = requestedParcels.map((item) => `${String(item.shipmentDraftId)}:${item.parcelNumber}`);
+  const requestedKeys = requestedParcels.map((item) => `${String(item.shipmentDraftId)}:${displaySwiftlineParcelNumber(item.parcelNumber)}`);
   if (new Set(requestedKeys).size !== requestedKeys.length) throw new FlightLinehaulServiceError("The same parcel was selected more than once.", 400);
   const affectedShipmentIds = [...new Map(requestedParcels.map((item) => [String(item.shipmentDraftId), item.shipmentDraftId])).values()];
 
@@ -2530,7 +2563,7 @@ export async function createOffload(input: {
   }).lean().exec();
   if (recentDuplicate) {
     const recentKey = [...(recentDuplicate.affectedParcels ?? [])]
-      .map((item: { shipmentDraftId: unknown; parcelNumber: string }) => `${String(item.shipmentDraftId)}:${item.parcelNumber}`)
+      .map((item: { shipmentDraftId: unknown; parcelNumber: string }) => `${String(item.shipmentDraftId)}:${displaySwiftlineParcelNumber(item.parcelNumber)}`)
       .sort()
       .join(",");
     const currentKey = [...requestedKeys].sort().join(",");
@@ -2579,7 +2612,12 @@ export async function createOffload(input: {
         const parcelByNumber = new Map(parcelDetails.map((parcel) => [parcel.parcelNumber, parcel]));
         const activeSet = new Set(activeParcelNumbersForAllocation(allocation));
         const selected = selectedByShipment.get(String(allocation.shipmentDraftId)) ?? new Set<string>();
-        for (const parcelNumber of selected) {
+        for (const requestedParcelNumber of selected) {
+          const parcelNumber = resolveStoredSwiftlineParcelNumber(
+            requestedParcelNumber,
+            parcelDetails.map((parcel) => parcel.parcelNumber)
+          );
+          if (!parcelNumber) throw new FlightLinehaulServiceError("A selected parcel could not be matched to one stored parcel number.", 409);
           const parcel = parcelByNumber.get(parcelNumber);
           if (!parcel) throw new FlightLinehaulServiceError(`Parcel ${parcelNumber} does not belong to the selected shipment.`, 409);
           if (!activeSet.has(parcelNumber)) throw new FlightLinehaulServiceError(`Parcel ${parcelNumber} is no longer active on this flight.`, 409);

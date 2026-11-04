@@ -27,6 +27,7 @@ import { resolveShipmentEventNote } from "../services/shipmentEventCopy.service.
 import { readShipmentBookingSnapshot, serializeShipmentBookingConfirmation } from "../services/shipmentBookingSnapshot.service.js";
 import { shipmentManifestAssignmentAvailability } from "../services/shipmentManifestMembership.service.js";
 import { equivalentCurrentStatusValues } from "../services/shipmentStatusSequence.service.js";
+import { formatSwiftlineParcelNumberForDisplay, swiftlineParcelNumberAliases } from "../services/swiftlineTracking.service.js";
 import {
   isOperatorBusinessAccountBookable,
   getOperatorTrackingTransitionError,
@@ -58,6 +59,24 @@ const operatorShipmentListSchema = z.object({
   status: z.string().trim().refine((status) => (shipmentEventStatusValues as readonly string[]).includes(status), "Choose a valid shipment status.").optional(),
   search: z.string().trim().max(100).optional()
 }).strict();
+
+function serializeOperatorShipment<T extends { swiftlineTrackingNumber?: string; parcelNumbers?: string[] }>(shipment: T): T {
+  return {
+    ...shipment,
+    parcelNumbers: (shipment.parcelNumbers ?? []).map((value) =>
+      formatSwiftlineParcelNumberForDisplay(value, shipment.swiftlineTrackingNumber ?? "")
+    )
+  };
+}
+
+function serializeOperatorLabel<T extends { labelType: string; parcelNumber: string }>(label: T): T {
+  return {
+    ...label,
+    parcelNumber: label.labelType === "SWIFTLINE"
+      ? formatSwiftlineParcelNumberForDisplay(label.parcelNumber)
+      : label.parcelNumber
+  };
+}
 
 const operatorDraftListSchema = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
@@ -301,14 +320,14 @@ export async function createOperatorShipment(request: Request, response: Respons
         id: String(result.dpdShipment._id),
         shipmentDraftId: String(result.dpdShipment.shipmentDraftId),
         trackingNumber: result.dpdShipment.swiftlineTrackingNumber,
-        parcelNumbers: result.dpdShipment.parcelNumbers,
+        parcelNumbers: serializeOperatorShipment(result.dpdShipment).parcelNumbers,
         status: result.dpdShipment.status,
         createdAt: result.dpdShipment.createdAt
       },
       labels: result.labels.map((label) => ({
         id: String(label._id),
         labelType: label.labelType,
-        parcelNumber: label.parcelNumber,
+        parcelNumber: serializeOperatorLabel(label).parcelNumber,
         format: label.format,
         labelSize: label.labelSize
       })),
@@ -434,13 +453,13 @@ export async function reconcileOperatorShipmentDocuments(request: Request, respo
         id: String(result.dpdShipment._id),
         shipmentDraftId: String(result.dpdShipment.shipmentDraftId),
         trackingNumber: result.dpdShipment.swiftlineTrackingNumber,
-        parcelNumbers: result.dpdShipment.parcelNumbers,
+        parcelNumbers: serializeOperatorShipment(result.dpdShipment).parcelNumbers,
         status: result.dpdShipment.status
       },
       labels: result.labels.map((label) => ({
         id: String(label._id),
         labelType: label.labelType,
-        parcelNumber: label.parcelNumber,
+        parcelNumber: serializeOperatorLabel(label).parcelNumber,
         format: label.format,
         labelSize: label.labelSize
       })),
@@ -526,7 +545,12 @@ export async function listOperatorShipments(request: Request, response: Response
     const pattern = new RegExp(escaped, "i");
     const matchingTrackingDraftIds = (await DpdShipment.find({
       tenantId: context.tenantId,
-      $or: [{ swiftlineTrackingNumber: pattern }, { parcelNumbers: pattern }]
+      $or: [
+        { swiftlineTrackingNumber: pattern },
+        { parcelNumbers: { $in: [pattern, ...swiftlineParcelNumberAliases(parsed.data.search)] } },
+        { "currentShipmentSnapshot.parcels.swiftlineParcelNumber": { $in: swiftlineParcelNumberAliases(parsed.data.search) } },
+        { "bookingSnapshot.parcels.swiftlineParcelNumber": { $in: swiftlineParcelNumberAliases(parsed.data.search) } }
+      ]
     }).select("shipmentDraftId").lean().exec()).map((booking) => booking.shipmentDraftId as mongoose.Types.ObjectId);
     clauses.push({ $or: [
       { _id: { $in: matchingTrackingDraftIds } },
@@ -589,7 +613,7 @@ export async function listOperatorShipments(request: Request, response: Response
       return {
         draft,
         businessAccountName: businessAccountNameById.get(String(draft.businessAccountId)) ?? "Business account name unavailable",
-        shipment: booking,
+        shipment: booking ? serializeOperatorShipment(booking) : null,
         taxInvoice: invoiceByDraft.get(String(draft._id)) ?? null,
         currentEvent: eventByDraft.get(String(draft._id)) ?? null,
         manifestEligible: completedLabel && notCancelled && manifestAvailability.canCreateAccount,
@@ -645,7 +669,12 @@ export async function listOperatorShipmentDrafts(request: Request, response: Res
     const pattern = new RegExp(escaped, "i");
     const matchingDraftIds = (await DpdShipment.find({
       tenantId: context.tenantId,
-      $or: [{ swiftlineTrackingNumber: pattern }, { parcelNumbers: pattern }]
+      $or: [
+        { swiftlineTrackingNumber: pattern },
+        { parcelNumbers: { $in: [pattern, ...swiftlineParcelNumberAliases(parsed.data.search)] } },
+        { "currentShipmentSnapshot.parcels.swiftlineParcelNumber": { $in: swiftlineParcelNumberAliases(parsed.data.search) } },
+        { "bookingSnapshot.parcels.swiftlineParcelNumber": { $in: swiftlineParcelNumberAliases(parsed.data.search) } }
+      ]
     }).select("shipmentDraftId").lean().exec()).map((booking) => booking.shipmentDraftId as mongoose.Types.ObjectId);
     clauses.push({ $or: [
       { _id: { $in: matchingDraftIds } },

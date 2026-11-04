@@ -7,6 +7,7 @@ import { ShipmentDraft } from "../../models/shipmentDraft.model.js";
 import { ShipmentImportEntry } from "../../models/shipmentImportEntry.model.js";
 import type { IClaim } from "../../models/claim.model.js";
 import { checksumOf, claimDocumentKey, getObjectBuffer, putObject } from "../storage/storage.service.js";
+import { formatSwiftlineParcelNumberForDisplay } from "../swiftlineTracking.service.js";
 
 /**
  * Attaches documents Swiftline already holds for the shipment.
@@ -60,7 +61,7 @@ async function collectSources(shipmentDraftId: mongoose.Types.ObjectId) {
   if (booking) {
     const label = await LabelDocument.findOne({ dpdShipmentId: booking._id, voidedAt: null })
       .sort({ createdAt: -1 })
-      .select("storageKey format parcelNumber")
+      .select("storageKey format parcelNumber labelType")
       .lean()
       .exec();
 
@@ -69,7 +70,7 @@ async function collectSources(shipmentDraftId: mongoose.Types.ObjectId) {
       sources.push({
         category: "OTHER",
         label: "shipping label",
-        filename: `label-${label.parcelNumber || "parcel"}.pdf`,
+        filename: `label-${label.labelType === "SWIFTLINE" ? formatSwiftlineParcelNumberForDisplay(label.parcelNumber) : label.parcelNumber || "parcel"}.pdf`,
         mimeType: "application/pdf",
         storageKey: label.storageKey
       });

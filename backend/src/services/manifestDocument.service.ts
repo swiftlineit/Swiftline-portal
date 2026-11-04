@@ -8,6 +8,7 @@ import type {
   ManifestDocumentParty
 } from "../types/manifestDocument.js";
 import { formatManifestConsignmentNumber, type ManifestPartySnapshot } from "./shipmentManifest.service.js";
+import { formatSwiftlineParcelNumberForDisplay } from "./swiftlineTracking.service.js";
 
 /** The frozen record written at seal time. v2 adds a `party` on each snapshot. */
 export type SealedSnapshot = {
@@ -123,7 +124,7 @@ export function buildManifestDocumentModel(snapshot: SealedSnapshot): ManifestDo
         isFirstParcelOfConsignment: isFirst,
         consignmentNumber: item.consignmentNumber,
         formattedConsignmentNumber,
-        parcelNumber: parcel.parcelNumber,
+        parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.parcelNumber, item.consignmentNumber),
         weightKg: parcel.weightKg,
         description: parcel.description,
         items: parcel.items,

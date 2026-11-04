@@ -13,6 +13,7 @@ import { LabelDocument } from "../models/labelDocument.model.js";
 import type { IShipmentDraft } from "../models/shipmentDraft.model.js";
 import type { ShipmentHoldReason } from "../models/shipmentEvent.model.js";
 import { readShipmentBookingSnapshot } from "./shipmentBookingSnapshot.service.js";
+import { swiftlineParcelNumberAliases } from "./swiftlineTracking.service.js";
 import { calculateParcelVolumetricWeight } from "./shipmentPricing.service.js";
 import { estimateRouteDelivery, findRoute, loadDestinationHolidays } from "./swiftlineRoute.service.js";
 import type { ISwiftlineRoute } from "../models/swiftlineRoute.model.js";
@@ -38,25 +39,37 @@ export async function resolveShipmentByTrackingNumber(
   // Anchored and escaped: the number is user input on its way into a query, and
   // an unescaped "." would quietly match every shipment of the same length.
   const exact = new RegExp(`^${trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
-
-  const [shipmentByReference, pieceLabel] = await Promise.all([
-    DpdShipment.findOne({
-      $or: [{ dpdShipmentId: exact }, { swiftlineTrackingNumber: exact }, { parcelNumbers: exact }]
-    }).select("shipmentDraftId").lean().exec(),
-    // Either label's number resolves: a consignee reads whichever is on the box.
-    LabelDocument.findOne({
-      parcelNumber: exact,
-      voidedAt: null
-    }).select("dpdShipmentId").lean().exec()
-  ]);
-
-  const shipment = shipmentByReference ?? (
-    pieceLabel
-      ? await DpdShipment.findById(pieceLabel.dpdShipmentId).select("shipmentDraftId").lean().exec()
-      : null
+  const parcelPatterns = swiftlineParcelNumberAliases(trimmed).map((value) =>
+    new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i")
   );
 
-  return shipment ? { shipmentDraftId: shipment.shipmentDraftId } : null;
+  const [shipmentMatches, pieceLabelShipmentIds] = await Promise.all([
+    DpdShipment.find({
+      $or: [
+        { dpdShipmentId: exact },
+        { swiftlineTrackingNumber: exact },
+        ...parcelPatterns.map((pattern) => ({ parcelNumbers: pattern })),
+        { "currentShipmentSnapshot.parcels.swiftlineParcelNumber": { $in: parcelPatterns } },
+        { "bookingSnapshot.parcels.swiftlineParcelNumber": { $in: parcelPatterns } }
+      ]
+    }).select("shipmentDraftId").lean().exec(),
+    // Either label's number resolves: a consignee reads whichever is on the box.
+    LabelDocument.distinct("dpdShipmentId", {
+      parcelNumber: { $in: parcelPatterns },
+      voidedAt: null
+    }).exec()
+  ]);
+
+  const labeledShipments = pieceLabelShipmentIds.length
+    ? await DpdShipment.find({ _id: { $in: pieceLabelShipmentIds } }).select("shipmentDraftId").lean().exec()
+    : [];
+  const matchingDraftIds = new Map<string, mongoose.Types.ObjectId>();
+  for (const shipment of [...shipmentMatches, ...labeledShipments]) {
+    matchingDraftIds.set(String(shipment.shipmentDraftId), shipment.shipmentDraftId);
+  }
+  if (matchingDraftIds.size !== 1) return null;
+  const shipmentDraftId = matchingDraftIds.values().next().value;
+  return shipmentDraftId ? { shipmentDraftId } : null;
 }
 
 /** The events tracking needs. Both callers already load more than this. */

@@ -3,6 +3,7 @@ import { DpdShipment } from "../models/dpdShipment.model.js";
 import { PickupRequestShipment } from "../models/pickupRequestShipment.model.js";
 import { ShipmentOperationsParcelScan } from "../models/shipmentOperationsParcelScan.model.js";
 import { resolveOperationsScanParcelNumbers } from "./shipmentOperationsScan.service.js";
+import { displaySwiftlineParcelNumber, formatSwiftlineParcelNumberForDisplay } from "./swiftlineTracking.service.js";
 
 export type ShipmentHubReceipt = {
   receivedParcels: number;
@@ -26,7 +27,7 @@ export async function loadShipmentHubReceiptsByDraftIds(draftIds: mongoose.Types
   for (const scan of scans) {
     const key = String(scan.shipmentDraftId);
     const numbers = receivedByDraft.get(key) ?? new Set<string>();
-    numbers.add(scan.parcelNumber.trim().toUpperCase());
+    numbers.add(displaySwiftlineParcelNumber(scan.parcelNumber));
     receivedByDraft.set(key, numbers);
   }
   const closedIds = new Set(closedPickupLinks.map((link) => String(link.shipmentDraftId)));
@@ -40,12 +41,15 @@ export async function loadShipmentHubReceiptsByDraftIds(draftIds: mongoose.Types
       parcelNumbers: shipment.parcelNumbers
     });
     if (!expected.length) continue;
-    const receivedParcelNumbers = expected.filter((number) => received.has(number));
+    const displayedExpected = expected.map((number) => displaySwiftlineParcelNumber(number));
+    const receivedParcelNumbers = displayedExpected.filter((number) => received.has(number));
     result.set(key, {
       receivedParcels: receivedParcelNumbers.length,
       totalParcels: expected.length,
-      receivedParcelNumbers,
-      notReceivedParcelNumbers: expected.filter((number) => !received.has(number))
+      receivedParcelNumbers: receivedParcelNumbers.map((number) => formatSwiftlineParcelNumberForDisplay(number)),
+      notReceivedParcelNumbers: displayedExpected
+        .filter((number) => !received.has(number))
+        .map((number) => formatSwiftlineParcelNumberForDisplay(number))
     });
   }
   return result;

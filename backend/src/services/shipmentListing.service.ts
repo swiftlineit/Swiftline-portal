@@ -25,6 +25,7 @@ import {
   equivalentCurrentStatusValues
 } from "./shipmentStatusSequence.service.js";
 import { resolveCurrentTrackingEvent } from "./shipmentJourney.service.js";
+import { formatSwiftlineParcelNumberForDisplay, swiftlineParcelNumberAliases } from "./swiftlineTracking.service.js";
 
 export type ShipmentListingFilter = {
   businessAccountIds?: mongoose.Types.ObjectId[];
@@ -381,6 +382,9 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     // Escaped because these are identifiers people paste: a stray bracket from
     // a copied email would otherwise be read as regex syntax.
     const pattern = new RegExp(filter.search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    const parcelPatterns = swiftlineParcelNumberAliases(filter.search.trim()).map((value) =>
+      new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+    );
 
     const [byBooking, byDraft] = await Promise.all([
       DpdShipment.find({
@@ -388,7 +392,9 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
         $or: [
           { swiftlineTrackingNumber: pattern },
           { dpdShipmentId: pattern },
-          { parcelNumbers: pattern },
+          ...parcelPatterns.map((parcelPattern) => ({ parcelNumbers: parcelPattern })),
+          ...parcelPatterns.map((parcelPattern) => ({ "currentShipmentSnapshot.parcels.swiftlineParcelNumber": parcelPattern })),
+          ...parcelPatterns.map((parcelPattern) => ({ "bookingSnapshot.parcels.swiftlineParcelNumber": parcelPattern })),
           { "currentShipmentSnapshot.consignor.companyName": pattern },
           { "currentShipmentSnapshot.consignor.contactName": pattern },
           { "bookingSnapshot.consignor.companyName": pattern },
@@ -801,7 +807,10 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
       shipmentReference: draft.parcelList.find((parcel) => parcel.shipmentReference1?.trim())?.shipmentReference1 ?? "",
       invoiceNumber: "",
       swiftlineTrackingNumber: booking?.swiftlineTrackingNumber ?? "",
-      awbNumbers: parcels.map((parcel) => parcel.swiftlineParcelNumber).filter(Boolean),
+      awbNumbers: parcels.map((parcel) => formatSwiftlineParcelNumberForDisplay(
+        parcel.swiftlineParcelNumber,
+        snapshot?.tracking.swiftlineTrackingNumber
+      )).filter(Boolean),
       forwardingNumbers: parcels.map((parcel) => parcel.carrierParcelNumber).filter(Boolean),
       consignor: snapshot?.consignor?.companyName || snapshot?.consignor?.contactName || account?.company?.companyName || "",
       consignee: consignee?.companyName || consignee?.contactName || "",
@@ -881,7 +890,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
             const header = live ? manifestHeaderById.get(live.manifestId) : undefined;
             if (!live || !header) {
               return {
-                parcelNumber: parcel.swiftlineParcelNumber,
+                parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.swiftlineParcelNumber, snapshot?.tracking.swiftlineTrackingNumber),
                 scanState: "AWAITING_SCAN",
                 manifestId: null,
                 manifestNumber: null,
@@ -892,7 +901,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
               };
             }
             return {
-              parcelNumber: parcel.swiftlineParcelNumber,
+              parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.swiftlineParcelNumber, snapshot?.tracking.swiftlineTrackingNumber),
               scanState: "SCANNED",
               manifestId: live.manifestId,
               manifestNumber: header.manifestNumber,

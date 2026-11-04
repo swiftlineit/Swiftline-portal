@@ -27,6 +27,7 @@ import {
   streamObjectToResponse
 } from "../services/storage/storage.service.js";
 import { resolveEvidenceKey } from "../services/storage/legacyKeys.js";
+import { formatSwiftlineParcelNumberForDisplay, resolveStoredSwiftlineParcelNumber } from "../services/swiftlineTracking.service.js";
 import { emailValidationMessage, isValidBusinessContactEmail } from "../services/businessAccountRules.js";
 import { notifyBusinessShipmentMembers, notifyOperationsStaff, notifyPortalUsers } from "../services/portalNotification.service.js";
 import {
@@ -58,6 +59,18 @@ function handle(error: unknown, response: Response, next: NextFunction) {
   return next(error);
 }
 function fail(status: number, message: string): never { throw new Error(`POD:${status}:${message}`); }
+
+function resolvePodParcelNumbers(values: string[], storedValues: readonly string[]) {
+  const resolved = values.map((value) => resolveStoredSwiftlineParcelNumber(value, storedValues));
+  if (resolved.some((value) => !value)) fail(400, "Every parcel must belong to the same shipment.");
+  const numbers = resolved as string[];
+  if (new Set(numbers).size !== numbers.length) fail(400, "The same parcel was selected more than once.");
+  return numbers;
+}
+
+function displayPodParcelNumbers(values: readonly string[]) {
+  return values.map((value) => formatSwiftlineParcelNumberForDisplay(value));
+}
 
 function statusesForDeliveryValidation(recorded: readonly string[]): string[] {
   const statuses = [...recorded];
@@ -115,13 +128,28 @@ async function loadDetail(id: string) {
     DeliveryAttempt.find({ assignmentId: assignment._id }).sort({ attemptedAt: -1 }).lean().exec(),
     PodDispute.find({ assignmentId: assignment._id }).sort({ createdAt: -1 }).populate("reportedBy", "firstName lastName name").lean().exec()
   ]);
-  return { ...assignment, id: String(assignment._id), shipment, booking, revisions: revisions.map((revision) => ({ ...revision, id: String(revision._id), evidence: revision.evidence.map((item: any) => ({ id: String(item._id), type: item.type, originalName: item.originalName, mimeType: item.mimeType, size: item.size, capturedAt: item.capturedAt })) })), attempts, disputes };
+  return {
+    ...assignment,
+    id: String(assignment._id),
+    parcelNumbers: displayPodParcelNumbers(assignment.parcelNumbers),
+    deliveredParcelNumbers: displayPodParcelNumbers(assignment.deliveredParcelNumbers),
+    shipment,
+    booking: booking ? { ...booking, parcelNumbers: displayPodParcelNumbers(booking.parcelNumbers) } : booking,
+    revisions: revisions.map((revision) => ({
+      ...revision,
+      id: String(revision._id),
+      parcelNumbers: displayPodParcelNumbers(revision.parcelNumbers),
+      evidence: revision.evidence.map((item: any) => ({ id: String(item._id), type: item.type, originalName: item.originalName, mimeType: item.mimeType, size: item.size, capturedAt: item.capturedAt }))
+    })),
+    attempts,
+    disputes
+  };
 }
 
 export async function createDeliveryPartner(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const data = partnerSchema.parse(request.body); const partner = await DeliveryPartner.create({ ...data, code: data.code.toUpperCase(), countries: data.countries.map((value) => value.toUpperCase()), createdBy: user.id }); await AuditLog.create({ action: "DELIVERY_PARTNER_CREATED", entityType: "DELIVERY_PARTNER", entityId: partner._id, performedBy: user.id, performedAt: new Date(), metadata: {} }); return response.status(201).json({ success: true, message: "Delivery partner created.", partner }); } catch (error) { return handle(error, response, next); } }
 export async function listDeliveryPartners(_request: Request, response: Response, next: NextFunction) { try { return response.json({ success: true, partners: await DeliveryPartner.find({ status: "ACTIVE" }).sort({ name: 1 }).lean().exec() }); } catch (error) { return next(error); } }
 
-export async function listPodEligibleShipments(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assigned = await DeliveryAssignment.distinct("shipmentDraftId"); const drafts = await ShipmentDraft.find({ _id: { $nin: assigned }, bookingState: "BOOKED", deletedAt: null, customerType: "BUSINESS", ...branchFilter(user), "consigneeEnteredAddress.countryCode": { $ne: "IN" } }).select("businessAccountId branchId consigneeEnteredAddress parcelCount serviceCode createdAt").sort({ createdAt: -1 }).limit(100).lean().exec(); const bookings = await DpdShipment.find({ shipmentDraftId: { $in: drafts.map((item) => item._id) }, status: "LABEL_RECEIVED" }).select("shipmentDraftId swiftlineTrackingNumber dpdShipmentId parcelNumbers").lean().exec(); const byDraft = new Map(bookings.map((item) => [String(item.shipmentDraftId), item])); return response.json({ success: true, shipments: drafts.flatMap((draft) => { const booking = byDraft.get(String(draft._id)); return booking ? [{ id: String(draft._id), businessAccountId: String(draft.businessAccountId), branchId: String(draft.branchId), consignee: draft.consigneeEnteredAddress, parcelCount: draft.parcelCount, serviceCode: draft.serviceCode, trackingNumber: booking.swiftlineTrackingNumber || booking.dpdShipmentId, parcelNumbers: booking.parcelNumbers }] : []; }) }); } catch (error) { return next(error); } }
+export async function listPodEligibleShipments(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assigned = await DeliveryAssignment.distinct("shipmentDraftId"); const drafts = await ShipmentDraft.find({ _id: { $nin: assigned }, bookingState: "BOOKED", deletedAt: null, customerType: "BUSINESS", ...branchFilter(user), "consigneeEnteredAddress.countryCode": { $ne: "IN" } }).select("businessAccountId branchId consigneeEnteredAddress parcelCount serviceCode createdAt").sort({ createdAt: -1 }).limit(100).lean().exec(); const bookings = await DpdShipment.find({ shipmentDraftId: { $in: drafts.map((item) => item._id) }, status: "LABEL_RECEIVED" }).select("shipmentDraftId swiftlineTrackingNumber dpdShipmentId parcelNumbers").lean().exec(); const byDraft = new Map(bookings.map((item) => [String(item.shipmentDraftId), item])); return response.json({ success: true, shipments: drafts.flatMap((draft) => { const booking = byDraft.get(String(draft._id)); return booking ? [{ id: String(draft._id), businessAccountId: String(draft.businessAccountId), branchId: String(draft.branchId), consignee: draft.consigneeEnteredAddress, parcelCount: draft.parcelCount, serviceCode: draft.serviceCode, trackingNumber: booking.swiftlineTrackingNumber || booking.dpdShipmentId, parcelNumbers: displayPodParcelNumbers(booking.parcelNumbers) }] : []; }) }); } catch (error) { return next(error); } }
 
 export async function listAvailableDeliveryPeople(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const users = await User.find({ role: "delivery", userStatus: "active", ...(user.role === "admin" ? {} : { assignedBranches: { $in: user.branches } }) }).select("firstName lastName name phone assignedBranches").lean().exec(); const profiles = await DriverProfile.find({ userId: { $in: users.map((item) => item._id) }, deliverySubrole: "DELIVERY_PERSON", status: "ACTIVE" }).populate("deliveryPartnerId", "name code").lean().exec(); const byId = new Map(users.map((item) => [String(item._id), item])); return response.json({ success: true, deliveryPeople: profiles.map((profile) => ({ ...profile, id: String(profile._id), user: byId.get(String(profile.userId)) })) }); } catch (error) { return next(error); } }
 
@@ -142,10 +170,7 @@ export async function createPodAssignment(request: Request, response: Response, 
     if (!draft || !booking || !profile) fail(400, "The shipment or delivery person is not eligible.");
     if (!await canManage(user, draft)) fail(403, "This shipment is outside your assigned branches.");
 
-    const allowedParcels = new Set(booking.parcelNumbers);
-    if (data.parcelNumbers.some((item) => !allowedParcels.has(item))) {
-      fail(400, "Every selected parcel must belong to the same shipment.");
-    }
+    const storedParcelNumbers = resolvePodParcelNumbers(data.parcelNumbers, booking.parcelNumbers);
 
     const assignment = await DeliveryAssignment.create({
       shipmentDraftId: draft._id,
@@ -154,7 +179,7 @@ export async function createPodAssignment(request: Request, response: Response, 
       branchId: draft.branchId,
       deliveryPartnerId: data.deliveryPartnerId || profile.deliveryPartnerId || null,
       currentDeliveryPersonProfileId: profile._id,
-      parcelNumbers: [...new Set(data.parcelNumbers)],
+      parcelNumbers: storedParcelNumbers,
       partnerReference: data.partnerReference,
       expectedDeliveryAt: data.expectedDeliveryAt ?? null,
       assignmentHistory: [{ deliveryPersonProfileId: profile._id, assignedBy: user.id, assignedAt: new Date() }],
@@ -186,7 +211,7 @@ export async function createPodAssignment(request: Request, response: Response, 
   }
 }
 
-export async function listManagedPodAssignments(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const filter: Record<string, unknown> = branchFilter(user); if (typeof request.query.status === "string" && deliveryAssignmentStatusValues.includes(request.query.status as any)) filter.status = request.query.status; const rows = await DeliveryAssignment.find(filter).sort({ updatedAt: -1 }).populate("deliveryPartnerId", "name code").populate({ path: "currentDeliveryPersonProfileId", populate: { path: "userId", select: "firstName lastName name" } }).lean().exec(); return response.json({ success: true, assignments: rows.map((item) => ({ ...item, id: String(item._id) })) }); } catch (error) { return next(error); } }
+export async function listManagedPodAssignments(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const filter: Record<string, unknown> = branchFilter(user); if (typeof request.query.status === "string" && deliveryAssignmentStatusValues.includes(request.query.status as any)) filter.status = request.query.status; const rows = await DeliveryAssignment.find(filter).sort({ updatedAt: -1 }).populate("deliveryPartnerId", "name code").populate({ path: "currentDeliveryPersonProfileId", populate: { path: "userId", select: "firstName lastName name" } }).lean().exec(); return response.json({ success: true, assignments: rows.map((item) => ({ ...item, parcelNumbers: displayPodParcelNumbers(item.parcelNumbers), deliveredParcelNumbers: displayPodParcelNumbers(item.deliveredParcelNumbers), id: String(item._id) })) }); } catch (error) { return next(error); } }
 export async function getManagedPodAssignment(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const row = await DeliveryAssignment.findById(request.params.assignmentId).lean().exec(); if (!row || !await canManage(user, row)) fail(404, "Delivery assignment was not found."); return response.json({ success: true, assignment: await loadDetail(String(row._id)) }); } catch (error) { return handle(error, response, next); } }
 export async function reassignPodDelivery(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assignment = await DeliveryAssignment.findById(request.params.assignmentId).exec(); if (!assignment || !await canManage(user, assignment)) fail(404, "Delivery assignment was not found."); if (["DELIVERED", "CANCELLED", "RETURNED"].includes(assignment.status)) fail(409, "Completed or closed delivery work cannot be reassigned."); const data = z.object({ deliveryPersonProfileId: z.string(), reason: z.string().trim().min(3).max(500) }).parse(request.body); const profile = await DriverProfile.findOne({ _id: data.deliveryPersonProfileId, deliverySubrole: "DELIVERY_PERSON", status: "ACTIVE" }).lean().exec(); if (!profile) fail(400, "Select an active delivery person."); const previous = assignment.assignmentHistory[assignment.assignmentHistory.length - 1] as any; if (previous) { previous.endedAt = new Date(); previous.reason = data.reason; } assignment.currentDeliveryPersonProfileId = profile._id; assignment.deliveryPartnerId = profile.deliveryPartnerId ?? assignment.deliveryPartnerId; assignment.status = "ASSIGNED"; assignment.acceptedAt = null; assignment.outForDeliveryAt = null; assignment.assignmentHistory.push({ deliveryPersonProfileId: profile._id, assignedBy: user.id, assignedAt: new Date(), endedAt: null, reason: "" }); await assignment.save(); await AuditLog.create({ action: "POD_ASSIGNMENT_UPDATED", entityType: "POD_ASSIGNMENT", entityId: assignment._id, performedBy: user.id, performedAt: new Date(), metadata: { reassignedTo: profile._id, reason: data.reason } }); await notifyPortalUsers([profile.userId], { type: "DELIVERY_ASSIGNED", title: "Delivery reassigned to you", message: `Delivery ${assignment.partnerReference} is ready in your portal.`, href: `/driver/deliveries/${assignment._id}`, idempotencyKey: `delivery-reassigned:${assignment._id}:${assignment.updatedAt.toISOString()}` }); return response.json({ success: true, message: "Delivery reassigned with its original history preserved.", assignment: await loadDetail(String(assignment._id)) }); } catch (error) { return handle(error, response, next); } }
 
@@ -221,6 +246,8 @@ export async function listMyDeliveries(request: Request, response: Response, nex
       success: true,
       assignments: rows.map((item) => ({
         ...item,
+        parcelNumbers: displayPodParcelNumbers(item.parcelNumbers),
+        deliveredParcelNumbers: displayPodParcelNumbers(item.deliveredParcelNumbers),
         id: String(item._id),
         latestPodStatus: latestStatus.get(String(item._id)) ?? null
       }))
@@ -371,7 +398,7 @@ export async function uploadPodEvidence(request: Request, response: Response, ne
   }
 }
 
-export async function savePodDraft(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assignment = await myAssignment(user.id, String(request.params.assignmentId)); const data = podSchema.parse(request.body); if (data.parcelNumbers.some((item) => !assignment.parcelNumbers.includes(item))) fail(400, "Every parcel must belong to this shipment assignment."); const revision = await writableRevision(assignment, user.id, "DELIVERY_PERSON"); Object.assign(revision, data); await revision.save(); return response.json({ success: true, message: "POD draft saved.", assignment: await loadDetail(String(assignment._id)) }); } catch (error) { return handle(error, response, next); } }
+export async function savePodDraft(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assignment = await myAssignment(user.id, String(request.params.assignmentId)); const data = podSchema.parse(request.body); const parcelNumbers = resolvePodParcelNumbers(data.parcelNumbers, assignment.parcelNumbers); const revision = await writableRevision(assignment, user.id, "DELIVERY_PERSON"); Object.assign(revision, { ...data, parcelNumbers }); await revision.save(); return response.json({ success: true, message: "POD draft saved.", assignment: await loadDetail(String(assignment._id)) }); } catch (error) { return handle(error, response, next); } }
 export async function requestSignatureException(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assignment = await myAssignment(user.id, String(request.params.assignmentId)); const reason = z.string().trim().min(5).max(500).parse(request.body?.reason); const revision = await writableRevision(assignment, user.id, "DELIVERY_PERSON"); if (!revision.evidence.some((item: any) => item.type === "PHOTO")) fail(409, "Upload the required delivery photo before requesting a signature exception."); revision.signatureExceptionReason = reason; revision.signatureExceptionStatus = "PENDING"; await revision.save(); return response.json({ success: true, message: "Signature exception sent for supervisor approval.", assignment: await loadDetail(String(assignment._id)) }); } catch (error) { return handle(error, response, next); } }
 export async function reviewSignatureException(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assignment = await DeliveryAssignment.findById(request.params.assignmentId).lean().exec(); if (!assignment || !await canManage(user, assignment)) fail(404, "Delivery assignment was not found."); const approved = z.boolean().parse(request.body?.approved); const revision = await PodRevision.findOne({ assignmentId: assignment._id, signatureExceptionStatus: "PENDING" }).sort({ revisionNumber: -1 }).exec(); if (!revision) fail(404, "No signature exception is awaiting review."); revision.signatureExceptionStatus = approved ? "APPROVED" : "REJECTED"; revision.reviewedBy = user.id; revision.reviewedAt = new Date(); revision.reviewReason = z.string().trim().max(1000).parse(request.body?.reason ?? ""); await revision.save(); return response.json({ success: true, message: approved ? "Signature exception approved." : "Signature exception rejected.", assignment: await loadDetail(String(assignment._id)) }); } catch (error) { return handle(error, response, next); } }
 
@@ -462,13 +489,11 @@ export async function submitManagedPod(request: Request, response: Response, nex
       manualSourceNote: z.string().trim().min(3).max(500),
       originalReceivedAt: z.coerce.date()
     }).parse(request.body);
-    if (data.parcelNumbers.some((item) => !assignment.parcelNumbers.includes(item))) {
-      fail(400, "Every parcel must belong to this shipment assignment.");
-    }
+    const parcelNumbers = resolvePodParcelNumbers(data.parcelNumbers, assignment.parcelNumbers);
     await requireDeliveryMilestoneReady(assignment.shipmentDraftId, "DELIVERED");
 
     const revision = await writableRevision(assignment, user.id, "OPERATIONS_UPLOAD");
-    Object.assign(revision, data);
+    Object.assign(revision, { ...data, parcelNumbers });
     revision.submissionSource = "OPERATIONS_UPLOAD";
     revision.submittedBy = user.id;
     if (!revision.evidence.some((item: any) => item.type === "PHOTO")) fail(409, "Upload the required delivery photo.");
@@ -537,7 +562,7 @@ export async function submitManagedPod(request: Request, response: Response, nex
   }
 }
 
-export async function getClientPod(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assignment = await DeliveryAssignment.findOne({ shipmentDraftId: request.params.shipmentId }).populate("deliveryPartnerId", "name code").lean().exec(); if (!assignment || !await canClientAccess(user.id, assignment)) fail(404, "POD was not found."); const [booking, revisions] = await Promise.all([DpdShipment.findById(assignment.dpdShipmentId).select("swiftlineTrackingNumber dpdShipmentId").lean().exec(), PodRevision.find({ assignmentId: assignment._id, status: "VERIFIED" }).sort({ revisionNumber: -1 }).lean().exec()]); return response.json({ success: true, pod: { id: String(assignment._id), shipmentDraftId: String(assignment.shipmentDraftId), status: assignment.status, partnerReference: assignment.partnerReference, parcelNumbers: assignment.parcelNumbers, deliveredParcelNumbers: assignment.deliveredParcelNumbers, deliveryPartnerId: assignment.deliveryPartnerId, booking, revisions: revisions.map((revision: any) => ({ id: String(revision._id), revisionNumber: revision.revisionNumber, status: revision.status, parcelNumbers: revision.parcelNumbers, recipientName: revision.recipientName, recipientRelationship: revision.recipientRelationship, deliveredAt: revision.deliveredAt, destinationTimeZone: revision.destinationTimeZone, partnerReference: revision.partnerReference, evidence: revision.evidence.map((item: any) => ({ id: String(item._id), type: item.type, originalName: item.originalName, mimeType: item.mimeType, size: item.size, capturedAt: item.capturedAt })) })) } }); } catch (error) { return handle(error, response, next); } }
+export async function getClientPod(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assignment = await DeliveryAssignment.findOne({ shipmentDraftId: request.params.shipmentId }).populate("deliveryPartnerId", "name code").lean().exec(); if (!assignment || !await canClientAccess(user.id, assignment)) fail(404, "POD was not found."); const [booking, revisions] = await Promise.all([DpdShipment.findById(assignment.dpdShipmentId).select("swiftlineTrackingNumber dpdShipmentId parcelNumbers").lean().exec(), PodRevision.find({ assignmentId: assignment._id, status: "VERIFIED" }).sort({ revisionNumber: -1 }).lean().exec()]); return response.json({ success: true, pod: { id: String(assignment._id), shipmentDraftId: String(assignment.shipmentDraftId), status: assignment.status, partnerReference: assignment.partnerReference, parcelNumbers: displayPodParcelNumbers(assignment.parcelNumbers), deliveredParcelNumbers: displayPodParcelNumbers(assignment.deliveredParcelNumbers), deliveryPartnerId: assignment.deliveryPartnerId, booking: booking ? { ...booking, parcelNumbers: displayPodParcelNumbers(booking.parcelNumbers) } : booking, revisions: revisions.map((revision: any) => ({ id: String(revision._id), revisionNumber: revision.revisionNumber, status: revision.status, parcelNumbers: displayPodParcelNumbers(revision.parcelNumbers), recipientName: revision.recipientName, recipientRelationship: revision.recipientRelationship, deliveredAt: revision.deliveredAt, destinationTimeZone: revision.destinationTimeZone, partnerReference: revision.partnerReference, evidence: revision.evidence.map((item: any) => ({ id: String(item._id), type: item.type, originalName: item.originalName, mimeType: item.mimeType, size: item.size, capturedAt: item.capturedAt })) })) } }); } catch (error) { return handle(error, response, next); } }
 export async function createPodDispute(request: Request, response: Response, next: NextFunction) { try { const user = actor(request); if (!user) return response.status(401).json({ success: false }); const assignment = await DeliveryAssignment.findOne({ shipmentDraftId: request.params.shipmentId }).lean().exec(); if (!assignment || !await canClientAccess(user.id, assignment)) fail(404, "POD was not found."); const revision = await PodRevision.findOne({ assignmentId: assignment._id, status: "VERIFIED" }).sort({ revisionNumber: -1 }).lean().exec(); if (!revision) fail(409, "A verified POD is required before reporting an issue."); const data = z.object({ category: z.enum(["WRONG_RECIPIENT", "MISSING_PARCEL", "DAMAGED_PARCEL", "INCORRECT_LOCATION", "SIGNATURE_CONCERN", "PHOTO_CONCERN", "NOT_RECEIVED", "OTHER"]), details: z.string().trim().min(5).max(2000) }).parse(request.body); const dispute = await PodDispute.create({ assignmentId: assignment._id, podRevisionId: revision._id, shipmentDraftId: assignment.shipmentDraftId, businessAccountId: assignment.businessAccountId, ...data, reportedBy: user.id }); await AuditLog.create({ action: "POD_DISPUTED", entityType: "POD_DISPUTE", entityId: dispute._id, performedBy: user.id, performedAt: new Date(), metadata: { category: data.category } }); await notifyOperationsStaff({ type: "POD_DISPUTED", title: "POD issue reported", message: data.details, href: `/dashboard/pod?assignment=${assignment._id}`, idempotencyKey: `pod-dispute:${dispute._id}` }); return response.status(201).json({ success: true, message: "POD issue reported to Swiftline.", dispute }); } catch (error) { return handle(error, response, next); } }
 
 async function sendEvidence(response: Response, revision: any, evidenceId: string) {

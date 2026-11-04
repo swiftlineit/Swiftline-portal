@@ -37,6 +37,7 @@ import {
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
+import { displaySwiftlineParcelNumber, formatSwiftlineParcelNumberForDisplay } from "../services/swiftlineTracking.service.js";
 import {
   loadShipmentParcelActivities,
   loadShipmentParcelProgress
@@ -47,8 +48,8 @@ import {
  *
  * Deliberately a charset-and-length guard rather than a match on today's AWB
  * shape. The current generator emits SLCDEL170826001 (`SLC` + station + DDMMYY +
- * sequence), with pieces as SLCDEL170826001-02. Shipments booked earlier carry an
- * older SLDL20072026000001 form, and their pieces were numbered by the carrier
+ * sequence), with pieces as SLCDEL170826001-02 or SLCDEL17082600102. Older
+ * shipments carry an SLDL20072026000001 form, and their pieces were carrier-numbered
  * as DPDTESTDL2107202600000101. Every one of those is printed on a label somebody
  * is holding right now, so pinning this to the newest format would mean the
  * public tracker did not work for the existing book of business.
@@ -160,7 +161,9 @@ function serializePublicTracking(input: {
   });
 
   return {
-    trackedNumber: input.trackedNumber,
+    trackedNumber: isParcelLevel
+      ? formatSwiftlineParcelNumberForDisplay(input.trackedNumber, input.trackingNumber)
+      : input.trackedNumber,
     trackingNumber: input.trackingNumber,
     // A piece-level search shows the whole shipment's timeline, so the page has
     // to be able to say so rather than implying these scans are for one parcel.
@@ -198,9 +201,11 @@ function serializePublicTracking(input: {
       // A parcel-number lookup must not reveal activity for other parcels in
       // the same shipment. A shipment-number lookup may show all parcel
       // activity because the caller supplied the parent reference.
-      .filter((activity) => !isParcelLevel || activity.parcelNumber.toUpperCase() === input.trackedNumber.toUpperCase())
+      .filter((activity) => !isParcelLevel
+        || displaySwiftlineParcelNumber(activity.parcelNumber, input.trackingNumber)
+          === displaySwiftlineParcelNumber(input.trackedNumber, input.trackingNumber))
       .map((activity) => ({
-        parcelNumber: activity.parcelNumber,
+        parcelNumber: formatSwiftlineParcelNumberForDisplay(activity.parcelNumber, input.trackingNumber),
         status: activity.status,
         eventAt: activity.eventAt,
         message: activity.customerMessage

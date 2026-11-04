@@ -1898,6 +1898,7 @@ export default function DpdLabelDraftPage() {
                 <div className="bg-white">
                   <ShipmentLabelsPanel
                     labels={result.labels}
+                    swiftlineTrackingNumber={result.dpdShipment.swiftlineTrackingNumber}
                     compact
                     getAccessUrl={(labelId, disposition) => getDpdLabelAccessUrl(result.dpdShipment.id, labelId, disposition)}
                   />

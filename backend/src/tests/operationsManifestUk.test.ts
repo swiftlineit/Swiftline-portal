@@ -552,8 +552,7 @@ describe("CFL UK workbook", () => {
 
   it("rejects non-UK, pre-parcel, and invalid-rate exports", async () => {
     const nonUkManifest = ukManifestFixture({ bagCount: 3, consignmentCount: 5 });
-    const nonUkSnapshot = nonUkManifest.sealedSnapshot as unknown as MutableSealedSnapshot;
-    nonUkSnapshot.header!.destinationCountryCode = "DE";
+    nonUkManifest.header.destinationCountryCode = "DE";
     await assert.rejects(
       buildOperationsManifestUkExcel(nonUkManifest, { gbpToInr: 100 }),
       /available only for United Kingdom/

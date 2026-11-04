@@ -6,6 +6,7 @@ import { OperationsManifest } from "../models/operationsManifest.model.js";
 import { OperationsManifestConsignment } from "../models/operationsManifestConsignment.model.js";
 import { ShipmentCancellation } from "../models/shipmentCancellation.model.js";
 import { readShipmentBookingSnapshot } from "./shipmentBookingSnapshot.service.js";
+import { formatSwiftlineParcelNumberForDisplay } from "./swiftlineTracking.service.js";
 
 export type ShipmentParcelActivity = {
   parcelNumber: string;
@@ -93,7 +94,7 @@ export async function loadShipmentParcelActivitiesByDraftIds(
     const flight = flightById.get(String(offload.flightLinehaulId));
     for (const parcel of offload.affectedParcels ?? []) {
       addActivity(result, parcel.shipmentDraftId, {
-        parcelNumber: parcel.parcelNumber,
+        parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.parcelNumber),
         status: "OFFLOADED",
         eventAt: offload.createdAt,
         reason: offload.detail,
@@ -111,7 +112,7 @@ export async function loadShipmentParcelActivitiesByDraftIds(
     const eventAt = cancellation.completedAt ?? cancellation.reviewedAt ?? cancellation.updatedAt;
     for (const parcelNumber of shipment ? shipmentParcelNumbers(shipment) : []) {
       addActivity(result, cancellation.shipmentDraftId, {
-        parcelNumber,
+        parcelNumber: formatSwiftlineParcelNumberForDisplay(parcelNumber),
         status: "CANCELLED",
         eventAt,
         reason: cancellation.reason,
@@ -139,7 +140,7 @@ export async function loadShipmentParcelActivitiesByDraftIds(
           ? "This parcel is scheduled to travel on a later manifest."
           : "This parcel was cancelled and is not travelling with the shipment.";
       addActivity(result, consignment.shipmentDraftId, {
-        parcelNumber: disposition.parcelNumber,
+        parcelNumber: formatSwiftlineParcelNumberForDisplay(disposition.parcelNumber),
         status: disposition.disposition,
         eventAt: disposition.recordedAt,
         reason: disposition.reason,

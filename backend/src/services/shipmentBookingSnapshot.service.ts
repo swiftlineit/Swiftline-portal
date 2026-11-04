@@ -6,7 +6,7 @@ import type { ShipmentLabelData } from "./shipmentLabelPdf.service.js";
 import { maskAadhaarNumber } from "./aadhaarValidation.service.js";
 import { getParcelItemAmount, normalizeParcelItems } from "./parcelItems.service.js";
 import { normalizeCsbType, type CsbType } from "./csbType.service.js";
-import { formatSwiftlineParcelNumber } from "./swiftlineTracking.service.js";
+import { formatSwiftlineParcelNumber, formatSwiftlineParcelNumberForDisplay } from "./swiftlineTracking.service.js";
 import { publicShipmentSourceIdentity } from "./shipmentSourceIdentity.service.js";
 
 export type ShipmentBookingSnapshot = {
@@ -297,10 +297,10 @@ export function buildRevisedShipmentSnapshot(input: {
       contentsDescription: parcel.contentsDescription,
       reference: parcel.shipmentReference1 ?? "",
       carrierParcelNumber: input.previousSnapshot.parcels[index]?.carrierParcelNumber ?? "",
-      swiftlineParcelNumber: formatSwiftlineParcelNumber(
-        input.previousSnapshot.tracking.swiftlineTrackingNumber,
-        index
-      )
+      // A revision changes shipment details, not the parcel identifiers already
+      // printed, scanned, or referenced by operational records.
+      swiftlineParcelNumber: input.previousSnapshot.parcels[index]?.swiftlineParcelNumber
+        ?? formatSwiftlineParcelNumber(input.previousSnapshot.tracking.swiftlineTrackingNumber, index)
     })),
     pricing: input.pricing,
     payment: {
@@ -330,15 +330,17 @@ export function bookingSnapshotToLabelData(
   const consignee = snapshot.consignee;
   const senderAddress = sender.address ?? {};
   const parcelNumber = parcel?.swiftlineParcelNumber ?? "";
+  const displayedParcelNumber = formatSwiftlineParcelNumberForDisplay(parcelNumber, snapshot.tracking.swiftlineTrackingNumber);
 
   return {
-    // Keep the unique suffixed value for the barcode and all internal scans.
+    // Keep the stored key stable; the rendered barcode follows the configured display format.
     parcelNumber,
+    barcodeParcelNumber: displayedParcelNumber,
     // CSB-V labels show the shipment HAWB as the human-readable number on each
     // piece. CSB-IV and legacy snapshots retain the existing parcel display.
     displayParcelNumber: snapshot.csbType === "CSB_V"
       ? snapshot.tracking.swiftlineTrackingNumber
-      : parcelNumber,
+      : displayedParcelNumber,
     parcelIndex,
     parcelCount: snapshot.parcels.length,
     ...(snapshot.labelBrand ? {

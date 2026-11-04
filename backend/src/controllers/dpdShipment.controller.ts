@@ -21,6 +21,7 @@ import {
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { counterPaymentMethodValues } from "../models/counterPayment.model.js";
 import { recordCounterCollection } from "../services/individualCustomer.service.js";
+import { formatSwiftlineParcelNumberForDisplay, swiftlineParcelNumberAliases } from "../services/swiftlineTracking.service.js";
 
 // Present only on walk-in bookings; business shipments ignore it entirely.
 const counterCollectionSchema = z.object({
@@ -300,7 +301,7 @@ function serializeDpdShipment(shipment: {
     forwardingNumber: shipment.forwardingNumber ?? "",
     entryNumber: shipment.entryNumber ?? "",
     swiftlineTrackingNumber: shipment.swiftlineTrackingNumber ?? "",
-    parcelNumbers: shipment.parcelNumbers,
+    parcelNumbers: shipment.parcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value, shipment.swiftlineTrackingNumber)),
     serviceCode: shipment.serviceCode,
     status: shipment.status,
     manuallyReconciled: shipment.responseSnapshot?.manuallyReconciled === true,
@@ -325,7 +326,9 @@ function serializeLabel(label: {
   return {
     id: label._id,
     dpdShipmentId: label.dpdShipmentId,
-    parcelNumber: label.parcelNumber,
+    parcelNumber: label.labelType !== "SWIFTLINE"
+      ? label.parcelNumber
+      : formatSwiftlineParcelNumberForDisplay(label.parcelNumber),
     labelType: label.labelType ?? "SWIFTLINE",
     format: label.format,
     labelSize: label.labelSize,
@@ -717,8 +720,8 @@ async function sendStoredLabel(params: {
     key: label.storageKey,
     contentType: labelContentType(label.format),
     filename: label.labelType === "SWIFTLINE" && label.labelSize === "A4"
-      ? `swiftline-labels-${label.parcelNumber.replace(/-\d+$/, "")}.${extension}`
-      : `${label.labelType.toLowerCase()}-label-${label.parcelNumber}.${extension}`,
+      ? `swiftline-labels-${formatSwiftlineParcelNumberForDisplay(label.parcelNumber)}.${extension}`
+      : `${label.labelType.toLowerCase()}-label-${label.labelType === "SWIFTLINE" ? formatSwiftlineParcelNumberForDisplay(label.parcelNumber) : label.parcelNumber}.${extension}`,
     disposition: params.disposition ?? "inline"
   });
 }
@@ -1060,13 +1063,18 @@ export async function listDpdShipments(request: Request, response: Response): Pr
   if (status) filters.status = status;
   if (trackingNumber) {
     const exact = new RegExp(`^${trackingNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+    const parcelPatterns = swiftlineParcelNumberAliases(trackingNumber).map((value) =>
+      new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i")
+    );
     const trackingFilters: Record<string, unknown>[] = [
       { dpdShipmentId: exact },
       { swiftlineTrackingNumber: exact },
-      { parcelNumbers: exact }
+      ...parcelPatterns.map((pattern) => ({ parcelNumbers: pattern })),
+      { "currentShipmentSnapshot.parcels.swiftlineParcelNumber": { $in: parcelPatterns } },
+      { "bookingSnapshot.parcels.swiftlineParcelNumber": { $in: parcelPatterns } }
     ];
     const matchingLabelShipmentIds = await LabelDocument.find({
-      parcelNumber: exact,
+      parcelNumber: { $in: parcelPatterns },
       voidedAt: null
     }).distinct("dpdShipmentId").exec();
     if (matchingLabelShipmentIds.length) trackingFilters.push({ _id: { $in: matchingLabelShipmentIds } });

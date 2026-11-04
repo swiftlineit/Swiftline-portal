@@ -5,6 +5,7 @@ import { FlightLinehaul } from "../models/flightLinehaul.model.js";
 import { FlightDocument } from "../models/flightDocument.model.js";
 import { flightBranchIds } from "../middleware/flightLinehaulBranchAccess.middleware.js";
 import * as service from "../services/flightLinehaul.service.js";
+import { formatSwiftlineParcelNumberForDisplay } from "../services/swiftlineTracking.service.js";
 import { streamObjectToResponse } from "../services/storage/storage.service.js";
 
 function userId(request: Request) {
@@ -359,7 +360,22 @@ export async function createOffload(request: Request, response: Response) {
     if (!input) return;
     const allowedBranchIds = flightBranchIds(request);
     const offload = await service.createOffload({ flightId: String(request.params.flightId), ...input, userId: actorId, allowedBranchIds });
-    return response.status(201).json({ success: true, message: "Offload recorded.", offload });
+    if (!offload) return response.status(500).json({ success: false, message: "Offload could not be recorded." });
+    const offloadData = typeof (offload as { toObject?: () => unknown }).toObject === "function"
+      ? (offload as { toObject: () => typeof offload }).toObject()
+      : offload;
+    if (!offloadData) return response.status(500).json({ success: false, message: "Offload could not be recorded." });
+    return response.status(201).json({
+      success: true,
+      message: "Offload recorded.",
+      offload: {
+        ...offloadData,
+        affectedParcels: offloadData.affectedParcels.map((parcel) => ({
+          ...parcel,
+          parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.parcelNumber)
+        }))
+      }
+    });
   } catch (error) {
     return sendError(response, error);
   }

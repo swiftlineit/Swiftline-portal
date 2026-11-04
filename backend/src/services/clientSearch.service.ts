@@ -6,6 +6,7 @@ import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
 import { SupportTicket } from "../models/supportTicket.model.js";
+import { formatSwiftlineParcelNumberForDisplay, swiftlineParcelNumberAliases } from "./swiftlineTracking.service.js";
 
 /**
  * One search box over everything a customer identifies work by.
@@ -78,6 +79,7 @@ export async function searchClientRecords(input: {
 
   const staff = input.audience === "staff";
   const pattern = containsPattern(term);
+  const parcelPatterns = swiftlineParcelNumberAliases(term).map((value) => containsPattern(value));
   const accountScope: Record<string, unknown> = {};
   if (input.businessAccountId) accountScope.businessAccountId = input.businessAccountId;
   if (input.branchIds !== undefined) accountScope.branchId = { $in: input.branchIds };
@@ -120,7 +122,9 @@ export async function searchClientRecords(input: {
             $or: [
               { swiftlineTrackingNumber: pattern },
               { dpdShipmentId: pattern },
-              { parcelNumbers: pattern },
+              { parcelNumbers: { $in: parcelPatterns } },
+              { "currentShipmentSnapshot.parcels.swiftlineParcelNumber": { $in: parcelPatterns } },
+              { "bookingSnapshot.parcels.swiftlineParcelNumber": { $in: parcelPatterns } },
             ],
           })
             .select(
@@ -177,9 +181,10 @@ export async function searchClientRecords(input: {
   for (const shipment of shipments) {
     const awb =
       shipment.swiftlineTrackingNumber || shipment.dpdShipmentId || "Shipment";
-    const piece = shipment.parcelNumbers?.find((number) =>
-      pattern.test(number),
-    );
+    const storedPiece = shipment.parcelNumbers?.find((number) => parcelPatterns.some((item) => item.test(number)));
+    const piece = storedPiece
+      ? formatSwiftlineParcelNumberForDisplay(storedPiece, shipment.swiftlineTrackingNumber)
+      : undefined;
     results.push({
       kind: "SHIPMENT",
       title: awb,

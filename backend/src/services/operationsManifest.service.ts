@@ -60,6 +60,12 @@ import { resolveShipmentEventNote } from "./shipmentEventCopy.service.js";
 import { isValidFlightNumber, normalizeFlightNumber } from "../utils/flightNumber.js";
 import { setIstDatePreservingTime } from "../utils/indiaDateTime.js";
 import {
+  displaySwiftlineParcelNumber,
+  formatSwiftlineParcelNumberForDisplay,
+  resolveStoredSwiftlineParcelNumber,
+  swiftlineParcelNumberAliases
+} from "./swiftlineTracking.service.js";
+import {
   allocateDispatchedManifestInTransaction,
   createFlightLinehaulInSession
 } from "./flightLinehaul.service.js";
@@ -1028,7 +1034,7 @@ async function buildAcceptedScanAcknowledgement(manifestId: mongoose.Types.Objec
   if (!bag || !manifest || !consignment) return null;
   return {
     scanId: String(scan._id),
-    parcelNumber: scan.parcelNumber,
+    parcelNumber: formatSwiftlineParcelNumberForDisplay(scan.parcelNumber),
     message: scan.message,
     bag: {
       id: String(bag._id),
@@ -1081,18 +1087,20 @@ export async function scanOperationsParcel(input: {
   const bagId = input.bagId && mongoose.Types.ObjectId.isValid(input.bagId)
     ? new mongoose.Types.ObjectId(input.bagId)
     : undefined;
-  const parcelNumber = input.parcelNumber.trim().toUpperCase();
+  const inputParcelNumber = input.parcelNumber.trim().toUpperCase();
+  let parcelNumber = inputParcelNumber;
+  const parcelAliases = swiftlineParcelNumberAliases(inputParcelNumber);
   const scanRequestId = input.scanRequestId?.trim() || crypto.randomUUID();
   const scanMetadata = { scanSource: input.scanSource ?? "MANUAL", scanSessionId: input.scanSessionId };
-  if (!parcelNumber) throw new OperationsManifestServiceError("Scan or enter a Swiftline parcel barcode.");
+  if (!inputParcelNumber) throw new OperationsManifestServiceError("Scan or enter a Swiftline parcel barcode.");
 
   // These lookups are independent. Running them in one round trip window cuts
   // camera acknowledgement latency without moving any validation into the
   // transaction or weakening the unique scan safeguards.
-  const [existingRequest, manifest, label] = await Promise.all([
+  const [existingRequest, manifest, labels] = await Promise.all([
     OperationsManifestScan.findOne({ scanRequestId }).lean().exec(),
     OperationsManifest.findById(manifestId).exec(),
-    LabelDocument.findOne({ parcelNumber, labelType: "SWIFTLINE", voidedAt: null }).exec()
+    LabelDocument.find({ parcelNumber: { $in: parcelAliases }, labelType: "SWIFTLINE", voidedAt: null }).exec()
   ]);
   if (existingRequest) {
     if (existingRequest.status === "ACCEPTED") {
@@ -1111,6 +1119,11 @@ export async function scanOperationsParcel(input: {
   if (!manifest) throw new OperationsManifestServiceError("Operations manifest was not found.", 404);
   if (!isEditable(manifest)) return recordRejectedScan({ manifestId, bagId, parcelNumber, scanRequestId, userId: input.userId, ...scanMetadata, message: "This manifest is locked and cannot accept parcel scans." });
 
+  const labelShipmentIds = [...new Set(labels.map((candidate) => String(candidate.dpdShipmentId)))];
+  if (labelShipmentIds.length > 1) {
+    return recordRejectedScan({ manifestId, bagId, parcelNumber, scanRequestId, userId: input.userId, ...scanMetadata, message: "This parcel number matches more than one active label. Contact Swiftline Operations." });
+  }
+  const label = labels.find((candidate) => candidate.parcelNumber.toUpperCase() === inputParcelNumber) ?? labels[0] ?? null;
   if (!label) return recordRejectedScan({ manifestId, bagId, parcelNumber, scanRequestId, userId: input.userId, ...scanMetadata, message: "No Swiftline parcel was found for this barcode." });
   const shipment = await DpdShipment.findOne({ _id: label.dpdShipmentId, status: { $in: ["DPD_CREATED", "LABEL_RECEIVED"] } }).exec();
   const snapshot = shipment
@@ -1119,6 +1132,14 @@ export async function scanOperationsParcel(input: {
   if (!shipment || !snapshot) {
     return recordRejectedScan({ manifestId, bagId, parcelNumber, scanRequestId, userId: input.userId, ...scanMetadata, message: "Shipment information is incomplete. Contact Swiftline support before packing it." });
   }
+  const storedParcelNumber = resolveStoredSwiftlineParcelNumber(
+    inputParcelNumber,
+    snapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber.toUpperCase())
+  );
+  if (!storedParcelNumber) {
+    return recordRejectedScan({ manifestId, bagId, parcelNumber, scanRequestId, userId: input.userId, ...scanMetadata, message: "This barcode does not match a unique parcel on the shipment." });
+  }
+  parcelNumber = storedParcelNumber;
   const expectedParcelNumbers = snapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber.toUpperCase());
   const parcelWeightSnapshots = snapshot.parcels.map((parcel) => ({
     parcelNumber: parcel.swiftlineParcelNumber.toUpperCase(),
@@ -1697,7 +1718,7 @@ export async function setOperationsParcelDisposition(input: {
 }) {
   const manifestId = asObjectId(input.manifestId, "Operations manifest");
   const consignmentId = asObjectId(input.consignmentId, "Consignment");
-  const parcelNumber = input.parcelNumber.trim().toUpperCase();
+  const inputParcelNumber = input.parcelNumber.trim().toUpperCase();
   const reason = input.reason.trim();
   const session = await mongoose.startSession();
   try {
@@ -1712,7 +1733,8 @@ export async function setOperationsParcelDisposition(input: {
         status: { $ne: "REMOVED" }
       }).session(session).exec();
       if (!consignment) throw new OperationsManifestServiceError("Consignment was not found.", 404);
-      if (!consignment.expectedParcelNumbers.includes(parcelNumber)) {
+      const parcelNumber = resolveStoredSwiftlineParcelNumber(inputParcelNumber, consignment.expectedParcelNumbers);
+      if (!parcelNumber) {
         throw new OperationsManifestServiceError("This parcel does not belong to the selected consignment.", 409);
       }
       if (consignment.scannedParcelNumbers.includes(parcelNumber)) {
@@ -2836,6 +2858,16 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
       );
       return {
         ...item,
+        expectedParcelNumbers: item.expectedParcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value)),
+        scannedParcelNumbers: item.scannedParcelNumbers.map((value) => formatSwiftlineParcelNumberForDisplay(value)),
+        parcelDispositions: (item.parcelDispositions ?? []).map((entry) => ({
+          ...entry,
+          parcelNumber: formatSwiftlineParcelNumberForDisplay(entry.parcelNumber)
+        })),
+        parcelWeightSnapshots: (item.parcelWeightSnapshots ?? []).map((parcel) => ({
+          ...parcel,
+          parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.parcelNumber)
+        })),
         id: String(item._id),
         manifestId: String(item.manifestId),
         bagId: String(item.bagId),
@@ -2845,7 +2877,7 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
         activeParcelScans: acceptedScans
           .filter((scan) => String(scan.consignmentId) === String(item._id))
           .map((scan) => ({
-            parcelNumber: scan.parcelNumber,
+            parcelNumber: formatSwiftlineParcelNumberForDisplay(scan.parcelNumber),
             scanId: String(scan._id),
             bagId: scan.bagId ? String(scan.bagId) : null
           })),
@@ -2858,15 +2890,29 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
         businessAccountId: String(item.businessAccountId),
         displayConsignmentNumber: formatManifestConsignmentNumber(item.consignmentNumber),
         // Goods value is entered per parcel; the consignment value is their sum.
-        parcelValues: scannedParcelValues(item),
+        parcelValues: scannedParcelValues(item).map((parcel) => ({
+          ...parcel,
+          parcelNumber: formatSwiftlineParcelNumberForDisplay(parcel.parcelNumber)
+        })),
         goodsValueRequired: scannedParcelValues(item).some((parcel) => !parcel.valueMinor),
         dpdWarning: item.dpdLabelGenerated ? "" : "Swiftline labels have not been generated for every parcel on this shipment.",
         carrierReconciliationRequired
       };
     }),
-    scans: scans.map((scan) => ({ ...scan, id: String(scan._id), manifestId: String(scan.manifestId), bagId: scan.bagId ? String(scan.bagId) : null })),
+    scans: scans.map((scan) => ({
+      ...scan,
+      parcelNumber: formatSwiftlineParcelNumberForDisplay(scan.parcelNumber),
+      id: String(scan._id),
+      manifestId: String(scan.manifestId),
+      bagId: scan.bagId ? String(scan.bagId) : null
+    })),
     latestScan: latestScan
-      ? { ...latestScan, id: String(latestScan._id), bagId: latestScan.bagId ? String(latestScan.bagId) : null }
+      ? {
+          ...latestScan,
+          parcelNumber: formatSwiftlineParcelNumberForDisplay(latestScan.parcelNumber),
+          id: String(latestScan._id),
+          bagId: latestScan.bagId ? String(latestScan.bagId) : null
+        }
       : null,
     sealingIssues: [
       ...sealingIssues(
@@ -2887,22 +2933,40 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
 /** Read-only lookup scoped to one manifest; it never records a packing scan. */
 export async function getOperationsParcelDetails(manifestIdValue: string, parcelNumberValue: string) {
   const manifestId = asObjectId(manifestIdValue, "Operations manifest");
-  const parcelNumber = parcelNumberValue.trim().toUpperCase();
-  if (!parcelNumber || parcelNumber.length > 80) {
+  const inputParcelNumber = parcelNumberValue.trim().toUpperCase();
+  const parcelAliases = swiftlineParcelNumberAliases(inputParcelNumber);
+  if (!inputParcelNumber || inputParcelNumber.length > 80) {
     throw new OperationsManifestServiceError("Scan a valid Swiftline parcel barcode.", 400);
   }
 
-  const [manifest, consignment] = await Promise.all([
+  const [manifest, consignments] = await Promise.all([
     OperationsManifest.findById(manifestId).select("manifestNumber status").lean().exec(),
-    OperationsManifestConsignment.findOne({
+    OperationsManifestConsignment.find({
       manifestId,
       status: { $ne: "REMOVED" },
-      $or: [{ expectedParcelNumbers: parcelNumber }, { scannedParcelNumbers: parcelNumber }]
+      $or: [
+        { expectedParcelNumbers: { $in: parcelAliases } },
+        { scannedParcelNumbers: { $in: parcelAliases } }
+      ]
     }).lean().exec()
   ]);
   if (!manifest) throw new OperationsManifestServiceError("Operations manifest was not found.", 404);
-  if (!consignment) {
+  if (!consignments.length) {
     throw new OperationsManifestServiceError("This parcel is not in the opened manifest.", 404);
+  }
+  if (consignments.length > 1) {
+    throw new OperationsManifestServiceError("This parcel number matches more than one consignment in the opened manifest.", 409);
+  }
+  const consignment = consignments[0]!;
+  const storedParcelNumbers = [
+    ...(consignment.expectedParcelNumbers ?? []),
+    ...(consignment.parcelWeightSnapshots ?? []).map((parcel) => parcel.parcelNumber),
+    ...(consignment.scannedParcelNumbers ?? []),
+    ...(consignment.parcelDispositions ?? []).map((item) => item.parcelNumber)
+  ];
+  const parcelNumber = resolveStoredSwiftlineParcelNumber(inputParcelNumber, [...new Set(storedParcelNumbers)]);
+  if (!parcelNumber) {
+    throw new OperationsManifestServiceError("This parcel number does not identify one parcel in the opened manifest.", 409);
   }
 
   const scans = await OperationsManifestScan.find({
@@ -2922,7 +2986,7 @@ export async function getOperationsParcelDetails(manifestIdValue: string, parcel
   const disposition = consignment.parcelDispositions?.find((item) => item.parcelNumber === parcelNumber);
 
   return {
-    parcelNumber,
+    parcelNumber: formatSwiftlineParcelNumberForDisplay(parcelNumber),
     packed: Boolean(parcelScan),
     scannedAt: parcelScan?.scannedAt ?? null,
     disposition: parcelScan ? null : disposition?.disposition ?? null,
