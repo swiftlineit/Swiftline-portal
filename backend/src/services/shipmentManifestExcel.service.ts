@@ -41,18 +41,18 @@ function filled(argb: string): ExcelJS.Fill {
 function cellValue(value: string, column: number): string | number {
   if (value === "") return "";
   if (column === 0 || column === 8) return Number(value);
-  if (column === 9 || column === 10) return Number.isFinite(Number(value)) ? Number(value) : value;
+  if (column === 10 || column === 11) return Number.isFinite(Number(value)) ? Number(value) : value;
   return value;
 }
 
 function rowHeight(values: string[]) {
-  const widths = [7, 22, 20, 18, 22, 22, 16, 18, 7, 11, 11, 16];
+  const widths = [7, 24, 24, 38, 16, 24, 38, 16, 7, 45, 11, 11, 15];
   const lines = values.reduce((tallest, value, index) => {
     const width = widths[index] ?? 12;
     const wrapped = value.split(/\r?\n/).reduce((count, line) => count + Math.max(1, Math.ceil(line.length / width)), 0);
     return Math.max(tallest, wrapped);
   }, 1);
-  return Math.min(72, Math.max(22, lines * 12 + 6));
+  return Math.min(409, Math.max(22, lines * 12 + 6));
 }
 
 /**
@@ -82,12 +82,12 @@ export async function buildShipmentManifestHandoverWorkbook(manifest: IShipmentM
     properties: { defaultRowHeight: 20 }
   });
   worksheet.columns = [
-    { width: 7 }, { width: 22 }, { width: 20 }, { width: 18 },
-    { width: 22 }, { width: 22 }, { width: 16 }, { width: 18 },
-    { width: 7 }, { width: 11 }, { width: 11 }, { width: 16 }
+    { width: 7 }, { width: 24 }, { width: 24 }, { width: 38 },
+    { width: 16 }, { width: 24 }, { width: 38 }, { width: 16 },
+    { width: 7 }, { width: 45 }, { width: 11 }, { width: 11 }, { width: 15 }
   ];
 
-  worksheet.mergeCells("A1:L1");
+  worksheet.mergeCells("A1:M1");
   worksheet.getCell("A1").value = "MANIFEST";
   worksheet.getRow(1).height = 32;
   worksheet.getCell("A1").font = { bold: true, size: 18, color: { argb: colours.ink } };
@@ -134,7 +134,7 @@ export async function buildShipmentManifestHandoverWorkbook(manifest: IShipmentM
   // the five shipment details in individually bordered rows on the right.
   styleMergedHeaderRange("A3:D3", 3, 1, 3, 4, "FROM,", { bold: true });
   styleMergedHeaderRange("E3:H3", 3, 5, 3, 8, "TO,", { bold: true });
-  styleMergedHeaderRange(`I3:L3`, 3, 9, 3, 12, `DATE: ${manifestDate(manifest.generatedAt)}`, { bold: true });
+  styleMergedHeaderRange("I3:M3", 3, 9, 3, 13, `DATE: ${manifestDate(manifest.generatedAt)}`, { bold: true });
   styleMergedHeaderRange("A4:D8", 4, 1, 8, 4, text(header.origin).toUpperCase() || "-", { bold: true, vertical: "top" });
   styleMergedHeaderRange("E4:H8", 4, 5, 8, 8, text(header.destination).toUpperCase() || "-", { bold: true, vertical: "top" });
   [
@@ -145,7 +145,7 @@ export async function buildShipmentManifestHandoverWorkbook(manifest: IShipmentM
     `PAYMENT TYPE:${text(header.paymentType) ? ` ${text(header.paymentType)}` : ""}`
   ].forEach((value, index) => {
     const row = index + 4;
-    styleMergedHeaderRange(`I${row}:L${row}`, row, 9, row, 12, value, { bold: true });
+    styleMergedHeaderRange(`I${row}:M${row}`, row, 9, row, 13, value, { bold: true });
   });
 
   worksheet.getRow(9).height = 8;
@@ -172,20 +172,20 @@ export async function buildShipmentManifestHandoverWorkbook(manifest: IShipmentM
       const cell = row.getCell(index + 1);
       cell.font = { size: 9, color: { argb: colours.ink } };
       cell.alignment = {
-        horizontal: index === 3 || index === 4 || index === 5 ? "left" : "center",
+        horizontal: [2, 3, 4, 5, 6, 7, 9, 12].includes(index) ? "left" : "center",
         vertical: "middle",
         wrapText: true
       };
       cell.border = border;
     });
-    row.getCell(10).numFmt = "0.00";
     row.getCell(11).numFmt = "0.00";
+    row.getCell(12).numFmt = "0.00";
   });
   rowsBySection.forEach((section, sectionIndex) => {
     if (sections.length) {
       if (sectionIndex > 0) worksheet.addRow([]).height = 20;
       const sectionRow = worksheet.addRow([section.label]);
-      worksheet.mergeCells(`A${sectionRow.number}:L${sectionRow.number}`);
+      worksheet.mergeCells(`A${sectionRow.number}:M${sectionRow.number}`);
       sectionRow.height = 24;
       for (let column = 1; column <= shipmentManifestTableHeadings.length; column += 1) {
         const cell = sectionRow.getCell(column);
@@ -202,7 +202,7 @@ export async function buildShipmentManifestHandoverWorkbook(manifest: IShipmentM
 
   const afterRows = Math.max(worksheet.rowCount, 10) + 2;
   const declaration = shipmentManifestDeclaration(manifest);
-  worksheet.mergeCells(`A${afterRows}:L${afterRows}`);
+  worksheet.mergeCells(`A${afterRows}:M${afterRows}`);
   const declarationCell = worksheet.getCell(`A${afterRows}`);
   declarationCell.value = declaration;
   declarationCell.font = { size: 9, color: { argb: colours.ink } };
@@ -212,14 +212,14 @@ export async function buildShipmentManifestHandoverWorkbook(manifest: IShipmentM
 
   const signatureLine = afterRows + 1;
   worksheet.mergeCells(`A${signatureLine}:F${signatureLine}`);
-  worksheet.mergeCells(`G${signatureLine}:L${signatureLine}`);
+  worksheet.mergeCells(`G${signatureLine}:M${signatureLine}`);
   worksheet.getRow(signatureLine).height = 24;
   for (const address of [`A${signatureLine}`, `G${signatureLine}`]) {
     worksheet.getCell(address).border = { bottom: { style: "thin", color: { argb: colours.border } } };
   }
   const signatureLabels = afterRows + 2;
   worksheet.mergeCells(`A${signatureLabels}:F${signatureLabels}`);
-  worksheet.mergeCells(`G${signatureLabels}:L${signatureLabels}`);
+  worksheet.mergeCells(`G${signatureLabels}:M${signatureLabels}`);
   worksheet.getCell(`A${signatureLabels}`).value = `FOR ${text(header.origin).toUpperCase() || "ORIGIN"} (SIGN AND STAMP)`;
   worksheet.getCell(`G${signatureLabels}`).value = "(NAME)";
   for (const address of [`A${signatureLabels}`, `G${signatureLabels}`]) {
@@ -227,7 +227,7 @@ export async function buildShipmentManifestHandoverWorkbook(manifest: IShipmentM
     worksheet.getCell(address).alignment = { horizontal: "center", vertical: "middle" };
   }
 
-  worksheet.pageSetup.printArea = `A1:L${signatureLabels}`;
+  worksheet.pageSetup.printArea = `A1:M${signatureLabels}`;
   worksheet.headerFooter.oddFooter = `Swiftline Portal | Manifest ${manifest.manifestNumber} | Page &P of &N`;
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }

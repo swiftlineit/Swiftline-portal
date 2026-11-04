@@ -41,7 +41,7 @@ export interface ShipmentManifestLineSnapshot {
   /**
    * One entry per physical parcel. The handover manifest gives each parcel its
    * own row, so these carry the per-parcel barcode, forwarding number, weight
-   * and product rather than a joined summary.
+   * product and goods description rather than a joined summary.
    */
   parcels?: ShipmentManifestParcelSnapshot[];
 }
@@ -53,6 +53,8 @@ export interface ShipmentManifestParcelSnapshot {
   /** That parcel's own chargeable weight; absent on lines sealed before it was captured. */
   chargeableWeightKg?: number;
   product: string;
+  /** The parcel's full goods description; absent on snapshots created before this field. */
+  description?: string;
 }
 
 export interface IShipmentManifest extends mongoose.Document, TenantOwnedFields {
@@ -109,7 +111,8 @@ const manifestLineSchema = new mongoose.Schema<ShipmentManifestLineSnapshot>({
       forwardingNumber: { type: String, trim: true, maxlength: 80, default: "" },
       weightKg: { type: Number, min: 0, default: 0 },
       chargeableWeightKg: { type: Number, min: 0 },
-      product: { type: String, trim: true, maxlength: 60, default: "" }
+      product: { type: String, trim: true, maxlength: 60, default: "" },
+      description: { type: String, trim: true, maxlength: 120 }
     }, { _id: false })],
     default: undefined
   }

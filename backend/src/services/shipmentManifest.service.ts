@@ -385,7 +385,8 @@ export function buildHandoverManifestLine(input: ManifestLineInput & { remark?: 
     forwardingNumber: text(parcel.carrierParcelNumber),
     weightKg: parcel.actualWeightKg,
     chargeableWeightKg: manifestParcelChargeableWeightKg(input.snapshot, parcel.sequence, index, parcel.actualWeightKg),
-    product: text(parcel.shipmentContentType)
+    product: text(parcel.shipmentContentType),
+    description: text(parcel.contentsDescription)
   }));
 
   return {

@@ -7,18 +7,19 @@ const border = "#222222";
 const ink = "#111111";
 const muted = "#f2f2f2";
 
-/** Sr, AWB/Parcel, Forwarding, Destination, Shipper, Receiver, Service, Product, Pcs, Weight, Chargeable Weight, Remark. */
-const columnWidths = [26, 92, 96, 78, 90, 90, 74, 62, 30, 44, 44, 50];
+/** Sr, AWB/Parcel, consignor, consignee, pieces, description, weights and remark. */
+const columnWidths = [22, 74, 58, 108, 42, 58, 108, 42, 24, 92, 38, 42, 68];
 export const shipmentManifestTableHeadings = [
   "Sr.\nNo.",
   "AWB No. /\nParcel No",
-  "Forwarding\nNo.",
-  "Destination",
-  "Shipper",
-  "Receiver",
-  "Service",
-  "Product",
+  "Consignor Name",
+  "Consignor Full\nAddress",
+  "Consignor Contact\nNumber",
+  "Consignee Name",
+  "Consignee Full\nAddress",
+  "Consignee Contact\nNumber",
   "Pcs",
+  "Description",
   "Weight",
   "Chg Wt",
   "Remark"
@@ -48,6 +49,54 @@ function partyName(value: unknown) {
   return text(source.formatted).split(/\r?\n/)[0] ?? "";
 }
 
+function uniqueValues(values: unknown[]) {
+  const seen = new Set<string>();
+  return values.map(text).filter((value) => {
+    if (!value) return false;
+    const key = value.replace(/\s+/g, " ").toUpperCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function partyDocumentFields(value: unknown, fallbackName: unknown) {
+  const party = partyOf(value);
+  if (party) {
+    const name = uniqueValues([party.companyName, party.contactName, fallbackName]);
+    const address = uniqueValues([
+      party.addressLine1,
+      party.addressLine2,
+      party.city,
+      party.state,
+      party.postcode,
+      party.countryName || party.countryCode
+    ]);
+    if (name.length || address.length || text(party.phone)) {
+      return { name: name.join("\n"), address: address.join("\n"), phone: text(party.phone) };
+    }
+  }
+
+  // Older snapshots only have the same newline-joined block used by the old
+  // manifest documents. Strip its explicit TEL marker and use any separately
+  // captured shipper/receiver name to split the fields without live lookups.
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const formattedLines = text(source.formatted).split(/\r?\n/).map(text).filter(Boolean);
+  const phoneLine = formattedLines.find((line) => /^TEL-/i.test(line)) ?? "";
+  const remainingLines = formattedLines.filter((line) => !/^TEL-/i.test(line));
+  const name = uniqueValues([fallbackName, remainingLines[0]]);
+  const nameValues = new Set(name.map((item) => item.replace(/\s+/g, " ").toUpperCase()));
+  const address = remainingLines.filter((line) => !nameValues.has(line.replace(/\s+/g, " ").toUpperCase()));
+  return { name: name.join("\n"), address: address.join("\n"), phone: phoneLine.replace(/^TEL-/i, "") };
+}
+
+/** Limits only the PDF display; the shared rows and Excel keep the full text. */
+export function clampManifestPdfDescription(value: string, wordLimit = 10) {
+  const words = text(value).split(/\s+/).filter(Boolean);
+  if (words.length <= wordLimit) return words.join(" ");
+  return `${words.slice(0, wordLimit).join(" ")}…`;
+}
+
 function manifestDate(value: Date) {
   return new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
@@ -58,8 +107,8 @@ function manifestDate(value: Date) {
 }
 
 /**
- * One row per physical parcel, each carrying only its own barcode, forwarding
- * number, weight and product. Lines sealed before per-parcel data existed keep a
+ * One row per physical parcel, each carrying its own barcode, weight and
+ * description. Lines sealed before per-parcel data existed keep a
  * single summary row so historical manifests still render every column.
  * Chargeable weight falls back to the actual weight on legacy lines. A line
  * sealed before per-parcel chargeable weights were captured states its shipment
@@ -68,26 +117,31 @@ function manifestDate(value: Date) {
  */
 export function manifestRows(lines: ShipmentManifestLineSnapshot[], startIndex = 0) {
   return lines.flatMap((line) => {
-    const consigneeParty = partyOf(line.consignee);
+    const consignor = partyDocumentFields(line.consignor, line.shipperName);
+    const consignee = partyDocumentFields(line.consignee, line.receiverName);
     const shared = {
-      destination: line.destination || consigneeParty?.countryName || consigneeParty?.countryCode || "",
-      shipper: line.shipperName || partyName(line.consignor),
-      receiver: line.receiverName || partyName(line.consignee),
-      service: line.service || line.serviceInfo,
+      consignorName: consignor.name || partyName(line.consignor),
+      consignorAddress: consignor.address,
+      consignorPhone: consignor.phone,
+      consigneeName: consignee.name || partyName(line.consignee),
+      consigneeAddress: consignee.address,
+      consigneePhone: consignee.phone,
       remark: line.remark || "DONE"
     };
     const lineChargeableKg = typeof line.chargeableWeightKg === "number" ? line.chargeableWeightKg : line.weightKg;
+    const hasParcelDescriptions = Boolean(line.parcels?.some((parcel) => text(parcel.description)));
 
     if (line.parcels?.length) {
       return line.parcels.map((parcel, parcelIndex) => [
         formatSwiftlineParcelNumberForDisplay(parcel.awbNumber || formatManifestConsignmentNumber(line.consignmentNumber), line.consignmentNumber),
-        parcel.forwardingNumber,
-        shared.destination,
-        shared.shipper,
-        shared.receiver,
-        shared.service,
-        parcel.product || line.product || line.description,
+        shared.consignorName,
+        shared.consignorAddress,
+        shared.consignorPhone,
+        shared.consigneeName,
+        shared.consigneeAddress,
+        shared.consigneePhone,
         "1",
+        text(parcel.description) || (!hasParcelDescriptions && parcelIndex === 0 ? line.description : ""),
         parcel.weightKg.toFixed(2),
         typeof parcel.chargeableWeightKg === "number"
           ? parcel.chargeableWeightKg.toFixed(2)
@@ -98,13 +152,14 @@ export function manifestRows(lines: ShipmentManifestLineSnapshot[], startIndex =
 
     return [[
       line.awbNumbers?.map((value) => formatSwiftlineParcelNumberForDisplay(value, line.consignmentNumber)).join(", ") || formatManifestConsignmentNumber(line.consignmentNumber),
-      line.forwardingNumbers?.join(", ") ?? "",
-      shared.destination,
-      shared.shipper,
-      shared.receiver,
-      shared.service,
-      line.product || line.description,
+      shared.consignorName,
+      shared.consignorAddress,
+      shared.consignorPhone,
+      shared.consigneeName,
+      shared.consigneeAddress,
+      shared.consigneePhone,
       String(line.pieces),
+      line.description,
       line.weightKg.toFixed(2),
       lineChargeableKg.toFixed(2),
       shared.remark
@@ -203,12 +258,12 @@ export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<B
     }
 
     function drawTableHeadings(y: number) {
-      shipmentManifestTableHeadings.forEach((heading, column) => drawCell(column, y, 26, heading, {
+      shipmentManifestTableHeadings.forEach((heading, column) => drawCell(column, y, 32, heading, {
         bold: true,
-        size: 6.5,
+        size: 5.8,
         fill: muted
       }));
-      return y + 26;
+      return y + 32;
     }
 
     function drawSectionHeading(label: string, y: number) {
@@ -260,9 +315,11 @@ export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<B
       : [{ key: "manifest", label: "", lines: manifest.lineSnapshots }];
     let rowIndex = 0;
     rowsBySection.forEach((section, sectionIndex) => {
-      const rows = manifestRows(section.lines, rowIndex);
+      const rows = manifestRows(section.lines, rowIndex).map((row) => row.map((value, column) =>
+        column === 9 ? clampManifestPdfDescription(value) : value
+      ));
       rowIndex += rows.length;
-      const firstRowHeight = rows.length ? rowHeight(rows[0]!, 6.5) : 0;
+      const firstRowHeight = rows.length ? rowHeight(rows[0]!, 5.8) : 0;
       const sectionGap = sections.length && sectionIndex > 0 ? 18 : 0;
       const headingHeight = sections.length ? 20 : 0;
       if (sections.length && y + sectionGap + headingHeight + firstRowHeight > contentLimit) {
@@ -273,12 +330,15 @@ export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<B
       }
       if (sections.length) y = drawSectionHeading(section.label, y);
       rows.forEach((values) => {
-        const height = rowHeight(values, 6.5);
+        const height = rowHeight(values, 5.8);
         if (y + height > contentLimit) {
           document.addPage();
           y = drawTableHeadings(document.page.margins.top);
         }
-        values.forEach((value, column) => drawCell(column, y, height, value));
+        values.forEach((value, column) => drawCell(column, y, height, value, {
+          size: 5.8,
+          align: [2, 3, 4, 5, 6, 7, 9, 12].includes(column) ? "left" : "center"
+        }));
         y += height;
       });
     });

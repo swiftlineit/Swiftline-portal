@@ -27,6 +27,7 @@ import {
 } from "../services/shipmentManifestMembership.service.js";
 import {
   buildShipmentManifestPdf,
+  clampManifestPdfDescription,
   manifestRows,
   shipmentManifestDeclaration,
   shipmentManifestSections
@@ -364,6 +365,8 @@ describe("shipment manifest workbook", () => {
       declaredValueMinor: 25_000_00,
       bagNumber: "BAG-01"
     });
+    const fullDescription = "one two three four five six seven eight nine ten eleven twelve";
+    line.parcels![0]!.description = fullDescription;
     const manifest = {
       _id: new mongoose.Types.ObjectId(),
       manifestNumber: "SLC-001",
@@ -405,7 +408,7 @@ describe("shipment manifest workbook", () => {
     assert.equal(sheet.getCell("I6").value, "MANIFEST #: SLC-001");
     assert.equal(sheet.getCell("I7").value, "COLOADER: Sky Cargo");
     assert.equal(sheet.getCell("I8").value, "PAYMENT TYPE: PREPAID");
-    for (let column = 1; column <= 12; column += 1) {
+    for (let column = 1; column <= 13; column += 1) {
       const labelCellBorder: Partial<ExcelJS.Borders> = sheet.getCell(3, column).border;
       assert.equal(labelCellBorder.top?.style, "thin", `missing header top border at column ${column}`);
       assert.equal(labelCellBorder.bottom?.style, "thin", `missing label divider at column ${column}`);
@@ -418,28 +421,35 @@ describe("shipment manifest workbook", () => {
         if (column === 1 || column === 5) assert.equal(cellBorder.left?.style, "thin", `missing section left at ${row},${column}`);
         if (column === 4 || column === 8) assert.equal(cellBorder.right?.style, "thin", `missing section right at ${row},${column}`);
       }
-      for (let column = 9; column <= 12; column += 1) {
+      for (let column = 9; column <= 13; column += 1) {
         const cellBorder: Partial<ExcelJS.Borders> = sheet.getCell(row, column).border;
         assert.equal(cellBorder.top?.style, "thin", `missing metadata row top at ${row},${column}`);
         assert.equal(cellBorder.bottom?.style, "thin", `missing metadata row bottom at ${row},${column}`);
         if (column === 9) assert.equal(cellBorder.left?.style, "thin", `missing metadata left at ${row}`);
-        if (column === 12) assert.equal(cellBorder.right?.style, "thin", `missing metadata right at ${row}`);
+        if (column === 13) assert.equal(cellBorder.right?.style, "thin", `missing metadata right at ${row}`);
       }
     }
-    assert.deepEqual(Array.from({ length: 12 }, (_value, index) => sheet.getCell(10, index + 1).value), [
-      "Sr.\nNo.", "AWB No. /\nParcel No", "Forwarding\nNo.", "Destination", "Shipper", "Receiver",
-      "Service", "Product", "Pcs", "Weight", "Chg Wt", "Remark"
+    assert.deepEqual(Array.from({ length: 13 }, (_value, index) => sheet.getCell(10, index + 1).value), [
+      "Sr.\nNo.", "AWB No. /\nParcel No", "Consignor Name", "Consignor Full\nAddress",
+      "Consignor Contact\nNumber", "Consignee Name", "Consignee Full\nAddress", "Consignee Contact\nNumber",
+      "Pcs", "Description", "Weight", "Chg Wt", "Remark"
     ]);
     assert.equal(sheet.getCell("A11").value, 1);
     assert.equal(sheet.getCell("B11").value, "S1");
-    assert.equal(sheet.getCell("C11").value, "P1");
-    assert.equal(sheet.getCell("D11").value, "United Kingdom");
-    assert.equal(sheet.getCell("H11").value, "PARCEL");
+    assert.equal(sheet.getCell("C11").value, "Example Exporter\nMr. Ravi Sharma");
+    assert.equal(sheet.getCell("D11").value, "1 Export Road\nDelhi\n110001\nIndia");
+    assert.equal(sheet.getCell("E11").value, "+919000000000");
+    assert.equal(sheet.getCell("F11").value, "Example Consignee\nAsha Patel");
+    assert.equal(sheet.getCell("G11").value, "10 Downing Street\nLondon\nSW1A 2AA\nUnited Kingdom");
+    assert.equal(sheet.getCell("H11").value, "+447123456789");
     assert.equal(sheet.getCell("I11").value, 1);
-    assert.equal(sheet.getCell("J11").value, 4.5);
+    assert.equal(sheet.getCell("J11").value, fullDescription);
+    assert.equal(sheet.getCell("K11").value, 4.5);
+    assert.equal(sheet.getCell("L11").value, 4.5);
+    assert.equal(sheet.getCell("M11").value, "DONE");
     assert.equal(sheet.getCell("B12").value, "S2");
-    assert.equal(sheet.getCell("H12").value, "DOCUMENTS");
-    assert.equal(sheet.getCell("J12").value, 5.5);
+    assert.equal(sheet.getCell("J12").value, "Documents");
+    assert.equal(sheet.getCell("K12").value, 5.5);
     assert.equal(String(sheet.getCell("A14").value).startsWith("We hereby declare"), true);
     assert.equal(sheet.getCell("A16").value, "FOR AHMEDABAD (SIGN AND STAMP)");
     assert.equal(sheet.autoFilter, undefined);
@@ -534,7 +544,7 @@ describe("handover manifest", () => {
     assert.ok(pdf.length > 1000);
   });
 
-  it("keeps every parcel's own barcode, forwarding number, weight and product", () => {
+  it("keeps each parcel's barcode, description, weight and contact snapshots", () => {
     const line = buildHandoverManifestLine({
       shipmentDraftId: new mongoose.Types.ObjectId(),
       dpdShipmentId: new mongoose.Types.ObjectId(),
@@ -545,8 +555,8 @@ describe("handover manifest", () => {
     });
 
     assert.deepEqual(line.parcels, [
-      { awbNumber: "S1", forwardingNumber: "P1", weightKg: 4.5, chargeableWeightKg: 4.5, product: "PARCEL" },
-      { awbNumber: "S2", forwardingNumber: "P2", weightKg: 5.5, chargeableWeightKg: 5.5, product: "DOCUMENTS" }
+      { awbNumber: "S1", forwardingNumber: "P1", weightKg: 4.5, chargeableWeightKg: 4.5, product: "PARCEL", description: "Clothing" },
+      { awbNumber: "S2", forwardingNumber: "P2", weightKg: 5.5, chargeableWeightKg: 5.5, product: "DOCUMENTS", description: "Documents" }
     ]);
     assert.equal(line.destination, "United Kingdom");
     assert.equal(line.remark, "DONE");
@@ -613,15 +623,15 @@ describe("handover manifest", () => {
     // Two shipments of two parcels each: four rows, not two.
     assert.equal(rows.length, 4);
     assert.deepEqual(rows.map((row) => row[0]), ["1", "2", "3", "4"]);
-    // Every row carries one parcel's own barcode, product, piece count and weight.
+    // Every row carries one parcel's own barcode, description, piece count and weight.
     assert.deepEqual(rows.map((row) => row[1]), ["S1", "S2", "S1", "S2"]);
-    assert.deepEqual(rows.map((row) => row[2]), ["P1", "P2", "P1", "P2"]);
-    assert.deepEqual(rows.map((row) => row[7]), ["PARCEL", "DOCUMENTS", "PARCEL", "DOCUMENTS"]);
+    assert.deepEqual(rows.map((row) => row[2]), ["Example Exporter\nMr. Ravi Sharma", "Example Exporter\nMr. Ravi Sharma", "Example Exporter\nMr. Ravi Sharma", "Example Exporter\nMr. Ravi Sharma"]);
+    assert.deepEqual(rows.map((row) => row[9]), ["Clothing", "Documents", "Clothing", "Documents"]);
     assert.deepEqual(rows.map((row) => row[8]), ["1", "1", "1", "1"]);
-    assert.deepEqual(rows.map((row) => row[9]), ["4.50", "5.50", "4.50", "5.50"]);
     assert.deepEqual(rows.map((row) => row[10]), ["4.50", "5.50", "4.50", "5.50"]);
-    assert.deepEqual(rows.map((row) => row[11]), ["DONE", "DONE", "DONE", "DONE"]);
-    assert.deepEqual([...new Set(rows.map((row) => row[6]))], ["COURIER"]);
+    assert.deepEqual(rows.map((row) => row[11]), ["4.50", "5.50", "4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[12]), ["DONE", "DONE", "DONE", "DONE"]);
+    assert.deepEqual([...new Set(rows.map((row) => row[7]))], ["+447123456789"]);
   });
 
   it("carries the pricing snapshot's chargeable weight on the line, parcels and rows", () => {
@@ -643,8 +653,8 @@ describe("handover manifest", () => {
     assert.equal(line.chargeableWeightKg, 13);
     assert.deepEqual(line.parcels?.map((parcel) => parcel.chargeableWeightKg), [6, 7]);
     const rows = manifestRows([line]);
-    assert.deepEqual(rows.map((row) => row[9]), ["4.50", "5.50"]);
-    assert.deepEqual(rows.map((row) => row[10]), ["6.00", "7.00"]);
+    assert.deepEqual(rows.map((row) => row[10]), ["4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[11]), ["6.00", "7.00"]);
   });
 
   it("restores missing parcel chargeable weights for legacy PDF downloads", () => {
@@ -672,7 +682,7 @@ describe("handover manifest", () => {
     );
 
     assert.deepEqual(hydratedLine?.parcels?.map((parcel) => parcel.chargeableWeightKg), [11, 12]);
-    assert.deepEqual(manifestRows([hydratedLine!]).map((row) => row[10]), ["11.00", "12.00"]);
+    assert.deepEqual(manifestRows([hydratedLine!]).map((row) => row[11]), ["11.00", "12.00"]);
     // The historical line is only hydrated for rendering; it is not mutated.
     assert.deepEqual(line.parcels?.map((parcel) => parcel.chargeableWeightKg), [undefined, undefined]);
   });
@@ -691,10 +701,10 @@ describe("handover manifest", () => {
     // Falls back to the consignment number and the shipment's own piece total.
     assert.equal(rows[0]?.[1], "SLDL210720260001");
     assert.equal(rows[0]?.[8], "2");
-    assert.equal(rows[0]?.[6], "EXP");
+    assert.equal(rows[0]?.[9], "Clothing, Documents");
     // Legacy lines carry no chargeable weight, so it falls back to actual.
-    assert.equal(rows[0]?.[9], "10.00");
     assert.equal(rows[0]?.[10], "10.00");
+    assert.equal(rows[0]?.[11], "10.00");
   });
 
   it("states a pre-chargeable line's shipment total only on its first parcel row", () => {
@@ -709,12 +719,30 @@ describe("handover manifest", () => {
       bagNumber: "1"
     });
     delete legacyParcelLine.chargeableWeightKg;
-    legacyParcelLine.parcels?.forEach((parcel) => { delete parcel.chargeableWeightKg; });
+    legacyParcelLine.parcels?.forEach((parcel) => {
+      delete parcel.chargeableWeightKg;
+      delete parcel.description;
+    });
 
     const rows = manifestRows([legacyParcelLine]);
     assert.equal(rows.length, 2);
-    assert.deepEqual(rows.map((row) => row[9]), ["4.50", "5.50"]);
-    assert.deepEqual(rows.map((row) => row[10]), ["10.00", ""]);
+    assert.deepEqual(rows.map((row) => row[9]), ["Clothing, Documents", ""]);
+    assert.deepEqual(rows.map((row) => row[10]), ["4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[11]), ["10.00", ""]);
+  });
+
+  it("limits PDF descriptions to ten words without changing Excel row values", () => {
+    const description = "one two three four five six seven eight nine ten eleven twelve";
+    assert.equal(clampManifestPdfDescription(description), "one two three four five six seven eight nine ten…");
+    const line = buildHandoverManifestLine({
+      shipmentDraftId: new mongoose.Types.ObjectId(),
+      dpdShipmentId: new mongoose.Types.ObjectId(),
+      snapshot: bookingSnapshot(),
+      declaredValueMinor: 0,
+      bagNumber: "1"
+    });
+    line.parcels![0]!.description = description;
+    assert.equal(manifestRows([line])[0]?.[9], description);
   });
 
   it("renders a PDF for handover lines and for legacy lines without the new fields", async () => {
