@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "test:swiftline-parcel-audit": "tsx --test src/tests/swiftlineParcelIdentifierAudit.test.ts",
     "test:operator:registry": "tsx --test src/tests/tenantRegistry.integration.test.ts",
     "test:operator:invitations": "tsx --test src/tests/operatorInvitation.test.ts src/tests/operatorInvitation.integration.test.ts",
     "test:operator:client-invitations": "tsx --test src/tests/operatorClientInvitation.test.ts",
@@ -204,6 +205,7 @@
     "jsonwebtoken": "^9.0.0",
     "libphonenumber-js": "^1.13.8",
     "mongoose": "^9.7.3",
+    "mongodb": "^7.2.0",
     "morgan": "^1.11.0",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.3",
