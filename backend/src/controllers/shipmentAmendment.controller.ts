@@ -4,6 +4,7 @@ import { z } from "zod";
 import { AuditLog } from "../models/auditLog.model.js";
 import { Branch } from "../models/branch.model.js";
 import { CounterPayment, counterPaymentMethodValues } from "../models/counterPayment.model.js";
+import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { ShipmentAmendment } from "../models/shipmentAmendment.model.js";
 import { ShipmentEvent, type ShipmentEventStatus } from "../models/shipmentEvent.model.js";
@@ -954,7 +955,7 @@ export async function approveShipmentAmendment(request: Request, response: Respo
           );
         }
 
-        await CounterPayment.create([{
+        const counterPayment = {
           shipmentDraftId: shipmentDraft._id,
           branchId: shipmentDraft.branchId,
           direction: billingAdjustment.deltaAmountMinor > 0 ? "COLLECTED" : "REFUNDED",
@@ -964,7 +965,18 @@ export async function approveShipmentAmendment(request: Request, response: Respo
           note: parsed.data.counterPayment.note ?? "",
           recordedBy: userId,
           recordedAt: new Date()
-        }], { session });
+        } as const;
+        const tenantContext = getTenantContext();
+        if (tenantContext?.kind === "OPERATOR") {
+          await OperatorCounterPayment.create([{
+            ...counterPayment,
+            tenantId: tenantContext.tenantId,
+            sourceType: "AMENDMENT",
+            sourceId: amendment._id
+          }], { session });
+        } else {
+          await CounterPayment.create([counterPayment], { session });
+        }
       }
 
       applyRequestedChanges(shipmentDraft, changePreview);

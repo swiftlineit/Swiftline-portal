@@ -394,6 +394,56 @@ control and verify access and new notices stop. For a module-wide problem:
 5. Reconcile bookings, credit, invoices, labels, and outbox rows created during
    the pilot before re-enabling the module.
 
+## Post-activation addition: operator counter payments
+
+Individual operator bookings and their later amendments/cancellations use the
+tenant-owned `operatorcounterpayments` collection. Production disables
+automatic index creation, so create and verify this collection's tenant lookup
+and tenant-scoped idempotency indexes before deploying code that can write
+operator counter-payment records. This is an index-only add-on; do not rerun the
+initial ownership cutover to install it.
+
+Rehearse the audit and apply commands against an isolated restored copy first.
+The audit checks key types, duplicate tenant/source pairs, and existing index
+conflicts. The apply path repeats those checks with the migration credential,
+creates only missing indexes, then verifies them. It never inserts, updates, or
+deletes records. Stop if malformed keys, duplicate sources, or conflicting
+indexes are reported.
+
+For production, use the exact reviewed release checkout with a clean Git tree,
+`NODE_ENV=production`, a dedicated read-only `TENANT_AUDIT_MONGODB_URI`, a
+separate least-privilege `TENANT_MIGRATION_MONGODB_URI`, and an exact
+`TENANT_MIGRATION_ALLOWED_CLUSTER_HOST`. First run the read-only audit:
+
+```powershell
+npm run audit:operator-counter-payment-indexes -- `
+  --database swiftline `
+  --cluster-host "<PRODUCTION_CLUSTER_HOST>"
+```
+
+Only after reviewing the audit and approving a change record, backup/PITR
+reference, and external log path, run the narrowly scoped apply command:
+
+```powershell
+npm run migrate:operator-counter-payment-indexes -- `
+  --database swiftline `
+  --cluster-host "<PRODUCTION_CLUSTER_HOST>" `
+  --change-id "<CHANGE_ID>" `
+  --backup-ref "<BACKUP_OR_PITR_REFERENCE>" `
+  --run-id "<UNIQUE_RUN_ID>" `
+  --artifact-sha "<RELEASE_GIT_SHA>" `
+  --log-file "C:\secure-migration-logs\operator-counter-payment-<RUN_ID>.jsonl" `
+  --confirm "APPLY SWIFTLINE TENANT MIGRATION swiftline"
+```
+
+The npm script supplies `--apply`. The runner checks that both credentials,
+database name, and cluster host agree; refuses CI/CD; verifies the release SHA
+and clean checkout; creates the log exclusively outside the repository; and
+requires the exact production approval phrase. Keep operator booking traffic
+off until the post-apply index verification passes. Never add this collection
+to a Swiftline ownership backfill or modify its payment history to resolve an
+index conflict.
+
 ## Deployment record
 
 Record the deployment date, `main` SHA, backend/frontend artifact IDs, database

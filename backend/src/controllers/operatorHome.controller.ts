@@ -157,10 +157,10 @@ export async function getOperatorHome(request: Request, response: Response) {
     const account = accountById.get(String(draft.businessAccountId));
     return {
       id: String(draft._id),
-      awb: booking?.swiftlineTrackingNumber || draft.allocatedTrackingNumber || "—",
+      awb: booking?.swiftlineTrackingNumber || draft.allocatedTrackingNumber || "-",
       accountName: account ? accountName(account) : "Business account",
-      consignee: draft.consigneeEnteredAddress?.companyName || draft.consigneeEnteredAddress?.contactName || "—",
-      destinationCountry: draft.consigneeEnteredAddress?.countryName || draft.consigneeEnteredAddress?.countryCode || "—",
+      consignee: draft.consigneeEnteredAddress?.companyName || draft.consigneeEnteredAddress?.contactName || "-",
+      destinationCountry: draft.consigneeEnteredAddress?.countryName || draft.consigneeEnteredAddress?.countryCode || "-",
       status: eventByDraft.get(String(draft._id)) || "SHIPMENT_BOOKED",
       parcelCount: draft.parcelCount,
       bookingAmountMinor: invoice?.totalAmountMinor ?? 0,

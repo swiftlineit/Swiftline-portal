@@ -212,7 +212,7 @@ type LabelPaymentContext =
     } & AcceptedPricing & DpdLabelChoice)
   | ({
       actor: "operator";
-      paymentSource: Extract<PaymentSource, "BUSINESS_ACCOUNT">;
+      paymentSource: Extract<PaymentSource, "BUSINESS_ACCOUNT" | "ADMIN_DIRECT">;
       acceptedPricingHash: string;
       skipDpdLabel: true;
     } & AcceptedPricing & DpdLabelChoice)
@@ -705,9 +705,19 @@ async function createLabelForShipmentDraftInternal(
   if (!branch) throw new DpdShipmentServiceError("The shipment branch could not be found.", 409);
   if (!businessAccount) throw new DpdShipmentServiceError("The business account could not be found.", 409);
   if (operatorBooking) {
+    const individualShipment = draft.customerType === "INDIVIDUAL";
+    const individualAccount = businessAccount.accountKind === "INDIVIDUAL_SENTINEL";
+    if (individualShipment !== individualAccount
+      || (individualShipment && paymentContext.paymentSource !== "ADMIN_DIRECT")
+      || (!individualShipment && paymentContext.paymentSource === "ADMIN_DIRECT")) {
+      throw new DpdShipmentServiceError("The shipment booking type and payment source do not match.", 403);
+    }
+  }
+  if (operatorBooking) {
     const eligibilityError = getOperatorShipmentEligibilityError({
       branchStatus: branch.status,
       accountStatus: businessAccount.status,
+      accountKind: businessAccount.accountKind,
       assignedBranchId: businessAccount.assignedBranch,
       shipmentBranchId: branch._id
     });
@@ -839,7 +849,7 @@ async function createLabelForShipmentDraftInternal(
     assertPriceLockUnchanged({
       acceptedPricingHash: paymentContext.acceptedPricingHash,
       currentPricing: pricing,
-      requireAcceptedPricing: usesBusinessAccountBilling || paymentContext.paymentSource === "PUBLIC_RAZORPAY"
+      requireAcceptedPricing: operatorBooking || usesBusinessAccountBilling || paymentContext.paymentSource === "PUBLIC_RAZORPAY"
     });
   } catch (error) {
     await transitionShipmentDraftBooking({

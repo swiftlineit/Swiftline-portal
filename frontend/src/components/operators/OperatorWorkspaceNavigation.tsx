@@ -48,7 +48,10 @@ function navigationFor(operator: OperatorSession, operatorSlug: string): Navigat
         { label: "Branches", path: `${base}/branches`, icon: FiGitBranch }
       );
       if (role === "OPERATOR_ADMIN") {
-        accounts.push({ label: "Users", path: `${base}/users`, icon: FiUsers });
+        accounts.push(
+          { label: "Individual rates", path: `${base}/rate-card/individual`, icon: FiTag },
+          { label: "Users", path: `${base}/users`, icon: FiUsers }
+        );
       }
       if (role === "OPERATOR_ADMIN" || role === "OPERATIONS") {
         operations.push({ label: "Client queries", path: `${base}/queries`, icon: FiMessageSquare });

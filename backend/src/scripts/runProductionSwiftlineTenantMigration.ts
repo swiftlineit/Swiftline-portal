@@ -18,9 +18,10 @@ import {
   parseMongoSrvCredentialUser,
   parseMongoSrvTarget,
   productionTenantMigrationSteps,
-  type ProductionTenantMigrationAuthorization,
-  type ProductionTenantMigrationStep
+  type ProductionTenantMigrationAuthorization
 } from "./migrationSafety.js";
+
+type CoordinatedProductionTenantMigrationStep = typeof productionTenantMigrationSteps[number];
 
 type Arguments = {
   apply: boolean;
@@ -131,7 +132,7 @@ function writeAuditRecord(
     .then(() => logFile.sync());
 }
 
-const stepRunners: Record<ProductionTenantMigrationStep, (authorization: ProductionTenantMigrationAuthorization, apply: boolean) => Promise<void>> = {
+const stepRunners: Record<CoordinatedProductionTenantMigrationStep, (authorization: ProductionTenantMigrationAuthorization, apply: boolean) => Promise<void>> = {
   "swiftline-root-ownership": runRootOwnership,
   "account-credit-tenant-ownership": runAccountCredit,
   "operational-tenant-ownership": runOperational,

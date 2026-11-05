@@ -416,7 +416,10 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
     const url = window.URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `swiftline-${(businessAccountId || "individual-clients")}-rate-card.csv`;
+    const workspacePrefix = operatorSlug
+      ? operatorSlug.toLowerCase().replace(/[^a-z0-9-]/g, "-")
+      : "swiftline";
+    anchor.download = `${workspacePrefix}-${businessAccountId || "individual-clients"}-rate-card.csv`;
     anchor.click();
     window.URL.revokeObjectURL(url);
   }

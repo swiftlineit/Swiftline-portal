@@ -21,6 +21,7 @@ import {
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { counterPaymentMethodValues } from "../models/counterPayment.model.js";
 import { recordCounterCollection } from "../services/individualCustomer.service.js";
+import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
 import { formatSwiftlineParcelNumberForDisplay, swiftlineParcelNumberAliases } from "../services/swiftlineTracking.service.js";
 
 // Present only on walk-in bookings; business shipments ignore it entirely.
@@ -376,6 +377,7 @@ function serializeOperatorShipmentDraftSummary(draftValue: unknown, snapshotValu
   const draft = draftValue as {
     _id: unknown;
     branchId: unknown;
+    customerType?: string;
     consigneeEnteredAddress: {
       companyName?: string;
       contactName?: string;
@@ -443,6 +445,7 @@ function serializeOperatorShipmentDraftSummary(draftValue: unknown, snapshotValu
       ?? draft.consigneeValidatedAddress
       ?? draft.consigneeEnteredAddress,
     consignor,
+    customerType: draft.customerType === "INDIVIDUAL" ? "INDIVIDUAL" : "BUSINESS",
     parcelCount: parcels.length,
     parcelList: parcels,
     kycUseForAllParcels: Boolean(draft.kycUseForAllParcels),
@@ -1429,7 +1432,8 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
     return response.status(404).json({ success: false, message: "Booked shipment not found" });
   }
 
-  const [labels, events, branch, shipmentInvoice, parcelActivities, parcelProgress, hubReceipt, carrierTrackingReviews] = await Promise.all([
+  const operatorTenant = getTenantContext()?.kind === "OPERATOR";
+  const [labels, events, branch, shipmentInvoice, parcelActivities, parcelProgress, hubReceipt, carrierTrackingReviews, counterPayments] = await Promise.all([
     LabelDocument.find({
       dpdShipmentId: shipment._id,
       labelVersion: shipment.snapshotRevision || 1
@@ -1451,7 +1455,14 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
       .sort({ eventAt: -1, receivedAt: -1 })
       .limit(50)
       .lean()
-      .exec()
+      .exec(),
+    operatorTenant && draft.customerType === "INDIVIDUAL"
+      ? OperatorCounterPayment.find({ shipmentDraftId })
+        .select("direction sourceType amountMinor method reference note recordedAt")
+        .sort({ recordedAt: 1, _id: 1 })
+        .lean()
+        .exec()
+      : Promise.resolve(null)
   ]);
 
   const journey = await loadShipmentJourney({
@@ -1466,8 +1477,6 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
   const currentSnapshot = (shipmentInvoice?.revision ?? 1) <= (shipment.snapshotRevision || 1)
     ? shipment.currentShipmentSnapshot || shipment.bookingSnapshot
     : null;
-  const operatorTenant = getTenantContext()?.kind === "OPERATOR";
-
   return response.status(200).json({
     success: true,
     shipment: {
@@ -1485,6 +1494,17 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
         status: shipmentInvoice.status,
         revision: shipmentInvoice.revision
       } : null,
+      ...(operatorTenant ? {
+        counterPayments: (counterPayments ?? []).map((payment) => ({
+          direction: payment.direction,
+          sourceType: payment.sourceType,
+          amountMinor: payment.amountMinor,
+          method: payment.method,
+          reference: payment.reference,
+          note: payment.note,
+          recordedAt: payment.recordedAt
+        }))
+      } : {}),
       labels: labels.map(serializeLabel),
       currentEvent: currentEvent ? serializeShipmentEvent(currentEvent, journey) : null,
       events: normalizeVisibleTrackingHistory(events, journey)

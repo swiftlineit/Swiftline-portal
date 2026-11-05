@@ -28,7 +28,7 @@ const dayLabel = (value: string) => new Date(`${value}T12:00:00.000Z`).toLocaleD
 });
 const dateLabel = (value: string | null) => value ? new Date(value).toLocaleDateString("en-IN", {
   day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata"
-}) : "—";
+}) : "-";
 const titleCase = (value: string) => value.toLowerCase().replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 type Tone = "indigo" | "teal" | "amber" | "sky";
@@ -243,8 +243,8 @@ export default function OperatorPortalHome({ operatorSlug }: { operatorSlug: str
   const kpis: KpiItem[] = client ? [
     { label: "My shipments", value: number(home.shipmentCount), hint: "All booked shipments", detail: `${number(home.bookedToday)} today`, tone: "indigo" },
     { label: "Booked this month", value: number(home.bookedThisMonth), hint: "Bookings since the start of this month", tone: "teal" },
-    { label: "Available to book", value: home.credit ? money(home.credit.availableCapacityMinor) : "—", hint: home.credit ? "Credit and advance balance" : "Available with financial access", tone: "sky" },
-    { label: "Amount owed", value: home.credit ? money(home.credit.totalOwedMinor) : "—", hint: home.credit ? "Unbilled and invoiced charges" : "Available with financial access", tone: "amber" }
+    { label: "Available to book", value: home.credit ? money(home.credit.availableCapacityMinor) : "-", hint: home.credit ? "Credit and advance balance" : "Available with financial access", tone: "sky" },
+    { label: "Amount owed", value: home.credit ? money(home.credit.totalOwedMinor) : "-", hint: home.credit ? "Unbilled and invoiced charges" : "Available with financial access", tone: "amber" }
   ] : finance && home.finance ? [
     { label: "Active credit accounts", value: number(home.finance.activeCreditAccounts), hint: "Facilities currently active", tone: "indigo" },
     { label: "Credit reviews", value: number(home.finance.pendingCreditReviews), hint: "Requests awaiting a decision", tone: "amber" },

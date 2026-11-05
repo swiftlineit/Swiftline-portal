@@ -46,9 +46,11 @@ import { downloadCustomsInvoicePdf, downloadCustomsInvoiceWorkbook, getCustomsIn
 import { downloadShipmentInvoicePdf, getShipmentInvoice } from "../controllers/shipmentInvoice.controller.js";
 import {
   createOperatorManualShipmentDraft,
+  createOperatorIndividualShipmentDraft,
   createOperatorClientManualShipmentDraft,
   createOperatorShipmentLabelAccess,
   createOperatorShipment,
+  recordOperatorShipmentCounterPayment,
   listOperatorShipmentDrafts,
   listOperatorShipments,
   reconcileOperatorShipmentDocuments,
@@ -367,6 +369,10 @@ operatorRouter.post("/dpd-labels/drafts/manual", dispatchOperatorRoleHandlers({
   OPERATIONS: createOperatorManualShipmentDraft,
   CLIENT: createOperatorClientManualShipmentDraft
 }));
+operatorRouter.post("/dpd-labels/drafts/individual", dispatchOperatorRoleHandlers({
+  OPERATOR_ADMIN: createOperatorIndividualShipmentDraft,
+  OPERATIONS: createOperatorIndividualShipmentDraft
+}));
 operatorRouter.get("/dpd-labels/drafts", dispatchOperatorRoleHandlers({
   OPERATOR_ADMIN: listOperatorShipmentDrafts,
   OPERATIONS: listOperatorShipmentDrafts,
@@ -442,6 +448,11 @@ operatorRouter.get(
   "/shipments/:draftId/details",
   requireOperatorRole("OPERATOR_ADMIN", "OPERATIONS", "FINANCE"),
   requireOperatorDraftAccess(getAdminShipmentDetails)
+);
+operatorRouter.post(
+  "/shipments/:id/counter-payment",
+  requireOperatorRole("OPERATOR_ADMIN", "OPERATIONS"),
+  requireOperatorDraftAccess(recordOperatorShipmentCounterPayment)
 );
 operatorRouter.post(
   "/shipments/:id/tracking-events",

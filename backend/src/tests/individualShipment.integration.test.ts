@@ -21,6 +21,7 @@ import {
 import { createIndividualShipmentDraft } from "../services/manualShipmentDraft.service.js";
 import { recordCounterShipmentCharge } from "../services/shipmentBookingBilling.service.js";
 import { resolveShipmentInvoicePaymentAllocation } from "../services/shipmentInvoice.service.js";
+import { runWithTenantContext } from "../services/tenantScope.service.js";
 
 // Kept short: Atlas caps database names at 38 bytes.
 const databaseName = `swiftline_ind_test_${Date.now()}`;
@@ -120,6 +121,39 @@ describe("individual shipment sentinel", () => {
     assert.equal(first.assignedBranch ?? null, null, "The sentinel serves every branch.");
     assert.equal(first.rateCardBand, "BAND_D", "Individual shipments must use the dedicated Band D tariff.");
     assert.equal(first.company.noCompany, true, "The sentinel must not be validated as a real company.");
+  });
+
+  test("operator sentinel creation works while legacy global account identity indexes remain", async () => {
+    const swiftlineSentinel = await getOrCreateIndividualSentinel(adminId);
+    const existingIndexes = await BusinessAccount.collection.listIndexes().toArray();
+    if (existingIndexes.some((index) => index.name === "contact.email_1")) {
+      await BusinessAccount.collection.dropIndex("contact.email_1");
+    }
+    await Promise.all([
+      BusinessAccount.collection.createIndex({ accountId: 1 }, { unique: true, name: "legacy_account_id_unique" }),
+      BusinessAccount.collection.createIndex({ "contact.email": 1 }, { unique: true, name: "legacy_contact_email_unique" }),
+      BusinessAccount.collection.createIndex(
+        { "contact.countryCode": 1, "contact.mobileNumber": 1 },
+        { unique: true, name: "legacy_contact_mobile_unique" }
+      )
+    ]);
+
+    const operator = await Tenant.create({
+      kind: "OPERATOR",
+      status: "ACTIVE",
+      companyName: "Individual Test Operator",
+      slug: `individual-test-${Date.now()}`,
+      createdBy: adminId
+    });
+    const operatorSentinel = await runWithTenantContext(
+      { tenantId: operator._id as mongoose.Types.ObjectId, kind: "OPERATOR" },
+      () => getOrCreateIndividualSentinel(adminId)
+    );
+
+    assert.notEqual(operatorSentinel.accountId, swiftlineSentinel.accountId);
+    assert.notEqual(operatorSentinel.contact.email, swiftlineSentinel.contact.email);
+    assert.notEqual(operatorSentinel.contact.mobileNumber, swiftlineSentinel.contact.mobileNumber);
+    assert.equal(operatorSentinel.tenantId?.toString(), operator._id.toString());
   });
 
   test("repairs a legacy sentinel without weakening real-account validation", async () => {

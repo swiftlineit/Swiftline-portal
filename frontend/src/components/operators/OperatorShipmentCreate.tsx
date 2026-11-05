@@ -15,7 +15,10 @@ import {
   type OperatorBusinessAccount,
   type OperatorSession
 } from "@/lib/operatorDirectory";
-import { createOperatorManualShipmentDraft } from "@/lib/operatorShipments";
+import {
+  createOperatorIndividualShipmentDraft,
+  createOperatorManualShipmentDraft
+} from "@/lib/operatorShipments";
 
 function isBookableAccount(account: OperatorBusinessAccount) {
   return ["active", "approved"].includes(account.status.toLowerCase()) && Boolean(account.assignedBranch?._id);
@@ -51,6 +54,9 @@ export default function OperatorShipmentCreate({
   const [accountSearchInput, setAccountSearchInput] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
   const [accountId, setAccountId] = useState("");
+  const [individualBranchId, setIndividualBranchId] = useState("");
+  const [individualName, setIndividualName] = useState("");
+  const [draftKind, setDraftKind] = useState<"BUSINESS" | "INDIVIDUAL" | null>(null);
   const [draftId, setDraftId] = useState(initialDraftId);
   const [selectionStepVisible] = useState(!initialDraftId);
   const [loading, setLoading] = useState(true);
@@ -68,13 +74,17 @@ export default function OperatorShipmentCreate({
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
-    Promise.all([
-      getOperatorSession(operatorSlug, controller.signal),
-      listOperatorBranches(operatorSlug, { page: 1, pageSize: 100 }, controller.signal)
-    ]).then(([operator, branchResult]) => {
+    const loadBookingAccess = async () => {
+      const operator = await getOperatorSession(operatorSlug, controller.signal);
+      const branchResult = initialDraftId
+        ? null
+        : await listOperatorBranches(operatorSlug, { page: 1, pageSize: 100 }, controller.signal);
+      return { operator, branchResult };
+    };
+    loadBookingAccess().then(({ operator, branchResult }) => {
       if (!active) return;
       setSession(operator);
-      setBranches(branchResult.branches);
+      if (branchResult) setBranches(branchResult.branches);
     }).catch((cause: unknown) => {
       if (!active || controller.signal.aborted) return;
       const requestError = cause && typeof cause === "object" ? cause as { canonicalSlug?: unknown } : null;
@@ -85,7 +95,7 @@ export default function OperatorShipmentCreate({
       setError(cause instanceof Error ? cause.message : "Unable to load operator booking access.");
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; controller.abort(); };
-  }, [operatorSlug, router]);
+  }, [operatorSlug, router, initialDraftId]);
 
   useEffect(() => {
     if (!session || draftId) return;
@@ -132,6 +142,11 @@ export default function OperatorShipmentCreate({
   }, [eligibleAccounts, selectedAccount]);
   const selectedBranch = branches.find((branch) => branch._id === selectedAccount?.assignedBranch?._id && isActiveBranch(branch));
   const selectedBranchId = selectedBranch?._id ?? "";
+  const individualBranchOptions = useMemo(
+    () => branches.filter(isActiveBranch).map((branch) => ({ value: branch._id, label: `${branch.name} (${branch.code})` })),
+    [branches]
+  );
+  const individualBranch = branches.find((branch) => branch._id === individualBranchId && isActiveBranch(branch)) ?? null;
   const clientAccount = isOperatorClient && accountTotal === 1 && eligibleAccounts.length === 1
     ? eligibleAccounts[0]
     : null;
@@ -158,6 +173,7 @@ export default function OperatorShipmentCreate({
     try {
       const result = await createOperatorManualShipmentDraft(operatorSlug, { branchId, businessAccountId });
       const createdDraftId = result.shipmentDraft._id;
+      setDraftKind("BUSINESS");
       setDraftId(createdDraftId);
       router.replace(`/portal/${encodeURIComponent(operatorSlug)}/shipments/new?draftId=${encodeURIComponent(createdDraftId)}`, { scroll: false });
       return true;
@@ -168,6 +184,28 @@ export default function OperatorShipmentCreate({
       setSaving(false);
     }
   }, [operatorSlug, router]);
+
+  const startIndividualDraft = useCallback(async () => {
+    if (!individualBranchId || !individualName.trim() || saving || draftId) return false;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await createOperatorIndividualShipmentDraft(operatorSlug, {
+        branchId: individualBranchId,
+        customer: { contactName: individualName.trim() }
+      });
+      const createdDraftId = result.shipmentDraft._id;
+      setDraftKind("INDIVIDUAL");
+      setDraftId(createdDraftId);
+      router.replace(`/portal/${encodeURIComponent(operatorSlug)}/shipments/new?draftId=${encodeURIComponent(createdDraftId)}`, { scroll: false });
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to start this individual shipment.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [draftId, individualBranchId, individualName, operatorSlug, router, saving]);
 
   useEffect(() => {
     if (!isOperatorClient || !canCreate || loading || !accountsLoaded || draftId || !clientSetupReady || !clientAccount || !clientBranch) return;
@@ -196,6 +234,12 @@ export default function OperatorShipmentCreate({
     await startDraft(selectedAccount._id, selectedBranchId);
   }
 
+  async function handleCreateIndividual(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canCreate || isOperatorClient || saving || draftId || !individualBranchId || !individualName.trim()) return;
+    await startIndividualDraft();
+  }
+
   const bookingPath = `/portal/${encodeURIComponent(operatorSlug)}/shipments/new`;
 
   return (
@@ -207,7 +251,7 @@ export default function OperatorShipmentCreate({
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
               {isOperatorClient
                 ? "Enter the shipment, recipient, parcel, and goods details for your business account."
-                : "Choose a business account. Its assigned dispatch branch will be used for this booking."}
+                : "Choose a business account or start an individual booking."}
             </p>
           </div>
           <Link href={`/portal/${encodeURIComponent(operatorSlug)}/shipments`} className="inline-flex min-h-10 shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">
@@ -226,24 +270,19 @@ export default function OperatorShipmentCreate({
 
         {!loading && session && !canCreate ? <div role="alert" className="rounded-lg border border-amber-200 bg-white p-4 text-sm text-amber-900">Your operator role can view shipments but cannot create a booking.</div> : null}
 
-        {loading ? (
+        {loading && !draftId ? (
           <OperatorLoadingIndicator label="Loading your operator workspace…" className="min-h-[calc(100dvh-16rem)]" />
         ) : null}
 
         {!loading && session && canCreate && !isOperatorClient && selectionStepVisible ? (
-          <form onSubmit={(event) => void handleCreate(event)} className={`rounded-xl border border-slate-200 bg-white p-5 sm:p-6 ${draftId ? "xl:shrink-0" : ""}`}>
-            {accountTotal > 100 ? (
-              <div className="mb-5 max-w-xl">
-                <label htmlFor="operator-account-search" className="mb-1.5 block text-sm font-medium text-slate-700">Find a business account</label>
-                <div className="relative">
-                  <FiSearch aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input id="operator-account-search" value={accountSearchInput} onChange={(event) => setAccountSearchInput(event.target.value)} maxLength={100} disabled={Boolean(draftId)} placeholder="Search company or account ID" className="min-h-11 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-sm text-slate-900 outline-none placeholder:text-slate-500 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20 disabled:bg-slate-100" />
-                </div>
-                <p className="mt-2 text-xs leading-5 text-slate-500">Search by company or account ID to find accounts beyond the first 100.</p>
-              </div>
-            ) : null}
+          <div className={`grid items-stretch gap-4 lg:grid-cols-2 ${draftId ? "xl:shrink-0" : ""}`}>
+          <form onSubmit={(event) => void handleCreate(event)} className="flex min-w-0 flex-col rounded-lg border border-slate-200 bg-white p-5 sm:p-6">
+            <div className="min-h-12">
+              <h2 className="text-base font-semibold text-slate-950">Business account booking</h2>
+              <p className="mt-1 text-sm leading-5 text-slate-600">Uses an approved account and its assigned branch.</p>
+            </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="mt-5 space-y-4">
               <OperatorSelect
                 id="operator-booking-account"
                 label="Business account"
@@ -252,6 +291,7 @@ export default function OperatorShipmentCreate({
                 placeholder={!accountsLoaded || accountSearchInput.trim() !== accountSearch ? "Loading business accounts…" : "Select an approved business account"}
                 disabled={Boolean(draftId) || !accountsLoaded || accountSearchInput.trim() !== accountSearch || eligibleAccounts.length === 0}
                 onChange={(value) => { setAccountId(value); setError(""); }}
+                variant="outlined"
               />
               <OperatorSelect
                 id="operator-booking-branch"
@@ -261,15 +301,29 @@ export default function OperatorShipmentCreate({
                 placeholder={selectedAccount ? "No active assigned branch" : "Select a business account first"}
                 disabled={!selectedBranch || Boolean(draftId)}
                 onChange={() => { /* The account assignment determines the branch. */ }}
+                variant="outlined"
               />
             </div>
+
+            {accountTotal > 100 ? (
+              <div className="mt-4 max-w-xl">
+                <div className="relative min-w-0 pt-2">
+                  <label htmlFor="operator-account-search" className={`absolute left-2 top-0 z-10 px-1 text-[11px] font-semibold leading-4 text-slate-600 ${draftId ? "bg-slate-100" : "bg-white"}`}>Find a business account</label>
+                  <div className="relative">
+                    <FiSearch aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                    <input id="operator-account-search" value={accountSearchInput} onChange={(event) => setAccountSearchInput(event.target.value)} maxLength={100} disabled={Boolean(draftId)} placeholder="Search company or account ID" className="h-11 w-full rounded-sm border border-slate-400 bg-white pl-10 pr-3 pt-1 text-sm text-slate-900 outline-none placeholder:text-slate-500 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20 disabled:bg-white disabled:text-slate-500" />
+                  </div>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-slate-500">Search by company or account ID to find accounts beyond the first 100.</p>
+              </div>
+            ) : null}
 
             {selectedAccount && !isBookableAccount(selectedAccount) ? <p role="alert" className="mt-3 text-sm text-amber-800">This account must be approved and assigned to an active branch before it can book.</p> : null}
             {accountsLoaded && eligibleAccounts.length === 0 ? <p className="mt-3 text-sm text-amber-800">No approved business account with an active branch is available for shipment booking.</p> : null}
             {selectedAccount && !selectedBranch ? <p role="alert" className="mt-3 text-sm text-amber-800">The assigned branch is unavailable or inactive. Ask an operator administrator to review the account assignment.</p> : null}
 
-            <div className="mt-6 flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
-              {draftId ? <p role="status" className="text-sm font-medium text-emerald-800">Shipment form ready for {selectedAccount ? businessAccountDisplayName(selectedAccount) : "business account"} · {selectedBranch?.name}.</p> : <span />}
+            <div className="mt-auto flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-between sm:pt-6">
+              {draftKind === "BUSINESS" && draftId ? <p role="status" className="text-sm font-medium text-emerald-800">Shipment form ready for {selectedAccount ? businessAccountDisplayName(selectedAccount) : "business account"} · {selectedBranch?.name}.</p> : <span />}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <Link href={`/portal/${encodeURIComponent(operatorSlug)}/shipments`} className="inline-flex min-h-11 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">Cancel</Link>
                 {!draftId ? (
@@ -281,6 +335,33 @@ export default function OperatorShipmentCreate({
               </div>
             </div>
           </form>
+          <form onSubmit={(event) => void handleCreateIndividual(event)} className="flex min-w-0 flex-col rounded-lg border border-slate-200 bg-white p-5 sm:p-6">
+            <div className="min-h-12">
+              <h2 className="text-base font-semibold text-slate-950">Individual booking</h2>
+              <p className="mt-1 text-sm leading-5 text-slate-600">For a walk-in customer without a business account.</p>
+            </div>
+            <div className="mt-5 space-y-4">
+              <OperatorSelect
+                id="operator-individual-branch"
+                label="Sender branch"
+                value={individualBranchId}
+                options={individualBranchOptions}
+                placeholder={branches.length ? "Select a sender branch" : "Loading branches..."}
+                disabled={Boolean(draftId) || loading || individualBranchOptions.length === 0}
+                onChange={(value) => { setIndividualBranchId(value); setError(""); }}
+                variant="outlined"
+              />
+              <div className="relative min-w-0 pt-2">
+                <label htmlFor="operator-individual-name" className={`absolute left-2 top-0 z-10 px-1 text-[11px] font-semibold leading-4 text-slate-600 ${draftId ? "bg-slate-100" : "bg-white"}`}>Customer name <span className="text-rose-600">*</span></label>
+                <input id="operator-individual-name" value={individualName} onChange={(event) => setIndividualName(event.target.value)} maxLength={120} required disabled={Boolean(draftId)} autoComplete="name" className="h-11 w-full rounded-sm border border-slate-400 bg-white px-3 pt-1 text-sm text-slate-900 outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20 disabled:bg-white disabled:text-slate-500" />
+              </div>
+            </div>
+            <div className="mt-auto flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-between sm:pt-6">
+              {draftKind === "INDIVIDUAL" && draftId ? <p role="status" className="text-sm font-medium text-emerald-800">Individual shipment form ready · {individualBranch?.name}.</p> : <span />}
+              {!draftId ? <button type="submit" disabled={saving || loading || !individualBranchId || !individualName.trim()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-[#0D1282] px-5 text-sm font-semibold text-white transition hover:bg-[#10166F] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282] disabled:cursor-not-allowed disabled:opacity-55">{saving ? <FiLoader aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}{saving ? "Preparing shipment..." : "Continue to shipment details"}</button> : null}
+            </div>
+          </form>
+          </div>
         ) : null}
 
         {isOperatorClient && !draftId && !visibleError && canCreate ? (
@@ -291,7 +372,7 @@ export default function OperatorShipmentCreate({
         ) : null}
 
         {draftId ? (
-          <div className="min-w-0 xl:h-[clamp(32.5rem,78dvh,56.25rem)] xl:shrink-0 xl:overflow-hidden">
+          <div data-testid="operator-shipment-draft-frame" className="min-w-0 min-h-[calc(100dvh-14rem)] xl:h-[clamp(32.5rem,78dvh,56.25rem)] xl:min-h-0 xl:shrink-0 xl:overflow-hidden">
             <OperatorShipmentDraftForm key={draftId} operatorSlug={operatorSlug} shipmentDraftId={draftId} />
           </div>
         ) : null}

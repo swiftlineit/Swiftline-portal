@@ -10,6 +10,7 @@ import { ShipmentAmendment } from "../models/shipmentAmendment.model.js";
 import { ShipmentCancellation, type IShipmentCancellation } from "../models/shipmentCancellation.model.js";
 import { ShipmentCharge } from "../models/shipmentCharge.model.js";
 import { CounterPayment, type CounterPaymentMethod } from "../models/counterPayment.model.js";
+import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
 import { ShipmentCreditNote } from "../models/shipmentCreditNote.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent, type ShipmentEventStatus } from "../models/shipmentEvent.model.js";
@@ -464,7 +465,7 @@ export async function approveShipmentCancellation(input: {
           );
         }
 
-        await CounterPayment.create([{
+        const refundPayment = {
           shipmentDraftId: cancellation.shipmentDraftId,
           branchId: counterCharge.branchId,
           direction: "REFUNDED",
@@ -474,7 +475,17 @@ export async function approveShipmentCancellation(input: {
           note: input.refundPayout.note ?? "",
           recordedBy: input.reviewedBy,
           recordedAt: new Date()
-        }], { session });
+        } as const;
+        if (tenantContext?.kind === "OPERATOR") {
+          await OperatorCounterPayment.create([{
+            ...refundPayment,
+            tenantId: tenantContext.tenantId,
+            sourceType: "CANCELLATION",
+            sourceId: cancellation._id
+          }], { session });
+        } else {
+          await CounterPayment.create([refundPayment], { session });
+        }
       }
 
       const settlement = businessCharge

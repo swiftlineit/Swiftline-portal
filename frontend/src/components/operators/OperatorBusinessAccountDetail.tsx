@@ -346,7 +346,7 @@ export default function OperatorBusinessAccountDetail({ operatorSlug, accountId 
                   <AccountDetailField label="Secondary registration ID" value={account.company.secondaryRegistrationId} />
                   <AccountDetailField label="Company registration status" value={account.company.noCompanyRegistration ? "No company registration" : account.company.noCompany ? "Individual / no company" : "Registered business"} />
                   <AccountDetailField label="GSTIN" value={account.company.gstin} />
-                  <AccountDetailField label="GST registration exemption" value={account.company.gstExempt ? `Yes${account.company.gstExemptReason ? ` — ${account.company.gstExemptReason}` : ""}` : "No"} />
+                  <AccountDetailField label="GST registration exemption" value={account.company.gstExempt ? `Yes${account.company.gstExemptReason ? ` - ${account.company.gstExemptReason}` : ""}` : "No"} />
                   <AccountDetailField label="Website" value={account.company.website} />
                   <AccountDetailField label="Industry" value={account.company.industry} />
                   <AccountDetailField label="Monthly shipment volume" value={account.company.monthlyShipmentVolume} />

@@ -11,7 +11,14 @@ export const productionTenantMigrationSteps = [
   "operator-support-indexes"
 ] as const;
 
-export type ProductionTenantMigrationStep = typeof productionTenantMigrationSteps[number];
+/** Narrow post-activation migrations that must never join the ownership cutover sequence. */
+export const standaloneProductionTenantMigrationSteps = [
+  "operator-counter-payment-indexes"
+] as const;
+
+export type ProductionTenantMigrationStep =
+  | typeof productionTenantMigrationSteps[number]
+  | typeof standaloneProductionTenantMigrationSteps[number];
 export type ProductionTenantMigrationAuthorization = object;
 export type TenantMigrationNodeEnvironment = "development" | "test" | "production";
 
@@ -183,7 +190,7 @@ export function assertProductionTenantMigrationAuthorization(
 ) {
   const grant = authorization && productionMigrationGrants.get(authorization);
   if (!grant) throw new Error("This production migration step was not authorized by the manual production runner.");
-  if (!productionTenantMigrationSteps.includes(step)) {
+  if (![...productionTenantMigrationSteps, ...standaloneProductionTenantMigrationSteps].includes(step)) {
     throw new Error("Unknown production tenant migration step.");
   }
   if (grant.database !== expectedDatabase || grant.clusterHost !== expectedClusterHost.toLowerCase().replace(/\.$/, "")) {

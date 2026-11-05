@@ -8,6 +8,7 @@ import { CountryRateCard } from "../models/countryRateCard.model.js";
 import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
 import { EmailOutbox } from "../models/emailOutbox.model.js";
 import { IdempotencyKey } from "../models/idempotencyKey.model.js";
+import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
 import { PortalNotification } from "../models/portalNotification.model.js";
 import { ShipmentCreditNote } from "../models/shipmentCreditNote.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
@@ -15,6 +16,14 @@ import { ShipmentInvoiceCounter } from "../models/shipmentInvoiceCounter.model.j
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
 import { ShipmentManifestCounter } from "../models/shipmentManifestCounter.model.js";
 import { indexSatisfiesPlan } from "../scripts/tenantMigrationIndexHelpers.js";
+import {
+  duplicateOperatorCounterPaymentSourcesPipeline,
+  findConflictingOperatorCounterPaymentIndexes,
+  findMissingOperatorCounterPaymentIndexes,
+  invalidOperatorCounterPaymentFieldsPipeline,
+  operatorCounterPaymentIndexPlans
+} from "../scripts/operatorCounterPaymentIndexMigration.js";
+import { operationalTenantOwnershipModelNames } from "../scripts/migrateOperationalTenantOwnership.js";
 
 type ModelWithIndexes = mongoose.Model<any>;
 type SchemaIndex = [Record<string, unknown>, mongoose.IndexOptions];
@@ -31,6 +40,7 @@ const tenantOwnedModels: ModelWithIndexes[] = [
   CountryRouteCharge,
   EmailOutbox,
   IdempotencyKey,
+  OperatorCounterPayment,
   PortalNotification,
   ShipmentCreditNote,
   ShipmentInvoice,
@@ -56,6 +66,10 @@ function hasIndex(model: ModelWithIndexes, fields: Record<string, number>) {
 }
 
 describe("operational tenant-owned model schemas", () => {
+  test("new operator counter payments are not treated as pre-activation Swiftline ownership data", () => {
+    assert.equal(operationalTenantOwnershipModelNames.includes("OperatorCounterPayment"), false);
+  });
+
   test("every release-critical support model declares tenant ownership", () => {
     for (const model of tenantOwnedModels) {
       const tenantId = model.schema.path("tenantId");
@@ -82,6 +96,31 @@ describe("operational tenant-owned model schemas", () => {
     ), false);
   });
 
+  test("operator counter-payment index migration only adds tenant lookup and idempotency indexes", () => {
+    assert.deepEqual(
+      operatorCounterPaymentIndexPlans.map((plan) => plan.key).sort((left, right) => Object.keys(left).length - Object.keys(right).length),
+      [{ tenantId: 1 }, { tenantId: 1, sourceType: 1, sourceId: 1 }]
+    );
+    const existing = operatorCounterPaymentIndexPlans.map((plan) => ({
+      name: plan.options.name,
+      key: plan.key,
+      unique: plan.options.unique
+    }));
+    assert.deepEqual(findMissingOperatorCounterPaymentIndexes(existing), []);
+    assert.deepEqual(findConflictingOperatorCounterPaymentIndexes(existing), []);
+    assert.equal(findConflictingOperatorCounterPaymentIndexes([
+      { name: "uniq_operator_counter_payment_tenant_source", key: { tenantId: 1, sourceType: 1, sourceId: 1 }, unique: false }
+    ]).length, 1);
+
+    const duplicatePipeline = duplicateOperatorCounterPaymentSourcesPipeline();
+    assert.deepEqual((duplicatePipeline[1] as { $group: { _id: Record<string, string> } }).$group._id, {
+      tenantId: "$tenantId",
+      sourceType: "$sourceType",
+      sourceId: "$sourceId"
+    });
+    assert.ok(invalidOperatorCounterPaymentFieldsPipeline().length > 0);
+  });
+
   test("business and document uniqueness is tenant-local", () => {
     const expected: Array<[ModelWithIndexes, Record<string, number>]> = [
       [CountryRouteCharge, { tenantId: 1, businessAccountId: 1, band: 1, countryCode: 1, service: 1 }],
@@ -90,6 +129,7 @@ describe("operational tenant-owned model schemas", () => {
       [CancellationFeeInvoice, { tenantId: 1, invoiceNumber: 1 }],
       [CancellationFeeInvoice, { tenantId: 1, cancellationId: 1 }],
       [IdempotencyKey, { tenantId: 1, scope: 1, userId: 1, key: 1 }],
+      [OperatorCounterPayment, { tenantId: 1, sourceType: 1, sourceId: 1 }],
       [PortalNotification, { tenantId: 1, idempotencyKey: 1 }],
       [ShipmentCreditNote, { tenantId: 1, creditNoteNumber: 1 }],
       [ShipmentCreditNote, { tenantId: 1, cancellationId: 1 }],

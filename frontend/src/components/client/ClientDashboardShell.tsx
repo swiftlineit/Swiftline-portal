@@ -873,12 +873,20 @@ export function ClientDashboardShell({
   );
 }
 
-export function ClientDashboardLoading() {
+export function ClientDashboardLoading({
+  label = "Loading client dashboard...",
+  className = "",
+  announce = false
+}: {
+  label?: string;
+  className?: string;
+  announce?: boolean;
+}) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#EEEDED]/60">
+    <div {...(announce ? { role: "status", "aria-live": "polite" as const, "aria-busy": true } : {})} className={`flex h-full flex-col items-center justify-center gap-3 bg-[#EEEDED]/60 ${className}`}>
       <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#0D1282]/20 border-t-[#0D1282]" />
       <p className="text-sm font-semibold text-[#0D1282]">
-        Loading client dashboard...
+        {label}
       </p>
     </div>
   );

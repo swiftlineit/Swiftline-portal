@@ -29,6 +29,8 @@
     "migrate:tenant-ownership:production": "tsx src/scripts/runProductionSwiftlineTenantMigration.ts",
     "audit:operator-support-indexes": "tsx src/scripts/migrateOperatorSupportSessionIndexes.ts",
     "migrate:operator-support-indexes": "tsx src/scripts/migrateOperatorSupportSessionIndexes.ts --apply",
+    "audit:operator-counter-payment-indexes": "tsx src/scripts/migrateOperatorCounterPaymentIndexes.ts",
+    "migrate:operator-counter-payment-indexes": "tsx src/scripts/migrateOperatorCounterPaymentIndexes.ts --apply",
     "migrate:swiftline-root-ownership": "tsx src/scripts/migrateSwiftlineRootOwnership.ts",
     "migrate:shipment-tenant-ownership": "tsx src/scripts/migrateShipmentTenantOwnership.ts",
     "migrate:account-credit-tenant-ownership": "tsx src/scripts/migrateAccountCreditTenantOwnership.ts",

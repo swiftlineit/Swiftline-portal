@@ -5,6 +5,7 @@ import {
   isOperatorBusinessAccountBookable,
   getOperatorTrackingTransitionError
 } from "../services/operatorShipmentPolicy.service.js";
+import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
 
 describe("operator client account booking readiness", () => {
   test("allows locally approved or active accounts after KYC verification", () => {
@@ -41,6 +42,33 @@ describe("operator shipment eligibility", () => {
     assert.match(getOperatorShipmentEligibilityError({ ...common, accountStatus: "pending_review" }) ?? "", /must be approved/);
     assert.match(getOperatorShipmentEligibilityError({ ...common, shipmentBranchId: "branch-2" }) ?? "", /not assigned/);
     assert.match(getOperatorShipmentEligibilityError({ ...common, assignedBranchId: undefined }) ?? "", /not assigned/);
+  });
+
+  test("allows an individual sentinel on an active branch without an account assignment", () => {
+    const individual = {
+      branchStatus: "ACTIVE",
+      accountStatus: "approved",
+      accountKind: "INDIVIDUAL_SENTINEL",
+      assignedBranchId: undefined,
+      shipmentBranchId: "branch-2"
+    };
+
+    assert.equal(getOperatorShipmentEligibilityError(individual), null);
+    assert.match(getOperatorShipmentEligibilityError({ ...individual, branchStatus: "SUSPENDED" }) ?? "", /branch is not active/);
+    assert.match(getOperatorShipmentEligibilityError({ ...individual, accountStatus: "suspended" }) ?? "", /must be approved/);
+  });
+
+  test("keeps operator payment events tenant-scoped and unique per booking, amendment, or cancellation", () => {
+    const indexes = OperatorCounterPayment.schema.indexes() as Array<[
+      Record<string, number>,
+      { unique?: boolean; name?: string }
+    ]>;
+    assert.equal(OperatorCounterPayment.schema.path("tenantId")?.isRequired, true);
+    assert.ok(indexes.some(([key, options]) =>
+      key.tenantId === 1 && key.sourceType === 1 && key.sourceId === 1 && options.unique === true
+    ));
+    assert.equal(OperatorCounterPayment.schema.path("direction")?.isRequired, true);
+    assert.equal(OperatorCounterPayment.schema.path("sourceId")?.isRequired, true);
   });
 });
 

@@ -39,7 +39,7 @@ const branchStatusActions: Record<BranchStatus, string> = {
 };
 
 function formatMoney(minor?: number): string {
-  return minor == null ? "—" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(minor / 100);
+  return minor == null ? "-" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(minor / 100);
 }
 
 function branchStatusClass(status: BranchStatus | string): string {
@@ -74,7 +74,7 @@ function DetailField({ label, value }: { label: string; value?: string | null })
   return (
     <div className="min-w-0">
       <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className="mt-1 break-words text-sm leading-6 text-slate-900">{value?.trim() || "—"}</dd>
+      <dd className="mt-1 break-words text-sm leading-6 text-slate-900">{value?.trim() || "-"}</dd>
     </div>
   );
 }
@@ -177,7 +177,7 @@ function BranchUserRows({ users, operatorSlug, branchId }: { users: OperatorBran
     <div className="min-w-0">
       {entry.account?.companyName ? <p className="font-medium text-slate-900">{entry.account.companyName}</p> : null}
       {entry.user?.designation ? <p className={entry.account?.companyName ? "mt-1 text-xs text-slate-600" : "text-slate-700"}>{entry.user.designation}</p> : null}
-      {!entry.account?.companyName && !entry.user?.designation ? <span className="text-slate-500">—</span> : null}
+      {!entry.account?.companyName && !entry.user?.designation ? <span className="text-slate-500">-</span> : null}
     </div>
   );
   const viewProfile = (entry: OperatorBranchUser) => (
@@ -189,7 +189,7 @@ function BranchUserRows({ users, operatorSlug, branchId }: { users: OperatorBran
     <div className="hidden overflow-x-auto lg:block"><table className="w-full min-w-[900px] border-collapse text-left text-sm">
       <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-600"><tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Role</th><th className="px-4 py-3">Company designation</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Last login</th><th className="px-4 py-3 text-right">Action</th></tr></thead>
       <tbody>{users.map((entry) => <tr key={entry._id} className="border-t border-slate-200">
-        <td className="px-4 py-4"><p className="font-semibold text-slate-950">{name(entry)}</p><p className="break-all text-xs text-slate-600">{entry.user?.email || "—"}</p><p className="text-xs text-slate-600">{entry.user?.phone || "—"}</p></td>
+        <td className="px-4 py-4"><p className="font-semibold text-slate-950">{name(entry)}</p><p className="break-all text-xs text-slate-600">{entry.user?.email || "-"}</p><p className="text-xs text-slate-600">{entry.user?.phone || "-"}</p></td>
         <td className="px-4 py-4">{formatBranchLabel(entry.role)}</td>
         <td className="px-4 py-4">{companyDesignation(entry)}</td>
         <td className="px-4 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${operatorUserStatusClass(entry.membershipStatus)}`}>{formatBranchLabel(entry.membershipStatus)}</span></td>
@@ -199,7 +199,7 @@ function BranchUserRows({ users, operatorSlug, branchId }: { users: OperatorBran
     </table></div>
     <ul className="divide-y divide-slate-200 lg:hidden">{users.map((entry) => <li key={entry._id} className="space-y-2 px-4 py-4 text-sm">
       <div className="flex items-start justify-between gap-3"><p className="font-semibold text-slate-950">{name(entry)}</p><span className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${operatorUserStatusClass(entry.membershipStatus)}`}>{formatBranchLabel(entry.membershipStatus)}</span></div>
-      <p className="break-all text-slate-600">{entry.user?.email || "—"} · {entry.user?.phone || "—"}</p>
+      <p className="break-all text-slate-600">{entry.user?.email || "-"} · {entry.user?.phone || "-"}</p>
       <p className="text-slate-700">{formatBranchLabel(entry.role)}</p>
       {entry.account?.companyName ? <p className="font-medium text-slate-900">{entry.account.companyName}</p> : null}
       {entry.user?.designation ? <p className="text-slate-600">{entry.user.designation}</p> : null}
@@ -475,7 +475,7 @@ export default function OperatorBranchDetailPage({ operatorSlug, branchId, initi
                   <div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Operating countries</h3><TextList values={branch.operations?.operatingCountries} emptyLabel="All countries" /></div>
                   <div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Working days</h3><TextList values={branch.operations?.workingDays} /></div>
                 </div>
-                {branch.phoneNumbers?.length ? <div className="border-t border-slate-200 px-4 py-4 sm:px-5"><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Additional phone numbers</h3><ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{branch.phoneNumbers.map((phone, index) => <li key={`${phone.number}-${index}`} className="text-sm text-slate-800">{phone.label ? `${phone.label}: ` : ""}{phone.number || "—"}</li>)}</ul></div> : null}
+                {branch.phoneNumbers?.length ? <div className="border-t border-slate-200 px-4 py-4 sm:px-5"><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Additional phone numbers</h3><ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{branch.phoneNumbers.map((phone, index) => <li key={`${phone.number}-${index}`} className="text-sm text-slate-800">{phone.label ? `${phone.label}: ` : ""}{phone.number || "-"}</li>)}</ul></div> : null}
               </section>
 
               {branch.documents?.length ? (

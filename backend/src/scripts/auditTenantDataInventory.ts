@@ -70,6 +70,9 @@ const parentLinks: ParentLink[] = [
   { childModel: "ShipmentDraft", field: "shipmentManifestAssignments.staffCombinedManifestId", parentModel: "ShipmentManifest", required: false },
   { childModel: "DpdShipment", field: "shipmentDraftId", parentModel: "ShipmentDraft" },
   { childModel: "OperatorShipmentTrackingCounter", field: "branchId", parentModel: "Branch" },
+  { childModel: "OperatorCounterPayment", field: "shipmentDraftId", parentModel: "ShipmentDraft", identityFields: ["branchId"] },
+  { childModel: "OperatorCounterPayment", field: "branchId", parentModel: "Branch" },
+  { childModel: "OperatorCounterPayment", field: "recordedBy", parentModel: "User" },
   { childModel: "BalanceReservation", field: "businessAccountId", parentModel: "BusinessAccount" },
   { childModel: "BalanceReservation", field: "branchId", parentModel: "Branch" },
   { childModel: "BalanceReservation", field: "shipmentDraftId", parentModel: "ShipmentDraft", identityFields: ["businessAccountId", "branchId"] },
@@ -393,7 +396,8 @@ const fullIndexAuditModels = new Set([
   "OperatorClientInvitation",
   "OperatorShipmentTrackingCounter",
   "OperatorContactQuery",
-  "OperatorSupportSession"
+  "OperatorSupportSession",
+  "OperatorCounterPayment"
 ]);
 
 const preActivationBackfillModels = new Set([

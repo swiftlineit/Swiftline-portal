@@ -31,7 +31,8 @@ export default function ShipmentCostEstimatePanel({
   countryName,
   forceGst,
   onForceGstChange,
-  busy = false
+  busy = false,
+  showFunding = true
 }: {
   estimate: ShipmentCostEstimate | null;
   loading: boolean;
@@ -43,9 +44,11 @@ export default function ShipmentCostEstimatePanel({
   onForceGstChange: (next: boolean) => void;
   /** Set while a save or booking is in flight, so GST cannot be toggled mid-request. */
   busy?: boolean;
+  /** Hide account settlement details for operator walk-ins paid outside the portal. */
+  showFunding?: boolean;
 }) {
   const pricing = estimate?.pricing ?? null;
-  const funding = estimate?.funding ?? null;
+  const funding = showFunding ? estimate?.funding ?? null : null;
 
   return (
     <div className="mt-4 rounded-2xl border border-slate-400 bg-slate-50 p-3">

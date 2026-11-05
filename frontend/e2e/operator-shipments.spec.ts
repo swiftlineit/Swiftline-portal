@@ -72,8 +72,10 @@ async function mockOperatorShipmentApi(
   capturedDrafts: Array<Record<string, unknown>>,
   capturedManifests: Array<{ path: string; body: Record<string, unknown> }> = [],
   capturedShipmentQueries: Array<{ path: string; query: Record<string, string> }> = [],
-  detailStatus: "DELIVERED" | "IN_TRANSIT" = "DELIVERED"
+  detailStatus: "DELIVERED" | "IN_TRANSIT" = "DELIVERED",
+  draftLoadDelayMs = 0
 ) {
+  let individualDraftCreated = false;
   const draftFixture = {
     _id: draftId,
     creationSource: "MANUAL",
@@ -333,11 +335,31 @@ async function mockOperatorShipmentApi(
       capturedDrafts.push(request.postDataJSON() as Record<string, unknown>);
       return json(route, { success: true, shipmentDraft: { _id: draftId } }, 201);
     }
+    if (path === `/api/v1/operators/${slug}/dpd-labels/drafts/individual` && request.method() === "POST") {
+      capturedDrafts.push(request.postDataJSON() as Record<string, unknown>);
+      individualDraftCreated = true;
+      return json(route, { success: true, shipmentDraft: { _id: draftId } }, 201);
+    }
     if (path === `/api/v1/operators/${slug}/dpd-labels/drafts/${draftId}` && request.method() === "GET") {
-      return json(route, { success: true, shipmentDraft: draftFixture });
+      if (draftLoadDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, draftLoadDelayMs));
+      return json(route, {
+        success: true,
+        shipmentDraft: {
+          ...draftFixture,
+          customerType: individualDraftCreated ? "INDIVIDUAL" : "BUSINESS",
+          creationSource: individualDraftCreated ? "INDIVIDUAL" : "MANUAL"
+        }
+      });
     }
     if (path === `/api/v1/operators/${slug}/dpd-labels/drafts/${draftId}` && request.method() === "PATCH") {
-      return json(route, { success: true, shipmentDraft: draftFixture });
+      return json(route, {
+        success: true,
+        shipmentDraft: {
+          ...draftFixture,
+          customerType: individualDraftCreated ? "INDIVIDUAL" : "BUSINESS",
+          creationSource: individualDraftCreated ? "INDIVIDUAL" : "MANUAL"
+        }
+      });
     }
     if (path === `/api/v1/operators/${slug}/dpd-labels/drafts/${draftId}/rate-card-context`) {
       return json(route, { success: true, title: "Northstar Rate Card", rateCardAssigned: true, rates: [], routeCharges: [] });
@@ -549,9 +571,7 @@ test("operator staff creates a draft with the selected account and branch", asyn
   expect(accountBox).not.toBeNull();
   expect(branchBox).not.toBeNull();
   if (accountBox && branchBox) {
-    const isMobile = await page.evaluate(() => window.innerWidth < 768);
-    if (isMobile) expect(branchBox.y).toBeGreaterThan(accountBox.y);
-    else expect(Math.abs(accountBox.y - branchBox.y)).toBeLessThanOrEqual(2);
+    expect(branchBox.y).toBeGreaterThan(accountBox.y);
   }
 
   await accountSelect.selectOption(accountId);
@@ -566,6 +586,40 @@ test("operator staff creates a draft with the selected account and branch", asyn
   const dimensions = await page.evaluate(() => ({ viewport: window.innerWidth, content: document.documentElement.scrollWidth }));
   expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport);
   expect(postedDrafts).toEqual([{ businessAccountId: accountId, branchId }]);
+});
+
+test("operator staff can start an individual booking and record its external payment", async ({ page }) => {
+  const capturedDrafts: Array<Record<string, unknown>> = [];
+  await mockOperatorShipmentApi(page, "OPERATOR_ADMIN", capturedDrafts);
+  await page.goto(`/portal/${slug}/shipments/new`);
+
+  const businessForm = page.getByRole("heading", { name: "Business account booking" }).locator("xpath=ancestor::form");
+  const individualForm = page.getByRole("heading", { name: "Individual booking" }).locator("xpath=ancestor::form");
+  await expect(businessForm.getByLabel("Business account")).toBeVisible();
+  await expect(businessForm.getByLabel("Assigned dispatch branch")).toBeVisible();
+  await expect(individualForm.getByLabel("Sender branch")).toBeVisible();
+  await expect(individualForm.getByLabel("Customer name")).toBeVisible();
+
+  const businessBox = await businessForm.boundingBox();
+  const individualBox = await individualForm.boundingBox();
+  expect(businessBox).not.toBeNull();
+  expect(individualBox).not.toBeNull();
+  if (businessBox && individualBox) {
+    if (await page.evaluate(() => window.innerWidth >= 1024)) {
+      expect(individualBox.x).toBeGreaterThan(businessBox.x);
+    } else {
+      expect(individualBox.y).toBeGreaterThan(businessBox.y);
+    }
+  }
+
+  await individualForm.getByLabel("Sender branch").selectOption(branchId);
+  await individualForm.getByLabel("Customer name").fill("Walk-in Customer");
+  await individualForm.getByRole("button", { name: "Continue to shipment details" }).click();
+  await expect(page).toHaveURL(new RegExp(`/portal/${slug}/shipments/new\\?draftId=${draftId}$`));
+  await expect(page.getByText("Consignee Details", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Payment received" })).toBeVisible();
+  await expect(page.getByLabel("Payment method")).toHaveValue("CASH");
+  expect(capturedDrafts).toEqual([{ branchId, customer: { contactName: "Walk-in Customer" } }]);
 });
 
 test("operator client opens the shipment form directly using its assigned account and branch", async ({ page }) => {
@@ -589,6 +643,7 @@ test("operator client opens the shipment form directly using its assigned accoun
     }
   }
   await expect(page.getByLabel("Business account")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Individual booking" })).toHaveCount(0);
   await expect(page.getByLabel("Assigned dispatch branch")).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`/portal/${slug}/shipments/new\\?draftId=${draftId}$`));
   await expect(page.getByRole("button", { name: "Continue to shipment details" })).toHaveCount(0);
@@ -603,10 +658,24 @@ test("operator client opens the shipment form directly using its assigned accoun
 
 for (const role of ["OPERATOR_ADMIN", "CLIENT"] as const) {
   test(`saved shipment drafts use the aligned scrollable booking layout for ${role === "CLIENT" ? "operator clients" : "operator staff"}`, async ({ page }) => {
-    await mockOperatorShipmentApi(page, role, []);
+    await mockOperatorShipmentApi(page, role, [], [], [], "DELIVERED", role === "OPERATOR_ADMIN" ? 750 : 0);
     await page.goto(`/portal/${slug}/shipments/drafts/${draftId}`);
 
     await expect(page.getByRole("heading", { name: "Create a shipment", exact: true })).toBeVisible();
+    if (role === "OPERATOR_ADMIN") {
+      const loading = page.getByRole("status").filter({ hasText: "Loading shipment form..." });
+      await expect(loading).toBeVisible();
+      const centering = await page.evaluate(() => {
+        const frame = document.querySelector<HTMLElement>('[data-testid="operator-shipment-draft-frame"]');
+        const status = document.querySelector<HTMLElement>('[role="status"][aria-live="polite"]');
+        if (!frame || !status) return null;
+        const frameRect = frame.getBoundingClientRect();
+        const statusRect = status.getBoundingClientRect();
+        return Math.abs((frameRect.top + frameRect.height / 2) - (statusRect.top + statusRect.height / 2));
+      });
+      expect(centering).not.toBeNull();
+      expect(centering ?? Infinity).toBeLessThanOrEqual(2);
+    }
     await expect(page.getByText("Consignee Details", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Book Shipment", exact: true })).toBeVisible();
     await expectOperatorBookingColumnsToFitViewport(page);

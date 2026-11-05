@@ -70,11 +70,11 @@ function BranchTableRow({ branch, ...actions }: BranchRowActionProps) {
         <p className="mt-1 text-sm text-slate-600">{branch.address?.stateOrProvince || "State not set"}</p>
       </td>
       <td className="px-4 py-4 text-sm text-slate-700 sm:px-5">
-        <p className="break-all">{branch.contact?.email || "—"}</p>
-        <p className="mt-1">{branch.contact?.phone || "—"}</p>
+        <p className="break-all">{branch.contact?.email || "-"}</p>
+        <p className="mt-1">{branch.contact?.phone || "-"}</p>
       </td>
       <td className="px-4 py-4 sm:px-5"><StatusBadge status={branch.status} /></td>
-      <td className="px-4 py-4 text-slate-700 sm:px-5">{branch.openingDate ? new Date(branch.openingDate).toLocaleDateString("en-IN") : "—"}</td>
+      <td className="px-4 py-4 text-slate-700 sm:px-5">{branch.openingDate ? new Date(branch.openingDate).toLocaleDateString("en-IN") : "-"}</td>
       <td className="px-4 py-4 text-right sm:px-5">
         <BranchRowActions branch={branch} {...actions} />
       </td>

@@ -15,7 +15,7 @@ export interface IPublicBusinessAccountOtp extends mongoose.Document {
 
 const publicBusinessAccountOtpSchema = new mongoose.Schema<IPublicBusinessAccountOtp>(
   {
-    email: { type: String, required: true, lowercase: true, trim: true, index: true },
+    email: { type: String, required: true, lowercase: true, trim: true },
     otpHash: { type: String, default: "", select: false },
     otpExpiresAt: { type: Date, default: null },
     otpAttempts: { type: Number, default: 0, min: 0 },

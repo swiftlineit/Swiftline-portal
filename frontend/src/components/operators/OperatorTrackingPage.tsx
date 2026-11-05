@@ -32,9 +32,9 @@ function humanize(value?: string | null) {
 }
 
 function formatDate(value?: string | null) {
-  if (!value) return "—";
+  if (!value) return "-";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat("en-IN", {
+  return Number.isNaN(date.getTime()) ? "-" : new Intl.DateTimeFormat("en-IN", {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(date);
@@ -251,7 +251,7 @@ export default function OperatorTrackingPage({ operatorSlug }: { operatorSlug: s
             <div className="px-4 py-4 sm:px-6"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Consignee</p><p className="mt-1 break-words font-medium text-slate-900">{shipment.shipmentDraft.consignee.companyName || shipment.shipmentDraft.consignee.contactName || selected.consignee}</p></div>
             <div className="border-t border-slate-200 px-4 py-4 sm:border-t-0 sm:px-6"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Destination</p><p className="mt-1 break-words font-medium text-slate-900">{[shipment.shipmentDraft.consignee.townOrCity, shipment.shipmentDraft.consignee.countryName || shipment.shipmentDraft.consignee.countryCode].filter(Boolean).join(", ") || selected.destination}</p></div>
             <div className="border-t border-slate-200 px-4 py-4 sm:px-6 lg:border-t-0"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Parcels</p><p className="mt-1 font-medium tabular-nums text-slate-900">{shipment.shipmentDraft.parcelCount || selected.parcelCount || 0}</p></div>
-            <div className="border-t border-slate-200 px-4 py-4 sm:px-6 lg:border-t-0 lg:border-l"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total weight</p><p className="mt-1 font-medium tabular-nums text-slate-900">{totalWeightKg === null ? "—" : `${totalWeightKg.toFixed(2)} kg`}</p></div>
+            <div className="border-t border-slate-200 px-4 py-4 sm:px-6 lg:border-t-0 lg:border-l"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total weight</p><p className="mt-1 font-medium tabular-nums text-slate-900">{totalWeightKg === null ? "-" : `${totalWeightKg.toFixed(2)} kg`}</p></div>
           </div>
 
           <div className="px-4 py-5 sm:px-6 sm:py-6">

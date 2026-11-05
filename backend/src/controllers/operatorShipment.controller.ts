@@ -10,9 +10,19 @@ import { ShipmentDraft, shipmentDraftStatusValues } from "../models/shipmentDraf
 import { ShipmentEvent, shipmentEventStatusValues, shipmentMilestoneKey } from "../models/shipmentEvent.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
+import { counterPaymentMethodValues } from "../models/counterPayment.model.js";
 import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 import { buildStoredLabelAccess } from "./dpdShipment.controller.js";
-import { createBlankShipmentDraft, ManualShipmentDraftError } from "../services/manualShipmentDraft.service.js";
+import {
+  createBlankShipmentDraft,
+  createIndividualShipmentDraft,
+  ManualShipmentDraftError,
+  type IndividualCustomerInput
+} from "../services/manualShipmentDraft.service.js";
+import {
+  OperatorCounterPaymentConflictError,
+  recordOperatorCounterCollection
+} from "../services/operatorCounterPayment.service.js";
 import {
   createLabelForShipmentDraft,
   DpdShipmentServiceError,
@@ -39,9 +49,25 @@ const operatorManualDraftSchema = z.object({
   businessAccountId: objectIdSchema,
   branchId: objectIdSchema
 }).strict();
+const operatorIndividualDraftSchema = z.object({
+  branchId: objectIdSchema,
+  customer: z.object({
+    contactName: z.string().trim().min(1).max(120)
+  }).strict()
+}).strict();
 
 const operatorBookingSchema = z.object({
-  acceptedPricingHash: z.string().trim().min(1).max(128)
+  acceptedPricingHash: z.string().trim().min(1).max(128),
+  counterPayment: z.object({
+    method: z.enum(counterPaymentMethodValues),
+    reference: z.string().trim().max(80).optional().default(""),
+    note: z.string().trim().max(300).optional().default("")
+  }).optional()
+}).strict();
+const operatorCounterPaymentSchema = z.object({
+  method: z.enum(counterPaymentMethodValues),
+  reference: z.string().trim().max(80).optional().default(""),
+  note: z.string().trim().max(300).optional().default("")
 }).strict();
 
 const operatorTrackingSchema = z.object({
@@ -158,6 +184,37 @@ export async function createOperatorManualShipmentDraft(request: Request, respon
   }
 }
 
+/** Walk-in drafts are available only to operator administrators and operations staff. */
+export async function createOperatorIndividualShipmentDraft(request: Request, response: Response): Promise<Response> {
+  const context = getOperatorContext(request);
+  const userId = authenticatedUserId(request);
+  if (!context || !userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  if (!["OPERATOR_ADMIN", "OPERATIONS"].includes(context.role)) {
+    return response.status(403).json({ success: false, message: "Only operator staff can create individual shipment drafts." });
+  }
+
+  const parsed = operatorIndividualDraftSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return response.status(400).json({ success: false, message: "Enter the customer's name and select a sender branch." });
+  }
+
+  try {
+    const customer: IndividualCustomerInput = { contactName: parsed.data.customer.contactName };
+    const shipmentDraft = await createIndividualShipmentDraft({
+      branchId: parsed.data.branchId,
+      customer,
+      createdBy: userId,
+      allowedBranchIds: context.role === "OPERATOR_ADMIN" ? null : context.assignedBranches.map(String)
+    });
+    return response.status(201).json({ success: true, shipmentDraft });
+  } catch (error) {
+    if (error instanceof ManualShipmentDraftError) {
+      return response.status(error.statusCode).json({ success: false, message: error.message });
+    }
+    throw error;
+  }
+}
+
 /** Operator clients choose the account explicitly so a login with multiple accounts cannot draft against the wrong one. */
 export async function createOperatorClientManualShipmentDraft(request: Request, response: Response): Promise<Response> {
   const context = getOperatorContext(request);
@@ -260,12 +317,14 @@ export async function createOperatorShipment(request: Request, response: Respons
   }
 
   const draft = await ShipmentDraft.findOne({ _id: id, tenantId: context.tenantId, deletedAt: null })
-    .select("businessAccountId branchId")
+    .select("businessAccountId branchId customerType")
     .lean()
     .exec();
   if (!draft) return response.status(404).json({ success: false, message: "Shipment draft not found." });
+  const individualShipment = draft.customerType === "INDIVIDUAL";
 
   if (context.role === "CLIENT") {
+    if (individualShipment) return response.status(404).json({ success: false, message: "Shipment draft not found." });
     const membership = await BusinessAccountMember.findOne({
       user: userId,
       tenantId: context.tenantId,
@@ -288,10 +347,17 @@ export async function createOperatorShipment(request: Request, response: Respons
     return response.status(404).json({ success: false, message: "Shipment draft not found." });
   }
 
+  if (individualShipment && !parsed.data.counterPayment) {
+    return response.status(400).json({ success: false, message: "Record how the customer paid before booking this shipment." });
+  }
+  if (!individualShipment && parsed.data.counterPayment) {
+    return response.status(400).json({ success: false, message: "External payment details are only valid for an individual shipment." });
+  }
+
   try {
     const result = await createLabelForShipmentDraft(id, userId, {
       actor: "operator",
-      paymentSource: "BUSINESS_ACCOUNT",
+      paymentSource: individualShipment ? "ADMIN_DIRECT" : "BUSINESS_ACCOUNT",
       acceptedPricingHash: parsed.data.acceptedPricingHash,
       skipDpdLabel: true
     });
@@ -306,6 +372,41 @@ export async function createOperatorShipment(request: Request, response: Respons
       shipmentDraftId: new mongoose.Types.ObjectId(id),
       finalizedAt: result.dpdShipment.createdAt
     });
+    let counterPayment: {
+      amountMinor: number;
+      method: string;
+      reference: string;
+      note: string;
+      recordedAt: Date;
+    } | null = null;
+    if (individualShipment && parsed.data.counterPayment) {
+      try {
+        const recorded = await recordOperatorCounterCollection({
+          shipmentDraftId: new mongoose.Types.ObjectId(id),
+          branchId: draft.branchId,
+          amountMinor: result.shipmentInvoice.totalAmountMinor,
+          payment: parsed.data.counterPayment,
+          recordedBy: userId
+        });
+        counterPayment = {
+          amountMinor: recorded.payment.amountMinor,
+          method: recorded.payment.method,
+          reference: recorded.payment.reference,
+          note: recorded.payment.note,
+          recordedAt: recorded.payment.recordedAt
+        };
+      } catch (error) {
+        if (error instanceof OperatorCounterPaymentConflictError) {
+          return response.status(409).json({ success: false, message: error.message });
+        }
+        console.error("Operator shipment was booked but its external payment could not be recorded.", error);
+        return response.status(503).json({
+          success: false,
+          shipmentBooked: true,
+          message: "Shipment booked, but its external payment record was not saved. Open the shipment and record the payment that was collected."
+        });
+      }
+    }
     await notifyOperatorShipmentBooked({
       shipmentDraftId: new mongoose.Types.ObjectId(id),
       dpdShipment: result.dpdShipment,
@@ -339,7 +440,8 @@ export async function createOperatorShipment(request: Request, response: Respons
         totalAmountMinor: result.shipmentInvoice.totalAmountMinor,
         status: result.shipmentInvoice.status,
         paymentStatus: result.shipmentInvoice.paymentStatus
-      }
+      },
+      ...(counterPayment ? { counterPayment } : {})
     });
   } catch (error) {
     if (error instanceof RateCardRequiredError) {
@@ -359,6 +461,69 @@ export async function createOperatorShipment(request: Request, response: Respons
     }
     console.error("Operator shipment booking failed.", error);
     return response.status(502).json({ success: false, message: "The operator shipment could not be booked." });
+  }
+}
+
+/** Allows staff to record a collected walk-in payment after a booking completed. */
+export async function recordOperatorShipmentCounterPayment(request: Request, response: Response): Promise<Response> {
+  const context = getOperatorContext(request);
+  const userId = authenticatedUserId(request);
+  const id = draftIdFromRequest(request);
+  if (!context || !userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  if (!id) return response.status(404).json({ success: false, message: "Shipment not found." });
+  if (!["OPERATOR_ADMIN", "OPERATIONS"].includes(context.role)) {
+    return response.status(403).json({ success: false, message: "Only operator staff can record external payments." });
+  }
+
+  const parsed = operatorCounterPaymentSchema.safeParse(request.body ?? {});
+  if (!parsed.success) {
+    return response.status(400).json({ success: false, message: "Enter a valid payment method, reference, and note." });
+  }
+
+  const draft = await ShipmentDraft.findOne({ _id: id, tenantId: context.tenantId, deletedAt: null })
+    .select("branchId customerType bookingState")
+    .lean()
+    .exec();
+  if (!draft || draft.customerType !== "INDIVIDUAL" || !canStaffAccessBranch(context, draft.branchId)) {
+    return response.status(404).json({ success: false, message: "Shipment not found." });
+  }
+
+  const [bookedShipment, invoice] = await Promise.all([
+    DpdShipment.findOne({ shipmentDraftId: id, status: "LABEL_RECEIVED" }).select("_id").lean().exec(),
+    ShipmentInvoice.findOne({ shipmentDraftId: id }).select("totalAmountMinor").lean().exec()
+  ]);
+  if (!bookedShipment || draft.bookingState !== "BOOKED") {
+    return response.status(409).json({ success: false, message: "Only a completed individual shipment can have its payment recorded." });
+  }
+  if (!invoice || invoice.totalAmountMinor < 1) {
+    return response.status(409).json({ success: false, message: "A payable invoice amount is not available for this shipment." });
+  }
+
+  try {
+    const recorded = await recordOperatorCounterCollection({
+      shipmentDraftId: new mongoose.Types.ObjectId(id),
+      branchId: draft.branchId,
+      amountMinor: invoice.totalAmountMinor,
+      payment: parsed.data,
+      recordedBy: userId
+    });
+    return response.status(recorded.created ? 201 : 200).json({
+      success: true,
+      counterPayment: {
+        direction: recorded.payment.direction,
+        sourceType: recorded.payment.sourceType,
+        amountMinor: recorded.payment.amountMinor,
+        method: recorded.payment.method,
+        reference: recorded.payment.reference,
+        note: recorded.payment.note,
+        recordedAt: recorded.payment.recordedAt
+      }
+    });
+  } catch (error) {
+    if (error instanceof OperatorCounterPaymentConflictError) {
+      return response.status(409).json({ success: false, message: error.message });
+    }
+    throw error;
   }
 }
 
@@ -568,7 +733,7 @@ export async function listOperatorShipments(request: Request, response: Response
   const [total, drafts] = await Promise.all([
     ShipmentDraft.countDocuments(filter).exec(),
     ShipmentDraft.find(filter)
-      .select("businessAccountId branchId consigneeEnteredAddress parcelList parcelCount bookingState shipmentManifestAssignments createdAt updatedAt")
+      .select("businessAccountId branchId customerType consigneeEnteredAddress parcelList parcelCount bookingState shipmentManifestAssignments createdAt updatedAt")
       .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(parsed.data.pageSize)
@@ -612,7 +777,9 @@ export async function listOperatorShipments(request: Request, response: Response
       const notCancelled = !cancelledDraftIds.has(String(draft._id));
       return {
         draft,
-        businessAccountName: businessAccountNameById.get(String(draft.businessAccountId)) ?? "Business account name unavailable",
+        businessAccountName: draft.customerType === "INDIVIDUAL"
+          ? "Individual booking"
+          : businessAccountNameById.get(String(draft.businessAccountId)) ?? "Business account name unavailable",
         shipment: booking ? serializeOperatorShipment(booking) : null,
         taxInvoice: invoiceByDraft.get(String(draft._id)) ?? null,
         currentEvent: eventByDraft.get(String(draft._id)) ?? null,
@@ -692,7 +859,7 @@ export async function listOperatorShipmentDrafts(request: Request, response: Res
   const [total, drafts] = await Promise.all([
     ShipmentDraft.countDocuments(filter).exec(),
     ShipmentDraft.find(filter)
-      .select("businessAccountId branchId consigneeEnteredAddress parcelList parcelCount status bookingState createdAt updatedAt")
+      .select("businessAccountId branchId customerType consigneeEnteredAddress parcelList parcelCount status bookingState createdAt updatedAt")
       .sort({ updatedAt: -1, _id: -1 })
       .skip(skip)
       .limit(parsed.data.pageSize)
@@ -705,7 +872,9 @@ export async function listOperatorShipmentDrafts(request: Request, response: Res
     drafts: drafts.map((draft) => ({
       id: String(draft._id),
       businessAccountId: String(draft.businessAccountId),
-      businessAccountName: businessAccountNameById.get(String(draft.businessAccountId)) ?? "Business account name unavailable",
+      businessAccountName: draft.customerType === "INDIVIDUAL"
+        ? "Individual booking"
+        : businessAccountNameById.get(String(draft.businessAccountId)) ?? "Business account name unavailable",
       branchId: String(draft.branchId),
       destination: draft.consigneeEnteredAddress,
       shipmentReference: draft.parcelList?.find((parcel) => parcel.shipmentReference1?.trim())?.shipmentReference1 ?? "",

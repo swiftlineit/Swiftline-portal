@@ -32,6 +32,7 @@ export function isOperatorBusinessAccountBookable(input: {
 export function getOperatorShipmentEligibilityError(input: {
   branchStatus: string;
   accountStatus: string;
+  accountKind?: string | null;
   assignedBranchId?: unknown;
   shipmentBranchId: unknown;
 }): string | null {
@@ -41,6 +42,10 @@ export function getOperatorShipmentEligibilityError(input: {
   if (!isOperatorBusinessAccountApproved(input.accountStatus)) {
     return "The operator client account must be approved before booking.";
   }
+  // Individual customers do not belong to a client account. Their system
+  // sentinel intentionally has no assignedBranch; the authenticated staff
+  // branch check is enforced when the draft is created and booked.
+  if (input.accountKind === "INDIVIDUAL_SENTINEL") return null;
   if (!input.assignedBranchId || String(input.assignedBranchId) !== String(input.shipmentBranchId)) {
     return "The selected operator branch is not assigned to this client account.";
   }

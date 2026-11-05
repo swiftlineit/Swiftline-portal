@@ -8,7 +8,9 @@ import {
   createProductionTenantMigrationAuthorization,
   parseTenantMigrationNodeEnvironment,
   parseMongoSrvCredentialUser,
-  parseMongoSrvTarget
+  parseMongoSrvTarget,
+  productionTenantMigrationSteps,
+  standaloneProductionTenantMigrationSteps
 } from "../scripts/migrationSafety.js";
 
 test("migration safety allows non-production environments", () => {
@@ -113,4 +115,37 @@ test("manual migration authorization requires production target, CI off, backup,
   assert.throws(() => createProductionTenantMigrationAuthorization({ ...input, apply: false }), /explicit --apply/);
   assert.throws(() => createProductionTenantMigrationAuthorization({ ...input, confirmation: "yes" }), /confirmation/);
   assert.throws(() => createProductionTenantMigrationAuthorization({ ...input, backupReference: "" }), /backup or point-in-time/);
+});
+
+test("operator counter-payment indexes are separately authorized after tenant activation", () => {
+  const step = "operator-counter-payment-indexes";
+  assert.equal(standaloneProductionTenantMigrationSteps.includes(step), true);
+  assert.equal((productionTenantMigrationSteps as readonly string[]).includes(step), false);
+
+  const authorization = createProductionTenantMigrationAuthorization({
+    nodeEnvironment: "production",
+    ci: undefined,
+    expectedDatabase: "swiftline",
+    expectedClusterHost: "cluster.example.mongodb.net",
+    mongoUri: "mongodb+srv://migration:secret@cluster.example.mongodb.net/swiftline",
+    allowedClusterHost: "cluster.example.mongodb.net",
+    apply: true,
+    confirmation: "APPLY SWIFTLINE TENANT MIGRATION swiftline",
+    changeId: "CHG-2026-1234",
+    backupReference: "backup-2026-11-04-001",
+    runId: "counter-payment-indexes-2026-11-04"
+  });
+  assert.doesNotThrow(() => assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: "production",
+    step,
+    expectedDatabase: "swiftline",
+    mongoUri: "mongodb+srv://migration:secret@cluster.example.mongodb.net/swiftline",
+    authorization
+  }));
+  assert.throws(() => assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: "production",
+    step,
+    expectedDatabase: "swiftline",
+    mongoUri: "mongodb+srv://migration:secret@cluster.example.mongodb.net/swiftline"
+  }), /not authorized/);
 });

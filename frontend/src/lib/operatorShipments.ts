@@ -9,7 +9,8 @@ import type {
   ShipmentAddress,
   ShipmentImportSummary,
   ShipmentKycDocumentType,
-  ShipmentKycDocuments
+  ShipmentKycDocuments,
+  CounterPaymentInput
 } from "@/lib/dpdLabels";
 import type { ClientCountryRateCard, ClientCountryRouteCharge } from "@/lib/countryRateCards";
 import type { ClientShipmentDetails, ClientShipmentListItem } from "@/lib/clientDashboard";
@@ -44,6 +45,7 @@ export type OperatorStaffShipmentRow = {
     _id: string;
     businessAccountId: string;
     branchId: string;
+    customerType?: "BUSINESS" | "INDIVIDUAL";
     consigneeEnteredAddress: ShipmentAddress;
     parcelList?: ShipmentDraft["parcelList"];
     parcelCount?: number;
@@ -73,6 +75,7 @@ export type OperatorStaffShipmentRow = {
 export type OperatorShipmentDetails = ClientShipmentDetails & {
   shipmentDraft: ClientShipmentDetails["shipmentDraft"] & {
     consignor?: Record<string, unknown> | null;
+    customerType?: "BUSINESS" | "INDIVIDUAL";
   };
   branch?: { name: string; code: string } | null;
   shipmentInvoice?: {
@@ -82,6 +85,22 @@ export type OperatorShipmentDetails = ClientShipmentDetails & {
     status: string;
     revision: number;
   } | null;
+  counterPayment?: {
+    amountMinor: number;
+    method: "CASH" | "UPI" | "BANK_TRANSFER" | "CARD" | "CHEQUE";
+    reference: string;
+    note: string;
+    recordedAt: string;
+  } | null;
+  counterPayments?: Array<{
+    direction: "COLLECTED" | "REFUNDED";
+    sourceType: "BOOKING" | "AMENDMENT" | "CANCELLATION";
+    amountMinor: number;
+    method: "CASH" | "UPI" | "BANK_TRANSFER" | "CARD" | "CHEQUE";
+    reference: string;
+    note: string;
+    recordedAt: string;
+  }>;
 };
 
 function operatorPath(operatorSlug: string, resource: string) {
@@ -132,16 +151,54 @@ export function createOperatorManualShipmentDraft(operatorSlug: string, input: {
   );
 }
 
-export function createOperatorShipment(operatorSlug: string, shipmentDraftId: string, acceptedPricingHash: string) {
+export function createOperatorIndividualShipmentDraft(operatorSlug: string, input: {
+  branchId: string;
+  customer: { contactName: string };
+}) {
+  return requestOperatorJson<{ success: true; shipmentDraft: ShipmentDraft }>(
+    operatorSlug,
+    "dpd-labels/drafts/individual",
+    jsonBody(input)
+  );
+}
+
+export function createOperatorShipment(
+  operatorSlug: string,
+  shipmentDraftId: string,
+  acceptedPricingHash: string,
+  counterPayment?: CounterPaymentInput
+) {
   return requestOperatorJson<{
     success: true;
     reused: boolean;
     shipment: { id: string; shipmentDraftId: string; trackingNumber: string; parcelNumbers: string[]; status: string };
     labels: Array<{ id: string; labelType: string; parcelNumber: string; format: string; labelSize: string }>;
+    counterPayment?: {
+      amountMinor: number;
+      method: CounterPaymentInput["method"];
+      reference: string;
+      note: string;
+      recordedAt: string;
+    };
   }>(
     operatorSlug,
     `dpd-labels/drafts/${encodeURIComponent(shipmentDraftId)}/create-shipment`,
-    jsonBody({ acceptedPricingHash })
+    jsonBody({ acceptedPricingHash, ...(counterPayment ? { counterPayment } : {}) })
+  );
+}
+
+export function recordOperatorShipmentCounterPayment(
+  operatorSlug: string,
+  shipmentDraftId: string,
+  payment: CounterPaymentInput
+) {
+  return requestOperatorJson<{
+    success: true;
+    counterPayment: NonNullable<OperatorShipmentDetails["counterPayments"]>[number];
+  }>(
+    operatorSlug,
+    `shipments/${encodeURIComponent(shipmentDraftId)}/counter-payment`,
+    jsonBody(payment)
   );
 }
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "react-toastify";
 import { FiDownload, FiEdit2, FiMapPin, FiX } from "react-icons/fi";
 import OperatorSelect from "@/components/operators/OperatorSelect";
 import OperatorShipmentCancellationPanel from "@/components/operators/OperatorShipmentCancellationPanel";
@@ -10,12 +11,14 @@ import ShipmentKycDocumentsPanel, { collectShipmentKycDocuments } from "@/compon
 import { getOperatorSession, type OperatorSession } from "@/lib/operatorDirectory";
 import { useOperatorSupportReadOnly } from "@/components/operators/OperatorSupportBoundary";
 import { OperatorLoadingIndicator } from "@/components/operators/OperatorLoadingState";
+import type { CounterPaymentInput } from "@/lib/dpdLabels";
 import {
   downloadOperatorShipmentDocument,
   getOperatorShipmentDetails,
   getOperatorShipmentLabelAccessUrl,
   openOperatorShipmentKycDocument,
   openOperatorShipmentParcelKycDocument,
+  recordOperatorShipmentCounterPayment,
   updateOperatorShipmentTracking,
   type OperatorShipmentDetails
 } from "@/lib/operatorShipments";
@@ -129,9 +132,13 @@ export default function OperatorShipmentDetail({ operatorSlug, shipmentDraftId }
   const [trackingLocation, setTrackingLocation] = useState("");
   const [trackingEventAt, setTrackingEventAt] = useState("");
   const [trackingEditorOpen, setTrackingEditorOpen] = useState(false);
+  const [counterPaymentMethod, setCounterPaymentMethod] = useState<CounterPaymentInput["method"]>("CASH");
+  const [counterPaymentReference, setCounterPaymentReference] = useState("");
+  const [counterPaymentNote, setCounterPaymentNote] = useState("");
   const trackingEditorRef = useRef<HTMLFormElement | null>(null);
 
   const canUpdateTracking = !supportReadOnly && Boolean(session && ["OPERATOR_ADMIN", "OPERATIONS"].includes(session.membership.role));
+  const canRecordCounterPayment = canUpdateTracking;
   const canDownloadKyc = !supportReadOnly && Boolean(session && session.membership.role !== "CLIENT");
 
   useEffect(() => {
@@ -200,6 +207,11 @@ export default function OperatorShipmentDetail({ operatorSlug, shipmentDraftId }
     parcels: shipment.shipmentDraft.parcelList,
     kycUseForAllParcels: shipment.shipmentDraft.kycUseForAllParcels
   }) : [], [shipment]);
+  const counterPayments = shipment?.counterPayments?.length
+    ? shipment.counterPayments
+    : shipment?.counterPayment
+      ? [{ ...shipment.counterPayment, direction: "COLLECTED" as const, sourceType: "BOOKING" as const }]
+      : [];
 
   async function handleLabelDownload(labelId: string) {
     setBusyAction(`label:${labelId}`);
@@ -220,6 +232,28 @@ export default function OperatorShipmentDetail({ operatorSlug, shipmentDraftId }
       await downloadOperatorShipmentDocument(operatorSlug, shipmentDraftId, documentKind);
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "Unable to download this shipment document.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleRecordCounterPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canRecordCounterPayment || busyAction || !shipment?.shipmentInvoice) return;
+    setBusyAction("counter-payment");
+    setActionError("");
+    try {
+      await recordOperatorShipmentCounterPayment(operatorSlug, shipmentDraftId, {
+        method: counterPaymentMethod,
+        reference: counterPaymentReference.trim(),
+        note: counterPaymentNote.trim()
+      });
+      setCounterPaymentReference("");
+      setCounterPaymentNote("");
+      setRefreshKey((current) => current + 1);
+      toast.success("External payment recorded.");
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Unable to record the external payment.");
     } finally {
       setBusyAction("");
     }
@@ -294,11 +328,60 @@ export default function OperatorShipmentDetail({ operatorSlug, shipmentDraftId }
                 <PartyDetails title="Consignee" address={consignee} />
                 <div className="min-w-0 p-4 sm:p-5">
                   <h3 className="text-sm font-semibold text-slate-950">Shipment details</h3>
+                  {shipment.shipmentDraft.customerType === "INDIVIDUAL" ? <p className="mt-1 text-sm font-medium text-indigo-800">Individual booking</p> : null}
                   <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
                     <div><dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Service</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{humanize(shipment.shipmentDraft.serviceType)}</dd></div>
                     <div><dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Parcels</dt><dd className="mt-1 text-sm font-semibold tabular-nums text-slate-900">{shipment.shipmentDraft.parcelCount || parcels.length || 0}</dd></div>
                     <div className="col-span-2"><dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total weight</dt><dd className="mt-1 text-sm font-semibold tabular-nums text-slate-900">{totalWeightKg ? `${totalWeightKg.toFixed(2)} kg` : "Not recorded"}</dd></div>
                   </dl>
+                  {shipment.shipmentDraft.customerType === "INDIVIDUAL" ? (
+                    <div className="mt-4 border-t border-slate-200 pt-3">
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">External payment activity</h4>
+                      {counterPayments.length ? (
+                        <ul className="mt-2 divide-y divide-slate-200">
+                          {counterPayments.map((payment, index) => (
+                            <li key={`${payment.sourceType}-${index}`} className="py-2 first:pt-0 last:pb-0">
+                              <dl className="space-y-1.5 text-sm">
+                                <div className="flex items-start justify-between gap-3"><dt className="text-slate-600">{humanize(payment.direction)}</dt><dd className="font-semibold tabular-nums text-slate-900">{formatMoney(payment.amountMinor, shipment.shipmentInvoice?.currency || "INR")}</dd></div>
+                                <div className="flex items-start justify-between gap-3"><dt className="text-slate-600">Method</dt><dd className="font-medium text-slate-900">{humanize(payment.method)}</dd></div>
+                                {payment.reference ? <div className="flex items-start justify-between gap-3"><dt className="text-slate-600">Reference</dt><dd className="break-all text-right text-slate-900">{payment.reference}</dd></div> : null}
+                                <div><dt className="text-xs text-slate-500">Recorded {formatDateTime(payment.recordedAt)}</dt></div>
+                                {payment.note ? <dd className="text-xs leading-5 text-slate-600">{payment.note}</dd> : null}
+                              </dl>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : canRecordCounterPayment && shipment.shipmentInvoice && shipment.shipmentInvoice.totalAmountMinor > 0 ? (
+                        <form onSubmit={(event) => void handleRecordCounterPayment(event)} className="mt-3 space-y-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                          <p className="text-xs leading-5 text-amber-950">No payment record was saved for this booking. Confirm the customer paid, then record the collection below. The amount comes from the shipment invoice.</p>
+                          <p className="text-sm font-semibold tabular-nums text-slate-900">Invoice total · {formatMoney(shipment.shipmentInvoice.totalAmountMinor, shipment.shipmentInvoice.currency)}</p>
+                          <div className="grid grid-cols-1 gap-x-3 gap-y-4 xl:grid-cols-2">
+                            <div className="relative min-w-0 pt-2">
+                              <label htmlFor="operator-counter-payment-method" className="absolute left-2 top-0 z-10 bg-white px-1 text-[11px] font-semibold leading-4 text-slate-600">Payment method</label>
+                              <select id="operator-counter-payment-method" value={counterPaymentMethod} onChange={(event) => setCounterPaymentMethod(event.target.value as CounterPaymentInput["method"])} className="h-11 w-full rounded-sm border border-slate-400 bg-white px-3 pt-1 text-sm text-slate-900 outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20">
+                              <option value="CASH">Cash</option>
+                              <option value="UPI">UPI</option>
+                              <option value="BANK_TRANSFER">Bank transfer</option>
+                              <option value="CARD">Card</option>
+                              <option value="CHEQUE">Cheque</option>
+                              </select>
+                            </div>
+                            <div className="relative min-w-0 pt-2">
+                              <label htmlFor="operator-counter-payment-reference" className="absolute left-2 top-0 z-10 bg-white px-1 text-[11px] font-semibold leading-4 text-slate-600">Reference <span className="font-normal text-slate-500">(optional)</span></label>
+                              <input id="operator-counter-payment-reference" value={counterPaymentReference} onChange={(event) => setCounterPaymentReference(event.target.value)} maxLength={80} placeholder="UTR, receipt or cheque number" className="h-11 w-full rounded-sm border border-slate-400 bg-white px-3 pt-1 text-sm text-slate-900 outline-none placeholder:text-slate-500 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20" />
+                            </div>
+                            <div className="relative min-w-0 pt-2 xl:col-span-2">
+                              <label htmlFor="operator-counter-payment-note" className="absolute left-2 top-0 z-10 bg-white px-1 text-[11px] font-semibold leading-4 text-slate-600">Payment note <span className="font-normal text-slate-500">(optional)</span></label>
+                              <input id="operator-counter-payment-note" value={counterPaymentNote} onChange={(event) => setCounterPaymentNote(event.target.value)} maxLength={300} className="h-11 w-full rounded-sm border border-slate-400 bg-white px-3 pt-1 text-sm text-slate-900 outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20" />
+                            </div>
+                          </div>
+                          <button type="submit" disabled={Boolean(busyAction)} className="inline-flex h-10 w-full items-center justify-center rounded-md bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#10166F] disabled:cursor-not-allowed disabled:opacity-60">
+                            {busyAction === "counter-payment" ? "Saving payment…" : "Record payment"}
+                          </button>
+                        </form>
+                      ) : <p role="status" className="mt-2 text-sm text-amber-800">No payment record is available. Ask an operator administrator or operations user to review this booking.</p>}
+                    </div>
+                  ) : null}
                   {parcels.length ? (
                     <div className="mt-4 border-t border-slate-200 pt-3">
                       <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Parcel weights</h4>
