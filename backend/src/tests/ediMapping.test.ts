@@ -167,6 +167,29 @@ describe("edi column mapping", () => {
     });
   });
 
+  it("compacts parcel-derived HAWB, export invoice, GST invoice, and CRN values", () => {
+    const row = mapRow(sampleRow({
+      consignmentNumber: "SLCDEL031126016",
+      formattedConsignmentNumber: "SLCDEL031126016",
+      parcelNumber: "SLCDEL031126016-01"
+    }));
+
+    assert.equal(row.HAWBNumber, "SLCDEL03112601601");
+    assert.equal(row.ExportInvoiceNo, "SLCDEL03112601601");
+    assert.equal(row.GSTInvoiceNo, "SLCDEL03112601601");
+    assert.equal(row.CRN_NO, "SLCDEL03112601601");
+    assert.equal(row.MAWBNumber, "607-54691055");
+
+    const customInvoice = mapRow(sampleRow({
+      consignmentNumber: "SLCDEL031126016",
+      parcelNumber: "SLCDEL031126016-01",
+      exportInvoiceNumber: "INV-100"
+    }));
+    assert.equal(customInvoice.HAWBNumber, "SLCDEL03112601601");
+    assert.equal(customInvoice.ExportInvoiceNo, "INV-100");
+    assert.equal(customInvoice.GSTInvoiceNo, "INV-100");
+  });
+
   it("uses the consignee contact name, never the company name", () => {
     const row = mapRow(sampleRow({
       consignee: { formatted: "", party: party({ contactName: "NAVPREET KAUR", companyName: "ACME LTD", city: "HOUNSLOW", countryCode: "GB" }) }

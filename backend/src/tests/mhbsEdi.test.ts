@@ -95,6 +95,23 @@ test("MHBS EDI preserves the approved BIFF8 layout and formulas", () => {
   assert.equal(result.warnings.length, 0);
 });
 
+test("MHBS EDI writes compact parcel HAWB and SYSTEM NO values from legacy parcel IDs", () => {
+  const trackingNumber = "SLCDEL031126016";
+  const parcelRow = {
+    ...row,
+    consignmentNumber: trackingNumber,
+    formattedConsignmentNumber: trackingNumber,
+    parcelNumber: `${trackingNumber}-01`
+  };
+  const result = buildMhbsEdiWorkbookBuffer([parcelRow]);
+  const sheet = XLSX.read(result.buffer, { type: "buffer", cellFormula: true }).Sheets.Sheet1;
+
+  assert.ok(sheet);
+  assert.equal(sheet.A2?.v, `${trackingNumber}01`);
+  assert.equal(sheet.C2?.v, `ZX-${trackingNumber}01`);
+  assert.equal(sheet.C2?.f, 'CONCATENATE("ZX-",A2)');
+});
+
 test("MHBS EDI extends formulas beyond the supplied sample rows", () => {
   const rows = Array.from({ length: 45 }, (_, index) => ({
     ...row,

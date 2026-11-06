@@ -87,6 +87,34 @@ describe("edi workbook writer", () => {
     assert.deepEqual(rows.map((row) => row.ConsignorState), ["Punjab", "Punjab", "Punjab"]);
   });
 
+  it("writes compact parcel-derived identifiers regardless of the portal display setting", async (t) => {
+    const originalFormat = process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+    t.after(() => {
+      if (originalFormat === undefined) delete process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+      else process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = originalFormat;
+    });
+    process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = "LEGACY";
+
+    const model = buildManifestDocumentModel(sealedSnapshot());
+    const trackingNumber = "SLCDEL031126016";
+    const legacyParcelNumber = `${trackingNumber}-01`;
+    const parcelRow = {
+      ...model.parcelRows[0]!,
+      consignmentNumber: trackingNumber,
+      parcelNumber: legacyParcelNumber
+    };
+    const customInvoiceRow = { ...parcelRow, exportInvoiceNumber: "INV-100" };
+    const { rows } = readBack(await buildEdiWorkbookBuffer([parcelRow, customInvoiceRow], context));
+
+    for (const field of ["HAWBNumber", "ExportInvoiceNo", "GSTInvoiceNo", "CRN_NO"] as const) {
+      assert.equal(rows[0]![field], `${trackingNumber}01`);
+    }
+    assert.equal(rows[1]!.HAWBNumber, `${trackingNumber}01`);
+    assert.equal(rows[1]!.ExportInvoiceNo, "INV-100");
+    assert.equal(rows[1]!.GSTInvoiceNo, "INV-100");
+    assert.equal(rows[0]!.MAWBNumber, "607-54691055");
+  });
+
   it("keeps numeric cells numeric and text cells textual, and blanks the value on non-first parcels", async () => {
     const model = buildManifestDocumentModel(sealedSnapshot());
     const { sheet, rows } = readBack(await buildEdiWorkbookBuffer(model.parcelRows, context));

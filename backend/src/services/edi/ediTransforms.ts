@@ -1,10 +1,17 @@
 // Pure formatters for the customs EDI. Each rule is derived from the rows of the
 // sample EDI that were not scrambled, and is unit-tested in isolation.
+import { compactSwiftlineParcelNumber } from "../swiftlineParcelIdentifier.service.js";
 
 /** Anything → a trimmed string. Numbers become their string form; null/undefined → "". */
 export function ediText(value: unknown): string {
   if (value === null || value === undefined) return "";
   return String(value).trim();
+}
+
+/** Compacts a recognized Swiftline parcel ID without changing custom references. */
+export function ediSwiftlineParcelNumber(value: unknown): string {
+  const text = ediText(value);
+  return compactSwiftlineParcelNumber(text) ?? text;
 }
 
 /** Trims and strips a single trailing comma; internal commas are preserved. */

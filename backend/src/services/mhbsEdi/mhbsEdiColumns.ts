@@ -1,5 +1,5 @@
 import type { ManifestDocumentParcelRow } from "../../types/manifestDocument.js";
-import { ediText } from "../edi/ediTransforms.js";
+import { ediSwiftlineParcelNumber, ediText } from "../edi/ediTransforms.js";
 
 export type MhbsEdiColumn = {
   header: string;
@@ -15,7 +15,7 @@ export type MhbsEdiWarning = {
 };
 
 function hawb(row: ManifestDocumentParcelRow): string {
-  return ediText(row.exportHawbNumber ?? row.parcelNumber).toUpperCase();
+  return ediSwiftlineParcelNumber(row.exportHawbNumber ?? row.parcelNumber).toUpperCase();
 }
 
 function mhbs(row: ManifestDocumentParcelRow): string {

@@ -333,7 +333,6 @@ export async function createClientPickup(input: {
     (input.expectedDelhiArrival.exactAt && !Number.isFinite(input.expectedDelhiArrival.exactAt.getTime()))) {
     throw new PickupServiceError("Choose valid dispatch and Delhi arrival dates and times.");
   }
-  if (input.dispatchAt <= new Date()) throw new PickupServiceError("Choose a dispatch date and time in the future.");
   if (!input.transportCompany.trim()) throw new PickupServiceError("Choose or enter a transport or courier company.");
   if (!pickupArrivalWindowValues.includes(input.expectedDelhiArrival.window)) throw new PickupServiceError("Choose an expected Delhi arrival window.");
   if (input.expectedDelhiArrival.window === "EXACT" && !input.expectedDelhiArrival.exactAt) throw new PickupServiceError("Choose the exact Delhi arrival time.");

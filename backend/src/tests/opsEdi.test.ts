@@ -65,6 +65,36 @@ test("OPS EDI preserves a CSB-V bank account's leading zeros as text", () => {
   assert.equal(cell("ACCOUNT_NO")?.t, "s");
 });
 
+test("OPS EDI compacts parcel-derived HAWB, invoice, and SYSTEM NO values but preserves CSB-V references", () => {
+  const trackingNumber = "SLCDEL031126016";
+  const parcelRow = {
+    ...row,
+    consignmentNumber: trackingNumber,
+    formattedConsignmentNumber: trackingNumber,
+    parcelNumber: `${trackingNumber}-01`
+  };
+  const csbVRow = {
+    ...parcelRow,
+    exportHawbNumber: trackingNumber,
+    exportInvoiceNumber: "INV-100"
+  };
+  const result = buildOpsEdiWorkbookBuffer([parcelRow, csbVRow], context);
+  const sheet = XLSX.read(result.buffer, { type: "buffer", cellFormula: true }).Sheets.Sheet1;
+  assert.ok(sheet);
+  const cell = (header: string, rowNumber: number) => sheet[XLSX.utils.encode_cell({
+    r: rowNumber,
+    c: OPS_EDI_HEADERS.indexOf(header)
+  })];
+
+  assert.equal(cell("HAWB_Number", 1)?.v, `${trackingNumber}01`);
+  assert.equal(cell("Export_Invoice_no", 1)?.v, `${trackingNumber}01`);
+  assert.equal(cell("SYSTEM NO", 1)?.v, `ZX-${trackingNumber}01`);
+  assert.equal(cell("SYSTEM NO", 1)?.f, 'CONCATENATE("ZX-",A2)');
+  assert.equal(cell("HAWB_Number", 2)?.v, trackingNumber);
+  assert.equal(cell("Export_Invoice_no", 2)?.v, "INV-100");
+  assert.equal(cell("SYSTEM NO", 2)?.v, `ZX-${trackingNumber}`);
+});
+
 function workbookStream(buffer: Buffer): Buffer {
   const container = CFB.read(buffer, { type: "buffer" });
   const workbook = container.FileIndex.find((entry) => entry.name === "Workbook");

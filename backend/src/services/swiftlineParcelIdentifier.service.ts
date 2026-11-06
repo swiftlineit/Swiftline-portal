@@ -1,4 +1,10 @@
 /** Converts only the current Swiftline piece format; carrier references are untouched. */
+export function compactSwiftlineParcelNumber(value: string): string | null {
+  const normalized = value.trim().toUpperCase();
+  const match = /^(SLC[A-Z]{3}\d{9,})-(0[1-9]|[1-9]\d|100)$/i.exec(normalized);
+  return match ? `${match[1]}${match[2]}` : null;
+}
+
 export function displaySwiftlineParcelNumber(value: string, trackingNumber?: string) {
   const normalized = value.trim().toUpperCase();
   const match = /^(SLC[A-Z]{3}\d{9,})-(0[1-9]|[1-9]\d|100)$/i.exec(normalized);

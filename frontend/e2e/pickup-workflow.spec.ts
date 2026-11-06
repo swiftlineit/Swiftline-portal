@@ -83,6 +83,10 @@ function futureDate(daysFromToday: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function pastDate(daysAgo: number) {
+  return futureDate(-daysAgo);
+}
+
 function indiaDateTime(date: string, time: string) {
   return new Date(date + "T" + time + ":00+05:30").toISOString();
 }
@@ -204,6 +208,7 @@ async function createPickupApiMock(page: Page) {
           : { id: driverUserId, name: "Priya Test Driver", email: driver.email, role };
       return json(route, { success: true, user });
     }
+    if (path.endsWith("/auth/client-workspaces")) return json(route, { success: true, swiftline: true, operators: [] });
     if (path.endsWith("/driver/profile")) return json(route, { success: true, driver });
     if (path.endsWith("/client/pickups/form-context")) return json(route, { success: true, ...formContext });
     if (path === "/api/v1/pickups/courier-addresses" && method === "GET") return json(route, {
@@ -616,6 +621,31 @@ test("staff pickup photo is visible to the client and document name opens a prev
   expect(previewErrors).toEqual([]);
   await expect(popup.locator("iframe")).toHaveAttribute("src", /^blob:/);
   await popup.close();
+});
+
+test("client can submit a pickup with a past dispatch date", async ({ page }) => {
+  const api = await createPickupApiMock(page);
+  await page.goto("/client/pickups");
+  await expect(page.getByRole("heading", { name: "Book a pickup" })).toBeVisible();
+  await page.getByRole("checkbox").nth(0).check();
+  await completeRequiredPickupFields(page, "MORNING");
+
+  const dispatchDate = pastDate(3);
+  const arrivalDate = pastDate(2);
+  const dispatchInput = page.getByLabel("Dispatch date and time");
+  await expect(dispatchInput).not.toHaveAttribute("min");
+  await dispatchInput.fill(`${dispatchDate}T09:30`);
+  await page.getByLabel("Expected Delhi arrival date").fill(arrivalDate);
+  await page.getByLabel("Transport / courier company").selectOption("FedEx");
+  await page.getByRole("button", { name: "Submit pickup request" }).click();
+
+  await expect.poll(() => api.submissions.length).toBe(1);
+  expect(api.submissions[0].body.dispatchDate).toBe(dispatchDate);
+  expect(api.submissions[0].body.dispatchTime).toBe("09:30");
+  expect(api.submissions[0].body.expectedDelhiArrival).toMatchObject({
+    date: arrivalDate,
+    window: "MORNING",
+  });
 });
 
 test("client can request manual volume and staff can complete pickup without a driver", async ({ page }) => {

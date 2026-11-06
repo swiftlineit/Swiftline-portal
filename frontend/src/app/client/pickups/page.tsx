@@ -64,8 +64,6 @@ const istToday = () =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(
     new Date(),
   );
-const istNowDateTime = () =>
-  new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 16);
 const displayDateTime = (value: string) =>
   new Intl.DateTimeFormat("en-IN", {
     dateStyle: "medium",
@@ -151,7 +149,6 @@ export default function ClientPickupsPage() {
   const [pickupAddress, setPickupAddress] =
     useState<PickupAddress>(emptyAddress);
   const [dispatchAt, setDispatchAt] = useState("");
-  const dispatchInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
   const [arrivalDate, setArrivalDate] = useState("");
   const [arrivalWindow, setArrivalWindow] = useState("");
@@ -169,11 +166,6 @@ export default function ClientPickupsPage() {
   const [view, setView] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (dispatchInputRef.current)
-      dispatchInputRef.current.min = istNowDateTime();
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -754,7 +746,6 @@ export default function ClientPickupsPage() {
                   Dispatch date and time
                   <RequiredMark />
                   <input
-                    ref={dispatchInputRef}
                     required
                     type="datetime-local"
                     value={dispatchAt}

@@ -69,7 +69,14 @@ export default function OperatorBusinessAccountCreate({ operatorSlug }: { operat
             <Link href={workspaceHref} className="mt-4 inline-flex min-h-10 items-center rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700">Return to workspace</Link>
           </section>
         ) : (
-          <BusinessAccountForm operatorSlug={operatorSlug} operatorName={operator.operator.companyName} />
+          <>
+            {/* <div className="mb-6">
+              <p className="text-sm font-medium text-slate-600"><Link href={workspaceHref} className="underline underline-offset-2">Workspace</Link> / New business account</p>
+              <h1 className="mt-2 text-2xl font-semibold tracking-[-0.02em] text-slate-950">Add a client business</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-5 text-slate-600">The account will be saved as a draft in {operator.operator.companyName}&apos;s workspace.</p>
+            </div> */}
+            <BusinessAccountForm operatorSlug={operatorSlug} operatorName={operator.operator.companyName} />
+          </>
         )}
       </main>
     </div>

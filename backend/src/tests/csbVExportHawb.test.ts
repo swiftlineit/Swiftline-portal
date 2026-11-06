@@ -29,20 +29,34 @@ test("only CSB-V export HAWBs use the original unsuffixed shipment number", () =
   const ediHawb = EDI_COLUMNS.find((column) => column.header === "HAWBNumber")!;
   const ediCrn = EDI_COLUMNS.find((column) => column.header === "CRN_NO")!;
   const ediInvoice = EDI_COLUMNS.find((column) => column.header === "ExportInvoiceNo")!;
+  const ediGstInvoice = EDI_COLUMNS.find((column) => column.header === "GSTInvoiceNo")!;
+  const opsSystem = OPS_EDI_COLUMNS.find((column) => column.header === "SYSTEM NO")!;
   const ediContext = { mawbNumber: "", departureDate: "", aadhaarFor: () => "" };
   const opsContext = { departureDate: "", aadhaarFor: () => "" };
 
   for (const [index, row] of rows.entries()) {
-    const expected = index < 2 ? "SLCAMD260926002" : "SLCAMD260926003-01";
-    assert.equal(mhbsHawb.value(row), expected);
-    assert.equal(mhbsSystem.value(row), `ZX-${expected}`);
-    assert.equal(opsHawb.value(row, opsContext), expected);
-    assert.equal(opsInvoice.value(row, opsContext), index < 2 ? "INV-100" : expected);
+    const expectedCsbVHawb = "SLCAMD260926002";
+    const expectedParcelHawb = "SLCAMD26092600301";
+    const hawb = index < 2 ? expectedCsbVHawb : expectedParcelHawb;
+    assert.equal(mhbsHawb.value(row), hawb);
+    assert.equal(mhbsSystem.value(row), `ZX-${hawb}`);
+    assert.equal(opsHawb.value(row, opsContext), hawb);
+    assert.equal(opsSystem.value(row, opsContext), `ZX-${hawb}`);
+    assert.equal(opsInvoice.value(row, opsContext), index < 2 ? "INV-100" : expectedParcelHawb);
     assert.equal(opsIec.value(row, opsContext), index < 2 ? "CUSTOMIEC1" : "");
     assert.equal(opsAccount.value(row, opsContext), index < 2 ? "001234" : 0);
     assert.equal(typeof opsAccount.type === "function" ? opsAccount.type(row) : opsAccount.type, index < 2 ? "text" : "number");
-    assert.equal(ediHawb.value(row, ediContext), expected);
-    assert.equal(ediCrn.value(row, ediContext), expected);
-    assert.equal(ediInvoice.value(row, ediContext), index < 2 ? "INV-100" : expected);
+    assert.equal(ediHawb.value(row, ediContext), hawb);
+    assert.equal(ediCrn.value(row, ediContext), hawb);
+    assert.equal(ediInvoice.value(row, ediContext), index < 2 ? "INV-100" : expectedParcelHawb);
+    assert.equal(ediGstInvoice.value(row, ediContext), index < 2 ? "INV-100" : expectedParcelHawb);
   }
+
+  const parcelNumberUsedAsInvoice = {
+    ...rows[0]!,
+    exportInvoiceNumber: "SLCAMD260926002-02"
+  };
+  assert.equal(opsInvoice.value(parcelNumberUsedAsInvoice, opsContext), "SLCAMD26092600202");
+  assert.equal(ediInvoice.value(parcelNumberUsedAsInvoice, ediContext), "SLCAMD26092600202");
+  assert.equal(ediGstInvoice.value(parcelNumberUsedAsInvoice, ediContext), "SLCAMD26092600202");
 });

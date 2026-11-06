@@ -5,6 +5,7 @@ import {
   ediAadhaarNumber,
   ediAddressLine,
   ediDate,
+  ediSwiftlineParcelNumber,
   ediText,
   ediValue,
   titleCaseState
@@ -40,7 +41,8 @@ const emptyParty: ManifestPartySnapshot = {
 
 const consignor = (row: ManifestDocumentParcelRow) => row.consignor.party ?? emptyParty;
 const consignee = (row: ManifestDocumentParcelRow) => row.consignee.party ?? emptyParty;
-const hawb = (row: ManifestDocumentParcelRow) => ediText(row.exportHawbNumber ?? row.parcelNumber).toUpperCase();
+const hawb = (row: ManifestDocumentParcelRow) => ediSwiftlineParcelNumber(row.exportHawbNumber ?? row.parcelNumber).toUpperCase();
+const exportInvoice = (row: ManifestDocumentParcelRow) => ediSwiftlineParcelNumber(row.exportInvoiceNumber ?? hawb(row));
 const description = (row: ManifestDocumentParcelRow) => ediText(fullManifestParcelDescription(row.items, row.description));
 const value = (row: ManifestDocumentParcelRow) => ediValue(row.declaredValueMinor);
 const bagNumber = (row: ManifestDocumentParcelRow) => ediText(row.bagNumber);
@@ -74,7 +76,7 @@ export const OPS_EDI_COLUMNS: readonly OpsEdiColumn[] = [
   { header: "CneePostal_Code", type: "text", value: (row) => ediText(consignee(row).postcode), warnWhenBlank: true },
   { header: "CneeState", type: "text", value: (row) => titleCaseState(consignee(row).state) },
   { header: "CneeCountry", type: "text", value: (row) => ediCountryName(consignee(row).countryCode || consignee(row).countryName), warnWhenBlank: true },
-  { header: "Export_Invoice_no", type: "text", value: (row) => row.exportInvoiceNumber ?? hawb(row), warnWhenBlank: true },
+  { header: "Export_Invoice_no", type: "text", value: (row) => exportInvoice(row), warnWhenBlank: true },
   { header: "Date_of_EXPORT_Invoice", type: "text", value: (_row, context) => ediDate(context.departureDate), warnWhenBlank: true },
   { header: "Total_Item_value", type: "number", value: (row) => value(row), warnWhenBlank: true },
   { header: "Total_Taxable_Value", type: "number", value: () => 0, warnWhenBlank: true },
