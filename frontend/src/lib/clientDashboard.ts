@@ -5,6 +5,8 @@ import type { TrackingAttention, TrackingSummary } from "@/lib/shipmentTracking"
 import {
   AddressPrediction,
   AddressValidationResult,
+  AadhaarOcrResult,
+  AadhaarOcrScope,
   PortalAddress,
   ShipmentAmendment,
   ShipmentAmendmentFundingPreview,
@@ -675,6 +677,28 @@ export async function uploadClientShipmentKycDocument(input: {
     kycDocuments: ShipmentKycDocuments;
     validationIssues: string[];
   }>(response);
+}
+
+export async function ocrClientShipmentDraftAadhaar(input: {
+  shipmentDraftId: string;
+  front: File;
+  back: File;
+  kycScope: AadhaarOcrScope;
+  parcelSequence?: number;
+}) {
+  const formData = new FormData();
+  formData.append("front", input.front);
+  formData.append("back", input.back);
+  formData.append("consent", "true");
+  formData.append("kycScope", input.kycScope);
+  if (input.parcelSequence) formData.append("parcelSequence", String(input.parcelSequence));
+
+  const response = await fetchWithAuth(
+    apiUrl(`/api/v1/client/dpd-labels/drafts/${input.shipmentDraftId}/aadhaar-ocr`),
+    { method: "POST", body: formData }
+  );
+
+  return parseApiResponse<{ success: true } & AadhaarOcrResult>(response);
 }
 
 export async function deleteClientShipmentKycDocument(shipmentDraftId: string, type: ShipmentKycDocumentType) {

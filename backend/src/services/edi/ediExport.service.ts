@@ -33,7 +33,6 @@ export async function buildOperationsManifestEdi(manifest: IOperationsManifest):
   const draftIds = [...new Set(model.consignments.map((consignment) => consignment.shipmentDraftId))];
   const drafts = await ShipmentDraft.find({ _id: { $in: draftIds } })
     .select("csbType csbVInvoiceNumber consignorAddress kycUseForAllParcels parcelList")
-    .lean()
     .exec();
   const draftById = new Map(drafts.map((draft) => [String(draft._id), draft]));
 

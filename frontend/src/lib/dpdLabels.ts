@@ -125,6 +125,28 @@ export type ShipmentKycDocument = {
 
 export type ShipmentKycDocuments = Partial<Record<ShipmentKycDocumentType, ShipmentKycDocument | null>>;
 
+export type AadhaarOcrPrefill = {
+  fullName: string;
+  aadhaarNumber: string;
+  address: {
+    fullAddress: string;
+    addressLine1: string;
+    addressLine2: string;
+    townOrCity: string;
+    county: string;
+    postcode: string;
+  };
+  warnings: string[];
+};
+
+export type AadhaarOcrScope = "shared" | "parcel";
+
+export type AadhaarOcrResult = {
+  prefill: AadhaarOcrPrefill;
+  kycDocuments: ShipmentKycDocuments;
+  parcelSequence?: number;
+};
+
 export const shipmentContentTypeOptions = [
   { value: "DOCUMENTS", label: "Documents" },
   { value: "PARCEL", label: "Parcel" },
@@ -1437,6 +1459,28 @@ export async function uploadShipmentKycDocument(input: {
     kycDocuments: ShipmentKycDocuments;
     validationIssues: string[];
   }>(response);
+}
+
+export async function ocrShipmentDraftAadhaar(input: {
+  shipmentDraftId: string;
+  front: File;
+  back: File;
+  kycScope: AadhaarOcrScope;
+  parcelSequence?: number;
+}) {
+  const formData = new FormData();
+  formData.append("front", input.front);
+  formData.append("back", input.back);
+  formData.append("consent", "true");
+  formData.append("kycScope", input.kycScope);
+  if (input.parcelSequence) formData.append("parcelSequence", String(input.parcelSequence));
+
+  const response = await fetchWithAuth(
+    apiUrl(`/api/v1/shipment-drafts/${input.shipmentDraftId}/aadhaar-ocr`),
+    { method: "POST", body: formData }
+  );
+
+  return parseApiResponse<{ success: true } & AadhaarOcrResult>(response);
 }
 
 export async function deleteShipmentKycDocument(shipmentDraftId: string, type: ShipmentKycDocumentType) {

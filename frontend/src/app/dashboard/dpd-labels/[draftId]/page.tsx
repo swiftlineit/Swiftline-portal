@@ -88,6 +88,7 @@ import {
   getDpdLabelAccessUrl,
   getPlaceAddress,
   getShipmentDraft,
+  ocrShipmentDraftAadhaar,
   isDpdLabelDestination,
   listDpdShipments,
   openShipmentKycDocument,
@@ -656,6 +657,7 @@ export default function DpdLabelDraftPage() {
     autocompleteConsignorAddress,
     getConsignorPlaceAddress,
     uploadKycDocument: uploadShipmentKycDocument,
+    ocrAadhaar: ocrShipmentDraftAadhaar,
     deleteKycDocument: deleteShipmentKycDocument,
     openKycDocument: openShipmentKycDocument,
     uploadParcelKycDocument: uploadShipmentParcelKycDocument,
@@ -1465,6 +1467,7 @@ export default function DpdLabelDraftPage() {
               }}
               onParcelKycChange={(sequence, documents) => setParcelKyc((current) => ({ ...current, [sequence]: documents }))}
               api={consignorKycApi}
+              enableAadhaarOcr
             />
 
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -1500,7 +1503,7 @@ export default function DpdLabelDraftPage() {
                     value={draftCorrectionForm.deliveryInstructions}
                     onChange={handleCorrectionFieldChange("deliveryInstructions")}
                     rows={3}
-                    className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                    className="mt-1.5 w-full rounded border border-slate-300 px-3 py-2 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                   />
                 </label>
               </div>
@@ -1518,7 +1521,7 @@ export default function DpdLabelDraftPage() {
                       value={addressQuery}
                       onChange={(event) => setAddressQuery(event.target.value.toUpperCase())}
                       placeholder="POST CODE AB10 6DN"
-                      className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                      className="mt-1.5 h-10 w-full rounded border border-slate-300 px-3 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                     />
                   </label>
                   <button
@@ -1618,7 +1621,7 @@ export default function DpdLabelDraftPage() {
                       value={parcelCountInput}
                       onChange={handleParcelCountChange}
                       onBlur={handleParcelCountBlur}
-                      className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                      className="mt-1.5 h-10 w-full rounded border border-slate-300 px-3 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                     />
                   </label>
               <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
@@ -1713,6 +1716,7 @@ export default function DpdLabelDraftPage() {
                           revealError={submitAttempted}
                           requireHsnCode={csbType === "CSB_V"}
                           enforceItemValueLimit={csbType !== "CSB_V"}
+                          controlCorners="compact"
                         />
                       </div>
                     </div>
@@ -1753,7 +1757,7 @@ export default function DpdLabelDraftPage() {
   <select
     value={counterMethod}
     onChange={(event) => setCounterMethod(event.target.value as CounterPaymentInput["method"])}
-    className="h-10 w-full appearance-none rounded-lg border border-amber-300 bg-white pl-3 pr-9 text-[13px] outline-none focus:border-amber-500"
+    className="h-10 w-full appearance-none rounded border border-amber-300 bg-white pl-3 pr-9 text-[13px] outline-none focus:border-amber-500"
   >
     <option value="CASH">Cash</option>
     <option value="UPI">UPI</option>
@@ -1767,7 +1771,7 @@ export default function DpdLabelDraftPage() {
                     value={counterReference}
                     onChange={(event) => setCounterReference(event.target.value.toUpperCase())}
                     placeholder="UTR, receipt or cheque number"
-                    className="mt-1.5 h-10 w-full rounded-lg border border-amber-300 bg-white px-3 text-[13px] outline-none focus:border-amber-500"
+                    className="mt-1.5 h-10 w-full rounded border border-amber-300 bg-white px-3 text-[13px] outline-none focus:border-amber-500"
                   />
                 </div>
               ) : null}

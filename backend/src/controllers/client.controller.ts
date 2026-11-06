@@ -57,6 +57,7 @@ import {
   deleteShipmentParcelKycDocument,
   downloadShipmentKycDocument,
   downloadShipmentParcelKycDocument,
+  ocrShipmentDraftAadhaar,
   uploadShipmentKycDocument,
   uploadShipmentParcelKycDocument
 } from "./shipmentKyc.controller.js";
@@ -953,6 +954,18 @@ export async function uploadClientShipmentKycDocument(request: Request, response
   }
 
   return uploadShipmentKycDocument(request, response);
+}
+
+export async function ocrClientShipmentDraftAadhaar(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+
+  const draftId = typeof request.params.id === "string" ? request.params.id : "";
+  if (!await clientCanAccessDraft(userId, draftId, true)) {
+    return response.status(404).json({ success: false, message: "Shipment draft not found" });
+  }
+
+  return ocrShipmentDraftAadhaar(request, response);
 }
 
 export async function deleteClientShipmentKycDocument(request: Request, response: Response): Promise<Response> {

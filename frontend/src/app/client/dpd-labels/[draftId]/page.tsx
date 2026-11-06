@@ -34,6 +34,7 @@ import {
   getClientConsignorPlaceAddress,
   getClientPlaceAddress,
   getClientShipmentDraft,
+  ocrClientShipmentDraftAadhaar,
   openClientShipmentKycDocument,
   openClientShipmentParcelKycDocument,
   updateClientShipmentDraft,
@@ -611,7 +612,8 @@ export default function ClientDpdDraftReviewPage({
       : deleteClientShipmentParcelKycDocument(shipmentDraftId, sequence, type),
     openParcelKycDocument: (shipmentDraftId: string, sequence: number, type: ShipmentKycDocumentType) => operatorSlug
       ? openOperatorShipmentParcelKycDocument(operatorSlug, shipmentDraftId, sequence, type)
-      : openClientShipmentParcelKycDocument(shipmentDraftId, sequence, type)
+      : openClientShipmentParcelKycDocument(shipmentDraftId, sequence, type),
+    ocrAadhaar: operatorSlug ? undefined : ocrClientShipmentDraftAadhaar
   }), [operatorSlug]);
 
   const parcelKycStates = useMemo<ParcelKycState[]>(
@@ -1510,6 +1512,7 @@ export default function ClientDpdDraftReviewPage({
                 }}
                 onParcelKycChange={(sequence, documents) => setParcelKyc((current) => ({ ...current, [sequence]: documents }))}
                 api={consignorKycApi}
+                enableAadhaarOcr={!operatorSlug}
                 headerAction={!operatorSlug ? (
                   <button type="button" onClick={() => setAddressBookPicker("SENDER")} className="inline-flex h-9 items-center gap-2 rounded-xl border border-[#0D1282]/25 bg-white px-3 text-xs font-semibold text-[#0D1282] hover:border-[#0D1282]">
                     <FiMapPin className="h-4 w-4" /> Choose Saved Sender
@@ -1545,7 +1548,7 @@ export default function ClientDpdDraftReviewPage({
                       value={contactForm.deliveryInstructions}
                       onChange={handleContactChange("deliveryInstructions")}
                       rows={3}
-                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px] outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                      className="mt-1.5 w-full rounded border border-slate-300 px-3 py-2 text-[13px] outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                     />
                   </label>
                 </div>
@@ -1567,7 +1570,7 @@ export default function ClientDpdDraftReviewPage({
                           }
                         }}
                         placeholder="POST CODE AB10 6DN"
-                        className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                        className="mt-1.5 h-10 w-full rounded border border-slate-300 px-3 text-[13px] outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                       />
                     </label>
                     <button
@@ -1659,7 +1662,7 @@ export default function ClientDpdDraftReviewPage({
                         value={parcelCountInput}
                         onChange={handleParcelCountChange}
                         onBlur={handleParcelCountBlur}
-                        className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                        className="mt-1.5 h-10 w-full rounded border border-slate-300 px-3 text-[13px] outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                       />
                     </label>
                    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
@@ -1751,6 +1754,7 @@ export default function ClientDpdDraftReviewPage({
                             revealError={submitAttempted}
                             requireHsnCode={csbType === "CSB_V"}
                             enforceItemValueLimit={csbType !== "CSB_V"}
+                            controlCorners="compact"
                           />
                         </div>
                       </div>
@@ -1787,7 +1791,7 @@ export default function ClientDpdDraftReviewPage({
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
                       <div>
                         <label htmlFor="operator-counter-method" className="mb-1 block text-xs font-semibold text-slate-700">Payment method</label>
-                        <select id="operator-counter-method" value={counterMethod} onChange={(event) => setCounterMethod(event.target.value as CounterPaymentInput["method"])} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20">
+                        <select id="operator-counter-method" value={counterMethod} onChange={(event) => setCounterMethod(event.target.value as CounterPaymentInput["method"])} className="h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20">
                           <option value="CASH">Cash</option>
                           <option value="UPI">UPI</option>
                           <option value="BANK_TRANSFER">Bank transfer</option>
@@ -1797,11 +1801,11 @@ export default function ClientDpdDraftReviewPage({
                       </div>
                       <div>
                         <label htmlFor="operator-counter-reference" className="mb-1 block text-xs font-semibold text-slate-700">Reference <span className="font-normal text-slate-500">(optional)</span></label>
-                        <input id="operator-counter-reference" value={counterReference} onChange={(event) => setCounterReference(event.target.value)} maxLength={80} placeholder="UTR, receipt or cheque number" className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none placeholder:text-slate-500 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20" />
+                        <input id="operator-counter-reference" value={counterReference} onChange={(event) => setCounterReference(event.target.value)} maxLength={80} placeholder="UTR, receipt or cheque number" className="h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none placeholder:text-slate-500 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20" />
                       </div>
                       <div className="sm:col-span-2">
                         <label htmlFor="operator-counter-note" className="mb-1 block text-xs font-semibold text-slate-700">Payment note <span className="font-normal text-slate-500">(optional)</span></label>
-                        <input id="operator-counter-note" value={counterNote} onChange={(event) => setCounterNote(event.target.value)} maxLength={300} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20" />
+                        <input id="operator-counter-note" value={counterNote} onChange={(event) => setCounterNote(event.target.value)} maxLength={300} className="h-10 w-full rounded border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20" />
                       </div>
                     </div>
                   </div>

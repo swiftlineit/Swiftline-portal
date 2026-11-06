@@ -81,8 +81,13 @@ const environmentSchema = z.object({
   EMAIL_DRAIN_BATCH_SIZE: z.coerce.number().int().positive().default(25),
   EMAIL_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
   IDEAL_POSTCODES_API_KEY: z.string().optional(),
-  // Protects stored SSN and ITIN values. Required in production; falls back to
-  // JWT_SECRET in development so a local setup still works.
+  // Surepass sandbox JWT; used only by the protected staff/client Aadhaar OCR route.
+  SUREPASS_API_TOKEN: z.preprocess(
+    (value) => typeof value === "string" && !value.trim() ? undefined : value,
+    z.string().trim().min(1).optional(),
+  ),
+  // Protects encrypted address-book identifiers and shipment Aadhaar values.
+  // Required in production; falls back to JWT_SECRET in development.
   TAX_ID_ENCRYPTION_KEY: z.string().optional(),
   GOOGLE_PLACES_API_KEY: z.string().optional(),
   GOOGLE_ADDRESS_VALIDATION_API_KEY: z.string().optional(),

@@ -7,6 +7,10 @@ import {
   normalizeParcelItems,
 } from "../services/parcelItems.service.js";
 import { defaultDeclarationNote } from "../services/customsInvoice/customsInvoiceConstants.js";
+import {
+  decryptShipmentDraftAadhaar,
+  encryptShipmentDraftAadhaar,
+} from "../services/shipmentDraftAadhaar.service.js";
 
 export const addressValidationStatusValues = [
   "NOT_VALIDATED",
@@ -316,8 +320,14 @@ const consignorSnapshotSchema = new mongoose.Schema<ShipmentConsignorSnapshot>(
       default: consignorMobileCountryCode,
     },
     mobileNumber: { type: String, trim: true, maxlength: 30, default: "" },
-    // Stored as 12 digits without separators so KYC lookups stay comparable.
-    aadhaarNumber: { type: String, trim: true, maxlength: 12, default: "" },
+    // Application readers see digits; MongoDB stores the value encrypted.
+    aadhaarNumber: {
+      type: String,
+      maxlength: 128,
+      default: "",
+      set: encryptShipmentDraftAadhaar,
+      get: decryptShipmentDraftAadhaar,
+    },
     countryCode: {
       type: String,
       uppercase: true,
@@ -351,7 +361,7 @@ const consignorSnapshotSchema = new mongoose.Schema<ShipmentConsignorSnapshot>(
       default: "",
     },
   },
-  { _id: false },
+  { _id: false, toJSON: { getters: true }, toObject: { getters: true } },
 );
 
 const kycDocumentSchema = new mongoose.Schema<ShipmentKycDocument>(
@@ -435,8 +445,14 @@ const parcelSchema = new mongoose.Schema<ShipmentParcel>(
       maxlength: 120,
       default: "",
     },
-    // Stored as 12 digits without separators, mirroring the consignor field.
-    aadhaarNumber: { type: String, trim: true, maxlength: 12, default: "" },
+    // Application readers see digits; MongoDB stores the value encrypted.
+    aadhaarNumber: {
+      type: String,
+      maxlength: 128,
+      default: "",
+      set: encryptShipmentDraftAadhaar,
+      get: decryptShipmentDraftAadhaar,
+    },
     kycDocuments: {
       aadhaar: { type: kycDocumentSchema },
       aadhaarBack: { type: kycDocumentSchema },
@@ -451,7 +467,7 @@ const parcelSchema = new mongoose.Schema<ShipmentParcel>(
       other: { type: kycDocumentSchema },
     },
   },
-  { _id: false },
+  { _id: false, toJSON: { getters: true }, toObject: { getters: true } },
 );
 
 const shipmentDraftSchema = new mongoose.Schema<IShipmentDraft>(

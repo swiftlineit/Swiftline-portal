@@ -23,10 +23,12 @@ import {
   deleteShipmentParcelKycDocument,
   downloadShipmentKycDocument,
   downloadShipmentParcelKycDocument,
+  ocrShipmentDraftAadhaar,
   uploadShipmentKycDocument,
   uploadShipmentParcelKycDocument
 } from "../controllers/shipmentKyc.controller.js";
 import { attachUser, requireRole } from "../middleware/auth.middleware.js";
+import { aadhaarOcrUpload } from "../middleware/aadhaarOcrUpload.middleware.js";
 import { shipmentKycUpload } from "../middleware/shipmentKycUpload.middleware.js";
 
 export const shipmentDraftRouter = Router();
@@ -59,6 +61,7 @@ shipmentDraftRouter.post("/:id/cost-estimate", requireOperations, getShipmentDra
 shipmentDraftRouter.patch("/:id", requireOperations, updateShipmentDraft);
 shipmentDraftRouter.post("/:id/amendments/preview", requireOperations, previewShipmentAmendment);
 shipmentDraftRouter.post("/:id/amendments", requireOperations, createAdminShipmentAmendment);
+shipmentDraftRouter.post("/:id/aadhaar-ocr", requireOperations, aadhaarOcrUpload, ocrShipmentDraftAadhaar);
 shipmentDraftRouter.post("/:id/kyc-documents/:type", requireOperations, shipmentKycUpload, uploadShipmentKycDocument);
 shipmentDraftRouter.delete("/:id/kyc-documents/:type", requireOperations, deleteShipmentKycDocument);
 shipmentDraftRouter.get("/:id/kyc-documents/:type", requireOperations, downloadShipmentKycDocument);

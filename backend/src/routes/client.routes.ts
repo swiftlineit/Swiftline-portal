@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { aadhaarOcrUpload } from "../middleware/aadhaarOcrUpload.middleware.js";
 import {
   createClientShipmentAmendment,
   downloadClientCustomsInvoicePdf,
@@ -28,6 +29,7 @@ import {
   getClientShipmentInvoiceRevisedDocument,
   listClientShipmentInvoiceRevisedDocuments,  getClientShipmentDraftRateCardContext,
   getClientShipmentDraftCostEstimate,
+  ocrClientShipmentDraftAadhaar,
   previewClientShipmentAmendment,
   createClientShipmentImportBatch,
   createClientShipmentImportDrafts,
@@ -220,6 +222,7 @@ clientRouter.post("/dpd-labels/drafts/:id/restore", restoreClientShipmentDraft);
 // POST because the booking form prices the values it currently holds, which are
 // sent in the body. Nothing is written.
 clientRouter.post("/dpd-labels/drafts/:id/cost-estimate", getClientShipmentDraftCostEstimate);
+clientRouter.post("/dpd-labels/drafts/:id/aadhaar-ocr", aadhaarOcrUpload, ocrClientShipmentDraftAadhaar);
 clientRouter.post("/dpd-labels/drafts/:id/kyc-documents/:type", shipmentKycUpload, uploadClientShipmentKycDocument);
 clientRouter.delete("/dpd-labels/drafts/:id/kyc-documents/:type", deleteClientShipmentKycDocument);
 clientRouter.get("/dpd-labels/drafts/:id/kyc-documents/:type", downloadClientShipmentKycDocument);

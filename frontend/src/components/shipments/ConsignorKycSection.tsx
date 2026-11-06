@@ -34,6 +34,9 @@ import {
   normalizeAadhaarNumber,
 } from "@/lib/aadhaar";
 import type {
+  AadhaarOcrResult,
+  AadhaarOcrScope,
+  AadhaarOcrPrefill,
   AddressPrediction,
   ShipmentKycDocument,
   ShipmentKycDocumentType,
@@ -100,6 +103,13 @@ export type ConsignorKycApi = {
     sequence: number,
     type: ShipmentKycDocumentType,
   ) => Promise<Blob>;
+  ocrAadhaar?: (input: {
+    shipmentDraftId: string;
+    front: File;
+    back: File;
+    kycScope: AadhaarOcrScope;
+    parcelSequence?: number;
+  }) => Promise<AadhaarOcrResult>;
 };
 
 type SlotConfig = {
@@ -134,6 +144,7 @@ export function ConsignorKycSection({
   onParcelKycChange,
   api,
   headerAction,
+  enableAadhaarOcr = false,
 }: {
   shipmentDraftId: string;
   csbType: CsbType;
@@ -155,6 +166,7 @@ export function ConsignorKycSection({
   ) => void;
   api: ConsignorKycApi;
   headerAction?: ReactNode;
+  enableAadhaarOcr?: boolean;
 }) {
   const [addressQuery, setAddressQuery] = useState("");
   const [predictions, setPredictions] = useState<AddressPrediction[]>([]);
@@ -276,12 +288,12 @@ export function ConsignorKycSection({
     }
   }
 
-  // CSB-V keeps the Aadhaar card upload but does not ask for a typed number.
-  // Only the document uploads follow the CSB checklist.
+  // CSB-V requires the card but keeps the number optional. CSB-IV's existing
+  // number requirement remains independent of its optional document upload.
   const aadhaarRequired = csbType !== "CSB_V";
   const aadhaarError = (value: string) => {
     if (!submitAttempted) return undefined;
-    if (!value.trim()) return "Aadhaar number is required";
+    if (!value.trim()) return aadhaarRequired ? "Aadhaar number is required" : undefined;
     return isValidAadhaarNumber(value)
       ? undefined
       : "Enter a valid 12 digit Aadhaar number";
@@ -305,6 +317,25 @@ export function ConsignorKycSection({
           </div>
           {headerAction}
         </div>
+        {enableAadhaarOcr && api.ocrAadhaar && !readOnly ? (
+          <div className="px-3 pt-3 sm:px-4">
+            <AadhaarOcrControl
+              shipmentDraftId={shipmentDraftId}
+              form={form}
+              onFormChange={onFormChange}
+              csbType={csbType}
+              kycScope={kycUseForAll ? "shared" : "parcel"}
+              parcels={parcels}
+              savedParcelCount={savedParcelCount}
+              onParcelAadhaarChange={onParcelAadhaarChange}
+              onKycDocumentsChange={(documents, parcelSequence) => {
+                if (kycUseForAll) onSharedKycChange(documents);
+                else if (parcelSequence) onParcelKycChange(parcelSequence, documents);
+              }}
+              api={api.ocrAadhaar}
+            />
+          </div>
+        ) : null}
         <div className="grid gap-3 p-3 sm:p-4 md:grid-cols-2">
           <ShipmentTextField
             label="Consignor Company"
@@ -382,7 +413,7 @@ export function ConsignorKycSection({
                     }
                   }}
                   placeholder="Building, street, area or PIN code"
-                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 px-3 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                  className="mt-1.5 h-10 w-full rounded border border-slate-300 px-3 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
                 />
               </label>
               <button
@@ -483,7 +514,7 @@ export function ConsignorKycSection({
                 }
                 readOnly={readOnly}
                 rows={3}
-                className={`mt-1.5 w-full rounded-lg border px-3 py-2 text-[13px] outline-none transition focus:ring-2 ${readOnly ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500" : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"}`}
+                className={`mt-1.5 w-full rounded border px-3 py-2 text-[13px] outline-none transition focus:ring-2 ${readOnly ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500" : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"}`}
               />
             </label>
           </div>
@@ -538,22 +569,20 @@ export function ConsignorKycSection({
               </span>
             </label>
 
-            {kycUseForAll && aadhaarRequired ? (
-              <ShipmentTextField
+            {kycUseForAll && (aadhaarRequired || enableAadhaarOcr) ? (
+              <AadhaarNumberField
                 label="Aadhaar Number"
                 required={aadhaarRequired}
-                inputMode="numeric"
-                value={formatAadhaarNumber(form.aadhaarNumber)}
-                onChange={(event) =>
+                value={form.aadhaarNumber}
+                onValueChange={(value) =>
                   onFormChange({
                     ...form,
-                    aadhaarNumber: normalizeAadhaarNumber(event.target.value),
+                    aadhaarNumber: value,
                   })
                 }
                 error={sharedAadhaarError}
                 revealError={submitAttempted}
                 readOnly={readOnly}
-                placeholder="1234 5678 9012"
               />
             ) : null}
           </div>
@@ -567,6 +596,7 @@ export function ConsignorKycSection({
                 slots={kycSlots}
                 csbType={csbType}
                 documents={sharedKycDocuments}
+                showStoredAadhaarBack={enableAadhaarOcr}
                 submitAttempted={submitAttempted}
                 readOnly={readOnly}
                 disabled={false}
@@ -605,23 +635,18 @@ export function ConsignorKycSection({
                       </span>
                     </div>
                     <div className="space-y-3 p-3">
-                      {aadhaarRequired ? (
+                      {aadhaarRequired || enableAadhaarOcr ? (
                         <div className="max-w-xs">
-                          <ShipmentTextField
+                          <AadhaarNumberField
                             label="Aadhaar Number"
                             required={aadhaarRequired}
-                            inputMode="numeric"
-                            value={formatAadhaarNumber(parcel.aadhaarNumber)}
-                            onChange={(event) =>
-                              onParcelAadhaarChange(
-                                parcel.sequence,
-                                normalizeAadhaarNumber(event.target.value),
-                              )
+                            value={parcel.aadhaarNumber}
+                            onValueChange={(value) =>
+                              onParcelAadhaarChange(parcel.sequence, value)
                             }
                             error={aadhaarError(parcel.aadhaarNumber)}
                             revealError={submitAttempted}
                             readOnly={readOnly}
-                            placeholder="1234 5678 9012"
                           />
                         </div>
                       ) : null}
@@ -630,6 +655,7 @@ export function ConsignorKycSection({
                           slots={kycSlots}
                           csbType={csbType}
                           documents={parcel.kycDocuments}
+                          showStoredAadhaarBack={enableAadhaarOcr}
                           submitAttempted={submitAttempted}
                           readOnly={readOnly}
                           disabled={!saved}
@@ -801,7 +827,7 @@ function IndianStateAutocompleteField({
             setQuery("");
             if (error && value.trim()) toast.error(error, { toastId: error });
           }}
-          className={`h-10 w-full rounded-xl border bg-white px-3 pr-10 text-[13px] outline-none transition focus:ring-2 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-500 ${
+          className={`h-10 w-full rounded border bg-white px-3 pr-10 text-[13px] outline-none transition focus:ring-2 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-500 ${
             error && showError
               ? "border-red-400 focus:border-red-500 focus:ring-red-100"
               : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"
@@ -860,10 +886,389 @@ function IndianStateAutocompleteField({
   );
 }
 
+function AadhaarNumberField({
+  label,
+  value,
+  onValueChange,
+  error,
+  revealError,
+  required,
+  readOnly,
+}: {
+  label: string;
+  value: string;
+  onValueChange: (value: string) => void;
+  error?: string;
+  revealError: boolean;
+  required: boolean;
+  readOnly: boolean;
+}) {
+  const [focused, setFocused] = useState(false);
+  const digits = normalizeAadhaarNumber(value);
+  const showMaskedValue = digits.length === 12 && !focused;
+
+  return (
+    <ShipmentTextField
+      label={label}
+      required={required}
+      type={showMaskedValue ? "text" : "password"}
+      autoComplete="off"
+      inputMode="numeric"
+      value={showMaskedValue ? `XXXX XXXX ${digits.slice(-4)}` : formatAadhaarNumber(digits)}
+      onChange={(event) => onValueChange(normalizeAadhaarNumber(event.target.value))}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      error={error}
+      revealError={revealError}
+      readOnly={readOnly}
+      placeholder="Enter 12-digit Aadhaar number"
+      maxLength={14}
+    />
+  );
+}
+
+function AadhaarOcrControl({
+  shipmentDraftId,
+  form,
+  onFormChange,
+  csbType,
+  kycScope,
+  parcels,
+  savedParcelCount,
+  onParcelAadhaarChange,
+  onKycDocumentsChange,
+  api,
+}: {
+  shipmentDraftId: string;
+  form: ConsignorForm;
+  onFormChange: (next: ConsignorForm) => void;
+  csbType: CsbType;
+  kycScope: AadhaarOcrScope;
+  parcels: ParcelKycState[];
+  savedParcelCount: number;
+  onParcelAadhaarChange: (sequence: number, value: string) => void;
+  onKycDocumentsChange: (documents: ShipmentKycDocuments, parcelSequence?: number) => void;
+  api: NonNullable<ConsignorKycApi["ocrAadhaar"]>;
+}) {
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
+  const [parcelSequence, setParcelSequence] = useState(parcels[0]?.sequence ?? 1);
+  const [consent, setConsent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [kycSaved, setKycSaved] = useState(false);
+  const [prefill, setPrefill] = useState<AadhaarOcrPrefill | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [dropTarget, setDropTarget] = useState<"front" | "back" | null>(null);
+  const frontInputRef = useRef<HTMLInputElement>(null);
+  const backInputRef = useRef<HTMLInputElement>(null);
+  const selectedParcel = parcels.find((parcel) => parcel.sequence === parcelSequence);
+  const selectedParcelSaved = Boolean(selectedParcel && parcelSequence <= savedParcelCount);
+  const currentAadhaarNumber = kycScope === "shared"
+    ? form.aadhaarNumber
+    : selectedParcel?.aadhaarNumber ?? "";
+
+  function acceptFile(file: File | undefined, side: "front" | "back") {
+    setError("");
+    setPrefill(null);
+    setKycSaved(false);
+    setConfirmReplace(false);
+    if (!file) {
+      if (side === "front") setFrontFile(null);
+      else setBackFile(null);
+      return;
+    }
+    if (!new Set(["application/pdf", "image/jpeg", "image/png"]).has(file.type)) {
+      setError("Choose a PDF, JPG, or PNG file.");
+      if (side === "front") setFrontFile(null);
+      else setBackFile(null);
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Each Aadhaar side must be 5 MB or smaller.");
+      if (side === "front") setFrontFile(null);
+      else setBackFile(null);
+      return;
+    }
+    if (side === "front") setFrontFile(file);
+    else setBackFile(file);
+  }
+
+  function readFile(event: ChangeEvent<HTMLInputElement>, side: "front" | "back") {
+    acceptFile(event.target.files?.[0], side);
+    event.target.value = "";
+  }
+
+  function handleDragOver(event: ReactDragEvent<HTMLDivElement>, side: "front" | "back") {
+    if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = busy ? "none" : "copy";
+    if (!busy) setDropTarget(side);
+  }
+
+  function handleDrop(event: ReactDragEvent<HTMLDivElement>, side: "front" | "back") {
+    if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+    event.preventDefault();
+    setDropTarget(null);
+    if (busy) return;
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length !== 1) {
+      setError("Drop one file into each side.");
+      return;
+    }
+    acceptFile(files[0], side);
+  }
+
+  async function scan() {
+    if (!frontFile || !backFile || !consent) return;
+    setBusy(true);
+    setError("");
+    setPrefill(null);
+    try {
+      const result = await api({
+        shipmentDraftId,
+        front: frontFile,
+        back: backFile,
+        kycScope,
+        parcelSequence: kycScope === "parcel" ? parcelSequence : undefined,
+      });
+      setPrefill(result.prefill);
+      onKycDocumentsChange(result.kycDocuments, result.parcelSequence);
+      setKycSaved(true);
+      setFrontFile(null);
+      setBackFile(null);
+      if (frontInputRef.current) frontInputRef.current.value = "";
+      if (backInputRef.current) backInputRef.current.value = "";
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Aadhaar scanning failed. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const safeValue = (value: string, maxLength: number) =>
+    value.trim() && value.trim().length <= maxLength ? value.trim() : "";
+  const stateValue = prefill ? normalizeIndiaState(prefill.address.county) : "";
+  const extractedAadhaarNumber = prefill && isValidAadhaarNumber(prefill.aadhaarNumber)
+    ? prefill.aadhaarNumber
+    : "";
+  const candidateChanges = prefill ? [
+    [safeValue(prefill.fullName, 120), form.contactName],
+    [safeValue(prefill.address.addressLine1, 120), form.addressLine1],
+    [safeValue(prefill.address.addressLine2, 120), form.addressLine2],
+    [safeValue(prefill.address.townOrCity, 80), form.townOrCity],
+    [safeValue(stateValue, 80), form.county],
+    [safeValue(prefill.address.postcode, 20), form.postcode],
+    [extractedAadhaarNumber, currentAadhaarNumber],
+  ] : [];
+  const hasExistingValuesToReplace = candidateChanges.some(([incoming, current]) =>
+    Boolean(incoming && current.trim() && incoming.toLocaleLowerCase() !== current.trim().toLocaleLowerCase()),
+  );
+  const hasOverlengthValues = Boolean(prefill && (
+    prefill.fullName.length > 120
+    || prefill.address.addressLine1.length > 120
+    || prefill.address.addressLine2.length > 120
+    || prefill.address.townOrCity.length > 80
+    || stateValue.length > 80
+    || prefill.address.postcode.length > 20
+  ));
+
+  function applyPrefill() {
+    if (!prefill) return;
+    if (hasExistingValuesToReplace && !confirmReplace) {
+      setConfirmReplace(true);
+      return;
+    }
+    onFormChange({
+      ...form,
+      contactName: safeValue(prefill.fullName, 120).toUpperCase() || form.contactName,
+      addressLine1: safeValue(prefill.address.addressLine1, 120).toUpperCase() || form.addressLine1,
+      addressLine2: safeValue(prefill.address.addressLine2, 120).toUpperCase() || form.addressLine2,
+      townOrCity: safeValue(prefill.address.townOrCity, 80).toUpperCase() || form.townOrCity,
+      county: safeValue(stateValue, 80).toUpperCase() || form.county,
+      postcode: safeValue(prefill.address.postcode, 20) || form.postcode,
+      aadhaarNumber: kycScope === "shared" && extractedAadhaarNumber
+        ? prefill.aadhaarNumber
+        : form.aadhaarNumber,
+    });
+    if (kycScope === "parcel" && extractedAadhaarNumber) {
+      onParcelAadhaarChange(parcelSequence, extractedAadhaarNumber);
+    }
+    setPrefill(null);
+    setConfirmReplace(false);
+  }
+
+  const canScan = Boolean(
+    frontFile && backFile && consent && !busy && (kycScope === "shared" || selectedParcelSaved),
+  );
+
+  return (
+    <section className="overflow-hidden rounded-md border border-slate-200 bg-white" aria-label="Aadhaar OCR and KYC upload">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/70 px-3 py-2.5 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-900">
+            <FiFileText aria-hidden="true" className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-[13px] font-semibold text-slate-900">Scan Aadhaar</h3>
+            <p className="text-[11px] text-slate-500">One upload saves both sides to KYC.</p>
+          </div>
+        </div>
+        <span className={`inline-flex shrink-0 items-center rounded-md border px-2.5 py-1 text-[10px] font-semibold ${csbType === "CSB_V" ? "border-blue-200 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-600"}`}>
+          {csbType === "CSB_V" ? "Required · CSB-V" : "Optional · CSB-IV"}
+        </span>
+      </header>
+
+      {kycScope === "parcel" ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-3 py-2.5 sm:px-4">
+          <label htmlFor="aadhaar-ocr-parcel" className="text-[11px] font-semibold text-slate-700">Save to parcel</label>
+          <select
+            id="aadhaar-ocr-parcel"
+            value={parcelSequence}
+            onChange={(event) => setParcelSequence(Number(event.target.value))}
+            disabled={busy || Boolean(prefill) || parcels.length === 0}
+            className="h-8 rounded border border-slate-300 bg-white px-2.5 text-[11px] text-slate-800 outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+          >
+            {parcels.map((parcel, index) => (
+              <option key={parcel.sequence} value={parcel.sequence}>
+                Parcel {index + 1}{parcel.sequence > savedParcelCount ? " · save first" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
+      <div className="grid gap-2.5 p-3 sm:grid-cols-2 sm:p-4">
+        <div
+          onDragOver={(event) => handleDragOver(event, "front")}
+          onDragLeave={(event) => {
+            if (!event.relatedTarget || !event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
+          }}
+          onDrop={(event) => handleDrop(event, "front")}
+          className={`flex min-h-[76px] min-w-0 items-center justify-between gap-2.5 rounded-md border border-dashed px-3 py-2.5 transition ${dropTarget === "front" ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100" : frontFile ? "border-emerald-300 bg-emerald-50/40" : "border-slate-300 bg-slate-50/60 hover:border-blue-300 hover:bg-blue-50/40"} ${busy ? "opacity-60" : ""}`}
+        >
+          <input ref={frontInputRef} type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" disabled={busy} onChange={(event) => readFile(event, "front")} className="sr-only" aria-label="Choose Aadhaar front file" />
+          <span className="flex min-w-0 items-center gap-2.5">
+            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${frontFile ? "bg-emerald-100 text-emerald-800" : "bg-white text-blue-900"}`}>
+              {frontFile ? <FiCheck aria-hidden="true" className="h-4 w-4" /> : <FiUploadCloud aria-hidden="true" className="h-4 w-4" />}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Front side</span>
+              <span className="block max-w-[min(13rem,48vw)] truncate text-[12px] font-medium text-slate-800" title={frontFile?.name}>{frontFile?.name || "Drop a file here"}</span>
+            </span>
+          </span>
+          <button type="button" onClick={() => frontInputRef.current?.click()} disabled={busy} className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-blue-900 transition hover:border-blue-400 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+            {frontFile ? "Replace" : "Choose"}
+          </button>
+        </div>
+
+        <div
+          onDragOver={(event) => handleDragOver(event, "back")}
+          onDragLeave={(event) => {
+            if (!event.relatedTarget || !event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
+          }}
+          onDrop={(event) => handleDrop(event, "back")}
+          className={`flex min-h-[76px] min-w-0 items-center justify-between gap-2.5 rounded-md border border-dashed px-3 py-2.5 transition ${dropTarget === "back" ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100" : backFile ? "border-emerald-300 bg-emerald-50/40" : "border-slate-300 bg-slate-50/60 hover:border-blue-300 hover:bg-blue-50/40"} ${busy ? "opacity-60" : ""}`}
+        >
+          <input ref={backInputRef} type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" disabled={busy} onChange={(event) => readFile(event, "back")} className="sr-only" aria-label="Choose Aadhaar back file" />
+          <span className="flex min-w-0 items-center gap-2.5">
+            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${backFile ? "bg-emerald-100 text-emerald-800" : "bg-white text-blue-900"}`}>
+              {backFile ? <FiCheck aria-hidden="true" className="h-4 w-4" /> : <FiUploadCloud aria-hidden="true" className="h-4 w-4" />}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Back side</span>
+              <span className="block max-w-[min(13rem,48vw)] truncate text-[12px] font-medium text-slate-800" title={backFile?.name}>{backFile?.name || "Drop a file here"}</span>
+            </span>
+          </span>
+          <button type="button" onClick={() => backInputRef.current?.click()} disabled={busy} className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-blue-900 transition hover:border-blue-400 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+            {backFile ? "Replace" : "Choose"}
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 sm:col-span-2">
+          <label className="flex min-h-9 items-center gap-2 text-[11px] font-medium text-slate-600">
+            <input type="checkbox" checked={consent} disabled={busy} onChange={(event) => setConsent(event.target.checked)} className="h-4 w-4 shrink-0 accent-blue-900" />
+            Holder consent confirmed
+          </label>
+          <button type="button" onClick={() => void scan()} disabled={!canScan} className="inline-flex h-9 items-center justify-center rounded-md bg-blue-900 px-3.5 text-[11px] font-semibold text-white transition hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600">
+            {busy ? "Scanning…" : "Scan and save KYC"}
+          </button>
+        </div>
+
+        {kycScope === "parcel" && !selectedParcelSaved ? <p className="text-[11px] text-amber-800 sm:col-span-2">Save this parcel before scanning its Aadhaar.</p> : null}
+        {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-medium text-red-800 sm:col-span-2">{error}</p> : null}
+        {kycSaved ? <p role="status" className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-800 sm:col-span-2"><FiCheck aria-hidden="true" className="h-3.5 w-3.5" /> Aadhaar front and back saved to this booking’s KYC.</p> : null}
+
+        {prefill ? (
+          <section className="overflow-hidden rounded-md border border-blue-200 bg-white sm:col-span-2" aria-live="polite">
+            <header className="flex items-center gap-2.5 border-b border-blue-100 bg-blue-50/60 px-3 py-2.5 sm:px-4">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white text-blue-900">
+                <FiCheck aria-hidden="true" className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <h4 className="text-[12px] font-semibold text-slate-900">Review extracted details</h4>
+                <p className="text-[11px] text-slate-600">Choose what to apply to the consignor form.</p>
+              </div>
+            </header>
+
+            <dl className="grid gap-2.5 p-3 text-[12px] sm:grid-cols-2 sm:p-4">
+              <div className="rounded-md bg-slate-50 px-3 py-2">
+                <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Full name</dt>
+                <dd className="mt-1 break-words font-medium text-slate-900">{prefill.fullName || "Not detected"}</dd>
+              </div>
+              <div className="rounded-md bg-slate-50 px-3 py-2">
+                <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Aadhaar number</dt>
+                <dd className="mt-1 font-semibold tracking-wide text-slate-900">{extractedAadhaarNumber ? `XXXX XXXX ${extractedAadhaarNumber.slice(-4)}` : "Not safely extracted"}</dd>
+              </div>
+              <div className="rounded-md bg-slate-50 px-3 py-2 sm:col-span-2">
+                <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Full address</dt>
+                <dd className="mt-1 break-words leading-5 text-slate-900">{prefill.address.fullAddress || "Not detected"}</dd>
+              </div>
+              <div className="rounded-md bg-slate-50 px-3 py-2">
+                <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Town / city</dt>
+                <dd className="mt-1 break-words font-medium text-slate-900">{prefill.address.townOrCity || "Review manually"}</dd>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-md bg-slate-50 px-3 py-2">
+                  <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">State</dt>
+                  <dd className="mt-1 break-words font-medium text-slate-900">{prefill.address.county || "—"}</dd>
+                </div>
+                <div className="rounded-md bg-slate-50 px-3 py-2">
+                  <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">PIN</dt>
+                  <dd className="mt-1 font-medium text-slate-900">{prefill.address.postcode || "—"}</dd>
+                </div>
+              </div>
+            </dl>
+
+            {prefill.warnings.length || hasOverlengthValues || (hasExistingValuesToReplace && !confirmReplace) ? (
+              <div className="space-y-1.5 px-3 pb-3 sm:px-4">
+                {prefill.warnings.map((warning) => <p key={warning} className="flex gap-1.5 rounded-md bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-900"><FiInfo aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />{warning}</p>)}
+                {hasOverlengthValues ? <p className="flex gap-1.5 rounded-md bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-900"><FiInfo aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />Long values stay in the preview; enter them manually if a form field does not fit.</p> : null}
+                {hasExistingValuesToReplace && !confirmReplace ? <p className="text-[11px] text-slate-600">Existing consignor values need confirmation before replacement.</p> : null}
+              </div>
+            ) : null}
+
+            <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-3 py-2.5 sm:px-4">
+              <button type="button" onClick={() => { setPrefill(null); setConfirmReplace(false); }} className="inline-flex h-8 items-center justify-center rounded-md px-3 text-[11px] font-semibold text-slate-700 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700">
+                Dismiss
+              </button>
+              {confirmReplace ? <button type="button" onClick={() => setConfirmReplace(false)} className="inline-flex h-8 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700">Keep existing</button> : null}
+              <button type="button" onClick={applyPrefill} className="inline-flex h-8 items-center justify-center rounded-md bg-blue-900 px-3.5 text-[11px] font-semibold text-white transition hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2">
+                {confirmReplace ? "Confirm replacement" : "Apply details"}
+              </button>
+            </footer>
+          </section>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function KycSlotRow({
   slots,
   csbType,
   documents,
+  showStoredAadhaarBack = false,
   submitAttempted,
   readOnly,
   disabled,
@@ -874,6 +1279,7 @@ function KycSlotRow({
   slots: SlotConfig[];
   csbType: CsbType;
   documents: ShipmentKycDocuments | undefined;
+  showStoredAadhaarBack?: boolean;
   submitAttempted: boolean;
   readOnly: boolean;
   disabled: boolean;
@@ -895,17 +1301,15 @@ function KycSlotRow({
       {slots.map((slot) => {
         const supportsOptionalAadhaarBack =
           csbType === "CSB_IV" && slot.type === "aadhaar";
+        const showsAadhaarBack =
+          supportsOptionalAadhaarBack || (showStoredAadhaarBack && slot.type === "aadhaar");
 
         return (
           <KycSlot
             key={slot.type}
             slot={slot}
             document={documents?.[slot.type] ?? null}
-            secondaryDocument={
-              supportsOptionalAadhaarBack
-                ? (documents?.aadhaarBack ?? null)
-                : null
-            }
+            secondaryDocument={showsAadhaarBack ? (documents?.aadhaarBack ?? null) : null}
             submitAttempted={submitAttempted}
             readOnly={readOnly}
             disabled={disabled}
@@ -917,16 +1321,8 @@ function KycSlotRow({
                 ? (file) => onUpload("aadhaarBack", file)
                 : undefined
             }
-            onDeleteSecondary={
-              supportsOptionalAadhaarBack
-                ? () => onDelete("aadhaarBack")
-                : undefined
-            }
-            onOpenSecondary={
-              supportsOptionalAadhaarBack
-                ? () => onOpen("aadhaarBack")
-                : undefined
-            }
+            onDeleteSecondary={showsAadhaarBack ? () => onDelete("aadhaarBack") : undefined}
+            onOpenSecondary={showsAadhaarBack ? () => onOpen("aadhaarBack") : undefined}
           />
         );
       })}
@@ -1139,7 +1535,7 @@ function KycSlot({
   const primaryIsImage =
     document?.mimeType === "image/jpeg" || document?.mimeType === "image/png";
   const showSecondaryControl = Boolean(
-    onUploadSecondary && (secondaryDocument || (primaryIsImage && !readOnly)),
+    secondaryDocument || (onUploadSecondary && primaryIsImage && !readOnly),
   );
   const dropAllowed = !readOnly && !disabled && !busy;
 
@@ -1204,7 +1600,7 @@ function KycSlot({
             placeholder={document?.documentLabel || "Name this document"}
             disabled={disabled || busy}
             maxLength={80}
-            className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-[12px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-800 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+            className="h-9 w-full rounded border border-slate-300 bg-white px-2.5 text-[12px] text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-800 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
           />
         </label>
       ) : null}
@@ -1313,31 +1709,35 @@ function KycSlot({
               </button>
               {!readOnly ? (
                 <span className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    aria-label="Replace Aadhaar back side image"
-                    onClick={() => secondaryInputRef.current?.click()}
-                    disabled={busy || disabled}
-                    className="font-semibold text-emerald-800 hover:underline disabled:opacity-50"
-                  >
-                    Replace
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleRemoveSecondary}
-                    disabled={busy}
-                    className="inline-flex items-center gap-1 font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
-                  >
-                    <FiTrash2 aria-hidden="true" className="h-3 w-3" />
-                    Remove
-                  </button>
+                  {onUploadSecondary ? (
+                    <button
+                      type="button"
+                      aria-label="Replace Aadhaar back side"
+                      onClick={() => secondaryInputRef.current?.click()}
+                      disabled={busy || disabled}
+                      className="font-semibold text-emerald-800 hover:underline disabled:opacity-50"
+                    >
+                      Replace
+                    </button>
+                  ) : null}
+                  {onDeleteSecondary ? (
+                    <button
+                      type="button"
+                      onClick={handleRemoveSecondary}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1 font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
+                    >
+                      <FiTrash2 aria-hidden="true" className="h-3 w-3" />
+                      Remove
+                    </button>
+                  ) : null}
                 </span>
               ) : null}
             </>
           ) : (
             <>
               <span className="min-w-0 text-[10px] font-medium text-emerald-900">
-                Drop back image here or add back side (optional)
+                Drop back side here or choose a file
               </span>
               {!readOnly ? (
                 <button

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  FiCheck,
   FiChevronDown,
   FiMinus,
   FiPlus,
@@ -56,6 +55,7 @@ export function ParcelItemsEditor({
   maxItems = maxParcelItems,
   maxQuantity = maxShipmentItemQuantity,
   maxUnitRate = maxShipmentItemUnitRate,
+  controlCorners = "default",
   parcelLabel = "Parcel",
 }: {
   items: ParcelItem[];
@@ -66,6 +66,7 @@ export function ParcelItemsEditor({
   maxItems?: number;
   maxQuantity?: number;
   maxUnitRate?: number;
+  controlCorners?: "default" | "compact";
   parcelLabel?: string;
 }) {
   // The description being typed drives the HS code suggestions below it. Only
@@ -80,9 +81,17 @@ export function ParcelItemsEditor({
   }>({ query: "", results: [] });
 
   const [isOpen, setIsOpen] = useState(false);
+  const fieldCornerClass = controlCorners === "compact" ? "rounded" : "rounded-lg";
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const descriptionInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const [suggestionPosition, setSuggestionPosition] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
   const titleId = useId();
 
   const activeQuery =
@@ -90,6 +99,46 @@ export function ParcelItemsEditor({
 
   const visibleSuggestions =
     activeQuery && suggestions.query === activeQuery ? suggestions.results : [];
+
+  useEffect(() => {
+    if (!isOpen || activeRow === null || visibleSuggestions.length === 0) return;
+
+    const updatePosition = () => {
+      const input = descriptionInputRefs.current[activeRow];
+      if (!input) return;
+
+      const bounds = input.getBoundingClientRect();
+      const viewportPadding = 8;
+      const width = Math.min(Math.max(bounds.width, 280), window.innerWidth - viewportPadding * 2);
+      const left = Math.max(
+        viewportPadding,
+        Math.min(bounds.left, window.innerWidth - width - viewportPadding),
+      );
+      const spaceBelow = Math.max(0, window.innerHeight - bounds.bottom - viewportPadding - 4);
+      const spaceAbove = Math.max(0, bounds.top - viewportPadding - 4);
+      const placeBelow = spaceBelow >= 180 || spaceBelow >= spaceAbove;
+      const availableSpace = placeBelow ? spaceBelow : spaceAbove;
+      const maxHeight = Math.min(320, availableSpace);
+      const estimatedHeight = Math.min(320, Math.max(84, visibleSuggestions.length * 44 + 28));
+      const height = Math.min(maxHeight, estimatedHeight);
+
+      setSuggestionPosition({
+        top: placeBelow ? bounds.bottom + 4 : Math.max(viewportPadding, bounds.top - height - 4),
+        left,
+        width,
+        maxHeight,
+      });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [activeRow, isOpen, visibleSuggestions.length]);
 
   useEffect(() => {
     if (activeQuery.length < minHsCodeQueryLength) return;
@@ -175,6 +224,9 @@ export function ParcelItemsEditor({
           "button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
         ),
       );
+      focusable.push(...Array.from(
+        document.querySelectorAll<HTMLElement>("[data-hsn-suggestion-option]"),
+      ));
 
       if (!focusable.length) return;
 
@@ -436,6 +488,9 @@ export function ParcelItemsEditor({
                               </label>
 
                               <input
+                                ref={(element) => {
+                                  descriptionInputRefs.current[index] = element;
+                                }}
                                 id={`${titleId}-description-${index}`}
                                 type="text"
                                 value={item.description}
@@ -470,8 +525,13 @@ export function ParcelItemsEditor({
                                 placeholder={`Item ${index + 1} description`}
                                 title="Letters only - record quantities in the Qty and Unit Rate fields."
                                 maxLength={120}
+                                role="combobox"
+                                aria-autocomplete="list"
+                                aria-haspopup="listbox"
+                                aria-controls={`${titleId}-suggestions-${index}`}
+                                aria-expanded={activeRow === index && visibleSuggestions.length > 0}
                                 aria-invalid={showDescriptionError || (revealError && !item.description.trim())}
-                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
+                                className={`mt-1 h-10 w-full ${fieldCornerClass} border px-3 text-[13px] outline-none transition focus:ring-2 ${
                                   showDescriptionError ||
                                   (revealError && !item.description.trim())
                                     ? "border-red-400 bg-red-50 focus:border-red-500 focus:ring-red-100"
@@ -479,51 +539,10 @@ export function ParcelItemsEditor({
                                 }`}
                               />
 
-                              {activeRow === index &&
-                              visibleSuggestions.length ? (
-                                <ul className="absolute left-0 top-full z-10 mt-1 max-h-60 w-[min(30rem,85vw)] overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl">
-                                  <li className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                                    Suggested HS codes
-                                  </li>
-
-                                  {visibleSuggestions.map((suggestion) => (
-                                    <li key={suggestion.code}>
-                                      <button
-                                        type="button"
-                                        onMouseDown={(event) =>
-                                          event.preventDefault()
-                                        }
-                                        onClick={() => {
-                                          updateItem(
-                                            index,
-                                            "hsnCode",
-                                            suggestion.code,
-                                          );
-
-                                          setSuggestions({
-                                            query: "",
-                                            results: [],
-                                          });
-                                        }}
-                                        className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs transition hover:bg-blue-50"
-                                      >
-                                        <span className="font-semibold text-blue-900">
-                                          {suggestion.code}
-                                        </span>
-
-                                        <span className="text-slate-600">
-                                          {suggestion.description}
-                                        </span>
-                                      </button>
-                                    </li>
-                                  ))}
-                                </ul>
-                              ) : null}
                             </div>
 
                             <label className="block text-xs font-semibold text-slate-600">
-                              HS code
-                              {requireHsnCode ? "" : " (optional)"}
+                              HS code{requireHsnCode ? "" : " (optional)"}
 
                               <input
                                 type="text"
@@ -549,7 +568,7 @@ export function ParcelItemsEditor({
                                   requireHsnCode ? "HS code" : "Optional"
                                 }
                                 aria-invalid={showHsnError}
-                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
+                                className={`mt-1 h-10 w-full ${fieldCornerClass} border px-3 text-[13px] outline-none transition focus:ring-2 ${
                                   showHsnError
                                     ? "border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
                                     : "border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
@@ -570,7 +589,7 @@ export function ParcelItemsEditor({
                                       event.target.value,
                                     )
                                   }
-                                className="h-10 w-full appearance-none rounded-lg border border-slate-300 bg-white py-0 pl-3 pr-9 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100"
+                                className={`h-10 w-full appearance-none ${fieldCornerClass} border border-slate-300 bg-white py-0 pl-3 pr-9 text-[13px] outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100`}
                                 >
                                   {parcelItemUnitTypeValues.map((unit) => (
                                     <option key={unit} value={unit}>
@@ -613,7 +632,7 @@ export function ParcelItemsEditor({
                                 }}
                                 placeholder="Qty"
                                 aria-invalid={showQuantityError}
-                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
+                                className={`mt-1 h-10 w-full ${fieldCornerClass} border px-3 text-[13px] outline-none transition focus:ring-2 ${
                                   showQuantityError
                                     ? "border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
                                     : "border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
@@ -648,7 +667,7 @@ export function ParcelItemsEditor({
                                 }}
                                 placeholder="Rate"
                                 aria-invalid={showUnitRateError}
-                                className={`mt-1 h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition focus:ring-2 ${
+                                className={`mt-1 h-10 w-full ${fieldCornerClass} border px-3 text-[13px] outline-none transition focus:ring-2 ${
                                   showUnitRateError
                                     ? "border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
                                     : "border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
@@ -664,7 +683,7 @@ export function ParcelItemsEditor({
                               <div
                                 aria-label={`Item ${index + 1} amount`}
                                 aria-invalid={Boolean(amountError)}
-                                className={`mt-1 flex h-10 items-center rounded-lg border px-3 text-[13px] font-semibold transition ${
+                                className={`mt-1 flex h-10 items-center ${fieldCornerClass} border px-3 text-[13px] font-semibold transition ${
                                   amountError
                                     ? "border-red-400 bg-red-50 text-red-700"
                                     : "border-slate-200 bg-slate-50 text-slate-700"
@@ -705,6 +724,45 @@ export function ParcelItemsEditor({
                   </button> */}
                 </footer>
               </div>
+            </div>,
+            document.body,
+          )
+        : null}
+      {isOpen && activeRow !== null && visibleSuggestions.length > 0 && suggestionPosition && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              id={`${titleId}-suggestions-${activeRow}`}
+              role="listbox"
+              aria-label="Suggested HS codes"
+              style={{
+                top: suggestionPosition.top,
+                left: suggestionPosition.left,
+                width: suggestionPosition.width,
+                maxHeight: suggestionPosition.maxHeight,
+              }}
+              className="fixed z-[220] overflow-y-auto overscroll-contain rounded-md border border-slate-200 bg-white py-1 shadow-2xl [scrollbar-width:thin]"
+            >
+              <div role="presentation" className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Suggested HS codes
+              </div>
+              {visibleSuggestions.map((suggestion) => (
+                <button
+                  key={suggestion.code}
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  data-hsn-suggestion-option
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    updateItem(activeRow, "hsnCode", suggestion.code);
+                    setSuggestions({ query: "", results: [] });
+                  }}
+                  className="flex w-full items-start gap-2 px-3 py-2.5 text-left text-xs transition hover:bg-blue-50 focus:bg-blue-50 focus:outline-none"
+                >
+                  <span className="shrink-0 font-semibold tabular-nums text-blue-900">{suggestion.code}</span>
+                  <span className="text-slate-700">{suggestion.description}</span>
+                </button>
+              ))}
             </div>,
             document.body,
           )

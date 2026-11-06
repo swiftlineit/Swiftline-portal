@@ -13,7 +13,11 @@ import {
   ShipmentDraftPolicyError
 } from "../services/shipmentDraftPolicy.service.js";
 import { validateShipmentDraftFields } from "../services/shipmentValidation.service.js";
-import { isSupportedDocument, isSupportedImage } from "../services/storage/fileSignature.js";
+import { isSupportedDocument, isSupportedImage, matchesDeclaredType } from "../services/storage/fileSignature.js";
+import {
+  scanAadhaarWithSurepass,
+  SurepassAadhaarOcrError,
+} from "../services/surepassAadhaarOcr.service.js";
 import {
   StorageObjectNotFoundError,
   deleteObject,
@@ -159,6 +163,175 @@ export function serializeKycDocuments(
     hsnCode: serializeKycDocument(source.hsnCode),
     other: serializeKycDocument(source.other)
   };
+}
+
+/** Reads Aadhaar sides for an explicit, consented consignor prefill request. */
+export async function ocrShipmentDraftAadhaar(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  if (request.body?.consent !== "true") {
+    return response.status(400).json({ success: false, message: "Confirm the Aadhaar holder's consent before scanning." });
+  }
+  const kycScope = request.body?.kycScope;
+  if (kycScope !== "shared" && kycScope !== "parcel") {
+    return response.status(400).json({ success: false, message: "Choose whether this Aadhaar applies to all parcels or one parcel." });
+  }
+  const rawParcelSequence = typeof request.body?.parcelSequence === "string"
+    ? Number(request.body.parcelSequence)
+    : NaN;
+  const parcelSequence = Number.isInteger(rawParcelSequence) && rawParcelSequence >= 1
+    ? rawParcelSequence
+    : null;
+  if (kycScope === "parcel" && parcelSequence === null) {
+    return response.status(400).json({ success: false, message: "Choose a saved parcel for this Aadhaar document." });
+  }
+
+  const files = request.files as Record<string, Express.Multer.File[] | undefined> | undefined;
+  const front = files?.front?.[0];
+  const back = files?.back?.[0];
+  if (!front || !back) {
+    return response.status(400).json({ success: false, message: "Upload both the Aadhaar front and back sides." });
+  }
+
+  const draftId = typeof request.params.id === "string" ? request.params.id : "";
+  if (!mongoose.Types.ObjectId.isValid(draftId)) {
+    return response.status(404).json({ success: false, message: "Shipment draft not found" });
+  }
+
+  const shipmentDraft = await ShipmentDraft.findById(draftId).exec();
+  if (!shipmentDraft) return response.status(404).json({ success: false, message: "Shipment draft not found" });
+
+  try {
+    await assertShipmentDraftMutationAllowed({
+      draft: shipmentDraft,
+      userId,
+      portalRole: getAuthenticatedPortalRole(request),
+    });
+  } catch (error) {
+    const policyResponse = sendDraftPolicyError(response, error);
+    if (policyResponse) return policyResponse;
+    throw error;
+  }
+  if ((kycScope === "shared") !== (shipmentDraft.kycUseForAllParcels !== false)) {
+    return response.status(409).json({ success: false, message: "The KYC sharing setting changed. Refresh the form and scan again." });
+  }
+  const initialParcelIndex = kycScope === "parcel"
+    ? shipmentDraft.parcelList.findIndex((parcel) => parcel.sequence === parcelSequence)
+    : -1;
+  if (kycScope === "parcel" && initialParcelIndex < 0) {
+    return response.status(409).json({ success: false, message: "Save the selected parcel before uploading its Aadhaar document." });
+  }
+
+  const isPdf = front.mimetype === "application/pdf";
+  const backIsPdf = back.mimetype === "application/pdf";
+  if (isPdf !== backIsPdf) {
+    return response.status(400).json({ success: false, message: "Upload both sides as PDFs or both sides as images." });
+  }
+  for (const file of [front, back]) {
+    if (!isSupportedDocument(file.buffer) || !matchesDeclaredType(file.buffer, file.mimetype)) {
+      return response.status(400).json({ success: false, message: "The Aadhaar file does not match its file type." });
+    }
+  }
+
+  try {
+    const prefill = await scanAadhaarWithSurepass({ front, back, arePdfs: isPdf });
+    const currentDraft = await ShipmentDraft.findById(draftId).exec();
+    if (!currentDraft) return response.status(404).json({ success: false, message: "Shipment draft not found" });
+
+    try {
+      await assertShipmentDraftMutationAllowed({
+        draft: currentDraft,
+        userId,
+        portalRole: getAuthenticatedPortalRole(request),
+      });
+    } catch (error) {
+      const policyResponse = sendDraftPolicyError(response, error);
+      if (policyResponse) return policyResponse;
+      throw error;
+    }
+    if ((kycScope === "shared") !== (currentDraft.kycUseForAllParcels !== false)) {
+      return response.status(409).json({ success: false, message: "The KYC sharing setting changed while Aadhaar was being scanned. Scan again." });
+    }
+    const parcelIndex = kycScope === "parcel"
+      ? currentDraft.parcelList.findIndex((parcel) => parcel.sequence === parcelSequence)
+      : -1;
+    if (kycScope === "parcel" && parcelIndex < 0) {
+      return response.status(409).json({ success: false, message: "Save the selected parcel before uploading its Aadhaar document." });
+    }
+
+    const targetPath = kycScope === "shared" ? "kycDocuments" : `parcelList.${parcelIndex}.kycDocuments`;
+    const previousKycDocuments = kycScope === "shared"
+      ? currentDraft.kycDocuments
+      : currentDraft.parcelList[parcelIndex]?.kycDocuments;
+    const previousFront = previousKycDocuments?.aadhaar;
+    const previousBack = previousKycDocuments?.aadhaarBack;
+    const storedDocuments: Array<ShipmentKycDocument & { uploadedBy: mongoose.Types.ObjectId }> = [];
+
+    try {
+      const storedFront = await storeKycDocument({
+        file: front,
+        draftId,
+        type: "aadhaar",
+        documentLabel: kycDocumentLabels.aadhaar,
+        userId,
+      });
+      storedDocuments.push(storedFront);
+      const storedBack = await storeKycDocument({
+        file: back,
+        draftId,
+        type: "aadhaarBack",
+        documentLabel: kycDocumentLabels.aadhaarBack,
+        userId,
+      });
+      storedDocuments.push(storedBack);
+
+      currentDraft.set(`${targetPath}.aadhaar`, storedFront);
+      currentDraft.set(`${targetPath}.aadhaarBack`, storedBack);
+      currentDraft.validationIssues = validateShipmentDraftFields(currentDraft);
+      currentDraft.status = currentDraft.validationIssues.length ? "VALIDATION_FAILED" : "READY_FOR_DPD";
+      await currentDraft.save();
+    } catch (error) {
+      await Promise.all(storedDocuments.map((document) => discardStoredObject(document.storageKey)));
+      throw error;
+    }
+
+    await Promise.all([
+      discardStoredObject(previousFront?.storageKey),
+      discardStoredObject(previousBack?.storageKey),
+    ]);
+
+    const savedKycDocuments = kycScope === "shared"
+      ? currentDraft.kycDocuments
+      : currentDraft.parcelList[parcelIndex]?.kycDocuments;
+    await AuditLog.create({
+      action: "SHIPMENT_AADHAAR_OCR_PROCESSED",
+      entityType: "SHIPMENT_DRAFT",
+      entityId: currentDraft._id,
+      performedBy: userId,
+      performedAt: new Date(),
+      metadata: {
+        provider: "SUREPASS_SANDBOX",
+        portalRole: getAuthenticatedPortalRole(request),
+        consentConfirmed: true,
+        fileTypes: [front.mimetype, back.mimetype],
+        kycScope,
+        parcelSequence: kycScope === "parcel" ? parcelSequence : undefined,
+        storedDocumentTypes: ["aadhaar", "aadhaarBack"],
+      },
+    });
+    response.setHeader("Cache-Control", "no-store");
+    return response.status(200).json({
+      success: true,
+      prefill,
+      kycDocuments: serializeKycDocuments(savedKycDocuments),
+      parcelSequence: kycScope === "parcel" ? parcelSequence : undefined,
+    });
+  } catch (error) {
+    if (error instanceof SurepassAadhaarOcrError) {
+      return response.status(error.statusCode).json({ success: false, message: error.message });
+    }
+    throw error;
+  }
 }
 
 function parseParcelSequence(request: Request): number | null {

@@ -46,6 +46,7 @@ export function ShipmentTextField({
   revealError = false,
   required = false,
   type = "text",
+  autoComplete,
   placeholder,
   inputMode,
   readOnly = false,
@@ -53,6 +54,7 @@ export function ShipmentTextField({
   max,
   hint,
   tooltip,
+  onFocus,
   onBlur
 }: {
   label: string;
@@ -62,6 +64,7 @@ export function ShipmentTextField({
   revealError?: boolean;
   required?: boolean;
   type?: string;
+  autoComplete?: string;
   placeholder?: string;
   inputMode?: "decimal" | "email" | "numeric" | "search" | "tel" | "text" | "url";
   readOnly?: boolean;
@@ -74,6 +77,7 @@ export function ShipmentTextField({
   max?: number;
   hint?: string;
   tooltip?: string;
+  onFocus?: () => void;
   // Fires after the field's own touched-tracking, e.g. to surface a restricted-goods toast.
   onBlur?: () => void;
 }) {
@@ -95,21 +99,23 @@ export function ShipmentTextField({
       <ShipmentFieldLabel required={required} tooltip={tooltip}>{label}</ShipmentFieldLabel>
       <input
         type={type}
+        autoComplete={autoComplete}
         inputMode={inputMode}
         value={value}
         onChange={handleChange}
+        onFocus={onFocus}
         onBlur={() => { setTouched(true); toastFieldError(error, value); onBlur?.(); }}
         placeholder={placeholder}
         readOnly={readOnly}
         maxLength={maxLength}
         max={max}
         aria-invalid={Boolean(error && showError)}
-        className={`mt-1.5 h-10 w-full min-w-0 rounded-xl border px-3 text-[13px] outline-none transition focus:ring-2 ${
+        className={`mt-1.5 h-10 w-full min-w-0 rounded px-3 text-[13px] outline-none transition focus:ring-2 ${
           readOnly
-            ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500"
+            ? "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-500"
             : error && showError
-              ? "border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
-              : "border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
+              ? "border border-red-400 bg-white focus:border-red-500 focus:ring-red-100"
+              : "border border-slate-300 bg-white focus:border-blue-900 focus:ring-blue-100"
         }`}
       />
       {hint ? <p className="mt-1.5 text-xs text-slate-500">{hint}</p> : null}
@@ -123,7 +129,7 @@ export function ShipmentFixedCountryField({ label, mode = "country" }: { label: 
   return (
     <label className="block min-w-0">
       <ShipmentFieldLabel required>{label}</ShipmentFieldLabel>
-      <div className="mt-1.5 flex h-10 w-full min-w-0 cursor-not-allowed items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-3 text-[13px] text-slate-600">
+      <div className="mt-1.5 flex h-10 w-full min-w-0 cursor-not-allowed items-center gap-2 rounded border border-slate-200 bg-slate-100 px-3 text-[13px] text-slate-600">
         <span className="flex h-5 w-7 shrink-0 items-center justify-center overflow-hidden [&_img]:rounded-none">
           <FlagImage iso2="in" size="20px" />
         </span>
@@ -169,7 +175,7 @@ export function ShipmentSelectField({
           onChange={onChange}
           onBlur={() => { setTouched(true); toastFieldError(error, value); }}
           aria-invalid={Boolean(error && showError)}
-          className={`h-10 w-full appearance-none rounded-xl border bg-white pr-10 text-[13px] outline-none transition focus:ring-2 ${flagCountryCode ? "pl-11" : "pl-3"} ${
+          className={`h-10 w-full appearance-none rounded border bg-white pr-10 text-[13px] outline-none transition focus:ring-2 ${flagCountryCode ? "pl-11" : "pl-3"} ${
             error && showError
               ? "border-red-400 focus:border-red-500 focus:ring-red-100"
               : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"
@@ -243,7 +249,7 @@ export function ShipmentPhoneCodeField({
             <button
               {...rootProps}
               type="button"
-              className={`flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border bg-white px-3 text-left text-[13px] outline-none transition focus:ring-2 ${
+              className={`flex h-10 w-full min-w-0 items-center gap-2 rounded border bg-white px-3 text-left text-[13px] outline-none transition focus:ring-2 ${
                 error && showError
                   ? "border-red-400 focus:border-red-500 focus:ring-red-100"
                   : "border-slate-300 focus:border-blue-900 focus:ring-blue-100"
