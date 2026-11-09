@@ -16,7 +16,7 @@ describe("shipment label document grouping", () => {
     const documents = groupShipmentLabelDocuments([
       label({ id: "1", parcelNumber: "SLCDEL120926001-01", fileChecksum: "combined" }),
       label({ id: "2", parcelNumber: "SLCDEL120926001-02", fileChecksum: "combined" }),
-      label({ id: "3", parcelNumber: "DPD-1", labelType: "DPD", fileChecksum: "carrier" })
+      label({ id: "3", parcelNumber: "DPD-1", labelType: "DPD", format: "HTML", fileChecksum: "carrier" })
     ]);
 
     assert.equal(documents.length, 2);
@@ -34,5 +34,15 @@ describe("shipment label document grouping", () => {
     ]);
 
     assert.equal(documents.length, 2);
+  });
+
+  test("hides the ALS PDF while keeping the Swiftline and DPD barcode labels", () => {
+    const documents = groupShipmentLabelDocuments([
+      label({ id: "internal", parcelNumber: "SLCDEL05112600101" }),
+      label({ id: "als", parcelNumber: "1017202245", labelType: "DPD", format: "PDF" }),
+      label({ id: "carrier", parcelNumber: "1017202245-2", labelType: "DPD", format: "HTML" })
+    ]);
+
+    assert.deepEqual(documents.map((document) => document.id), ["internal", "carrier"]);
   });
 });

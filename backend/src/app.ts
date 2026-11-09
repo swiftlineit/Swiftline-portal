@@ -61,6 +61,7 @@ import { publicShipmentBookingRouter } from "./routes/publicShipmentBooking.rout
 import { platformOperatorRouter } from "./routes/platformOperator.routes.js";
 import { operatorRouter } from "./routes/operator.routes.js";
 import { establishSwiftlineTenantContext } from "./middleware/swiftlineTenantContext.middleware.js";
+import { aadhaarOcrFeatureRouter } from "./routes/aadhaarOcrFeature.routes.js";
 
 export const app = express();
 
@@ -134,6 +135,7 @@ if (env.OPERATOR_PORTAL_ENABLED) {
 // Operator requests are mounted above and establish their membership context
 // independently; public endpoints below remain Swiftline-only.
 app.use("/api/v1", establishSwiftlineTenantContext);
+app.use("/api/v1/aadhaar-ocr-feature", aadhaarOcrFeatureRouter);
 app.use("/api/v1/auth", authRouter);
 if (env.OPERATOR_PORTAL_ENABLED) {
   app.use("/api/v1/platform/operators", platformOperatorRouter);

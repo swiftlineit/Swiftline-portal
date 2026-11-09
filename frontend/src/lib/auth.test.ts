@@ -4,6 +4,7 @@ import {
   SessionEndedError,
   getAccessToken,
   refreshAccessToken,
+  refreshAccessTokenWithStatus,
   setAccessToken,
   setSessionEndedReason,
   takeSessionEndedReason
@@ -42,6 +43,32 @@ test("a transient refresh failure does not erase the current access token", asyn
   assert.equal(await refreshAccessToken(), null);
   assert.equal(getAccessToken(), "still-usable");
   assert.equal(takeSessionEndedReason(), null);
+});
+
+test("refresh status distinguishes an expired session from an unavailable service", async () => {
+  globalThis.fetch = async () => new Response("temporarily unavailable", { status: 503 });
+
+  assert.deepEqual(await refreshAccessTokenWithStatus(), {
+    outcome: "unavailable",
+    reason: "service",
+    status: 503
+  });
+  assert.equal(getAccessToken(), null);
+
+  globalThis.fetch = async () => new Response(JSON.stringify({ success: false }), {
+    status: 401,
+    headers: { "Content-Type": "application/json" }
+  });
+  assert.deepEqual(await refreshAccessTokenWithStatus(), { outcome: "expired" });
+});
+
+test("refresh status classifies a connection failure without calling it an expired session", async () => {
+  globalThis.fetch = async () => { throw new TypeError("Failed to fetch"); };
+
+  assert.deepEqual(await refreshAccessTokenWithStatus(), {
+    outcome: "unavailable",
+    reason: "network"
+  });
 });
 
 test("a successful refresh clears a stale session-ended notice", async () => {

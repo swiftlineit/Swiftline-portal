@@ -283,7 +283,7 @@ export function DashboardLoading({
   // Fills the shell's content area. `min-h-screen` here was a full viewport
   // inside an area already shorter than one, which overflowed the scroller.
   return (
-    <div className="flex h-full items-center justify-center bg-[#EEEDED]/60">
+    <div role="status" aria-live="polite" aria-busy="true" className="flex h-full min-h-full items-center justify-center bg-[#EEEDED]/60">
       <p className="text-sm font-semibold text-[#0D1282]">
         {message}
       </p>

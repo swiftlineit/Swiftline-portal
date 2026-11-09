@@ -81,10 +81,16 @@ const environmentSchema = z.object({
   EMAIL_DRAIN_BATCH_SIZE: z.coerce.number().int().positive().default(25),
   EMAIL_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
   IDEAL_POSTCODES_API_KEY: z.string().optional(),
-  // Surepass sandbox JWT; used only by the protected staff/client Aadhaar OCR route.
+  // Surepass credentials are backend-only. Production deployments must explicitly
+  // select production mode and configure its full Aadhaar Full endpoint URL.
   SUREPASS_API_TOKEN: z.preprocess(
     (value) => typeof value === "string" && !value.trim() ? undefined : value,
     z.string().trim().min(1).optional(),
+  ),
+  SUREPASS_API_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
+  SUREPASS_AADHAAR_FULL_URL: z.preprocess(
+    (value) => typeof value === "string" && !value.trim() ? undefined : value,
+    z.string().trim().url().optional(),
   ),
   // Protects encrypted address-book identifiers and shipment Aadhaar values.
   // Required in production; falls back to JWT_SECRET in development.

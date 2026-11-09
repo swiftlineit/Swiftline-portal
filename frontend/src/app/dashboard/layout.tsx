@@ -2,9 +2,12 @@
 
 import { ReactNode, useEffect, useState } from "react";
 import { apiUrl } from "@/lib/api";
-import { getAccessToken, refreshAccessToken } from "@/lib/auth";
+import { readJsonSafely, refreshAccessTokenWithStatus, setSessionEndedReason } from "@/lib/auth";
 import DashboardShell from "@/components/DashboardShell";
 import { type AuthenticatedUser } from "@/lib/useAdminUser";
+import { AuthRecoveryBoundary } from "@/components/auth/AuthRecoveryBoundary";
+import { useReportAuthRecoveryIssue } from "@/contexts/AuthRecoveryContext";
+import { accessTokenForAuthCheck, authRecoveryIssueForError, authRecoveryIssueForRefresh, authRecoveryIssueForStatus } from "@/lib/authRecovery";
 
 // Empty role renders no sidebar nav items (Sidebar filters by
 // `roles.includes(userRole)`) rather than crashing or over-privileging while
@@ -12,31 +15,67 @@ import { type AuthenticatedUser } from "@/lib/useAdminUser";
 const FALLBACK_USER: AuthenticatedUser = { email: "", role: "" as AuthenticatedUser["role"] };
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
+  return (
+    <AuthRecoveryBoundary>
+      <DashboardLayoutContent>{children}</DashboardLayoutContent>
+    </AuthRecoveryBoundary>
+  );
+}
+
+function DashboardLayoutContent({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthenticatedUser>(FALLBACK_USER);
+  const reportRecoveryIssue = useReportAuthRecoveryIssue();
 
   useEffect(() => {
     let active = true;
+    function report(issue: ReturnType<typeof authRecoveryIssueForStatus>) {
+      if (!active) return;
+      if (issue.kind === "session") {
+        setSessionEndedReason(issue.message || "Your session may have expired. Please sign in again.");
+      }
+      reportRecoveryIssue?.(issue);
+    }
+
     async function load() {
       try {
-        let token = getAccessToken() ?? await refreshAccessToken();
-        if (!token) throw new Error("Unauthorized");
+        const accessTokenResult = await accessTokenForAuthCheck();
+        if ("issue" in accessTokenResult) {
+          report(accessTokenResult.issue);
+          return;
+        }
+        let token = accessTokenResult.token;
         let response = await fetch(apiUrl("/api/v1/auth/me"), { headers: { Authorization: `Bearer ${token}` } });
         if (response.status === 401) {
-          token = await refreshAccessToken();
-          if (!token) throw new Error("Unauthorized");
+          const refreshResult = await refreshAccessTokenWithStatus();
+          if (refreshResult.outcome !== "refreshed") {
+            report(authRecoveryIssueForRefresh(refreshResult));
+            return;
+          }
+          token = refreshResult.token;
           response = await fetch(apiUrl("/api/v1/auth/me"), { headers: { Authorization: `Bearer ${token}` } });
         }
-        const data = await response.json();
-        if (!data.success) throw new Error("Unauthorized");
+        if (response.status === 401 || response.status === 403) {
+          report(authRecoveryIssueForStatus(response.status));
+          return;
+        }
+        if (!response.ok) {
+          report(authRecoveryIssueForStatus(response.status));
+          return;
+        }
+        const data = await readJsonSafely(response) as { success?: boolean; user?: AuthenticatedUser };
+        if (!data.success || !data.user) {
+          report({ kind: "service" });
+          return;
+        }
         if (active) setUser(data.user);
-      } catch {
-        // Each page runs its own useAdminUser() check and handles redirect-on-failure;
-        // this fetch only fills in the header/sidebar display, so it fails silently.
+      } catch (error) {
+        const issue = authRecoveryIssueForError(error);
+        report(issue);
       }
     }
     void load();
     return () => { active = false; };
-  }, []);
+  }, [reportRecoveryIssue]);
 
   return <DashboardShell user={user}>{children}</DashboardShell>;
 }

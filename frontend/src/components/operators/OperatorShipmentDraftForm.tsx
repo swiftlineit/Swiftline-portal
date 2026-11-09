@@ -1,6 +1,6 @@
 "use client";
 
-import ClientDpdDraftReviewPage from "@/app/client/dpd-labels/[draftId]/page";
+import ClientDpdDraftReview from "@/components/shipments/ClientDpdDraftReview";
 
 export default function OperatorShipmentDraftForm({
   operatorSlug,
@@ -9,5 +9,5 @@ export default function OperatorShipmentDraftForm({
   operatorSlug: string;
   shipmentDraftId: string;
 }) {
-  return <ClientDpdDraftReviewPage operatorSlug={operatorSlug} initialDraftId={shipmentDraftId} />;
+  return <ClientDpdDraftReview operatorSlug={operatorSlug} initialDraftId={shipmentDraftId} />;
 }

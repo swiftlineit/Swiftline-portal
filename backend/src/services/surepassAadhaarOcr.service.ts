@@ -1,8 +1,43 @@
 import { env } from "../config/env.js";
 import { isValidAadhaarNumber } from "./aadhaarValidation.service.js";
 
-const surepassAadhaarFullUrl = "https://sandbox.surepass.app/api/v1/ocr/aadhaar-full";
+const sandboxAadhaarFullUrl = "https://sandbox.surepass.app/api/v1/ocr/aadhaar-full";
 const surepassTimeoutMs = 20_000;
+
+type SurepassEnvironment = "sandbox" | "production";
+
+function resolveSurepassAadhaarFullUrl(): string | null {
+  const explicitUrl = env.SUREPASS_AADHAAR_FULL_URL;
+  if (env.NODE_ENV === "production" && env.SUREPASS_API_ENV !== "production") return null;
+  if (env.SUREPASS_API_ENV === "production" && !explicitUrl) return null;
+
+  const endpoint = explicitUrl ?? sandboxAadhaarFullUrl;
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) return null;
+  if (env.SUREPASS_API_ENV === "production" && parsed.hostname.toLowerCase() === "sandbox.surepass.app") return null;
+  if (env.SUREPASS_API_ENV === "sandbox" && parsed.hostname.toLowerCase() !== "sandbox.surepass.app") return null;
+  return parsed.toString();
+}
+
+export function getSurepassAadhaarOcrConfiguration(): {
+  environment: SurepassEnvironment;
+  configured: boolean;
+} {
+  return {
+    environment: env.SUREPASS_API_ENV,
+    configured: Boolean(env.SUREPASS_API_TOKEN && resolveSurepassAadhaarFullUrl()),
+  };
+}
+
+export function getSurepassAadhaarOcrProviderName(): string {
+  return env.SUREPASS_API_ENV === "production" ? "SUREPASS_PRODUCTION" : "SUREPASS_SANDBOX";
+}
 
 export type AadhaarOcrFile = {
   buffer: Buffer;
@@ -111,7 +146,9 @@ function resolveTownOrCity(cityValue: string, fullAddress: string): { value: str
   const postOffice = fullAddress.match(/\bP\.?\s*O\.?\s*:\s*([^,]+)/i)?.[1]?.trim() ?? "";
   return {
     value: postOffice,
-    warning: "Surepass returned an incomplete city value. The post office locality was used where available; review the town or city before saving.",
+    warning: postOffice
+      ? "We used the post office name for the city. Check it before saving."
+      : "We couldn't read the city. Enter it before saving.",
   };
 }
 
@@ -198,7 +235,7 @@ export function mapSurepassAadhaarFullResponse(response: SurepassOcrResponse): A
   const validCandidateFields = [...frontNumberFields, ...backNumberFields]
     .filter((field) => Boolean(aadhaarNumber) && validUnmaskedAadhaar(field) === aadhaarNumber);
   if (aadhaarNumber && validCandidateFields.some((field) => field?.input_validation !== true)) {
-    warnings.push("Surepass did not validate this number, but its local checksum passed. Review the masked number against the document before applying it.");
+    warnings.push("We couldn't confirm the Aadhaar number. Check it against the card before saving.");
   }
   if (townOrCity.warning) warnings.push(townOrCity.warning);
 
@@ -222,7 +259,8 @@ export async function scanAadhaarWithSurepass(input: {
   back: AadhaarOcrFile;
   arePdfs: boolean;
 }): Promise<AadhaarOcrPrefill> {
-  if (!env.SUREPASS_API_TOKEN) {
+  const endpoint = resolveSurepassAadhaarFullUrl();
+  if (!env.SUREPASS_API_TOKEN || !endpoint) {
     throw new SurepassAadhaarOcrError("Aadhaar scanning is not configured.", 503);
   }
 
@@ -238,7 +276,7 @@ export async function scanAadhaarWithSurepass(input: {
 
   let response: Response;
   try {
-    response = await fetch(surepassAadhaarFullUrl, {
+    response = await fetch(endpoint, {
       method: "POST",
       headers: { Authorization: `Bearer ${env.SUREPASS_API_TOKEN}` },
       body: form,

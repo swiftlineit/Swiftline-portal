@@ -1,7 +1,16 @@
 import { apiUrl } from "@/lib/api";
 
 let accessToken: string | null = null;
-let refreshInFlight: Promise<string | null> | null = null;
+type RefreshRequestResult =
+  | { outcome: "refreshed"; token: string }
+  | { outcome: "expired" }
+  | { outcome: "unavailable"; reason: "network" | "service"; status?: number };
+
+export type AccessTokenRefreshResult =
+  | RefreshRequestResult
+  | { outcome: "ended"; message: string };
+
+let refreshInFlight: Promise<RefreshRequestResult> | null = null;
 
 /**
  * Why the session ended, when the server ended it rather than the user.
@@ -64,45 +73,66 @@ export async function readJsonSafely(response: Response): Promise<Record<string,
 }
 
 async function requestRefreshedAccessToken() {
+  let response: Response;
   try {
-    const response = await fetch(apiUrl("/api/v1/auth/refresh"), {
+    response = await fetch(apiUrl("/api/v1/auth/refresh"), {
       method: "POST",
       credentials: "include"
     });
-
-    const data = await readJsonSafely(response);
-    if (response.ok && data.success && typeof data.accessToken === "string") {
-      setAccessToken(data.accessToken);
-      setSessionEndedReason(null);
-      return data.accessToken;
-    }
-
-    // A session ended elsewhere- signed in on another device, terminated by an
-    // admin, or gone idle. The user needs to be told why, otherwise being
-    // bounced to the login screen looks like a bug.
-    if (data.sessionEnded && typeof data.message === "string") {
-      setAccessToken(null);
-      setSessionEndedReason(data.message);
-      throw new SessionEndedError(data.message);
-    }
-
-    // Only a rejected refresh cookie means the session is gone. Throttling,
-    // server faults, and offline devices must keep the current token usable.
-    if (response.status === 401 || response.status === 403) setAccessToken(null);
-    return null;
-  } catch (error) {
-    // Callers must see the server's reason. Returning null here made request
-    // helpers fall back to the original generic 401 response instead.
-    if (error instanceof SessionEndedError) throw error;
-    return null;
+  } catch {
+    return { outcome: "unavailable", reason: "network" } as const;
   }
+
+  const data = await readJsonSafely(response);
+  if (response.ok && data.success && typeof data.accessToken === "string") {
+    setAccessToken(data.accessToken);
+    setSessionEndedReason(null);
+    return { outcome: "refreshed", token: data.accessToken } as const;
+  }
+
+  // A session ended elsewhere- signed in on another device, terminated by an
+  // admin, or gone idle. The user needs to be told why, otherwise being
+  // bounced to the login screen looks like a bug.
+  if (data.sessionEnded && typeof data.message === "string") {
+    setAccessToken(null);
+    setSessionEndedReason(data.message);
+    throw new SessionEndedError(data.message);
+  }
+
+  // Only a rejected refresh cookie means the session is gone. Throttling,
+  // server faults, and offline devices must keep the current token usable.
+  if (response.status === 401 || response.status === 403) {
+    setAccessToken(null);
+    return { outcome: "expired" } as const;
+  }
+
+  return {
+    outcome: "unavailable",
+    reason: "service",
+    ...(response.status >= 400 ? { status: response.status } : {})
+  } as const;
 }
 
-export async function refreshAccessToken() {
+function sharedRefreshRequest() {
   // A dashboard page mount can trigger several parallel refreshes. Sharing one
   // request stops them rotating the cookie against each other.
   refreshInFlight ??= requestRefreshedAccessToken().finally(() => { refreshInFlight = null; });
   return refreshInFlight;
+}
+
+export async function refreshAccessToken() {
+  const result = await sharedRefreshRequest();
+  return result.outcome === "refreshed" ? result.token : null;
+}
+
+/** Refreshes with enough detail for a protected page to show the right recovery message. */
+export async function refreshAccessTokenWithStatus(): Promise<AccessTokenRefreshResult> {
+  try {
+    return await sharedRefreshRequest();
+  } catch (error) {
+    if (error instanceof SessionEndedError) return { outcome: "ended", message: error.message };
+    return { outcome: "unavailable", reason: "network" };
+  }
 }
 
 export async function logout() {

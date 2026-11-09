@@ -34,7 +34,19 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     "**/*.mts",
-    ".next/dev/types/**/*.ts"
+    ".next/dev/types/**/*.ts",
+    ".next-playwright-43181/types/**/*.ts",
+    ".next-playwright-43181/dev/types/**/*.ts",
+    ".next-playwright-43182/types/**/*.ts",
+    ".next-playwright-43182/dev/types/**/*.ts",
+    ".next-playwright-43183/types/**/*.ts",
+    ".next-playwright-43183/dev/types/**/*.ts",
+    ".next-playwright-43184/types/**/*.ts",
+    ".next-playwright-43184/dev/types/**/*.ts",
+    ".next-playwright-43185/types/**/*.ts",
+    ".next-playwright-43185/dev/types/**/*.ts",
+    ".next-playwright-43186/types/**/*.ts",
+    ".next-playwright-43186/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

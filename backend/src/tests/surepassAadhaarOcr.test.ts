@@ -71,7 +71,7 @@ describe("Surepass Aadhaar Full mapping", () => {
       },
     });
     assert.equal(providerRejected.aadhaarNumber, validAadhaar);
-    assert.match(providerRejected.warnings[0] ?? "", /local checksum passed/);
+    assert.match(providerRejected.warnings[0] ?? "", /couldn't confirm the Aadhaar number/);
 
     const checksumRejected = mapSurepassAadhaarFullResponse({
       success: true,
@@ -114,7 +114,7 @@ describe("Surepass Aadhaar Full mapping", () => {
       `${result.address.addressLine1}${result.address.addressLine2 ? ` ${result.address.addressLine2}` : ""}`,
       "Care of Sample, 20 Main Road, Palam Village, PO: Palam Village, DIST: South West Delhi",
     );
-    assert.match(result.warnings.join(" "), /incomplete city value/);
+    assert.match(result.warnings.join(" "), /used the post office name/);
   });
 });
 

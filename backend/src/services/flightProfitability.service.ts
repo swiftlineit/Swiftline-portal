@@ -220,7 +220,7 @@ export async function loadFlightOperationalFacts(manifestId: mongoose.Types.Obje
   if (!manifest) throw new Error("Operations manifest was not found.");
   const shipmentIds = consignments.map((item) => item.dpdShipmentId);
   const labelsQuery = LabelDocument.countDocuments({
-    dpdShipmentId: { $in: shipmentIds }, labelType: "DPD", voidedAt: null
+    dpdShipmentId: { $in: shipmentIds }, labelType: "DPD", format: "HTML", voidedAt: null
   });
   if (session) labelsQuery.session(session);
   const portalDpdLabels = await labelsQuery.exec();

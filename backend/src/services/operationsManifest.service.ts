@@ -2816,6 +2816,7 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
         LabelDocument.find({
           dpdShipmentId: { $in: carrierShipmentIds },
           labelType: "DPD",
+          format: "HTML",
           voidedAt: null
         }).select("dpdShipmentId").lean().exec()
       ])
@@ -2851,9 +2852,11 @@ export async function getOperationsManifestDetail(manifestIdValue: string, optio
       const carrierStage = String(carrierShipment?.responseSnapshot?.stage ?? "");
       const carrierReconciliationRequired = Boolean(
         carrierShipment
-        && ["DPD_STATUS_UNKNOWN", "DPD_CREATED"].includes(carrierShipment.status)
-        && (["DPD_LABEL", "DPD_LABEL_ONLY"].includes(carrierStage)
-          || (carrierStage === "DPD_BOOKING" && carrierShipment.responseSnapshot?.localLabelError))
+        && ((["DPD_STATUS_UNKNOWN", "DPD_CREATED"].includes(carrierShipment.status)
+          && (["DPD_LABEL", "DPD_LABEL_ONLY"].includes(carrierStage)
+            || (carrierStage === "DPD_BOOKING" && carrierShipment.responseSnapshot?.localLabelError)))
+          || (carrierShipment.status === "LABEL_RECEIVED"
+            && carrierShipment.responseSnapshot?.carrierLabelStatus === "RECEIVED"))
         && !carrierLabelShipmentIds.has(String(item.dpdShipmentId))
       );
       return {

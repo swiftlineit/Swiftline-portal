@@ -6,11 +6,13 @@ import {
   type KeyboardEvent,
   type ReactNode,
   useId,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import Image from "next/image";
 import { createPortal } from "react-dom";
 import {
   FiCheck,
@@ -51,6 +53,7 @@ import type { CsbType } from "@/lib/csbType";
 import { indiaStates, normalizeIndiaState } from "@/lib/indiaStates";
 import type { ConsignorForm, ParcelKycState } from "@/lib/shipmentConsignor";
 import { nextContactNameOnCompanyChange } from "@/lib/shipmentConsignor";
+import { getAadhaarOcrFeatureStatus } from "@/lib/operationsAdvisory";
 
 type ConsignorFieldIssues = Partial<Record<keyof ConsignorForm, string>>;
 
@@ -171,6 +174,35 @@ export function ConsignorKycSection({
   const [addressQuery, setAddressQuery] = useState("");
   const [predictions, setPredictions] = useState<AddressPrediction[]>([]);
   const [addressBusy, setAddressBusy] = useState(false);
+  const [aadhaarOcrFeatureEnabled, setAadhaarOcrFeatureEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!enableAadhaarOcr || !api.ocrAadhaar || readOnly) return;
+
+    let active = true;
+    const refreshStatus = async () => {
+      try {
+        const status = await getAadhaarOcrFeatureStatus();
+        if (active) setAadhaarOcrFeatureEnabled(status.enabled && status.providerConfigured);
+      } catch {
+        if (active) setAadhaarOcrFeatureEnabled(false);
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshStatus();
+    };
+
+    void refreshStatus();
+    const intervalId = window.setInterval(() => void refreshStatus(), 30_000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [enableAadhaarOcr, api.ocrAadhaar, readOnly]);
 
   // Every slot the route offers is rendered; only CSB-V marks them required.
   const requiredTypes = requiredShipmentKycDocumentTypes(csbType);
@@ -317,7 +349,7 @@ export function ConsignorKycSection({
           </div>
           {headerAction}
         </div>
-        {enableAadhaarOcr && api.ocrAadhaar && !readOnly ? (
+        {enableAadhaarOcr && aadhaarOcrFeatureEnabled && api.ocrAadhaar && !readOnly ? (
           <div className="px-3 pt-3 sm:px-4">
             <AadhaarOcrControl
               shipmentDraftId={shipmentDraftId}
@@ -956,12 +988,15 @@ function AadhaarOcrControl({
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [kycSaved, setKycSaved] = useState(false);
   const [prefill, setPrefill] = useState<AadhaarOcrPrefill | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [dropTarget, setDropTarget] = useState<"front" | "back" | null>(null);
   const frontInputRef = useRef<HTMLInputElement>(null);
   const backInputRef = useRef<HTMLInputElement>(null);
+  const latestValues = useRef({ form, parcels });
+  useEffect(() => {
+    latestValues.current = { form, parcels };
+  }, [form, parcels]);
   const selectedParcel = parcels.find((parcel) => parcel.sequence === parcelSequence);
   const selectedParcelSaved = Boolean(selectedParcel && parcelSequence <= savedParcelCount);
   const currentAadhaarNumber = kycScope === "shared"
@@ -971,7 +1006,6 @@ function AadhaarOcrControl({
   function acceptFile(file: File | undefined, side: "front" | "back") {
     setError("");
     setPrefill(null);
-    setKycSaved(false);
     setConfirmReplace(false);
     if (!file) {
       if (side === "front") setFrontFile(null);
@@ -1032,15 +1066,20 @@ function AadhaarOcrControl({
         kycScope,
         parcelSequence: kycScope === "parcel" ? parcelSequence : undefined,
       });
+      const current = latestValues.current;
+      const currentNumber = kycScope === "shared"
+        ? current.form.aadhaarNumber
+        : current.parcels.find((parcel) => parcel.sequence === parcelSequence)?.aadhaarNumber ?? "";
+      applyExtractedDetails(result.prefill, current.form, currentNumber, false);
       setPrefill(result.prefill);
       onKycDocumentsChange(result.kycDocuments, result.parcelSequence);
-      setKycSaved(true);
       setFrontFile(null);
       setBackFile(null);
       if (frontInputRef.current) frontInputRef.current.value = "";
       if (backInputRef.current) backInputRef.current.value = "";
+      toast.success("Aadhaar front and back saved to this booking KYC.");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Aadhaar scanning failed. Try again.");
+      toast.error(caught instanceof Error ? caught.message : "Aadhaar scanning failed. Try again.");
     } finally {
       setBusy(false);
     }
@@ -1048,6 +1087,37 @@ function AadhaarOcrControl({
 
   const safeValue = (value: string, maxLength: number) =>
     value.trim() && value.trim().length <= maxLength ? value.trim() : "";
+  function applyExtractedDetails(
+    extracted: AadhaarOcrPrefill,
+    currentForm: ConsignorForm,
+    currentNumber: string,
+    replaceExisting: boolean,
+  ) {
+    const fill = (incoming: string, current: string, maxLength: number, uppercase = true) => {
+      const value = safeValue(incoming, maxLength);
+      if (!value || (!replaceExisting && current.trim())) return current;
+      return uppercase ? value.toUpperCase() : value;
+    };
+    const number = isValidAadhaarNumber(extracted.aadhaarNumber) ? extracted.aadhaarNumber : "";
+    const nextForm: ConsignorForm = {
+      ...currentForm,
+      contactName: fill(extracted.fullName, currentForm.contactName, 120),
+      addressLine1: fill(extracted.address.addressLine1, currentForm.addressLine1, 120),
+      addressLine2: fill(extracted.address.addressLine2, currentForm.addressLine2, 120),
+      townOrCity: fill(extracted.address.townOrCity, currentForm.townOrCity, 80),
+      county: fill(normalizeIndiaState(extracted.address.county), currentForm.county, 80),
+      postcode: fill(extracted.address.postcode, currentForm.postcode, 20, false),
+      aadhaarNumber: kycScope === "shared" && number && (replaceExisting || !currentForm.aadhaarNumber.trim())
+        ? number
+        : currentForm.aadhaarNumber,
+    };
+    if ((Object.keys(nextForm) as Array<keyof ConsignorForm>).some((key) => nextForm[key] !== currentForm[key])) {
+      onFormChange(nextForm);
+    }
+    if (kycScope === "parcel" && number && number !== currentNumber && (replaceExisting || !currentNumber.trim())) {
+      onParcelAadhaarChange(parcelSequence, number);
+    }
+  }
   const stateValue = prefill ? normalizeIndiaState(prefill.address.county) : "";
   const extractedAadhaarNumber = prefill && isValidAadhaarNumber(prefill.aadhaarNumber)
     ? prefill.aadhaarNumber
@@ -1074,26 +1144,12 @@ function AadhaarOcrControl({
   ));
 
   function applyPrefill() {
-    if (!prefill) return;
-    if (hasExistingValuesToReplace && !confirmReplace) {
+    if (!prefill || !hasExistingValuesToReplace) return;
+    if (!confirmReplace) {
       setConfirmReplace(true);
       return;
     }
-    onFormChange({
-      ...form,
-      contactName: safeValue(prefill.fullName, 120).toUpperCase() || form.contactName,
-      addressLine1: safeValue(prefill.address.addressLine1, 120).toUpperCase() || form.addressLine1,
-      addressLine2: safeValue(prefill.address.addressLine2, 120).toUpperCase() || form.addressLine2,
-      townOrCity: safeValue(prefill.address.townOrCity, 80).toUpperCase() || form.townOrCity,
-      county: safeValue(stateValue, 80).toUpperCase() || form.county,
-      postcode: safeValue(prefill.address.postcode, 20) || form.postcode,
-      aadhaarNumber: kycScope === "shared" && extractedAadhaarNumber
-        ? prefill.aadhaarNumber
-        : form.aadhaarNumber,
-    });
-    if (kycScope === "parcel" && extractedAadhaarNumber) {
-      onParcelAadhaarChange(parcelSequence, extractedAadhaarNumber);
-    }
+    applyExtractedDetails(prefill, form, currentAadhaarNumber, true);
     setPrefill(null);
     setConfirmReplace(false);
   }
@@ -1103,31 +1159,32 @@ function AadhaarOcrControl({
   );
 
   return (
-    <section className="overflow-hidden rounded-md border border-slate-200 bg-white" aria-label="Aadhaar OCR and KYC upload">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/70 px-3 py-2.5 sm:px-4">
+    <section className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm" aria-label="Aadhaar OCR and KYC upload">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-100 bg-blue-50/50 px-3 py-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-900">
-            <FiFileText aria-hidden="true" className="h-4 w-4" />
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white text-blue-900 shadow-sm ring-1 ring-blue-100">
+            <FiFileText aria-hidden="true" className="h-[18px] w-[18px]" />
           </span>
           <div className="min-w-0">
-            <h3 className="text-[13px] font-semibold text-slate-900">Scan Aadhaar</h3>
-            <p className="text-[11px] text-slate-500">One upload saves both sides to KYC.</p>
+            <h3 className="text-sm font-semibold text-slate-900">Scan Aadhaar</h3>
+            <p className="mt-0.5 text-[11px] leading-4 text-slate-600">Review the extracted details; both sides are saved to Aadhaar KYC.</p>
           </div>
         </div>
-        <span className={`inline-flex shrink-0 items-center rounded-md border px-2.5 py-1 text-[10px] font-semibold ${csbType === "CSB_V" ? "border-blue-200 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-600"}`}>
-          {csbType === "CSB_V" ? "Required · CSB-V" : "Optional · CSB-IV"}
+        <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[10px] font-semibold ${csbType === "CSB_V" ? "border-blue-200 bg-white text-blue-900" : "border-slate-200 bg-white text-slate-600"}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${csbType === "CSB_V" ? "bg-blue-700" : "bg-slate-400"}`} />
+          {csbType === "CSB_V" ? "Required for CSB-V" : "Optional for CSB-IV"}
         </span>
       </header>
 
       {kycScope === "parcel" ? (
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-3 py-2.5 sm:px-4">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/60 px-3 py-2.5 sm:px-4">
           <label htmlFor="aadhaar-ocr-parcel" className="text-[11px] font-semibold text-slate-700">Save to parcel</label>
           <select
             id="aadhaar-ocr-parcel"
             value={parcelSequence}
             onChange={(event) => setParcelSequence(Number(event.target.value))}
             disabled={busy || Boolean(prefill) || parcels.length === 0}
-            className="h-8 rounded border border-slate-300 bg-white px-2.5 text-[11px] text-slate-800 outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+            className="h-8 rounded-md border border-slate-300 bg-white px-2.5 text-[11px] text-slate-800 outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
           >
             {parcels.map((parcel, index) => (
               <option key={parcel.sequence} value={parcel.sequence}>
@@ -1138,76 +1195,100 @@ function AadhaarOcrControl({
         </div>
       ) : null}
 
-      <div className="grid gap-2.5 p-3 sm:grid-cols-2 sm:p-4">
-        <div
-          onDragOver={(event) => handleDragOver(event, "front")}
-          onDragLeave={(event) => {
-            if (!event.relatedTarget || !event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
-          }}
-          onDrop={(event) => handleDrop(event, "front")}
-          className={`flex min-h-[76px] min-w-0 items-center justify-between gap-2.5 rounded-md border border-dashed px-3 py-2.5 transition ${dropTarget === "front" ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100" : frontFile ? "border-emerald-300 bg-emerald-50/40" : "border-slate-300 bg-slate-50/60 hover:border-blue-300 hover:bg-blue-50/40"} ${busy ? "opacity-60" : ""}`}
-        >
-          <input ref={frontInputRef} type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" disabled={busy} onChange={(event) => readFile(event, "front")} className="sr-only" aria-label="Choose Aadhaar front file" />
-          <span className="flex min-w-0 items-center gap-2.5">
-            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${frontFile ? "bg-emerald-100 text-emerald-800" : "bg-white text-blue-900"}`}>
-              {frontFile ? <FiCheck aria-hidden="true" className="h-4 w-4" /> : <FiUploadCloud aria-hidden="true" className="h-4 w-4" />}
-            </span>
-            <span className="min-w-0">
-              <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Front side</span>
-              <span className="block max-w-[min(13rem,48vw)] truncate text-[12px] font-medium text-slate-800" title={frontFile?.name}>{frontFile?.name || "Drop a file here"}</span>
-            </span>
-          </span>
-          <button type="button" onClick={() => frontInputRef.current?.click()} disabled={busy} className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-blue-900 transition hover:border-blue-400 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
-            {frontFile ? "Replace" : "Choose"}
-          </button>
+      <div className="grid gap-3 p-3 sm:p-4 lg:grid-cols-[minmax(210px,0.78fr)_minmax(0,2fr)]">
+        <aside className="flex flex-col justify-between gap-3" aria-label="Masked Aadhaar example">
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-xs font-semibold text-slate-800">Masked example</h4>
+          </div>
+          <Image
+            src="/images/aadhaar-sample-card.webp"
+            alt="Fictional sample card showing the masked number XXXX XXXX 1234."
+            width={900}
+            height={600}
+            sizes="(min-width: 1024px) 260px, 100vw"
+            className="mx-auto h-auto w-full max-w-[260px] rounded-md border border-slate-200"
+          />
+          <p className="text-[11px] leading-4 text-slate-600">Upload both sides. The Aadhaar number stays masked on screen.</p>
+        </aside>
+
+        <div className="grid content-start gap-3">
+          <div className="flex flex-wrap items-end justify-between gap-1.5">
+            <div>
+              <h4 className="text-xs font-semibold text-slate-800">Upload both sides</h4>
+              <p className="mt-0.5 text-[10px] text-slate-500">PDF, JPG, or PNG - up to 5 MB per file</p>
+            </div>
+            <span className="text-[10px] font-medium text-slate-500">Front + back required to scan</span>
+          </div>
+
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            <div
+              onDragOver={(event) => handleDragOver(event, "front")}
+              onDragLeave={(event) => {
+                if (!event.relatedTarget || !event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
+              }}
+              onDrop={(event) => handleDrop(event, "front")}
+              className={`flex min-h-[104px] min-w-0 flex-col justify-between gap-3 rounded-md border border-dashed p-3 transition ${dropTarget === "front" ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100" : frontFile ? "border-emerald-300 bg-emerald-50/50" : "border-slate-300 bg-white hover:border-blue-400 hover:bg-blue-50/30"} ${busy ? "opacity-60" : ""}`}
+            >
+              <input ref={frontInputRef} type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" disabled={busy} onChange={(event) => readFile(event, "front")} className="sr-only" aria-label="Choose Aadhaar front file" tabIndex={-1} aria-hidden="true" />
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="block text-[11px] font-semibold text-slate-800">Front side</span>
+                  <span className="mt-0.5 block text-[10px] text-slate-500">Photo and number</span>
+                </span>
+              </div>
+              <button type="button" onClick={() => frontInputRef.current?.click()} disabled={busy} className="flex min-h-9 w-full min-w-0 items-center justify-between gap-2 border-t border-slate-100 pt-2 text-left text-[10px] text-slate-600 transition hover:text-blue-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+                <span className="min-w-0 truncate" title={frontFile?.name}>{frontFile?.name || "Drop the front side here"}</span>
+                {frontFile ? <FiCheck aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-emerald-700" /> : <FiUploadCloud aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
+              </button>
+            </div>
+
+            <div
+              onDragOver={(event) => handleDragOver(event, "back")}
+              onDragLeave={(event) => {
+                if (!event.relatedTarget || !event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
+              }}
+              onDrop={(event) => handleDrop(event, "back")}
+              className={`flex min-h-[104px] min-w-0 flex-col justify-between gap-3 rounded-md border border-dashed p-3 transition ${dropTarget === "back" ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100" : backFile ? "border-emerald-300 bg-emerald-50/50" : "border-slate-300 bg-white hover:border-blue-400 hover:bg-blue-50/30"} ${busy ? "opacity-60" : ""}`}
+            >
+              <input ref={backInputRef} type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" disabled={busy} onChange={(event) => readFile(event, "back")} className="sr-only" aria-label="Choose Aadhaar back file" tabIndex={-1} aria-hidden="true" />
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="block text-[11px] font-semibold text-slate-800">Back side</span>
+                  <span className="mt-0.5 block text-[10px] text-slate-500">Address side</span>
+                </span>
+              </div>
+              <button type="button" onClick={() => backInputRef.current?.click()} disabled={busy} className="flex min-h-9 w-full min-w-0 items-center justify-between gap-2 border-t border-slate-100 pt-2 text-left text-[10px] text-slate-600 transition hover:text-blue-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+                <span className="min-w-0 truncate" title={backFile?.name}>{backFile?.name || "Drop the back side here"}</span>
+                {backFile ? <FiCheck aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-emerald-700" /> : <FiUploadCloud aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2.5 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex min-h-12 min-w-0 flex-1 items-center gap-2.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-medium text-slate-700">
+              <input type="checkbox" checked={consent} disabled={busy} onChange={(event) => setConsent(event.target.checked)} className="h-4 w-4 shrink-0 accent-blue-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2" />
+              <span>
+                <span className="block font-semibold text-slate-800">Holder consent confirmed</span>
+                <span className="mt-0.5 block text-[10px] font-normal text-slate-500">Required before scanning and saving.</span>
+              </span>
+            </label>
+            <button type="button" onClick={() => void scan()} disabled={!canScan} className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-md bg-blue-900 px-4 text-[11px] font-semibold text-white shadow-sm transition hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-blue-900 disabled:shadow-none">
+              <FiFileText aria-hidden="true" className="h-4 w-4" />
+              {busy ? "Scanning..." : "Scan and save KYC"}
+            </button>
+          </div>
         </div>
 
-        <div
-          onDragOver={(event) => handleDragOver(event, "back")}
-          onDragLeave={(event) => {
-            if (!event.relatedTarget || !event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
-          }}
-          onDrop={(event) => handleDrop(event, "back")}
-          className={`flex min-h-[76px] min-w-0 items-center justify-between gap-2.5 rounded-md border border-dashed px-3 py-2.5 transition ${dropTarget === "back" ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100" : backFile ? "border-emerald-300 bg-emerald-50/40" : "border-slate-300 bg-slate-50/60 hover:border-blue-300 hover:bg-blue-50/40"} ${busy ? "opacity-60" : ""}`}
-        >
-          <input ref={backInputRef} type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" disabled={busy} onChange={(event) => readFile(event, "back")} className="sr-only" aria-label="Choose Aadhaar back file" />
-          <span className="flex min-w-0 items-center gap-2.5">
-            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${backFile ? "bg-emerald-100 text-emerald-800" : "bg-white text-blue-900"}`}>
-              {backFile ? <FiCheck aria-hidden="true" className="h-4 w-4" /> : <FiUploadCloud aria-hidden="true" className="h-4 w-4" />}
-            </span>
-            <span className="min-w-0">
-              <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">Back side</span>
-              <span className="block max-w-[min(13rem,48vw)] truncate text-[12px] font-medium text-slate-800" title={backFile?.name}>{backFile?.name || "Drop a file here"}</span>
-            </span>
-          </span>
-          <button type="button" onClick={() => backInputRef.current?.click()} disabled={busy} className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-blue-900 transition hover:border-blue-400 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
-            {backFile ? "Replace" : "Choose"}
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 sm:col-span-2">
-          <label className="flex min-h-9 items-center gap-2 text-[11px] font-medium text-slate-600">
-            <input type="checkbox" checked={consent} disabled={busy} onChange={(event) => setConsent(event.target.checked)} className="h-4 w-4 shrink-0 accent-blue-900" />
-            Holder consent confirmed
-          </label>
-          <button type="button" onClick={() => void scan()} disabled={!canScan} className="inline-flex h-9 items-center justify-center rounded-md bg-blue-900 px-3.5 text-[11px] font-semibold text-white transition hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600">
-            {busy ? "Scanning…" : "Scan and save KYC"}
-          </button>
-        </div>
-
-        {kycScope === "parcel" && !selectedParcelSaved ? <p className="text-[11px] text-amber-800 sm:col-span-2">Save this parcel before scanning its Aadhaar.</p> : null}
-        {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-medium text-red-800 sm:col-span-2">{error}</p> : null}
-        {kycSaved ? <p role="status" className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-800 sm:col-span-2"><FiCheck aria-hidden="true" className="h-3.5 w-3.5" /> Aadhaar front and back saved to this booking’s KYC.</p> : null}
+        <div className="grid gap-2 lg:col-span-2">
+          {kycScope === "parcel" && !selectedParcelSaved ? <p className="text-[11px] text-amber-800">Save this parcel before scanning its Aadhaar.</p> : null}
+          {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-medium text-red-800">{error}</p> : null}
 
         {prefill ? (
-          <section className="overflow-hidden rounded-md border border-blue-200 bg-white sm:col-span-2" aria-live="polite">
-            <header className="flex items-center gap-2.5 border-b border-blue-100 bg-blue-50/60 px-3 py-2.5 sm:px-4">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white text-blue-900">
-                <FiCheck aria-hidden="true" className="h-4 w-4" />
-              </span>
+          <section className="overflow-hidden rounded-md border border-blue-200 bg-white" aria-live="polite">
+            <header className="border-b border-blue-100 bg-blue-50/60 px-3 py-2.5 sm:px-4">
               <div className="min-w-0">
                 <h4 className="text-[12px] font-semibold text-slate-900">Review extracted details</h4>
-                <p className="text-[11px] text-slate-600">Choose what to apply to the consignor form.</p>
+                <p className="text-[11px] text-slate-600">Empty fields were filled where possible. Check the form before saving.</p>
               </div>
             </header>
 
@@ -1244,21 +1325,26 @@ function AadhaarOcrControl({
               <div className="space-y-1.5 px-3 pb-3 sm:px-4">
                 {prefill.warnings.map((warning) => <p key={warning} className="flex gap-1.5 rounded-md bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-900"><FiInfo aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />{warning}</p>)}
                 {hasOverlengthValues ? <p className="flex gap-1.5 rounded-md bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-900"><FiInfo aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />Long values stay in the preview; enter them manually if a form field does not fit.</p> : null}
-                {hasExistingValuesToReplace && !confirmReplace ? <p className="text-[11px] text-slate-600">Existing consignor values need confirmation before replacement.</p> : null}
+                {hasExistingValuesToReplace ? <p className="text-[11px] text-slate-600">{confirmReplace ? "This will replace details you entered. Confirm to continue." : "Some existing details differ from the scan. Review them before replacing."}</p> : null}
               </div>
             ) : null}
 
             <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-3 py-2.5 sm:px-4">
-              <button type="button" onClick={() => { setPrefill(null); setConfirmReplace(false); }} className="inline-flex h-8 items-center justify-center rounded-md px-3 text-[11px] font-semibold text-slate-700 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700">
+              <button type="button" onClick={() => { setPrefill(null); setConfirmReplace(false); }} className="inline-flex h-8 items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-3 text-[11px] font-semibold text-blue-900 transition hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2">
                 Dismiss
               </button>
-              {confirmReplace ? <button type="button" onClick={() => setConfirmReplace(false)} className="inline-flex h-8 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700">Keep existing</button> : null}
-              <button type="button" onClick={applyPrefill} className="inline-flex h-8 items-center justify-center rounded-md bg-blue-900 px-3.5 text-[11px] font-semibold text-white transition hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2">
-                {confirmReplace ? "Confirm replacement" : "Apply details"}
-              </button>
+              {hasExistingValuesToReplace ? (
+                <>
+                  {confirmReplace ? <button type="button" onClick={() => setConfirmReplace(false)} className="inline-flex h-8 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700">Keep existing</button> : null}
+                  <button type="button" onClick={applyPrefill} className="inline-flex h-8 items-center justify-center rounded-md bg-blue-900 px-3.5 text-[11px] font-semibold text-white transition hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2">
+                    {confirmReplace ? "Confirm replacement" : "Replace existing details"}
+                  </button>
+                </>
+              ) : null}
             </footer>
           </section>
         ) : null}
+        </div>
       </div>
     </section>
   );

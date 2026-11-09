@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense } from "react";
-import { FiAlertOctagon, FiCalendar, FiEye, FiFileText, FiImage, FiSlash } from "react-icons/fi";
+import { FiAlertOctagon, FiCalendar, FiEye, FiFileText, FiImage, FiShield, FiSlash } from "react-icons/fi";
 import { DashboardLoading } from "@/components/DashboardShell";
 import CalendarEntriesManager from "@/components/operations-advisory/CalendarEntriesManager";
 import RegulatoryUpdatesManager from "@/components/operations-advisory/RegulatoryUpdatesManager";
@@ -11,6 +11,7 @@ import OperationsCalendarView, {
   OperationsCalendarSkeleton,
 } from "@/components/operations-advisory/OperationsCalendarView";
 import DashboardBannerManager from "@/components/operations-advisory/DashboardBannerManager";
+import AadhaarOcrFeatureManager from "@/components/operations-advisory/AadhaarOcrFeatureManager";
 import { OPERATIONS_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
 import { useSearchParams } from "next/navigation";
@@ -24,14 +25,15 @@ import {
   type ServiceDisruption
 } from "@/lib/operationsAdvisory";
 
-type Tab = "disruptions" | "calendar" | "regulatory" | "banner" | "bookingPauses";
+type Tab = "disruptions" | "calendar" | "regulatory" | "banner" | "bookingPauses" | "aadhaarOcr";
 
 const tabMeta: Record<Tab, { label: string; icon: typeof FiCalendar }> = {
   disruptions: { label: "Service Disruption Centre", icon: FiAlertOctagon },
   calendar: { label: "Holiday & Cut-Off Calendar", icon: FiCalendar },
   regulatory: { label: "Customs & Regulatory Updates", icon: FiFileText },
   banner: { label: "Dashboard Banner", icon: FiImage },
-  bookingPauses: { label: "Booking Pauses", icon: FiSlash }
+  bookingPauses: { label: "Booking Pauses", icon: FiSlash },
+  aadhaarOcr: { label: "Aadhaar OCR", icon: FiShield }
 };
 
 /** Tabs the header calendar icon and other deep links can address by name. */
@@ -80,7 +82,7 @@ function OperationsAdvisoryContent() {
       </div>
 
       <div className="mb-6 flex flex-wrap items-center gap-2 border-b border-slate-200">
-        {(Object.keys(tabMeta) as Tab[]).map((key) => {
+        {(Object.keys(tabMeta) as Tab[]).filter((key) => key !== "aadhaarOcr" || user.role === "admin").map((key) => {
           const meta = tabMeta[key];
           const Icon = meta.icon;
           const active = tab === key;
@@ -107,6 +109,7 @@ function OperationsAdvisoryContent() {
       {tab === "bookingPauses" ? <BookingPausesManager /> : null}
       {tab === "regulatory" ? <RegulatoryUpdatesManager /> : null}
       {tab === "banner" ? <DashboardBannerManager /> : null}
+      {tab === "aadhaarOcr" && user.role === "admin" ? <AadhaarOcrFeatureManager /> : null}
       {tab === "calendar" ? (
         <>
           <CalendarEntriesManager />

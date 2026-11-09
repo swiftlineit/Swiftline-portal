@@ -241,6 +241,7 @@ describe("shipment listing read path", () => {
   test("reports route-aware DPD label status to staff without exposing it to clients", async () => {
     const available = await createBookedDraft(accountOneId, "DPD-AVAILABLE");
     const missing = await createBookedDraft(accountOneId, "DPD-MISSING");
+    const alsPdfOnly = await createBookedDraft(accountOneId, "ALS-PDF-ONLY");
     const notApplicable = await createBookedDraft(accountOneId, "DPD-NA");
 
     await Promise.all([
@@ -248,10 +249,19 @@ describe("shipment listing read path", () => {
         dpdShipmentId: available.booking._id,
         parcelNumber: "DPD-AVAILABLE",
         labelType: "DPD",
-        format: "PDF",
+        format: "HTML",
         labelSize: "A4",
-        storageKey: "tests/dpd-available.pdf",
+        storageKey: "tests/dpd-available.html",
         fileChecksum: "dpd-available-checksum"
+      }),
+      LabelDocument.create({
+        dpdShipmentId: alsPdfOnly.booking._id,
+        parcelNumber: "ALS-PDF-ONLY",
+        labelType: "DPD",
+        format: "PDF",
+        labelSize: "A6",
+        storageKey: "tests/als-pdf-only.pdf",
+        fileChecksum: "als-pdf-only-checksum"
       }),
       ShipmentDraft.updateOne(
         { _id: notApplicable.draft._id },
@@ -279,6 +289,7 @@ describe("shipment listing read path", () => {
 
     assert.equal(staffById.get(String(available.draft._id))?.dpdLabelStatus, "AVAILABLE");
     assert.equal(staffById.get(String(missing.draft._id))?.dpdLabelStatus, "NOT_AVAILABLE");
+    assert.equal(staffById.get(String(alsPdfOnly.draft._id))?.dpdLabelStatus, "NOT_AVAILABLE");
     assert.equal(staffById.get(String(notApplicable.draft._id))?.dpdLabelStatus, "NOT_APPLICABLE");
 
     await LabelDocument.updateOne(

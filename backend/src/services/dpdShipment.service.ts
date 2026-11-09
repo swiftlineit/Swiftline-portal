@@ -43,6 +43,7 @@ import {
   isAlsEnabled,
 } from "./als/alsClient.service.js";
 import { isDpdLabelDestination } from "./als/alsPayload.service.js";
+import { isAlsDpdShippingLabelFormat } from "./als/alsLabelClassification.js";
 import { ensureShipmentInvoiceForDraft } from "./shipmentInvoice.service.js";
 import { notifyShipmentBooked } from "./shipmentBookedNotification.service.js";
 import {
@@ -1172,9 +1173,10 @@ async function createLabelForShipmentDraftInternal(
       throw new Error("SHIPMENT_LABEL_SET_INCOMPLETE");
     }
 
+    const hasDpdShippingLabel = dpdLabelJobs.some((job) => isAlsDpdShippingLabelFormat(job.format ?? ""));
     booking.status = carrierUncertainError
       ? "DPD_STATUS_UNKNOWN"
-      : wantsDpdLabel && dpdLabelJobs.length === 0
+      : wantsDpdLabel && !hasDpdShippingLabel
         ? "DPD_CREATED"
         : "LABEL_RECEIVED";
     await measureShipmentBookingStage(timings, "bookingWriteMs", () => booking.save());
@@ -1189,10 +1191,10 @@ async function createLabelForShipmentDraftInternal(
         status: "DPD_STATUS_UNKNOWN",
         stage: "DPD_LABEL_ONLY",
         message: carrierUncertainError.message
-      } : wantsDpdLabel && dpdLabelJobs.length === 0 ? {
+      } : wantsDpdLabel && !hasDpdShippingLabel ? {
         status: "DPD_CREATED",
         stage: "DPD_LABEL_ONLY",
-        message: "ALS accepted the booking but did not return a label."
+        message: "ALS accepted the booking but did not return a DPD shipping label."
       } : {})
     };
     if (operatorBooking) {
@@ -1204,7 +1206,7 @@ async function createLabelForShipmentDraftInternal(
       );
     } else {
       await writeDpdAuditLog(
-        carrierUncertainError || (wantsDpdLabel && dpdLabelJobs.length === 0)
+        carrierUncertainError || (wantsDpdLabel && !hasDpdShippingLabel)
           ? "DPD_REQUEST_FAILED"
           : "DPD_REQUEST_SUCCEEDED",
         booking._id as mongoose.Types.ObjectId,
@@ -1448,7 +1450,9 @@ export async function reconcileShipmentDocuments(
     const carrierLabels = await LabelDocument.countDocuments({
       dpdShipmentId: dpdShipment._id,
       ...tenantFilter,
-      labelType: "DPD"
+      labelType: "DPD",
+      format: "HTML",
+      voidedAt: null
     }).exec();
     if (!carrierLabels) {
       throw new DpdShipmentServiceError(
@@ -1924,7 +1928,14 @@ export async function generateDpdLabelForExistingShipment(
   if (!initialShipment) throw new DpdShipmentServiceError("Shipment booking not found.", 404);
 
   const existingLabels = await LabelDocument.find({ dpdShipmentId: shipmentId }).exec();
-  const hasDpdLabel = existingLabels.some((label) => label.labelType === "DPD");
+  const hasDpdLabel = existingLabels.some((label) => label.labelType === "DPD"
+    && isAlsDpdShippingLabelFormat(label.format) && !label.voidedAt);
+  if (initialShipment.dpdShipmentId?.trim() && !hasDpdLabel) {
+    throw new DpdShipmentServiceError(
+      "The carrier booking already has an AWB, but its DPD shipping label needs reconciliation. Do not submit it again; contact Swiftline Operations.",
+      409
+    );
+  }
   const isInternalLabelOnly = !initialShipment.dpdShipmentId?.trim() && !hasDpdLabel;
   if (hasDpdLabel || (initialShipment.status === "LABEL_RECEIVED" && !isInternalLabelOnly)) {
     return { dpdShipment: initialShipment, labels: existingLabels, reused: true };
@@ -1978,8 +1989,15 @@ export async function generateDpdLabelForExistingShipment(
     const current = await DpdShipment.findById(shipmentId).exec();
     if (current?.status === "LABEL_RECEIVED") {
       const labels = await LabelDocument.find({ dpdShipmentId: shipmentId }).exec();
-      const currentHasDpdLabel = labels.some((label) => label.labelType === "DPD");
-      if (current.dpdShipmentId?.trim() || currentHasDpdLabel) {
+      const currentHasDpdLabel = labels.some((label) => label.labelType === "DPD"
+        && isAlsDpdShippingLabelFormat(label.format) && !label.voidedAt);
+      if (current.dpdShipmentId?.trim() && !currentHasDpdLabel) {
+        throw new DpdShipmentServiceError(
+          "The carrier booking already has an AWB, but its DPD shipping label needs reconciliation. Do not submit it again; contact Swiftline Operations.",
+          409
+        );
+      }
+      if (currentHasDpdLabel) {
         return { dpdShipment: current, labels, reused: true };
       }
     }
@@ -2020,25 +2038,6 @@ export async function generateDpdLabelForExistingShipment(
     claimedShipment.status = "DPD_CREATED";
     await claimedShipment.save();
 
-    if (docket.labels.length === 0) {
-      await writeDpdAuditLog(
-        "DPD_REQUEST_FAILED",
-        shipmentId,
-        "DPD_SHIPMENT",
-        userId,
-        {
-          stage: "DPD_LABEL_ONLY",
-          status: "DPD_CREATED",
-          dpdAwbNumber: docket.awbNumber,
-          message: "ALS accepted the booking but returned no carrier label."
-        }
-      );
-      throw new DpdShipmentServiceError(
-        "ALS created an AWB but returned no DPD label. Do not submit it again; reconcile the replacement booking and label.",
-        409
-      );
-    }
-
     await storeGeneratedLabels(docket.labels.map((dpdLabel, index) => ({
         dpdShipmentId: shipmentId,
         shipmentDraftId: claimedShipment.shipmentDraftId,
@@ -2050,6 +2049,25 @@ export async function generateDpdLabelForExistingShipment(
         format: dpdLabel.format,
         labelVersion: claimedShipment.snapshotRevision || 1
       })));
+
+    if (!docket.labels.some((label) => isAlsDpdShippingLabelFormat(label.format))) {
+      await writeDpdAuditLog(
+        "DPD_REQUEST_FAILED",
+        shipmentId,
+        "DPD_SHIPMENT",
+        userId,
+        {
+          stage: "DPD_LABEL_ONLY",
+          status: "DPD_CREATED",
+          dpdAwbNumber: docket.awbNumber,
+          message: "ALS accepted the booking but returned no DPD shipping label."
+        }
+      );
+      throw new DpdShipmentServiceError(
+        "ALS created an AWB but returned no DPD shipping label. Do not submit it again; reconcile the carrier label.",
+        409
+      );
+    }
 
     claimedShipment.status = "LABEL_RECEIVED";
     await claimedShipment.save();

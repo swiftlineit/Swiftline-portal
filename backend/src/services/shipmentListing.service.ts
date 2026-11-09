@@ -694,6 +694,7 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     ? await LabelDocument.distinct("dpdShipmentId", {
       dpdShipmentId: { $in: bookingIdsForLabelCheck },
       labelType: "DPD",
+      format: "HTML",
       voidedAt: null
     }).exec() as mongoose.Types.ObjectId[]
     : [];

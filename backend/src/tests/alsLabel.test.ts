@@ -14,6 +14,7 @@ import {
   buildAlsCreateDocketPayload,
   isDpdLabelDestination
 } from "../services/als/alsPayload.service.js";
+import { isVisibleShipmentLabel } from "../services/als/alsLabelClassification.js";
 
 /**
  * Every case here runs against a stubbed `fetch`. ALS has no sandbox, so a real
@@ -403,6 +404,25 @@ describe("ALS response handling", () => {
       ),
       (error: unknown) => error instanceof AlsUncertainError && /returned no AWB number/.test(error.message)
     );
+  });
+
+  test("retains an ALS PDF but does not treat it as a DPD shipping label", () => {
+    const result = parseAlsCreateDocketResponse(
+      {
+        success: true,
+        data: { awb_no: "1017290427" },
+        labels: [{ label: Buffer.from("%PDF-1.4\nALS document").toString("base64"), file_type: "pdf" }]
+      },
+      {}
+    );
+
+    assert.equal(result.labels.length, 1);
+    assert.equal(result.labels[0]?.format, "PDF");
+    assert.equal(result.responseSnapshot.carrierLabelStatus, "NOT_PROVIDED");
+    assert.equal(result.responseSnapshot.outcome, "ACCEPTED_WITHOUT_LABEL");
+    assert.equal(isVisibleShipmentLabel({ labelType: "DPD", format: "PDF" }), false);
+    assert.equal(isVisibleShipmentLabel({ labelType: "DPD", format: "HTML" }), true);
+    assert.equal(isVisibleShipmentLabel({ labelType: "SWIFTLINE", format: "PDF" }), true);
   });
 
   test("reads the carrier's own wording out of either shape it uses", () => {

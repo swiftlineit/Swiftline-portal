@@ -10,6 +10,7 @@ import { Tenant } from "../models/tenant.model.js";
 import { CarrierTrackingEvent } from "../models/carrierTrackingEvent.model.js";
 import { allowedBranchIds, canAccessBranch } from "../middleware/branchAccess.middleware.js";
 import { labelContentType, labelFileExtension } from "../services/labelStorage.service.js";
+import { isVisibleShipmentLabel } from "../services/als/alsLabelClassification.js";
 import {
   ShipmentEvent,
   shipmentEventStatusValues,
@@ -795,7 +796,7 @@ export async function createShipment(
       success: true,
       reused: result.reused,
       dpdShipment: serializeDpdShipment(result.dpdShipment),
-      labels: result.labels.map(serializeLabel),
+      labels: result.labels.filter(isVisibleShipmentLabel).map(serializeLabel),
       bookingConfirmation: serializeShipmentBookingConfirmation(result.dpdShipment.bookingSnapshot),
       shipmentInvoice: {
         id: String(result.shipmentInvoice._id),
@@ -860,7 +861,7 @@ export async function reconcileDpdShipmentDocuments(request: Request, response: 
       success: true,
       message: result.reused ? "Shipment documents are already complete." : "Shipment documents reconciled successfully.",
       dpdShipment: serializeDpdShipment(result.dpdShipment),
-      labels: result.labels.map(serializeLabel),
+      labels: result.labels.filter(isVisibleShipmentLabel).map(serializeLabel),
       bookingConfirmation: serializeShipmentBookingConfirmation(result.dpdShipment.bookingSnapshot),
       shipmentInvoice: {
         id: String(result.shipmentInvoice._id),
@@ -905,7 +906,7 @@ export async function generateExistingDpdLabel(request: Request, response: Respo
         ? "The existing DPD label is already available."
         : "The DPD carrier label was generated for the existing shipment.",
       dpdShipment: serializeDpdShipment(result.dpdShipment),
-      labels: result.labels.map(serializeLabel)
+      labels: result.labels.filter(isVisibleShipmentLabel).map(serializeLabel)
     });
   } catch (error) {
     if (error instanceof DpdLabelUnavailableError) {
@@ -1325,6 +1326,7 @@ export async function listDpdShipments(request: Request, response: Response): Pr
         } : null,
         labels: (labelsByShipment.get(String(shipment._id)) ?? [])
           .filter((label) => label.labelVersion === (shipment.snapshotRevision || 1))
+          .filter(isVisibleShipmentLabel)
           .map(serializeLabel),
         currentEvent: currentEvent ? serializeShipmentEvent(currentEvent, journey) : null,
         events: normalizeVisibleTrackingHistory(events, journey)
@@ -1392,7 +1394,7 @@ export async function getDpdShipment(request: Request, response: Response): Prom
   return response.status(200).json({
     success: true,
     dpdShipment: serializeDpdShipment(shipment),
-    labels: labels.map(serializeLabel),
+    labels: labels.filter(isVisibleShipmentLabel).map(serializeLabel),
     currentEvent: currentEvent ? serializeShipmentEvent(currentEvent, journey) : null,
     events: normalizeVisibleTrackingHistory(events, journey)
       .map((event) => serializeShipmentEvent(event, journey)),
@@ -1505,7 +1507,7 @@ export async function getAdminShipmentDetails(request: Request, response: Respon
           recordedAt: payment.recordedAt
         }))
       } : {}),
-      labels: labels.map(serializeLabel),
+      labels: labels.filter(isVisibleShipmentLabel).map(serializeLabel),
       currentEvent: currentEvent ? serializeShipmentEvent(currentEvent, journey) : null,
       events: normalizeVisibleTrackingHistory(events, journey)
         .map((event) => serializeShipmentEvent(event, journey)),

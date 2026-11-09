@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
+import { isVisibleShipmentLabel } from "./als/alsLabelClassification.js";
 import { User } from "../models/user.model.js";
 import type { IEmailAttachmentRef } from "../models/emailOutbox.model.js";
 import type { IDpdShipment } from "../models/dpdShipment.model.js";
@@ -117,13 +118,14 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
     // travels on, so withholding it from the client leaves them unable to hand
     // over. The invoice leads the list so that if the size budget runs out it is
     // labels that get dropped, never the document needed for accounts.
-    const printableLabels = labels.filter((label, index) => (
-      labels.findIndex((candidate) => candidate.storageKey === label.storageKey) === index
+    const visibleLabels = labels.filter(isVisibleShipmentLabel);
+    const printableLabels = visibleLabels.filter((label, index) => (
+      visibleLabels.findIndex((candidate) => candidate.storageKey === label.storageKey) === index
     ));
     const attachments = [invoiceAttachment, ...printableLabels.map(labelAttachment)];
     // Drives the wording in the booked email: a UK shipment travels on the DPD
     // label, so the message must not tell the customer to affix only ours.
-    const hasDpdLabel = labels.some((label) => label.labelType === "DPD");
+    const hasDpdLabel = printableLabels.some((label) => label.labelType === "DPD");
 
     const trackingNumber = payload.trackingNumber || String(draft._id);
     const idempotencyKey = `SHIPMENT_BOOKED:${String(dpdShipment._id)}`;

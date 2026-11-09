@@ -220,7 +220,11 @@ function shippingLabelPipeline(scope: TenantScopedClientScope) {
   const destination = destinationExpression("$draft");
   const awb = trackingExpression("$booking", "$draft");
   return [
-    { $match: { voidedAt: null, ...(scope.tenantId ? { tenantId: scope.tenantId } : {}) } },
+    { $match: {
+      voidedAt: null,
+      $or: [{ labelType: { $ne: "DPD" } }, { labelType: "DPD", format: "HTML" }],
+      ...(scope.tenantId ? { tenantId: scope.tenantId } : {})
+    } },
     scopedLookup(
       DpdShipment.collection.name,
       "dpdShipmentId",

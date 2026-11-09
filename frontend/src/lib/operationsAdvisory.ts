@@ -278,6 +278,27 @@ async function parseApiResponse<T>(response: Response): Promise<T> {
 
 // ── Staff endpoints ───────────────────────────────────────────────────────────
 
+export type AadhaarOcrFeatureStatus = {
+  enabled: boolean;
+  providerConfigured: boolean;
+  providerEnvironment: "sandbox" | "production";
+  updatedAt: string | null;
+};
+
+export async function getAadhaarOcrFeatureStatus() {
+  const response = await fetchWithAuth(apiUrl("/api/v1/aadhaar-ocr-feature"));
+  return parseApiResponse<{ success: true } & AadhaarOcrFeatureStatus>(response);
+}
+
+export async function updateAadhaarOcrFeature(enabled: boolean) {
+  const response = await fetchWithAuth(apiUrl("/api/v1/aadhaar-ocr-feature"), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  return parseApiResponse<{ success: true } & AadhaarOcrFeatureStatus>(response);
+}
+
 export async function listServiceDisruptions(input: { active?: boolean; scope?: "live" } = {}) {
   const url = new URL(apiUrl("/api/v1/operations-advisory/service-disruptions"));
   if (typeof input.active === "boolean") url.searchParams.set("active", String(input.active));

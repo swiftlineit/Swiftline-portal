@@ -35,6 +35,8 @@ export function groupShipmentLabelDocuments(labels: ShipmentLabelItem[]) {
   const documents = new Map<string, ShipmentLabelDocument>();
 
   for (const label of labels) {
+    // Older API responses can still contain ALS's branded POD PDF as DPD.
+    if (label.labelType === "DPD" && label.format !== "HTML") continue;
     const key = label.labelType === "SWIFTLINE" && label.fileChecksum
       ? `SWIFTLINE:${label.fileChecksum}`
       : `${label.labelType}:${label.id}`;
@@ -107,7 +109,7 @@ export function ShipmentLabelsPanel({
     }
   }
 
-  if (!labels.length) return null;
+  if (!labelDocuments.length) return null;
 
   return (
     <section className="border border-slate-200 bg-white rounded-2xl">

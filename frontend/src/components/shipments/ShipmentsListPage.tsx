@@ -1172,7 +1172,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
     try {
       const { shipment } = await getAdminShipmentDetails(shipmentId);
-      const label = shipment.labels.find((item) => item.labelType === "DPD");
+      const label = shipment.labels.find((item) => item.labelType === "DPD" && item.format === "HTML");
       if (!label) throw new Error("The DPD label is no longer available for this shipment.");
       const access = await getDpdLabelAccessUrl(shipment.dpdShipment.id, label.id, "inline");
       openedWindow.location.href = access.url;

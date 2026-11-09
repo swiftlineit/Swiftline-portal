@@ -1,6 +1,7 @@
 import { env } from "../../config/env.js";
 import type { IShipmentDraft } from "../../models/shipmentDraft.model.js";
 import type { LabelFormat } from "../../models/labelDocument.model.js";
+import { isAlsDpdShippingLabelFormat } from "./alsLabelClassification.js";
 import {
   AlsPayloadError,
   buildAlsCreateDocketPayload,
@@ -327,10 +328,11 @@ export function parseAlsCreateDocketResponse(
   // parcel. Persisting that response would duplicate the same document stored
   // in object storage and make each booking row unnecessarily large. Keep only
   // the identifiers and document metadata required for audit/reconciliation.
+  const hasDpdShippingLabel = labels.some((label) => isAlsDpdShippingLabelFormat(label.format));
   const responseSnapshot = {
     provider: "ALS",
-    outcome: labels.length ? "ACCEPTED" : "ACCEPTED_WITHOUT_LABEL",
-    stage: labels.length ? "DPD_BOOKING" : "DPD_LABEL_ONLY",
+    outcome: hasDpdShippingLabel ? "ACCEPTED" : "ACCEPTED_WITHOUT_LABEL",
+    stage: hasDpdShippingLabel ? "DPD_BOOKING" : "DPD_LABEL_ONLY",
     docketId,
     awbNumber,
     forwardingNumber: asString(data.forwording_no),
@@ -338,7 +340,7 @@ export function parseAlsCreateDocketResponse(
     parcelNumbers,
     labelCount: labels.length,
     labelFormats: [...new Set(labels.map((label) => label.format))],
-    carrierLabelStatus: labels.length ? "RECEIVED" : "NOT_PROVIDED"
+    carrierLabelStatus: hasDpdShippingLabel ? "RECEIVED" : "NOT_PROVIDED"
   };
 
   return {

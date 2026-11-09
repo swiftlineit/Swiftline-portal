@@ -13,9 +13,11 @@ import {
   ShipmentDraftPolicyError
 } from "../services/shipmentDraftPolicy.service.js";
 import { validateShipmentDraftFields } from "../services/shipmentValidation.service.js";
+import { isAadhaarOcrFeatureEnabled } from "../services/aadhaarOcrFeature.service.js";
 import { isSupportedDocument, isSupportedImage, matchesDeclaredType } from "../services/storage/fileSignature.js";
 import {
   scanAadhaarWithSurepass,
+  getSurepassAadhaarOcrProviderName,
   SurepassAadhaarOcrError,
 } from "../services/surepassAadhaarOcr.service.js";
 import {
@@ -234,6 +236,9 @@ export async function ocrShipmentDraftAadhaar(request: Request, response: Respon
   }
 
   try {
+    if (!await isAadhaarOcrFeatureEnabled()) {
+      return response.status(403).json({ success: false, message: "Aadhaar OCR is currently disabled." });
+    }
     const prefill = await scanAadhaarWithSurepass({ front, back, arePdfs: isPdf });
     const currentDraft = await ShipmentDraft.findById(draftId).exec();
     if (!currentDraft) return response.status(404).json({ success: false, message: "Shipment draft not found" });
@@ -310,7 +315,7 @@ export async function ocrShipmentDraftAadhaar(request: Request, response: Respon
       performedBy: userId,
       performedAt: new Date(),
       metadata: {
-        provider: "SUREPASS_SANDBOX",
+        provider: getSurepassAadhaarOcrProviderName(),
         portalRole: getAuthenticatedPortalRole(request),
         consentConfirmed: true,
         fileTypes: [front.mimetype, back.mimetype],
