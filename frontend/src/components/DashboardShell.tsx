@@ -12,6 +12,8 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
+import { useWhatsNew } from "@/components/whats-new/useWhatsNew";
+import WhatsNewButton from "@/components/whats-new/WhatsNewButton";
 import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import { AuthenticatedUser } from "@/lib/useAdminUser";
 import { logout } from "@/lib/auth";
@@ -35,6 +37,13 @@ export default function DashboardShell({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const [welcomeComplete, setWelcomeComplete] = useState(false);
+  useEffect(() => {
+    const complete = () => setWelcomeComplete(true);
+    window.addEventListener("swiftline:welcome-seen", complete);
+    return () => window.removeEventListener("swiftline:welcome-seen", complete);
+  }, []);
+  const whatsNew = useWhatsNew("/dashboard", Boolean(user.hasSeenWelcome) || welcomeComplete, Boolean(user.email));
   const contentScrollRef = useRef<HTMLDivElement>(null);
   const [profileImageUrl, setProfileImageUrl] = useState("");
 
@@ -131,6 +140,7 @@ export default function DashboardShell({
       <div className="flex min-h-0 flex-1">
         <Sidebar
           userRole={user.role}
+          badgeHrefs={whatsNew.badgeHrefs}
           mobileOpen={mobileNavOpen}
           onMobileClose={closeMobileNav}
         />
@@ -217,6 +227,7 @@ export default function DashboardShell({
                 variant="staff"
                 role={user.role}
               />
+              {whatsNew.available ? <WhatsNewButton unreadCount={whatsNew.unreadCount} onClick={whatsNew.open} /> : null}
 
               <NotificationBell />
 
@@ -271,6 +282,7 @@ export default function DashboardShell({
       {/* One instance per shell: the prompt is driven by a module-level registry
           that any open form writes to, so it must not be mounted per page. */}
       <UnsavedChangesDialog />
+      {whatsNew.modal}
     </div>
   );
 }

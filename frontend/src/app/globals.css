@@ -137,6 +137,73 @@ input[type="reset"]:disabled {
   animation: advisory-glow 1.8s ease-out infinite;
 }
 
+/* Quill guide editor: keep the toolbar attached to the writing surface and
+   let inserted screenshots scale to the editor width. */
+.feature-announcement-editor .ql-toolbar.ql-snow {
+  border: 0;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  padding: 0.625rem 0.75rem;
+}
+
+.feature-announcement-editor .ql-container.ql-snow {
+  border: 0;
+  font-family: inherit;
+}
+
+.feature-announcement-editor .ql-editor {
+  min-height: 17rem;
+  max-height: 32rem;
+  overflow-y: auto;
+  color: #334155;
+  font-size: 0.875rem;
+  line-height: 1.75;
+}
+
+.feature-announcement-editor .ql-editor.ql-blank::before {
+  color: #94a3b8;
+  font-style: normal;
+}
+
+.feature-announcement-editor .ql-editor img {
+  max-width: 100%;
+  max-height: 24rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  object-fit: contain;
+  vertical-align: middle;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor {
+  background: #1b2940;
+  border-color: #526889;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-toolbar.ql-snow {
+  background: #152137;
+  border-color: #394a65;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-editor {
+  color: #e4ebf5;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-editor.ql-blank::before {
+  color: #9aacc4;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-stroke {
+  stroke: #d6e2f1;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-fill {
+  fill: #d6e2f1;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-editor img {
+  border-color: #526889;
+}
+
 /* Operations calendar: staggered card entrance on load. `backwards` fill
    applies the `from` state during the per-card delay but releases the element
    to its natural styles afterwards, so hover transforms keep working. */

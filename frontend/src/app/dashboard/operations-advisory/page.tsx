@@ -12,6 +12,7 @@ import OperationsCalendarView, {
 } from "@/components/operations-advisory/OperationsCalendarView";
 import DashboardBannerManager from "@/components/operations-advisory/DashboardBannerManager";
 import AadhaarOcrFeatureManager from "@/components/operations-advisory/AadhaarOcrFeatureManager";
+import FeatureAnnouncementManager from "@/components/operations-advisory/FeatureAnnouncementManager";
 import { OPERATIONS_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
 import { useSearchParams } from "next/navigation";
@@ -25,7 +26,7 @@ import {
   type ServiceDisruption
 } from "@/lib/operationsAdvisory";
 
-type Tab = "disruptions" | "calendar" | "regulatory" | "banner" | "bookingPauses" | "aadhaarOcr";
+type Tab = "disruptions" | "calendar" | "regulatory" | "banner" | "bookingPauses" | "aadhaarOcr" | "whatsNew";
 
 const tabMeta: Record<Tab, { label: string; icon: typeof FiCalendar }> = {
   disruptions: { label: "Service Disruption Centre", icon: FiAlertOctagon },
@@ -33,7 +34,8 @@ const tabMeta: Record<Tab, { label: string; icon: typeof FiCalendar }> = {
   regulatory: { label: "Customs & Regulatory Updates", icon: FiFileText },
   banner: { label: "Dashboard Banner", icon: FiImage },
   bookingPauses: { label: "Booking Pauses", icon: FiSlash },
-  aadhaarOcr: { label: "Aadhaar OCR", icon: FiShield }
+  aadhaarOcr: { label: "Aadhaar OCR", icon: FiShield },
+  whatsNew: { label: "What's New", icon: FiEye }
 };
 
 /** Tabs the header calendar icon and other deep links can address by name. */
@@ -41,6 +43,7 @@ function tabFromQuery(value: string | null): Tab {
   if (value === "calendar") return "calendar";
   if (value === "regulatory") return "regulatory";
   if (value === "banner") return "banner";
+  if (value === "whats-new") return "whatsNew";
   if (value === "booking-pauses" || value === "bookingPauses" || value === "pauses") return "bookingPauses";
   return "disruptions";
 }
@@ -109,6 +112,7 @@ function OperationsAdvisoryContent() {
       {tab === "bookingPauses" ? <BookingPausesManager /> : null}
       {tab === "regulatory" ? <RegulatoryUpdatesManager /> : null}
       {tab === "banner" ? <DashboardBannerManager /> : null}
+      {tab === "whatsNew" ? <FeatureAnnouncementManager /> : null}
       {tab === "aadhaarOcr" && user.role === "admin" ? <AadhaarOcrFeatureManager /> : null}
       {tab === "calendar" ? (
         <>

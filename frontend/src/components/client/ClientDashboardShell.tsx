@@ -39,6 +39,8 @@ import Sidebar, {
   filterNavigation,
   type SidebarNavEntry,
 } from "@/components/Sidebar";
+import { useWhatsNew } from "@/components/whats-new/useWhatsNew";
+import WhatsNewButton from "@/components/whats-new/WhatsNewButton";
 import { logout } from "@/lib/auth";
 import SessionTimeoutGuard from "@/components/SessionTimeoutGuard";
 import DeepLinkTarget from "@/components/DeepLinkTarget";
@@ -285,6 +287,7 @@ export function ClientDashboardShell({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const whatsNew = useWhatsNew("/client/dashboard", true, Boolean(user.email));
   const contentScrollRef = useRef<HTMLDivElement>(null);
   const [profileImageUrl, setProfileImageUrl] = useState("");
 
@@ -683,6 +686,7 @@ export function ClientDashboardShell({
       <div className="flex min-h-0 flex-1">
         <Sidebar
           items={navigation ?? []}
+          badgeHrefs={whatsNew.badgeHrefs}
           mobileOpen={mobileNavOpen}
           onMobileClose={closeMobileNav}
         />
@@ -751,6 +755,7 @@ export function ClientDashboardShell({
               </div>
 
               <OperationsCalendarIcon />
+              {whatsNew.available ? <WhatsNewButton unreadCount={whatsNew.unreadCount} onClick={whatsNew.open} /> : null}
 
 
               <NotificationBell />
@@ -838,6 +843,7 @@ export function ClientDashboardShell({
           half-filled form discarded it silently. The sidebar it renders is the
           same guarded one the admin shell uses; this supplies the prompt. */}
       <UnsavedChangesDialog />
+      {whatsNew.modal}
 
       <a
         ref={whatsappRef}

@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "audit:feature-announcement-indexes": "tsx src/scripts/migrateFeatureAnnouncementIndexes.ts",
+    "migrate:feature-announcement-indexes": "tsx src/scripts/migrateFeatureAnnouncementIndexes.ts --apply",
     "test:swiftline-parcel-audit": "tsx --test src/tests/swiftlineParcelIdentifierAudit.test.ts",
     "test:operator:registry": "tsx --test src/tests/tenantRegistry.integration.test.ts",
     "test:operator:invitations": "tsx --test src/tests/operatorInvitation.test.ts src/tests/operatorInvitation.integration.test.ts",

@@ -397,7 +397,9 @@ const fullIndexAuditModels = new Set([
   "OperatorShipmentTrackingCounter",
   "OperatorContactQuery",
   "OperatorSupportSession",
-  "OperatorCounterPayment"
+  "OperatorCounterPayment",
+  "FeatureAnnouncement",
+  "FeatureAnnouncementView"
 ]);
 
 const preActivationBackfillModels = new Set([

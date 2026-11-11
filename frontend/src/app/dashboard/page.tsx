@@ -112,13 +112,14 @@ export default function DashboardPage() {
     const token = getAccessToken();
     if (!token) return;
 
-    await fetch(apiUrl("/api/v1/auth/welcome-seen"), {
+    const response = await fetch(apiUrl("/api/v1/auth/welcome-seen"), {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`
       }
     });
+    if (response.ok) window.dispatchEvent(new Event("swiftline:welcome-seen"));
   }
 
   if (loading || !user) return <AdminDashboardBootstrap />;

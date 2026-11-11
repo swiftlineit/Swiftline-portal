@@ -32,6 +32,7 @@ import { sesWebhookRouter } from "./routes/sesWebhook.routes.js";
 import { creditAccountRouter } from "./routes/creditAccount.routes.js";
 import { creditAgreementRouter } from "./routes/creditAgreement.routes.js";
 import { notificationRouter } from "./routes/notification.routes.js";
+import { featureAnnouncementRouter } from "./routes/featureAnnouncement.routes.js";
 import { shipmentCancellationRouter } from "./routes/shipmentCancellation.routes.js";
 import { counterSalesRouter } from "./routes/counterSales.routes.js";
 import { shipmentManifestRouter } from "./routes/shipmentManifest.routes.js";
@@ -191,6 +192,7 @@ app.use("/api/v1/credit-agreements", creditAgreementRouter);
 app.use("/api/v1/profitability", profitabilityRouter);
 app.use("/api/v1/notifications", notificationRouter);
 app.use("/api/v1/dashboard-banner", dashboardBannerRouter);
+app.use("/api/v1/feature-announcements", featureAnnouncementRouter);
 
 // There is deliberately no generic file route here. `/api/v1/files` used to
 // serve the whole `private_uploads` tree behind nothing but "are you signed in",

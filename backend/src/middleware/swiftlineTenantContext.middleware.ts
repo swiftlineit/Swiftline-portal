@@ -12,7 +12,7 @@ export async function establishSwiftlineTenantContext(
   const current = getTenantContext();
   if (current) {
     if (current.kind === "SWIFTLINE") return next();
-    return response.status(403).json({ success: false, message: "Forbidden" });
+    return response.status(403).json({ success: false, message: "This endpoint is available only in the Swiftline workspace." });
   }
   // Existing integration tests use isolated databases without a seeded root
   // tenant; production and development requests must always resolve explicitly.

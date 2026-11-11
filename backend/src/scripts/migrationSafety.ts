@@ -13,7 +13,8 @@ export const productionTenantMigrationSteps = [
 
 /** Narrow post-activation migrations that must never join the ownership cutover sequence. */
 export const standaloneProductionTenantMigrationSteps = [
-  "operator-counter-payment-indexes"
+  "operator-counter-payment-indexes",
+  "feature-announcement-indexes"
 ] as const;
 
 export type ProductionTenantMigrationStep =
