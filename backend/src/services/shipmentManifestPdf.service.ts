@@ -5,7 +5,7 @@ import {
   shipmentManifestConsignorAadhaarForRow,
   type ShipmentManifestConsignorAadhaarByDraft
 } from "./shipmentManifestConsignorAadhaar.service.js";
-import { formatSwiftlineParcelNumberForDisplay } from "./swiftlineTracking.service.js";
+import { displaySwiftlineParcelNumber } from "./swiftlineTracking.service.js";
 
 const border = "#222222";
 const ink = "#111111";
@@ -142,7 +142,7 @@ export function manifestRows(
 
     if (line.parcels?.length) {
       return line.parcels.map((parcel, parcelIndex) => [
-        formatSwiftlineParcelNumberForDisplay(parcel.awbNumber || formatManifestConsignmentNumber(line.consignmentNumber), line.consignmentNumber),
+        displaySwiftlineParcelNumber(parcel.awbNumber || formatManifestConsignmentNumber(line.consignmentNumber), line.consignmentNumber),
         shared.consignorName,
         shared.consignorAddress,
         shared.consignorPhone,
@@ -161,7 +161,7 @@ export function manifestRows(
     }
 
     return [[
-      line.awbNumbers?.map((value) => formatSwiftlineParcelNumberForDisplay(value, line.consignmentNumber)).join(", ") || formatManifestConsignmentNumber(line.consignmentNumber),
+      line.awbNumbers?.map((value) => displaySwiftlineParcelNumber(value, line.consignmentNumber)).join(", ") || formatManifestConsignmentNumber(line.consignmentNumber),
       shared.consignorName,
       shared.consignorAddress,
       shared.consignorPhone,

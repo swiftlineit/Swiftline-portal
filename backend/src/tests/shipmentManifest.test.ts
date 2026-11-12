@@ -625,6 +625,43 @@ describe("handover manifest", () => {
     assert.equal(line.chargeableWeightKg, 10);
   });
 
+  it("uses compact Swiftline parcel numbers in shipment manifest PDF and Excel", async () => {
+    const trackingNumber = "SLCAMD151026001";
+    const compactParcelNumbers = [`${trackingNumber}01`, `${trackingNumber}02`];
+    const legacyParcelNumbers = [`${trackingNumber}-01`, `${trackingNumber}-02`];
+    const line = buildHandoverManifestLine({
+      shipmentDraftId: new mongoose.Types.ObjectId(),
+      dpdShipmentId: new mongoose.Types.ObjectId(),
+      snapshot: bookingSnapshot(),
+      declaredValueMinor: 0,
+      bagNumber: "1"
+    });
+    line.consignmentNumber = trackingNumber;
+    line.parcels![0]!.awbNumber = legacyParcelNumbers[0]!;
+    line.parcels![1]!.awbNumber = legacyParcelNumbers[1]!;
+
+    const previousFormat = process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+    process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = "LEGACY";
+    try {
+      const manifest = handoverManifest([line]);
+      assert.deepEqual(manifestRows([line]).map((row) => row[1]), compactParcelNumbers);
+
+      const workbook = new ExcelJS.Workbook();
+      const bytes = await buildShipmentManifestHandoverWorkbook(manifest);
+      await workbook.xlsx.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+      const sheet = workbook.getWorksheet("Manifest");
+      assert.ok(sheet);
+      assert.deepEqual([sheet.getCell("B11").value, sheet.getCell("B12").value], compactParcelNumbers);
+
+      const pdfText = drawnPdfText(await buildShipmentManifestPdf(manifest));
+      assert.ok(compactParcelNumbers.every((number) => pdfText.includes(number)));
+      assert.ok(legacyParcelNumbers.every((number) => !pdfText.includes(number)));
+    } finally {
+      if (previousFormat === undefined) delete process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT;
+      else process.env.SWIFTLINE_PARCEL_NUMBER_FORMAT = previousFormat;
+    }
+  });
+
   it("takes shipper and receiver from the two contact names, and service from the service type", () => {
     // A consignor company distinct from its contact name, and a business account
     // distinct from both, so the shipper can only be right if it reads the
