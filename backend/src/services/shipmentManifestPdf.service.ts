@@ -1,6 +1,10 @@
 import PDFDocument from "pdfkit";
 import type { IShipmentManifest, ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
 import { formatManifestConsignmentNumber, type ManifestPartySnapshot } from "./shipmentManifest.service.js";
+import {
+  shipmentManifestConsignorAadhaarForRow,
+  type ShipmentManifestConsignorAadhaarByDraft
+} from "./shipmentManifestConsignorAadhaar.service.js";
 import { formatSwiftlineParcelNumberForDisplay } from "./swiftlineTracking.service.js";
 
 const border = "#222222";
@@ -8,13 +12,14 @@ const ink = "#111111";
 const muted = "#f2f2f2";
 
 /** Sr, AWB/Parcel, consignor, consignee, pieces, description, weights and remark. */
-const columnWidths = [22, 74, 58, 108, 42, 58, 108, 42, 24, 92, 38, 42, 68];
+const columnWidths = [22, 70, 58, 96, 42, 60, 58, 96, 42, 24, 86, 38, 42, 59];
 export const shipmentManifestTableHeadings = [
   "Sr.\nNo.",
   "AWB No. /\nParcel No",
   "Consignor Name",
   "Consignor Full\nAddress",
   "Consignor Contact\nNumber",
+  "Consignor Aadhaar\nNumber",
   "Consignee Name",
   "Consignee Full\nAddress",
   "Consignee Contact\nNumber",
@@ -115,7 +120,11 @@ function manifestDate(value: Date) {
  * total only on its first parcel row (like goods value elsewhere), never
  * repeated as if every parcel weighed that much.
  */
-export function manifestRows(lines: ShipmentManifestLineSnapshot[], startIndex = 0) {
+export function manifestRows(
+  lines: ShipmentManifestLineSnapshot[],
+  startIndex = 0,
+  aadhaarByDraft: ShipmentManifestConsignorAadhaarByDraft = new Map()
+) {
   return lines.flatMap((line) => {
     const consignor = partyDocumentFields(line.consignor, line.shipperName);
     const consignee = partyDocumentFields(line.consignee, line.receiverName);
@@ -137,6 +146,7 @@ export function manifestRows(lines: ShipmentManifestLineSnapshot[], startIndex =
         shared.consignorName,
         shared.consignorAddress,
         shared.consignorPhone,
+        shipmentManifestConsignorAadhaarForRow(line, aadhaarByDraft, parcel.awbNumber),
         shared.consigneeName,
         shared.consigneeAddress,
         shared.consigneePhone,
@@ -155,6 +165,7 @@ export function manifestRows(lines: ShipmentManifestLineSnapshot[], startIndex =
       shared.consignorName,
       shared.consignorAddress,
       shared.consignorPhone,
+      shipmentManifestConsignorAadhaarForRow(line, aadhaarByDraft),
       shared.consigneeName,
       shared.consigneeAddress,
       shared.consigneePhone,
@@ -202,7 +213,10 @@ export function shipmentManifestDeclaration(manifest: IShipmentManifest) {
     + "fines or penalties or legal action that may arise as a result of any mis-declaration or our action.";
 }
 
-export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<Buffer> {
+export function buildShipmentManifestPdf(
+  manifest: IShipmentManifest,
+  aadhaarByDraft: ShipmentManifestConsignorAadhaarByDraft = new Map()
+): Promise<Buffer> {
   const header = manifest.headerSnapshot as Record<string, unknown>;
 
   return new Promise<Buffer>((resolve, reject) => {
@@ -315,8 +329,8 @@ export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<B
       : [{ key: "manifest", label: "", lines: manifest.lineSnapshots }];
     let rowIndex = 0;
     rowsBySection.forEach((section, sectionIndex) => {
-      const rows = manifestRows(section.lines, rowIndex).map((row) => row.map((value, column) =>
-        column === 9 ? clampManifestPdfDescription(value) : value
+      const rows = manifestRows(section.lines, rowIndex, aadhaarByDraft).map((row) => row.map((value, column) =>
+        column === 10 ? clampManifestPdfDescription(value) : value
       ));
       rowIndex += rows.length;
       const firstRowHeight = rows.length ? rowHeight(rows[0]!, 5.8) : 0;
@@ -337,7 +351,7 @@ export function buildShipmentManifestPdf(manifest: IShipmentManifest): Promise<B
         }
         values.forEach((value, column) => drawCell(column, y, height, value, {
           size: 5.8,
-          align: [2, 3, 4, 5, 6, 7, 9, 12].includes(column) ? "left" : "center"
+          align: [2, 3, 4, 6, 7, 8, 10, 13].includes(column) ? "left" : "center"
         }));
         y += height;
       });

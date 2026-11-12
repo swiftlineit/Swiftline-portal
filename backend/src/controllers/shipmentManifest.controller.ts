@@ -15,6 +15,7 @@ import { readShipmentBookingSnapshot, snapshotDeclaredGoodsValueMinor } from "..
 import { notifyAdminsOfClientManifest } from "../services/shipmentManifestNotification.service.js";
 import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
 import { buildShipmentManifestPdf } from "../services/shipmentManifestPdf.service.js";
+import { loadShipmentManifestConsignorAadhaar } from "../services/shipmentManifestConsignorAadhaar.service.js";
 import { dateRangeCondition, dateRangeParams } from "../utils/dateRangeFilter.js";
 import { resolveClientAccountBranchScopes } from "../utils/clientScope.js";
 import { normalizePortalRole } from "../utils/portalRole.js";
@@ -507,7 +508,9 @@ async function downloadManifest(request: Request, response: Response, actorRole:
   const disposition = request.query.view === "1" ? "inline" : "attachment";
   response.setHeader("Content-Type", "application/pdf");
   response.setHeader("Content-Disposition", `${disposition}; filename="MANIFEST-${manifest.manifestNumber}.pdf"`);
-  return response.status(200).send(await buildShipmentManifestPdf(await manifestForHandoverDocument(manifest)));
+  const documentManifest = await manifestForHandoverDocument(manifest);
+  const aadhaarByDraft = await loadShipmentManifestConsignorAadhaar(documentManifest);
+  return response.status(200).send(await buildShipmentManifestPdf(documentManifest, aadhaarByDraft));
 }
 
 export async function getAdminShipmentManifestContext(request: Request, response: Response) {
@@ -696,7 +699,9 @@ async function downloadManifestPdf(request: Request, response: Response, actorRo
     const disposition = request.query.view === "1" ? "inline" : "attachment";
     response.setHeader("Content-Type", "application/pdf");
     response.setHeader("Content-Disposition", `${disposition}; filename="MANIFEST-${manifest.manifestNumber}.pdf"`);
-    return response.status(200).send(await buildShipmentManifestPdf(await manifestForHandoverDocument(manifest)));
+    const documentManifest = await manifestForHandoverDocument(manifest);
+    const aadhaarByDraft = await loadShipmentManifestConsignorAadhaar(documentManifest);
+    return response.status(200).send(await buildShipmentManifestPdf(documentManifest, aadhaarByDraft));
   } catch (error) {
     return sendManifestError(response, error);
   }
@@ -707,7 +712,9 @@ async function downloadManifestExcel(request: Request, response: Response, actor
   if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
   try {
     const manifest = await loadVisibleManifest(request, userId, actorRole);
-    const workbook = await buildShipmentManifestHandoverWorkbook(await manifestForHandoverDocument(manifest));
+    const documentManifest = await manifestForHandoverDocument(manifest);
+    const aadhaarByDraft = await loadShipmentManifestConsignorAadhaar(documentManifest);
+    const workbook = await buildShipmentManifestHandoverWorkbook(documentManifest, aadhaarByDraft);
     await AuditLog.create({
       action: "SHIPMENT_MANIFEST_DOWNLOADED",
       entityType: "SHIPMENT_MANIFEST",

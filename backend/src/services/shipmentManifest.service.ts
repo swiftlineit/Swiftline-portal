@@ -695,7 +695,10 @@ function manifestPartyOf(value: unknown): ManifestPartySnapshot | null {
  */
 export async function buildShipmentManifestWorkbook(
   manifest: IShipmentManifest,
-  options: { includeChargeableWeight?: boolean } = {}
+  options: {
+    includeChargeableWeight?: boolean;
+    consignmentNumberForLine?: (line: ShipmentManifestLineSnapshot) => string;
+  } = {}
 ): Promise<Buffer> {
   const includeChargeableWeight = options.includeChargeableWeight ?? true;
   const columnWidths = includeChargeableWeight
@@ -842,7 +845,7 @@ export async function buildShipmentManifestWorkbook(
       if (offset === 0) {
         const values: Array<string | number> = [
           index + 1,
-          formatManifestConsignmentNumber(line.consignmentNumber),
+          options.consignmentNumberForLine?.(line) ?? formatManifestConsignmentNumber(line.consignmentNumber),
           line.pieces,
           line.weightKg,
           ...(includeChargeableWeight

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import zlib from "node:zlib";
 import ExcelJS from "exceljs";
 import mongoose from "mongoose";
 import { ShipmentManifest, type IShipmentManifest, type ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
@@ -19,6 +20,8 @@ import {
   type ManifestPartySnapshot
 } from "../services/shipmentManifest.service.js";
 import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
+import { buildShipmentManifestConsignorAadhaarByDraft } from "../services/shipmentManifestConsignorAadhaar.service.js";
+import { encryptShipmentDraftAadhaar } from "../services/shipmentDraftAadhaar.service.js";
 import { getTenantContext, runWithTenantContext } from "../services/tenantScope.service.js";
 import {
   shipmentManifestAssignmentAvailability,
@@ -33,6 +36,26 @@ import {
   shipmentManifestSections
 } from "../services/shipmentManifestPdf.service.js";
 import type { ShipmentBookingSnapshot } from "../services/shipmentBookingSnapshot.service.js";
+
+function drawnPdfText(pdf: Buffer) {
+  const output: string[] = [];
+  for (let index = 0; (index = pdf.indexOf("stream", index)) !== -1; ) {
+    let start = index + 6;
+    if (pdf[start] === 0x0d) start += 1;
+    if (pdf[start] === 0x0a) start += 1;
+    const end = pdf.indexOf("endstream", start);
+    if (end === -1) break;
+    try {
+      const content = zlib.inflateSync(pdf.subarray(start, end)).toString("latin1");
+      output.push(...[...content.matchAll(/<([0-9a-fA-F]+)>/g)]
+        .map((part) => Buffer.from(part[1] ?? "", "hex").toString("latin1")));
+    } catch {
+      // Non-text streams such as images are not deflate-encoded text.
+    }
+    index = end + 9;
+  }
+  return output.join("");
+}
 
 describe("shipment manifest identifiers and search", () => {
   it("uses up to three business-name initials or the full single-word name", () => {
@@ -387,9 +410,14 @@ describe("shipment manifest workbook", () => {
       actorRole: "admin",
       generatedAt: new Date("2026-07-21T10:00:00.000Z")
     } as unknown as IShipmentManifest;
+    const aadhaarByDraft = buildShipmentManifestConsignorAadhaarByDraft([{
+      _id: line.shipmentDraftId,
+      consignorAddress: { aadhaarNumber: encryptShipmentDraftAadhaar("234567890124") },
+      kycUseForAllParcels: true
+    }]);
 
     const workbook = new ExcelJS.Workbook();
-    const workbookBytes = await buildShipmentManifestHandoverWorkbook(manifest);
+    const workbookBytes = await buildShipmentManifestHandoverWorkbook(manifest, aadhaarByDraft);
     const workbookData = workbookBytes.buffer.slice(
       workbookBytes.byteOffset,
       workbookBytes.byteOffset + workbookBytes.byteLength
@@ -408,7 +436,7 @@ describe("shipment manifest workbook", () => {
     assert.equal(sheet.getCell("I6").value, "MANIFEST #: SLC-001");
     assert.equal(sheet.getCell("I7").value, "COLOADER: Sky Cargo");
     assert.equal(sheet.getCell("I8").value, "PAYMENT TYPE: PREPAID");
-    for (let column = 1; column <= 13; column += 1) {
+    for (let column = 1; column <= 14; column += 1) {
       const labelCellBorder: Partial<ExcelJS.Borders> = sheet.getCell(3, column).border;
       assert.equal(labelCellBorder.top?.style, "thin", `missing header top border at column ${column}`);
       assert.equal(labelCellBorder.bottom?.style, "thin", `missing label divider at column ${column}`);
@@ -421,35 +449,36 @@ describe("shipment manifest workbook", () => {
         if (column === 1 || column === 5) assert.equal(cellBorder.left?.style, "thin", `missing section left at ${row},${column}`);
         if (column === 4 || column === 8) assert.equal(cellBorder.right?.style, "thin", `missing section right at ${row},${column}`);
       }
-      for (let column = 9; column <= 13; column += 1) {
+      for (let column = 9; column <= 14; column += 1) {
         const cellBorder: Partial<ExcelJS.Borders> = sheet.getCell(row, column).border;
         assert.equal(cellBorder.top?.style, "thin", `missing metadata row top at ${row},${column}`);
         assert.equal(cellBorder.bottom?.style, "thin", `missing metadata row bottom at ${row},${column}`);
         if (column === 9) assert.equal(cellBorder.left?.style, "thin", `missing metadata left at ${row}`);
-        if (column === 13) assert.equal(cellBorder.right?.style, "thin", `missing metadata right at ${row}`);
+        if (column === 14) assert.equal(cellBorder.right?.style, "thin", `missing metadata right at ${row}`);
       }
     }
-    assert.deepEqual(Array.from({ length: 13 }, (_value, index) => sheet.getCell(10, index + 1).value), [
+    assert.deepEqual(Array.from({ length: 14 }, (_value, index) => sheet.getCell(10, index + 1).value), [
       "Sr.\nNo.", "AWB No. /\nParcel No", "Consignor Name", "Consignor Full\nAddress",
-      "Consignor Contact\nNumber", "Consignee Name", "Consignee Full\nAddress", "Consignee Contact\nNumber",
-      "Pcs", "Description", "Weight", "Chg Wt", "Remark"
+      "Consignor Contact\nNumber", "Consignor Aadhaar\nNumber", "Consignee Name", "Consignee Full\nAddress",
+      "Consignee Contact\nNumber", "Pcs", "Description", "Weight", "Chg Wt", "Remark"
     ]);
     assert.equal(sheet.getCell("A11").value, 1);
     assert.equal(sheet.getCell("B11").value, "S1");
     assert.equal(sheet.getCell("C11").value, "Example Exporter\nMr. Ravi Sharma");
     assert.equal(sheet.getCell("D11").value, "1 Export Road\nDelhi\n110001\nIndia");
     assert.equal(sheet.getCell("E11").value, "+919000000000");
-    assert.equal(sheet.getCell("F11").value, "Example Consignee\nAsha Patel");
-    assert.equal(sheet.getCell("G11").value, "10 Downing Street\nLondon\nSW1A 2AA\nUnited Kingdom");
-    assert.equal(sheet.getCell("H11").value, "+447123456789");
-    assert.equal(sheet.getCell("I11").value, 1);
-    assert.equal(sheet.getCell("J11").value, fullDescription);
-    assert.equal(sheet.getCell("K11").value, 4.5);
+    assert.equal(sheet.getCell("F11").value, "2345 6789 0124");
+    assert.equal(sheet.getCell("G11").value, "Example Consignee\nAsha Patel");
+    assert.equal(sheet.getCell("H11").value, "10 Downing Street\nLondon\nSW1A 2AA\nUnited Kingdom");
+    assert.equal(sheet.getCell("I11").value, "+447123456789");
+    assert.equal(sheet.getCell("J11").value, 1);
+    assert.equal(sheet.getCell("K11").value, fullDescription);
     assert.equal(sheet.getCell("L11").value, 4.5);
-    assert.equal(sheet.getCell("M11").value, "DONE");
+    assert.equal(sheet.getCell("M11").value, 4.5);
+    assert.equal(sheet.getCell("N11").value, "DONE");
     assert.equal(sheet.getCell("B12").value, "S2");
-    assert.equal(sheet.getCell("J12").value, "Documents");
-    assert.equal(sheet.getCell("K12").value, 5.5);
+    assert.equal(sheet.getCell("K12").value, "Documents");
+    assert.equal(sheet.getCell("L12").value, 5.5);
     assert.equal(String(sheet.getCell("A14").value).startsWith("We hereby declare"), true);
     assert.equal(sheet.getCell("A16").value, "FOR AHMEDABAD (SIGN AND STAMP)");
     assert.equal(sheet.autoFilter, undefined);
@@ -457,6 +486,37 @@ describe("shipment manifest workbook", () => {
     assert.equal(Object.hasOwn(sheet.views[0] ?? {}, "ySplit"), false);
     assert.equal(sheet.getCell("A1").font.bold, true);
     assert.equal(sheet.getCell("A10").font.bold, true);
+
+    const pdf = await buildShipmentManifestPdf(manifest, aadhaarByDraft);
+    assert.equal(pdf.subarray(0, 5).toString("ascii"), "%PDF-");
+    assert.ok(drawnPdfText(pdf).includes("2345 6789 0124"));
+  });
+
+  it("uses each parcel's consignor Aadhaar when KYC is stored per parcel", () => {
+    const line = buildHandoverManifestLine({
+      shipmentDraftId: new mongoose.Types.ObjectId(),
+      dpdShipmentId: new mongoose.Types.ObjectId(),
+      snapshot: bookingSnapshot(),
+      declaredValueMinor: 25_000_00,
+      bagNumber: "BAG-01"
+    });
+    line.consignmentNumber = "SLCDEL031126016";
+    line.parcels![0]!.awbNumber = "SLCDEL031126016-01";
+    line.parcels![1]!.awbNumber = "SLCDEL031126016-02";
+    const aadhaarByDraft = buildShipmentManifestConsignorAadhaarByDraft([{
+      _id: line.shipmentDraftId,
+      kycUseForAllParcels: false,
+      consignorAddress: { aadhaarNumber: encryptShipmentDraftAadhaar("XXXX XXXX 0124") },
+      parcelList: [
+        { sequence: 1, aadhaarNumber: encryptShipmentDraftAadhaar("234567890124") },
+        { sequence: 2, aadhaarNumber: encryptShipmentDraftAadhaar("352043382892") }
+      ]
+    }]);
+
+    assert.deepEqual(manifestRows([line], 0, aadhaarByDraft).map((row) => row[5]), [
+      "2345 6789 0124", "3520 4338 2892"
+    ]);
+    assert.equal("aadhaarNumber" in (line.consignor.party as Record<string, unknown>), false);
   });
 
 });
@@ -626,12 +686,12 @@ describe("handover manifest", () => {
     // Every row carries one parcel's own barcode, description, piece count and weight.
     assert.deepEqual(rows.map((row) => row[1]), ["S1", "S2", "S1", "S2"]);
     assert.deepEqual(rows.map((row) => row[2]), ["Example Exporter\nMr. Ravi Sharma", "Example Exporter\nMr. Ravi Sharma", "Example Exporter\nMr. Ravi Sharma", "Example Exporter\nMr. Ravi Sharma"]);
-    assert.deepEqual(rows.map((row) => row[9]), ["Clothing", "Documents", "Clothing", "Documents"]);
-    assert.deepEqual(rows.map((row) => row[8]), ["1", "1", "1", "1"]);
-    assert.deepEqual(rows.map((row) => row[10]), ["4.50", "5.50", "4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[10]), ["Clothing", "Documents", "Clothing", "Documents"]);
+    assert.deepEqual(rows.map((row) => row[9]), ["1", "1", "1", "1"]);
     assert.deepEqual(rows.map((row) => row[11]), ["4.50", "5.50", "4.50", "5.50"]);
-    assert.deepEqual(rows.map((row) => row[12]), ["DONE", "DONE", "DONE", "DONE"]);
-    assert.deepEqual([...new Set(rows.map((row) => row[7]))], ["+447123456789"]);
+    assert.deepEqual(rows.map((row) => row[12]), ["4.50", "5.50", "4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[13]), ["DONE", "DONE", "DONE", "DONE"]);
+    assert.deepEqual([...new Set(rows.map((row) => row[8]))], ["+447123456789"]);
   });
 
   it("carries the pricing snapshot's chargeable weight on the line, parcels and rows", () => {
@@ -653,8 +713,8 @@ describe("handover manifest", () => {
     assert.equal(line.chargeableWeightKg, 13);
     assert.deepEqual(line.parcels?.map((parcel) => parcel.chargeableWeightKg), [6, 7]);
     const rows = manifestRows([line]);
-    assert.deepEqual(rows.map((row) => row[10]), ["4.50", "5.50"]);
-    assert.deepEqual(rows.map((row) => row[11]), ["6.00", "7.00"]);
+    assert.deepEqual(rows.map((row) => row[11]), ["4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[12]), ["6.00", "7.00"]);
   });
 
   it("restores missing parcel chargeable weights for legacy PDF downloads", () => {
@@ -682,7 +742,7 @@ describe("handover manifest", () => {
     );
 
     assert.deepEqual(hydratedLine?.parcels?.map((parcel) => parcel.chargeableWeightKg), [11, 12]);
-    assert.deepEqual(manifestRows([hydratedLine!]).map((row) => row[11]), ["11.00", "12.00"]);
+    assert.deepEqual(manifestRows([hydratedLine!]).map((row) => row[12]), ["11.00", "12.00"]);
     // The historical line is only hydrated for rendering; it is not mutated.
     assert.deepEqual(line.parcels?.map((parcel) => parcel.chargeableWeightKg), [undefined, undefined]);
   });
@@ -700,11 +760,11 @@ describe("handover manifest", () => {
     assert.equal(rows.length, 1);
     // Falls back to the consignment number and the shipment's own piece total.
     assert.equal(rows[0]?.[1], "SLDL210720260001");
-    assert.equal(rows[0]?.[8], "2");
-    assert.equal(rows[0]?.[9], "Clothing, Documents");
+    assert.equal(rows[0]?.[9], "2");
+    assert.equal(rows[0]?.[10], "Clothing, Documents");
     // Legacy lines carry no chargeable weight, so it falls back to actual.
-    assert.equal(rows[0]?.[10], "10.00");
     assert.equal(rows[0]?.[11], "10.00");
+    assert.equal(rows[0]?.[12], "10.00");
   });
 
   it("states a pre-chargeable line's shipment total only on its first parcel row", () => {
@@ -726,9 +786,9 @@ describe("handover manifest", () => {
 
     const rows = manifestRows([legacyParcelLine]);
     assert.equal(rows.length, 2);
-    assert.deepEqual(rows.map((row) => row[9]), ["Clothing, Documents", ""]);
-    assert.deepEqual(rows.map((row) => row[10]), ["4.50", "5.50"]);
-    assert.deepEqual(rows.map((row) => row[11]), ["10.00", ""]);
+    assert.deepEqual(rows.map((row) => row[10]), ["Clothing, Documents", ""]);
+    assert.deepEqual(rows.map((row) => row[11]), ["4.50", "5.50"]);
+    assert.deepEqual(rows.map((row) => row[12]), ["10.00", ""]);
   });
 
   it("limits PDF descriptions to ten words without changing Excel row values", () => {
@@ -742,7 +802,7 @@ describe("handover manifest", () => {
       bagNumber: "1"
     });
     line.parcels![0]!.description = description;
-    assert.equal(manifestRows([line])[0]?.[9], description);
+    assert.equal(manifestRows([line])[0]?.[10], description);
   });
 
   it("renders a PDF for handover lines and for legacy lines without the new fields", async () => {

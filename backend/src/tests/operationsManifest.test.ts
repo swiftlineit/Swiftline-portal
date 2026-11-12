@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import zlib from "node:zlib";
 import { describe, it } from "node:test";
 import ExcelJS from "exceljs";
 import mongoose from "mongoose";
@@ -55,6 +56,26 @@ import {
   summarizeManifestDestinations,
   unaccountedManifestParcelNumbers
 } from "../services/operationsManifest.service.js";
+
+function drawnPdfText(pdf: Buffer) {
+  const output: string[] = [];
+  for (let index = 0; (index = pdf.indexOf("stream", index)) !== -1; ) {
+    let start = index + 6;
+    if (pdf[start] === 0x0d) start += 1;
+    if (pdf[start] === 0x0a) start += 1;
+    const end = pdf.indexOf("endstream", start);
+    if (end === -1) break;
+    try {
+      const content = zlib.inflateSync(pdf.subarray(start, end)).toString("latin1");
+      output.push(...[...content.matchAll(/<([0-9a-fA-F]+)>/g)]
+        .map((part) => Buffer.from(part[1] ?? "", "hex").toString("latin1")));
+    } catch {
+      // Non-text streams such as images are not deflate-encoded text.
+    }
+    index = end + 9;
+  }
+  return output.join("");
+}
 
 describe("operations manifest list search", () => {
   it("searches literal manifest and flight values plus matching branches and shipments", () => {
@@ -782,12 +803,13 @@ function sealedMultiParcelManifest() {
   const first = consignments[0];
   if (first) {
     first.bagId = bagOne;
+    first.consignmentNumber = "SLCDEL031126016";
     first.weightKg = 44;
     first.description = "Clothing, Footwear, Books";
     first.parcels = [
-      { parcelNumber: "SLDL22072026000001P01", weightKg: 20, description: "Clothing", bagNumber: "SLC00101" },
-      { parcelNumber: "SLDL22072026000001P02", weightKg: 19, description: "Footwear", bagNumber: "SLC00102" },
-      { parcelNumber: "SLDL22072026000001P03", weightKg: 5, description: "Books", bagNumber: "SLC00101" }
+      { parcelNumber: "SLCDEL031126016-01", weightKg: 20, description: "Clothing", bagNumber: "SLC00101" },
+      { parcelNumber: "SLCDEL031126016-02", weightKg: 19, description: "Footwear", bagNumber: "SLC00102" },
+      { parcelNumber: "SLCDEL031126016-03", weightKg: 5, description: "Books", bagNumber: "SLC00101" }
     ];
   }
   return manifest;
@@ -819,23 +841,40 @@ describe("operations manifest safeguards", () => {
   });
 
   it("keeps each parcel row intact while ordering the standard Excel by bag sequence", async () => {
-    const sheet = await manifestSheetRows(sealedMultiParcelManifest());
-    const dataRows: Array<{ serial: unknown; weight: unknown; description: unknown; bag: unknown }> = [];
+    const manifest = sealedMultiParcelManifest();
+    const sheet = await manifestSheetRows(manifest);
+    const dataRows: Array<{ serial: unknown; parcelNumber: unknown; weight: unknown; description: unknown; bag: unknown }> = [];
     sheet.eachRow((row, rowNumber) => {
       if (rowNumber <= 14) return;
       const serial = row.getCell(1).value;
       if (typeof serial === "number") {
-        dataRows.push({ serial, weight: row.getCell(4).value, description: row.getCell(7).value, bag: row.getCell(10).value });
+        dataRows.push({
+          serial,
+          parcelNumber: row.getCell(2).value,
+          weight: row.getCell(4).value,
+          description: row.getCell(7).value,
+          bag: row.getCell(10).value
+        });
       }
     });
 
     assert.equal(dataRows.length, 3, "each of the three boxes needs its own row");
     assert.deepEqual(dataRows.map((row) => row.serial), [1, 2, 3]);
+    assert.deepEqual(dataRows.map((row) => row.parcelNumber), [
+      "SLCDEL03112601601", "SLCDEL03112601603", "SLCDEL03112601602"
+    ]);
     assert.deepEqual(dataRows.map((row) => row.weight), [20, 5, 19]);
     // Each row describes only its own box, never the whole shipment.
     assert.deepEqual(dataRows.map((row) => row.description), ["Clothing", "Books", "Footwear"]);
     // Complete rows move together: the two boxes packed in Bag 01 are adjacent.
     assert.deepEqual(dataRows.map((row) => row.bag), ["SLC00101", "SLC00101", "SLC00102"]);
+
+    const pdf = await buildOperationsManifestPdf(manifest);
+    const pdfText = drawnPdfText(pdf);
+    assert.ok(pdfText.includes("SLCDEL03112601601"));
+    assert.ok(pdfText.includes("SLCDEL03112601602"));
+    assert.ok(pdfText.includes("SLCDEL03112601603"));
+    assert.ok(!pdfText.includes("SLCDEL031126016-01"));
   });
 
   it("expands the Excel description row for wrapped contents", async () => {

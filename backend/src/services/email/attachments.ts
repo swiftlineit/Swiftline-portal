@@ -12,6 +12,7 @@ import { serializeShipmentInvoice } from "../shipmentInvoice.service.js";
 import { createShipmentInvoicePdf } from "../shipmentInvoicePdf.service.js";
 import { loadOperatorBrandLogo } from "../operatorBranding.service.js";
 import { buildShipmentManifestPdf } from "../shipmentManifestPdf.service.js";
+import { loadShipmentManifestConsignorAadhaar } from "../shipmentManifestConsignorAadhaar.service.js";
 import { getObjectBuffer } from "../storage/storage.service.js";
 import { labelContentType, labelFileExtension } from "../labelStorage.service.js";
 import { getTenantContext } from "../tenantScope.service.js";
@@ -101,7 +102,10 @@ async function resolveShipmentManifestPdf(ref: IEmailAttachmentRef): Promise<Res
   return {
     kind: "SHIPMENT_MANIFEST_PDF",
     filename: safeFilename(ref.filename || `MANIFEST-${manifest.manifestNumber}.pdf`),
-    content: await buildShipmentManifestPdf(manifest),
+    content: await buildShipmentManifestPdf(
+      manifest,
+      await loadShipmentManifestConsignorAadhaar(manifest)
+    ),
     contentType: "application/pdf"
   };
 }

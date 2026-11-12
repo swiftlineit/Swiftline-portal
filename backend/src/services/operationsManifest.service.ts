@@ -3086,6 +3086,7 @@ export async function buildOperationsManifestExcel(manifest: IOperationsManifest
       shipmentDraftId: new mongoose.Types.ObjectId(row.shipmentDraftId),
       dpdShipmentId: new mongoose.Types.ObjectId(row.dpdShipmentId),
       consignmentNumber: row.consignmentNumber,
+      awbNumbers: row.parcelNumber ? [row.parcelNumber] : [],
       pieces: 1,
       weightKg: row.weightKg,
       consignor: { formatted: normalizedManifestAddress(row.consignor.formatted), party: row.consignor.party },
@@ -3103,7 +3104,10 @@ export async function buildOperationsManifestExcel(manifest: IOperationsManifest
     generatedAt: model.generatedAt
   };
   return buildShipmentManifestWorkbook(virtualManifest as unknown as IShipmentManifest, {
-    includeChargeableWeight: false
+    includeChargeableWeight: false,
+    consignmentNumberForLine: (line) => line.awbNumbers?.[0]
+      ? displaySwiftlineParcelNumber(line.awbNumbers[0], line.consignmentNumber)
+      : formatManifestConsignmentNumber(line.consignmentNumber)
   });
 }
 
@@ -3183,7 +3187,8 @@ export async function buildOperationsManifestPdf(manifest: IOperationsManifest) 
           const values = row === 0
             ? [
               parcel.serial,
-              consignment.formattedConsignmentNumber,
+              displaySwiftlineParcelNumber(parcel.parcelNumber, consignment.consignmentNumber)
+                || consignment.formattedConsignmentNumber,
               1,
               parcel.weightKg.toFixed(3),
               consignorLines[0] ?? "",
