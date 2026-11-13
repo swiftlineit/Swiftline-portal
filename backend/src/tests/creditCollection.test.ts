@@ -91,7 +91,7 @@ describe("credit collection policy", () => {
 
   test("enforces one offline payment reference per business and method", () => {
     const indexes = CreditPayment.schema.indexes();
-    const offlineReferenceIndex = indexes.find((index: [Record<string, unknown>, { unique?: boolean }]) => {
+    const offlineReferenceIndex = indexes.find((index) => {
       const fields = index[0] as Record<string, unknown>;
       return fields.businessAccountId === 1 && fields.method === 1 && fields.externalReference === 1;
     });
