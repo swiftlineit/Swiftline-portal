@@ -153,6 +153,21 @@ test("generic template covers any notification type without a bespoke file", () 
   assert.match(text, /Operations replied to your ticket/);
 });
 
+test("service disruption advisory email uses the generic notification template and operational policy", () => {
+  const { content, html, text } = render("SERVICE_DISRUPTION", {
+    title: "Updated service advisory: Airport advisory",
+    message: "Operations will resume at 15:00 UTC.",
+    href: "/client/operations-calendar"
+  });
+
+  assert.equal(hasEmailTemplate("SERVICE_DISRUPTION"), false);
+  assert.equal(getEmailPolicy("SERVICE_DISRUPTION")?.category, "OPERATIONAL");
+  assert.equal(content.subject, "Updated service advisory: Airport advisory");
+  assert.match(html, /Operations will resume at 15:00 UTC/);
+  assert.match(html, /https:\/\/portal\.swiftline\.example\/client\/operations-calendar/);
+  assert.match(text, /Updated service advisory: Airport advisory/);
+});
+
 test("operator administrator invitation is transactional and escapes supplied company text", () => {
   const { content, html, text } = render("OPERATOR_INVITATION", {
     companyName: "<Northstar Cargo>",

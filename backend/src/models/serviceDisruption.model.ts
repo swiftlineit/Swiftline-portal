@@ -14,7 +14,8 @@ export const serviceDisruptionTypeValues = [
   "PUBLIC_HOLIDAY",
   "FLIGHT_CANCELLATION",
   "SECURITY_RESTRICTION",
-  "PEAK_SEASON_DELAY"
+  "PEAK_SEASON_DELAY",
+  "INFORMATION"
 ] as const;
 
 export const serviceDisruptionSeverityValues = ["INFO", "WARNING", "CRITICAL"] as const;

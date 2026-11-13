@@ -21,8 +21,7 @@ import {
   type IRegulatoryUpdate
 } from "../models/regulatoryUpdate.model.js";
 import { regulatoryRegionCodes } from "../services/reference/regulatoryRegions.js";
-import { User } from "../models/user.model.js";
-import { notifyPortalUsers } from "../services/portalNotification.service.js";
+import { dispatchServiceDisruptionNotification } from "../services/serviceDisruptionNotification.service.js";
 
 const objectIdSchema = z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), {
   message: "Invalid identifier"
@@ -267,37 +266,6 @@ async function writeCalendarEntryAuditLog(
   });
 }
 
-/**
- * Alerts every active client login when a disruption is published (created
- * active, or activated later). The per-user idempotency key is the disruption
- * id, so re-saving the same disruption never stacks a second notification, and
- * the type is not in the email catalogue, so this stays an in-app alert only.
- */
-async function dispatchServiceDisruptionNotification(disruption: {
-  _id: unknown;
-  type: string;
-  title: string;
-  message: string;
-  active: boolean;
-}) {
-  if (!disruption.active) return;
-
-  const clients = await User.find({ role: "client", userStatus: "active" })
-    .select("_id")
-    .lean()
-    .exec();
-  if (!clients.length) return;
-
-  await notifyPortalUsers(clients.map((client) => client._id), {
-    type: "SERVICE_DISRUPTION",
-    title: disruption.title,
-    message: disruption.message.slice(0, 500),
-    href: "/client/operations-calendar",
-    idempotencyKey: `SERVICE_DISRUPTION:${String(disruption._id)}`,
-    metadata: { disruptionType: disruption.type }
-  });
-}
-
 // ── Staff: service disruptions ───────────────────────────────────────────────
 
 export async function listServiceDisruptions(request: Request, response: Response): Promise<Response> {
@@ -346,7 +314,7 @@ export async function createServiceDisruption(request: Request, response: Respon
     parsed.data,
     userId
   );
-  await dispatchServiceDisruptionNotification(disruption);
+  await dispatchServiceDisruptionNotification(disruption, "PUBLISHED");
 
   return response.status(201).json({
     success: true,
@@ -384,11 +352,9 @@ export async function updateServiceDisruption(request: Request, response: Respon
     userId
   );
 
-  // A fresh activation is a publish: the notification goes out now. Edits to an
-  // already-active disruption are silent thanks to the idempotency key.
-  if (!wasActive && disruption.active) {
-    await dispatchServiceDisruptionNotification(disruption);
-  }
+  // An activation is a publish; changes to a live advisory are a new version
+  // and notify the same audiences again. Inactive advisories stay silent.
+  await dispatchServiceDisruptionNotification(disruption, wasActive ? "UPDATED" : "PUBLISHED");
 
   return response.status(200).json({
     success: true,

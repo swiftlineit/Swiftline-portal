@@ -24,7 +24,8 @@ export const serviceDisruptionTypes = [
   "PUBLIC_HOLIDAY",
   "FLIGHT_CANCELLATION",
   "SECURITY_RESTRICTION",
-  "PEAK_SEASON_DELAY"
+  "PEAK_SEASON_DELAY",
+  "INFORMATION"
 ] as const;
 export type ServiceDisruptionType = (typeof serviceDisruptionTypes)[number];
 
@@ -38,7 +39,8 @@ export const serviceDisruptionTypeLabels: Record<ServiceDisruptionType, string> 
   PUBLIC_HOLIDAY: "Public holiday",
   FLIGHT_CANCELLATION: "Flight cancellation",
   SECURITY_RESTRICTION: "Security restriction",
-  PEAK_SEASON_DELAY: "Peak season delay"
+  PEAK_SEASON_DELAY: "Peak season delay",
+  INFORMATION: "Information"
 };
 
 export type ServiceDisruption = {
