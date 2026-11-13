@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
-import { FiEdit3, FiPlus, FiSave, FiTrash2 } from "react-icons/fi";
+import { FiChevronDown, FiEdit3, FiPlus, FiSave, FiTrash2 } from "react-icons/fi";
 import { listBranches, type Branch } from "@/lib/branches";
 import {
   createServiceDisruption,
@@ -193,7 +193,9 @@ export default function ServiceDisruptionsManager() {
     }
   }
 
-  const inputClass = "mt-2 h-10 w-full border border-slate-300 bg-white rounded-xl px-3 text-sm outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100";
+  const controlBaseClass = "h-10 w-full border border-slate-300 bg-white rounded-xl px-3 text-sm outline-none transition focus:border-blue-900 focus:ring-2 focus:ring-blue-100";
+  const inputClass = `mt-2 ${controlBaseClass}`;
+  const selectClass = `${controlBaseClass} appearance-none pr-9`;
   const labelClass = "text-xs font-semibold uppercase text-slate-500";
 
   return (
@@ -217,24 +219,30 @@ export default function ServiceDisruptionsManager() {
         <div className="grid gap-4 p-4 md:grid-cols-2">
           <label className="block">
             <span className={labelClass}>Type</span>
-            <select value={form.type} onChange={handleTextChange("type")} className={inputClass}>
-              {serviceDisruptionTypes.map((type) => (
-                <option key={type} value={type}>{serviceDisruptionTypeLabels[type]}</option>
-              ))}
-            </select>
+            <div className="relative mt-2">
+              <select value={form.type} onChange={handleTextChange("type")} className={selectClass}>
+                {serviceDisruptionTypes.map((type) => (
+                  <option key={type} value={type}>{serviceDisruptionTypeLabels[type]}</option>
+                ))}
+              </select>
+              <FiChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            </div>
           </label>
 
           <label className="block">
             <span className={labelClass}>Severity</span>
-            <select
-              value={form.severity}
-              onChange={(event) => updateField("severity", event.target.value as ServiceDisruptionSeverity)}
-              className={inputClass}
-            >
-              {serviceDisruptionSeverities.map((severity) => (
-                <option key={severity} value={severity}>{severity}</option>
-              ))}
-            </select>
+            <div className="relative mt-2">
+              <select
+                value={form.severity}
+                onChange={(event) => updateField("severity", event.target.value as ServiceDisruptionSeverity)}
+                className={selectClass}
+              >
+                {serviceDisruptionSeverities.map((severity) => (
+                  <option key={severity} value={severity}>{severity}</option>
+                ))}
+              </select>
+              <FiChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            </div>
           </label>
 
           <label className="block md:col-span-2">
