@@ -15,6 +15,7 @@ import {
   findShipmentStateCode,
   findStateCode,
   matchStateName,
+  resolveStateFieldValue,
   type GeographyState,
 } from "@/lib/geography";
 import { formatAadhaarNumber, normalizeAadhaarNumber } from "@/lib/aadhaar";
@@ -92,13 +93,20 @@ function AddressPanel<T extends PublicAddress>({
   prefix: string;
   csbType: "CSB_IV" | "CSB_V";
 }) {
-  const [states, setStates] = useState<GeographyState[]>([]);
+  const countryName = value.countryName;
+  const countryKey = countryName.trim().toLowerCase();
+  const [loadedStates, setLoadedStates] = useState<{
+    countryKey: string;
+    states: GeographyState[];
+  } | null>(null);
+  const states = useMemo(
+    () => loadedStates?.countryKey === countryKey ? loadedStates.states : [],
+    [countryKey, loadedStates],
+  );
   const [cities, setCities] = useState<string[]>([]);
   const update = (key: keyof PublicSender, next: string) =>
     onChange({ ...value, [key]: next } as T);
-  const selectedStateName = states.length
-    ? matchStateName(states, value.county) || value.county
-    : value.county;
+  const selectedStateName = resolveStateFieldValue(states, value.county);
   const referenceStateCode = findStateCode(states, selectedStateName);
   const usesNumericStateCode = !sender && csbType === "CSB_V";
   const stateCode = usesNumericStateCode
@@ -113,13 +121,22 @@ function AddressPanel<T extends PublicAddress>({
 
   useEffect(() => {
     let current = true;
-    void fetchStates(value.countryName, PUBLIC_REFERENCE_ROOT).then((items) => {
-      if (current) setStates(items);
+    void fetchStates(countryName, PUBLIC_REFERENCE_ROOT).then((items) => {
+      if (current) setLoadedStates({ countryKey, states: items });
     });
     return () => {
       current = false;
     };
-  }, [value.countryName]);
+  }, [countryKey, countryName]);
+
+  useEffect(() => {
+    if (sender || !states.length || !value.county.trim() || matchStateName(states, value.county)) return;
+
+    // Address lookup may supply a state outside the destination's options.
+    // Clear it so the required select cannot appear blank while retaining a
+    // value that would pass the public form's non-empty check.
+    onChange({ ...value, county: "", stateCode: "" } as T);
+  }, [onChange, sender, states, value]);
   useEffect(() => {
     let current = true;
     if (!referenceStateCode)
@@ -301,8 +318,7 @@ function AddressPanel<T extends PublicAddress>({
             error={errors[`${prefix}.addressLine1`]}
             onChange={(next) => update("addressLine1", next)}
             onAddressSelected={(address) => {
-              const matchedState =
-                matchStateName(states, address.state) || address.state;
+              const matchedState = resolveStateFieldValue(states, address.state);
               onChange({
                 ...value,
                 addressLine1: address.addressLine1,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { findShipmentStateCode, findStateCode, matchStateName, type GeographyState } from "@/lib/geography";
+import { findShipmentStateCode, findStateCode, matchStateName, resolveStateFieldValue, type GeographyState } from "@/lib/geography";
 
 const referenceStates = JSON.parse(
   readFileSync(new URL("../../../backend/data/reference/states.json", import.meta.url), "utf8"),
@@ -22,6 +22,11 @@ describe("shipment state codes", () => {
   test("restores the canonical option name for uppercased saved states", () => {
     assert.equal(matchStateName(usStates, "OHIO"), "Ohio");
     assert.equal(matchStateName(usStates, "OH"), "Ohio");
+  });
+
+  test("leaves unmatched reference states empty while preserving free text without options", () => {
+    assert.equal(resolveStateFieldValue(usStates, "Unknown County"), "");
+    assert.equal(resolveStateFieldValue([], "Free-text county"), "Free-text county");
   });
 
   test("falls back to the reference code outside the numeric U.S. mapping", () => {

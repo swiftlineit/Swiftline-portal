@@ -3,7 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { ShipmentSelectField, ShipmentTextField } from "@/components/shipments/ShipmentFormControls";
 import { resolveCountry } from "@/lib/countryLookup";
-import { fetchStates, findShipmentStateCode, findStateCode, matchStateName, type GeographyState } from "@/lib/geography";
+import { fetchStates, findShipmentStateCode, findStateCode, matchStateName, resolveStateFieldValue, type GeographyState } from "@/lib/geography";
 
 export function ShipmentConsigneeStateFields({
   countryCode,
@@ -40,7 +40,7 @@ export function ShipmentConsigneeStateFields({
   // MongoDB stores this address field uppercased, while the reference options
   // use title case. Keep the controlled select pointed at the canonical option
   // so a saved value such as "OHIO" never renders as an empty selection.
-  const selectedStateName = states.length ? matchStateName(states, state) || state : state;
+  const selectedStateName = resolveStateFieldValue(states, state);
   const numericStateCode = isUnitedStates && /^\d+$/.test(findShipmentStateCode(lookupCountry, states, selectedStateName));
 
   useEffect(() => {
@@ -50,6 +50,16 @@ export function ShipmentConsigneeStateFields({
     });
     return () => { active = false; };
   }, [countryKey, lookupCountry]);
+
+  useEffect(() => {
+    if (!states.length || !state.trim() || matchStateName(states, state)) return;
+
+    // Provider autocomplete can return a county that is not an option in the
+    // selected country's reference list. Keep the controlled select genuinely
+    // empty and discard its dependent customs code until the user selects one.
+    onStateChange("");
+    onStateCodeChange("");
+  }, [onStateChange, onStateCodeChange, state, states]);
 
   useEffect(() => {
     if (!requiredStateCode || !states.length || !state) return;
@@ -68,7 +78,7 @@ export function ShipmentConsigneeStateFields({
     onStateChange(nextState);
 
     const nextCode = findShipmentStateCode(lookupCountry, states, nextState);
-    if (requiredStateCode && nextCode) onStateCodeChange(nextCode);
+    if (requiredStateCode) onStateCodeChange(nextCode);
   };
 
   const handleManualStateCodeChange = (event: ChangeEvent<HTMLInputElement>) => {

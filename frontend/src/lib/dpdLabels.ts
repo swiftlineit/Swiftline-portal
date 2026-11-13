@@ -221,6 +221,8 @@ export type ShipmentDraft = {
   forceGst?: boolean;
   // Printed as the NOTE block on the customs (shipment) invoice.
   declarationNote?: string;
+  shipperDeclarationAcceptedAt?: string | null;
+  shipperDeclarationVersion?: string;
   serviceType?: ShipmentServiceType;
   serviceCode: string;
   validationIssues: string[];
@@ -264,6 +266,7 @@ export type ShipmentDraftPatch = {
   insuranceOptIn?: boolean;
   forceGst?: boolean;
   declarationNote?: string;
+  shipperDeclarationAccepted?: boolean;
   serviceType?: ShipmentServiceType;
   serviceCode?: string;
 };

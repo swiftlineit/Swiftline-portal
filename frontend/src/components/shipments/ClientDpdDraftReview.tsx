@@ -22,6 +22,7 @@ import ShipmentImportBanner from "@/components/shipments/ShipmentImportBanner";
 import { ConsignorKycSection } from "@/components/shipments/ConsignorKycSection";
 import { CsbVBookingFields } from "@/components/shipments/CsbVBookingFields";
 import { ShipmentConsigneeStateFields } from "@/components/shipments/ShipmentConsigneeStateFields";
+import { ShipperDeclarationAcceptance } from "@/components/shipments/ShipperDeclarationAcceptance";
 import { apiUrl } from "@/lib/api";
 import { getAccessToken, logout, refreshAccessToken } from "@/lib/auth";
 import {
@@ -67,6 +68,7 @@ import { normalizeCsbType, type CsbType } from "@/lib/csbType";
 import { getCsbVBookingIssues, getCsbVShipmentValueError, type CsbVBookingDetails } from "@/lib/csbVBooking";
 import { maxParcelsPerShipment } from "@/lib/shipmentLimits";
 import { defaultDeclarationNote } from "@/lib/customsInvoice";
+import { hasCurrentShipperDeclarationAcceptance } from "@/lib/shipperDeclaration";
 import {
   composeContentsDescription,
   getDeclaredGoodsValue,
@@ -432,6 +434,7 @@ export default function ClientDpdDraftReview({
   const appliedAddressBookEntryRef = useRef("");
   const [user, setUser] = useState<ClientShellUser | null>(null);
   const [draft, setDraft] = useState<ShipmentDraft | null>(null);
+  const [shipperDeclarationAccepted, setShipperDeclarationAccepted] = useState(false);
   const [supportReadOnly, setSupportReadOnly] = useState(false);
   const [rates, setRates] = useState<ClientCountryRateCard[]>([]);
   const [addressForm, setAddressForm] = useState<AddressForm>({
@@ -721,9 +724,10 @@ export default function ClientDpdDraftReview({
     insuranceOptIn,
     forceGst,
     declarationNote,
+    ...(!operatorSlug ? { shipperDeclarationAccepted } : {}),
     serviceType: contactForm.serviceType,
     serviceCode: contactForm.serviceCode
-  }), [addressForm, consignorForm, contactForm, csbType, csbVDetails, declarationNote, forceGst, insuranceOptIn, kycUseForAll, parcelForms]);
+  }), [addressForm, consignorForm, contactForm, csbType, csbVDetails, declarationNote, forceGst, insuranceOptIn, kycUseForAll, operatorSlug, parcelForms, shipperDeclarationAccepted]);
 
   const draftPatchKey = useMemo(
     () => `${draft?._id ?? "unloaded"}:${JSON.stringify(draftPatch)}`,
@@ -735,6 +739,7 @@ export default function ClientDpdDraftReview({
     return consignorChanged
       || insuranceOptIn !== (draft.insuranceOptIn ?? false)
       || forceGst !== (draft.forceGst ?? false)
+      || (!operatorSlug && shipperDeclarationAccepted !== hasCurrentShipperDeclarationAcceptance(draft))
       || csbType !== normalizeCsbType(draft.csbType)
       || csbVDetails.gstin !== (draft.csbVGstin ?? "")
       || csbVDetails.accountNumber !== (draft.csbVAccountNumber ?? "")
@@ -759,7 +764,7 @@ export default function ClientDpdDraftReview({
       || addressForm.county !== (draft.consigneeEnteredAddress.county ?? "")
       || addressForm.stateCode !== (draft.consigneeEnteredAddress.stateCode ?? "")
       || addressForm.postcode !== (draft.consigneeEnteredAddress.postcode ?? "");
-  }, [addressForm, consignorChanged, contactForm, csbType, csbVDetails, declarationNote, draft, forceGst, insuranceOptIn, parcelForms]);
+  }, [addressForm, consignorChanged, contactForm, csbType, csbVDetails, declarationNote, draft, forceGst, insuranceOptIn, operatorSlug, parcelForms, shipperDeclarationAccepted]);
 
   const {
     status: draftAutosaveStatus,
@@ -799,6 +804,9 @@ export default function ClientDpdDraftReview({
   function syncDraft(nextDraft: ShipmentDraft, preserveLocalItemRows = false) {
     const address = nextDraft.consigneeEnteredAddress;
     setDraft(nextDraft);
+    if (!operatorSlug) {
+      setShipperDeclarationAccepted(hasCurrentShipperDeclarationAcceptance(nextDraft));
+    }
     setAddressForm({
       countryCode: address.countryCode ?? "GB",
       countryName: address.countryName ?? getCountryName(address.countryCode ?? "GB"),
@@ -1204,6 +1212,13 @@ export default function ClientDpdDraftReview({
   ) {
     if (!draft) return;
 
+    if (!operatorSlug && !shipperDeclarationAccepted) {
+      const message = "Accept the shipper declaration before booking this shipment.";
+      setError(message);
+      toast.error(message);
+      return;
+    }
+
     if (!operatorSlug && isCountryPaused(draft.consigneeEnteredAddress?.countryCode || addressForm.countryCode, bookingPauses)) {
       const msg = "Bookings for this destination are temporarily paused. Please check the booking pause notice for details.";
       setError(msg);
@@ -1275,6 +1290,13 @@ export default function ClientDpdDraftReview({
     try {
       const currentDraft = draftChanged ? await saveDraftChanges() : draft;
       if (!currentDraft) return;
+      if (!operatorSlug && !hasCurrentShipperDeclarationAcceptance(currentDraft)) {
+        setShipperDeclarationAccepted(false);
+        const message = "Shipment details changed. Review and accept the shipper declaration again before booking.";
+        setError(message);
+        toast.error(message);
+        return;
+      }
 
       if (currentDraft.addressValidationStatus !== "VALIDATED") {
         const addressInput = {
@@ -1824,7 +1846,7 @@ export default function ClientDpdDraftReview({
                   <button
                     type="button"
                     onClick={() => void handleCreateLabel()}
-                    disabled={busy || isCurrentCountryPaused}
+                    disabled={busy || isCurrentCountryPaused || (!operatorSlug && !shipperDeclarationAccepted)}
                     title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
                     className="inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                   >
@@ -1837,13 +1859,20 @@ export default function ClientDpdDraftReview({
                   <button
                     type="button"
                     onClick={() => void handleCreateLabel(undefined, true)}
-                    disabled={busy || isCurrentCountryPaused}
+                    disabled={busy || isCurrentCountryPaused || !shipperDeclarationAccepted}
                     title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
                     className="mt-2 inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 border border-amber-500 bg-amber-50 px-4 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-amber-800"
                   >
                     {/* <FiTruck aria-hidden="true" className="h-4 w-4" /> */}
                     {pendingAction === "BOOKING_NO_DPD" ? "Processing..." : "Create Shipment Without DPD Label"}
                   </button>
+                ) : null}
+                {!operatorSlug ? (
+                  <ShipperDeclarationAcceptance
+                    checked={shipperDeclarationAccepted}
+                    disabled={busy}
+                    onCheckedChange={setShipperDeclarationAccepted}
+                  />
                 ) : null}
                 {/* Sits with the booking action rather than in its own bar: this
                     is where the customer already looks to finish the shipment, and

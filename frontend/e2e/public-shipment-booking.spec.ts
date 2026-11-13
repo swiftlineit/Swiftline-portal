@@ -166,7 +166,11 @@ async function mockApis(page: Page) {
   return { sessionStarts: () => sessionStarts };
 }
 
-async function completeAddressStep(page: Page, csbType: "CSB_IV" | "CSB_V" = "CSB_IV") {
+async function completeAddressStep(
+  page: Page,
+  csbType: "CSB_IV" | "CSB_V" = "CSB_IV",
+  expectedReceiverState = "Greater London",
+) {
   await page.getByLabel("Customs route").selectOption(csbType);
   const sender = page.getByRole("region", { name: "Sender details" });
   await expect(sender.getByText("Confirm sender email", { exact: true })).toHaveCount(0);
@@ -196,8 +200,8 @@ async function completeAddressStep(page: Page, csbType: "CSB_IV" | "CSB_V" = "CS
   await receiver.getByLabel("Address line 1").fill("10 Down");
   await page.getByRole("button", { name: /10 Downing Street/ }).click();
   await expect(receiver.getByLabel("Postal code")).toHaveValue("SW1A 1AA");
-  await expect(receiver.getByLabel("State / county")).toHaveValue(
-    "Greater London",
+  await expect(receiver.getByLabel("State / county")).toContainText(
+    expectedReceiverState,
   );
   await expect(receiver.getByLabel("Town / city")).toHaveValue("London");
   if (csbType === "CSB_V") {
@@ -424,6 +428,42 @@ test("receiver state and city use reference search without clearing an entered c
   await expect(
     receiver.locator('button[aria-label="Town / City"]'),
   ).toContainText("London");
+});
+
+test("does not retain an autocomplete state that is missing from destination options", async ({
+  page,
+}) => {
+  await page.route("**/reference/countries/GB/states", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        states: [{ name: "Greater London", code: "LND" }],
+      },
+    }),
+  );
+  await page.route("**/address-lookup/places/**", (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        address: {
+          addressLine1: "10 Downing Street",
+          addressLine2: "",
+          city: "London",
+          state: "Unmatched County",
+          postalCode: "SW1A 1AA",
+          countryCode: "GB",
+          countryName: "United Kingdom",
+        },
+      },
+    }),
+  );
+
+  await page.goto("/book-shipment-online");
+  await completeAddressStep(page, "CSB_IV", "Search state");
+
+  const receiver = page.getByRole("region", { name: "Receiver details" });
+  await expect(receiver.getByLabel("State / county")).toContainText("Search state");
+  await expect(page.getByText("Dimensions and contents", { exact: true })).toHaveCount(0);
 });
 
 test("mobile layout has no horizontal overflow", async ({ page }, testInfo) => {

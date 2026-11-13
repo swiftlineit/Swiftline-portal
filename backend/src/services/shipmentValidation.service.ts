@@ -13,7 +13,7 @@ import { getDeclaredGoodsValue, getParcelDescriptionLimitMessage, getParcelItemA
 import { isDialCodeForCountry } from "./phoneCountry.service.js";
 import { findRestrictedCategories } from "./restrictedGoods.service.js";
 import { getGstinError } from "./gstin.js";
-import { getStates, normalizePlaceName } from "./reference/geography.service.js";
+import { getStates, isValidStateForCountry, normalizePlaceName } from "./reference/geography.service.js";
 
 const ukPostcodePattern = /^[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}$/;
 const indianPostcodePattern = /^[1-9]\d{5}$/;
@@ -328,6 +328,8 @@ export function validateShipmentDraftFields(
     requireItemHsnCodes?: boolean;
     /** Keep newly introduced CSB-V booking checks off legacy amendment reviews. */
     enforceNewCsbVBookingRules?: boolean;
+    /** Require CSB-IV states to match the destination list; CSB-V is checked separately. */
+    requireConsigneeStateMatch?: boolean;
   } = {}
 ): string[] {
   const issues: string[] = [];
@@ -359,6 +361,21 @@ export function validateShipmentDraftFields(
   if (!hasText(address.addressLine1)) issues.push("Address line 1 is required");
   if (!hasText(address.townOrCity)) issues.push("Town or city is required");
   if (!hasText(address.county)) issues.push("Consignee state is required");
+  if (
+    options.requireConsigneeStateMatch
+    && normalizeCsbType(draft.csbType) === "CSB_IV"
+    && hasText(address.countryCode)
+    && hasText(address.county)
+  ) {
+    try {
+      if (!isValidStateForCountry(address.countryCode ?? "", address.county ?? "")) {
+        issues.push("Consignee state is not valid for the selected country");
+      }
+    } catch {
+      // Match the existing CSB-V validation behavior when reference data is
+      // unavailable: required fields remain enforced without blocking all lanes.
+    }
+  }
   issues.push(...validateCsbVFields(draft, options.enforceNewCsbVBookingRules !== false));
 
   const phoneNumber = parsePhoneNumberFromString(`${address.mobileCountryCode}${address.mobileNumber}`);

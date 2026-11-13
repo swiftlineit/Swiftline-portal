@@ -10,6 +10,7 @@ import {
   type ShipmentPayload
 } from "../services/shipmentPayload.service.js";
 import { validateShipmentDraftFields } from "../services/shipmentValidation.service.js";
+import { getStates } from "../services/reference/geography.service.js";
 
 function payload(parcelCount: number): ShipmentPayload {
   return {
@@ -110,6 +111,55 @@ test("enforces the per-item derived amount limit for CSB-IV while allowing highe
     { requireConsignorDetails: false }
   );
   assert.equal(csbVIssues.some((issue) => issue.includes("item amount")), false);
+});
+
+test("checks CSB-IV consignee state against the destination reference list at booking", () => {
+  const makeDraft = (countryCode: string, county: string) => ({
+    csbType: "CSB_IV",
+    consigneeEnteredAddress: {
+      contactName: "Consignee",
+      mobileCountryCode: "+44",
+      mobileNumber: "7123456789",
+      email: "consignee@example.com",
+      countryCode,
+      postcode: countryCode === "GB" ? "SW1A 1AA" : "00000",
+      addressLine1: "1 Test Street",
+      townOrCity: "London",
+      county
+    },
+    parcelCount: 1,
+    parcelList: [{
+      sequence: 1,
+      weightKg: 1,
+      lengthCm: 10,
+      widthCm: 10,
+      heightCm: 10,
+      shipmentContentType: "PARCEL",
+      contentsDescription: "BOOKS",
+      items: []
+    }]
+  } as unknown as IShipmentDraft);
+  const hasStateIssue = (draft: IShipmentDraft, requireConsigneeStateMatch: boolean) =>
+    validateShipmentDraftFields(draft, {
+      requireConsignorDetails: false,
+      requireItemHsnCodes: false,
+      requireConsigneeStateMatch
+    }).includes("Consignee state is not valid for the selected country");
+
+  const gbStates = getStates("GB");
+  assert.ok(gbStates.length, "GB reference states must be available for this test");
+  const validGbState = gbStates[0]?.name ?? "";
+  assert.ok(validGbState, "GB reference state must have a name");
+  const validDraft = makeDraft("GB", validGbState);
+  const invalidDraft = makeDraft("GB", "Not a real state");
+
+  assert.equal(hasStateIssue(validDraft, true), false);
+  assert.equal(hasStateIssue(invalidDraft, true), true);
+  // Other draft-validation callers, including legacy amendment review, retain
+  // their prior behavior until they explicitly opt into the booking check.
+  assert.equal(hasStateIssue(invalidDraft, false), false);
+  // Countries without a subdivision list keep the existing free-text behavior.
+  assert.equal(hasStateIssue(makeDraft("AQ", "Free-text county"), true), false);
 });
 
 test("rejects more than 50 normalized item lines during booking validation", () => {

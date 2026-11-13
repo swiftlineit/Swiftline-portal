@@ -297,6 +297,8 @@ describe("Swiftline tracking sequence", () => {
 
     const draft = await ShipmentDraft.create({
       creationSource: "MANUAL",
+      shipperDeclarationAcceptedAt: new Date(),
+      shipperDeclarationVersion: "v1",
       businessAccountId: account._id,
       branchId: branch._id,
       sender: { name: branch.name, code: branch.code },
@@ -444,6 +446,8 @@ describe("Swiftline tracking sequence", () => {
     });
     const draft = await ShipmentDraft.create({
       creationSource: "MANUAL",
+      shipperDeclarationAcceptedAt: new Date(),
+      shipperDeclarationVersion: "v1",
       businessAccountId: account._id,
       branchId: branch._id,
       sender: { name: branch.name, code: branch.code },
@@ -589,6 +593,8 @@ describe("Swiftline tracking sequence", () => {
 
     const swiftlineDraft = await ShipmentDraft.create({
       creationSource: "MANUAL",
+      shipperDeclarationAcceptedAt: new Date(),
+      shipperDeclarationVersion: "v1",
       businessAccountId: account._id,
       branchId: branch._id,
       sender: draft.sender,

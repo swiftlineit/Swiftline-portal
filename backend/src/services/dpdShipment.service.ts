@@ -77,6 +77,7 @@ import {
   getOperatorCompanyTrackingPrefix
 } from "./operatorTrackingNumber.service.js";
 import { loadOperatorBrandLogo } from "./operatorBranding.service.js";
+import { bookingRequiresShipperDeclarationAcceptance } from "./shipperDeclaration.service.js";
 
 // Keeps multi-parcel PDF/S3 work moving without opening an unbounded number of
 // uploads or holding too many generated label buffers in memory.
@@ -639,6 +640,17 @@ async function createLabelForShipmentDraftInternal(
     }
   }
 
+  // Staff and client bookings must carry the server-recorded acceptance before
+  // any new booking validation, billing, tracking allocation, or carrier work.
+  // Existing bookings remain safely reusable through the idempotent path above.
+  if (bookingRequiresShipperDeclarationAcceptance(paymentContext.actor, draft)) {
+    throw new DpdShipmentServiceError(
+      "Accept the shipper declaration before booking this shipment.",
+      400,
+      { code: "SHIPPER_DECLARATION_REQUIRED" }
+    );
+  }
+
   // CSB-IV has a 240-character description cap per parcel. Draft autosave keeps
   // allowing longer entries for review; no financial or carrier side-effect
   // starts until each parcel fits. CSB-V has no corresponding description cap.
@@ -651,7 +663,10 @@ async function createLabelForShipmentDraftInternal(
     });
   }
 
-  const validationIssues = validateShipmentDraftFields(draft, { requireValidatedAddress: true });
+  const validationIssues = validateShipmentDraftFields(draft, {
+    requireValidatedAddress: true,
+    requireConsigneeStateMatch: true
+  });
   if (validationIssues.length) {
     draft.validationIssues = validationIssues;
     draft.status = "VALIDATION_FAILED";

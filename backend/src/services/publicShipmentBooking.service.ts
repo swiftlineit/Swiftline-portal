@@ -200,7 +200,10 @@ export async function quotePublicShipment(input: {
   if (!["DRAFT", "QUOTED"].includes(booking.state)) throw new PublicShipmentBookingError("This booking is already in payment processing.", 409);
   const draft = await ShipmentDraft.findById(booking.shipmentDraftId).exec();
   if (!draft) throw new PublicShipmentBookingError("Shipment details were not found.", 404);
-  const issues = validateShipmentDraftFields(draft, { requireValidatedAddress: true });
+  const issues = validateShipmentDraftFields(draft, {
+    requireValidatedAddress: true,
+    requireConsigneeStateMatch: true
+  });
   if (issues.length) throw new PublicShipmentBookingError("Complete the required shipment information before requesting a quote.", 400, "VALIDATION_FAILED", { validationIssues: issues });
 
   const pricing = await calculateShipmentPricingEstimate({

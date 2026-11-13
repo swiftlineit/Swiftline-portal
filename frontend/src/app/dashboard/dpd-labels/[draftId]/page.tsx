@@ -20,6 +20,7 @@ import { ConsignorKycSection } from "@/components/shipments/ConsignorKycSection"
 import { CsbVBookingFields } from "@/components/shipments/CsbVBookingFields";
 import { ShipmentConsigneeStateFields } from "@/components/shipments/ShipmentConsigneeStateFields";
 import { ShipmentLabelsPanel } from "@/components/shipments/ShipmentLabelsPanel";
+import { ShipperDeclarationAcceptance } from "@/components/shipments/ShipperDeclarationAcceptance";
 import {
   ConsignorForm,
   ParcelKycState,
@@ -44,6 +45,7 @@ import { normalizeCsbType, type CsbType } from "@/lib/csbType";
 import { getCsbVBookingIssues, getCsbVShipmentValueError, type CsbVBookingDetails } from "@/lib/csbVBooking";
 import { maxParcelsPerShipment } from "@/lib/shipmentLimits";
 import { defaultDeclarationNote } from "@/lib/customsInvoice";
+import { hasCurrentShipperDeclarationAcceptance } from "@/lib/shipperDeclaration";
 import {
   composeContentsDescription,
   getDeclaredGoodsValue,
@@ -423,6 +425,7 @@ export default function DpdLabelDraftPage() {
   const router = useRouter();
   const { user, loading } = useAdminUser(OPERATIONS_AREA);
   const [draft, setDraft] = useState<ShipmentDraft | null>(null);
+  const [shipperDeclarationAccepted, setShipperDeclarationAccepted] = useState(false);
   const [result, setResult] = useState<DpdShipmentResult | null>(null);
   // Walk-in payment capture. Ignored entirely for business shipments.
   const [counterMethod, setCounterMethod] = useState<CounterPaymentInput["method"]>("CASH");
@@ -636,9 +639,10 @@ export default function DpdLabelDraftPage() {
     insuranceOptIn,
     forceGst,
     declarationNote,
+    shipperDeclarationAccepted,
     serviceType: draftCorrectionForm.serviceType,
     serviceCode: draftCorrectionForm.serviceCode
-  }), [addressForm, consignorForm, csbType, csbVDetails, declarationNote, draftCorrectionForm, forceGst, insuranceOptIn, kycUseForAll, parcelForms]);
+  }), [addressForm, consignorForm, csbType, csbVDetails, declarationNote, draftCorrectionForm, forceGst, insuranceOptIn, kycUseForAll, parcelForms, shipperDeclarationAccepted]);
 
   const draftPatchKey = useMemo(
     () => `${draft?._id ?? "unloaded"}:${JSON.stringify(draftPatch)}`,
@@ -677,6 +681,7 @@ export default function DpdLabelDraftPage() {
   const draftChanged = correctionChanged
     || addressChanged
     || consignorChanged
+    || (draft ? shipperDeclarationAccepted !== hasCurrentShipperDeclarationAcceptance(draft) : false)
     || (draft ? csbType !== normalizeCsbType(draft.csbType) : false)
     || (draft ? declarationNote !== (draft.declarationNote ?? defaultDeclarationNote) : false);
 
@@ -695,6 +700,7 @@ export default function DpdLabelDraftPage() {
     onSaved: (nextDraft, isLatest) => {
       setDraft(nextDraft);
       if (!isLatest) return;
+      setShipperDeclarationAccepted(hasCurrentShipperDeclarationAcceptance(nextDraft));
       syncDraftCorrectionForm(nextDraft, true);
       syncConsignorForm(nextDraft);
       syncAddressForm(nextDraft);
@@ -849,6 +855,7 @@ export default function DpdLabelDraftPage() {
         setRates(rateData.rates);
         setShipmentImport(data.shipmentImport ?? null);
         setDraft(data.shipmentDraft);
+        setShipperDeclarationAccepted(hasCurrentShipperDeclarationAcceptance(data.shipmentDraft));
         syncDraftCorrectionForm(data.shipmentDraft);
         syncConsignorForm(data.shipmentDraft);
         syncAddressForm(data.shipmentDraft);
@@ -1110,6 +1117,7 @@ export default function DpdLabelDraftPage() {
       setPredictions([]);
       const refreshed = await getShipmentDraft(draft._id);
       setDraft(refreshed.shipmentDraft);
+      setShipperDeclarationAccepted(hasCurrentShipperDeclarationAcceptance(refreshed.shipmentDraft));
       syncAddressForm(refreshed.shipmentDraft);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to select address.");
@@ -1129,6 +1137,13 @@ export default function DpdLabelDraftPage() {
    skipDpdLabel = false
  ) {
   if (!draft) return;
+
+  if (!shipperDeclarationAccepted) {
+    const message = "Accept the shipper declaration before booking this shipment.";
+    setError(message);
+    toast.error(message);
+    return;
+  }
 
   if (isCountryPaused(draft.consigneeEnteredAddress?.countryCode || addressForm.countryCode, bookingPauses)) {
     const msg = "Bookings for this destination are temporarily paused. Please check the booking pause notice for details.";
@@ -1212,6 +1227,13 @@ export default function DpdLabelDraftPage() {
     }
 
     const savedDraft = await saveDraftCorrectionsIfNeeded();
+    if (!hasCurrentShipperDeclarationAcceptance(savedDraft)) {
+      setShipperDeclarationAccepted(false);
+      const message = "Shipment details changed. Review and accept the shipper declaration again before booking.";
+      setError(message);
+      toast.error(message);
+      return;
+    }
     let draftForValidation = savedDraft;
 
     // Once an address is validated (including a manual "use as entered" confirmation)
@@ -1249,6 +1271,7 @@ export default function DpdLabelDraftPage() {
       const refreshed = await getShipmentDraft(draftForValidation._id);
       draftForValidation = refreshed.shipmentDraft;
       setDraft(draftForValidation);
+      setShipperDeclarationAccepted(hasCurrentShipperDeclarationAcceptance(draftForValidation));
       syncDraftCorrectionForm(draftForValidation);
       syncAddressForm(draftForValidation);
     }
@@ -1256,6 +1279,7 @@ export default function DpdLabelDraftPage() {
     const validation = await validateShipmentDraft(draftForValidation._id);
 
     setDraft(validation.shipmentDraft);
+    setShipperDeclarationAccepted(hasCurrentShipperDeclarationAcceptance(validation.shipmentDraft));
     syncDraftCorrectionForm(validation.shipmentDraft);
 
     if (!validation.readyForDpd) {
@@ -1373,6 +1397,7 @@ export default function DpdLabelDraftPage() {
         decision: "KEEP_ENTERED"
       });
       setDraft(data.shipmentDraft);
+      setShipperDeclarationAccepted(hasCurrentShipperDeclarationAcceptance(data.shipmentDraft));
       syncDraftCorrectionForm(data.shipmentDraft);
       syncAddressForm(data.shipmentDraft);
       setManualAddressConfirmationRequired(false);
@@ -1783,7 +1808,7 @@ export default function DpdLabelDraftPage() {
               <button
                 type="button"
                 onClick={() => void handleCreateLabel()}
-                disabled={busy || isCurrentCountryPaused}
+                disabled={busy || isCurrentCountryPaused || !shipperDeclarationAccepted}
                 title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
                 className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
               >
@@ -1799,7 +1824,7 @@ export default function DpdLabelDraftPage() {
                 <button
                   type="button"
                   onClick={() => void handleCreateLabel(undefined, true)}
-                  disabled={busy || isCurrentCountryPaused}
+                  disabled={busy || isCurrentCountryPaused || !shipperDeclarationAccepted}
                   title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
                   className="mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-500 bg-amber-50 px-4 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-amber-800"
                 >
@@ -1807,6 +1832,11 @@ export default function DpdLabelDraftPage() {
                   {pendingAction === "BOOKING_NO_DPD" ? "Creating..." : "Create Shipment Without DPD Label"}
                 </button>
               ) : null}
+              <ShipperDeclarationAcceptance
+                checked={shipperDeclarationAccepted}
+                disabled={busy}
+                onCheckedChange={setShipperDeclarationAccepted}
+              />
               {result ? draft.customerType === "INDIVIDUAL" ? (
                 <Link
                   href="/dashboard/dpd-labels"

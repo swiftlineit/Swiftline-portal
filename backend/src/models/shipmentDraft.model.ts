@@ -227,6 +227,9 @@ export interface IShipmentDraft extends mongoose.Document, TenantOwnedFields {
   // Printed as the NOTE / NOTES block on the customs (shipment) invoice. Kept
   // separate from consignee deliveryInstructions, which go to the carrier.
   declarationNote: string;
+  /** Client or staff acceptance of the shipper declaration presented before booking. */
+  shipperDeclarationAcceptedAt?: Date | null;
+  shipperDeclarationVersion?: string;
   serviceType: ShipmentServiceType;
   serviceCode: string;
   validationIssues: string[];
@@ -575,6 +578,8 @@ const shipmentDraftSchema = new mongoose.Schema<IShipmentDraft>(
       maxlength: 500,
       default: defaultDeclarationNote,
     },
+    shipperDeclarationAcceptedAt: { type: Date, default: null },
+    shipperDeclarationVersion: { type: String, trim: true, maxlength: 20, default: "" },
     serviceType: {
       type: String,
       enum: shipmentServiceTypeValues,

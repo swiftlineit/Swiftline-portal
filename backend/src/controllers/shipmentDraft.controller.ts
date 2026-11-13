@@ -35,6 +35,10 @@ import { buildShipmentCostEstimate } from "../services/shipmentCostEstimate.serv
 import { getDeclaredGoodsValue } from "../services/parcelItems.service.js";
 import { RateCardRequiredError } from "../services/shipmentPricing.service.js";
 import { resolveShipmentRateCardScope } from "../services/shipmentPricing.service.js";
+import {
+  hasCurrentShipperDeclarationAcceptance,
+  resolveShipperDeclarationAcceptance
+} from "../services/shipperDeclaration.service.js";
 import { rateCardFilter } from "../services/rateCardScope.service.js";
 import { CountryRateCard } from "../models/countryRateCard.model.js";
 import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
@@ -157,6 +161,9 @@ const draftPatchSchema = z.object({
   forceGst: z.boolean().optional(),
   // Printed as the NOTE block on the customs (shipment) invoice.
   declarationNote: z.string().trim().toUpperCase().max(500).optional(),
+  // The client records only the user's choice. The acceptance time and text
+  // version are assigned by the server and never trusted from request input.
+  shipperDeclarationAccepted: z.boolean().optional(),
   serviceType: z.enum(shipmentServiceTypeValues).optional(),
   serviceCode: z.string().trim().max(40).optional()
 });
@@ -821,6 +828,44 @@ export async function updateShipmentDraft(request: Request, response: Response):
     shipmentDraft.declarationNote = parsed.data.declarationNote;
   }
 
+  // Operator workspaces do not use this Swiftline client/staff declaration.
+  // For Swiftline bookings, any substantive draft edit invalidates a previous
+  // acceptance so the user must accept against the final shipment details.
+  if (!getOperatorContext(request)) {
+    const wasDeclarationAccepted = hasCurrentShipperDeclarationAcceptance(shipmentDraft);
+    const nextAcceptance = resolveShipperDeclarationAcceptance({
+      current: shipmentDraft,
+      requestedAcceptance: parsed.data.shipperDeclarationAccepted,
+      shipmentDetailsChanged: changedFields.length > 0,
+      acceptedAt: new Date(changedAt)
+    });
+    const isDeclarationAccepted = hasCurrentShipperDeclarationAcceptance(nextAcceptance);
+
+    if (wasDeclarationAccepted !== isDeclarationAccepted) {
+      recordFieldChange(
+        changedFields,
+        "shipperDeclarationAccepted",
+        wasDeclarationAccepted,
+        isDeclarationAccepted,
+        userId,
+        changedAt
+      );
+    }
+    if (shipmentDraft.shipperDeclarationVersion !== nextAcceptance.shipperDeclarationVersion) {
+      recordFieldChange(
+        changedFields,
+        "shipperDeclarationVersion",
+        shipmentDraft.shipperDeclarationVersion,
+        nextAcceptance.shipperDeclarationVersion,
+        userId,
+        changedAt
+      );
+    }
+
+    shipmentDraft.shipperDeclarationAcceptedAt = nextAcceptance.shipperDeclarationAcceptedAt;
+    shipmentDraft.shipperDeclarationVersion = nextAcceptance.shipperDeclarationVersion;
+  }
+
   shipmentDraft.validationIssues = validateShipmentDraftFields(shipmentDraft);
   shipmentDraft.status = shipmentDraft.validationIssues.length ? "VALIDATION_FAILED" : "READY_FOR_DPD";
   await shipmentDraft.save();
@@ -855,7 +900,10 @@ export async function validateShipmentDraft(request: Request, response: Response
     throw error;
   }
 
-  const issues = validateShipmentDraftFields(shipmentDraft, { requireValidatedAddress: true });
+  const issues = validateShipmentDraftFields(shipmentDraft, {
+    requireValidatedAddress: true,
+    requireConsigneeStateMatch: true
+  });
 
   // Only run the booking-payload checks once the draft's own fields are sound,
   // so the booker is not shown the same missing value reported twice over.

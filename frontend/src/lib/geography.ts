@@ -260,3 +260,11 @@ export function matchStateName(states: GeographyState[], stateName: string) {
 
   return match?.name ?? "";
 }
+
+/**
+ * Keeps free-text state values for countries without reference subdivisions,
+ * but only returns a selectable value when a reference list exists.
+ */
+export function resolveStateFieldValue(states: GeographyState[], stateName: string) {
+  return states.length ? matchStateName(states, stateName) : stateName;
+}
