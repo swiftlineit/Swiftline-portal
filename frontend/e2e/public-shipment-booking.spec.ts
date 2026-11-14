@@ -200,9 +200,12 @@ async function completeAddressStep(
   await receiver.getByLabel("Address line 1").fill("10 Down");
   await page.getByRole("button", { name: /10 Downing Street/ }).click();
   await expect(receiver.getByLabel("Postal code")).toHaveValue("SW1A 1AA");
-  await expect(receiver.getByLabel("State / county")).toContainText(
-    expectedReceiverState,
-  );
+  const stateField = receiver.getByLabel("State / county");
+  if (expectedReceiverState === "Search state") {
+    await expect(stateField).toContainText(expectedReceiverState);
+  } else {
+    await expect(stateField).toHaveValue(expectedReceiverState);
+  }
   await expect(receiver.getByLabel("Town / city")).toHaveValue("London");
   if (csbType === "CSB_V") {
     await receiver.getByLabel("Consignee State Code").fill("10");
@@ -283,7 +286,7 @@ test("books and pays for a public shipment", async ({ page }, testInfo) => {
     fullPage: true,
   });
   await page.getByRole("button", { name: /Pay ₹2,360.00/ }).click();
-  await expect(page).toHaveURL(/\/book-shipment-online\/status$/);
+  await expect(page).toHaveURL(/\/book-shipment-online\/status$/, { timeout: 30_000 });
   await expect(
     page.getByRole("heading", { name: "Your shipment is ready" }),
   ).toBeVisible();

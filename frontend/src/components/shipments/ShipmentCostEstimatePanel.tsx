@@ -198,7 +198,7 @@ function FundingBreakdown({ funding }: { funding: ShipmentCostEstimate["funding"
   }
 
   return (
-    <div className="mt-3 rounded-xl ">
+    <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
       <dl className="space-y-1.5">
         <div className="flex items-center justify-between gap-3">
           <dt className="text-xs font-medium text-slate-600">Advance deduction</dt>
@@ -218,7 +218,9 @@ function FundingBreakdown({ funding }: { funding: ShipmentCostEstimate["funding"
           funding.canFund ? "text-slate-500" : "text-red-700"
         }`}
       >
-      
+        {!funding.canFund ? (
+          <FiAlertTriangle aria-hidden="true" className="mr-1 inline-block h-3.5 w-3.5 align-text-bottom" />
+        ) : null}
         {funding.message}
       </p>
     </div>
@@ -237,7 +239,7 @@ function PriceLockNote({ expiresAt }: { expiresAt: string }) {
 
   return (
     <p className="mt-3 flex items-start gap-1.5 text-xs font-medium text-slate-500">
-     
+      <FiLock aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0" />
       <span>
         This price is held until{" "}
         {expiry.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}. If any charge changes
