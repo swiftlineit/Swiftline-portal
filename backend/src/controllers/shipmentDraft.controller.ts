@@ -829,8 +829,8 @@ export async function updateShipmentDraft(request: Request, response: Response):
   }
 
   // Operator workspaces do not use this Swiftline client/staff declaration.
-  // For Swiftline bookings, any substantive draft edit invalidates a previous
-  // acceptance so the user must accept against the final shipment details.
+  // For Swiftline bookings, a draft edit without a checked declaration clears
+  // an earlier acceptance. A checked declaration covers this PATCH's details.
   if (!getOperatorContext(request)) {
     const wasDeclarationAccepted = hasCurrentShipperDeclarationAcceptance(shipmentDraft);
     const nextAcceptance = resolveShipperDeclarationAcceptance({

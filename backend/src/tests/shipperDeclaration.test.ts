@@ -50,13 +50,32 @@ describe("shipper declaration acceptance", () => {
     });
   });
 
-  test("clears an earlier acceptance after shipment details change", () => {
+  test("applies a checked declaration to details saved in the same request", () => {
+    const acceptedAt = new Date("2026-11-13T12:10:00.000Z");
     const acceptance = resolveShipperDeclarationAcceptance({
       current: {
         shipperDeclarationAcceptedAt: new Date("2026-11-13T12:00:00.000Z"),
         shipperDeclarationVersion: SHIPPER_DECLARATION_VERSION
       },
       requestedAcceptance: true,
+      shipmentDetailsChanged: true,
+      acceptedAt
+    });
+
+    assert.deepEqual(acceptance, {
+      shipperDeclarationAcceptedAt: acceptedAt,
+      shipperDeclarationVersion: SHIPPER_DECLARATION_VERSION
+    });
+    assert.equal(bookingRequiresShipperDeclarationAcceptance("admin", acceptance), false);
+    assert.equal(bookingRequiresShipperDeclarationAcceptance("client", acceptance), false);
+  });
+
+  test("clears an earlier acceptance when shipment details change without consent", () => {
+    const acceptance = resolveShipperDeclarationAcceptance({
+      current: {
+        shipperDeclarationAcceptedAt: new Date("2026-11-13T12:00:00.000Z"),
+        shipperDeclarationVersion: SHIPPER_DECLARATION_VERSION
+      },
       shipmentDetailsChanged: true
     });
 
@@ -64,5 +83,18 @@ describe("shipper declaration acceptance", () => {
       shipperDeclarationAcceptedAt: null,
       shipperDeclarationVersion: ""
     });
+  });
+
+  test("unchecking the declaration clears acceptance", () => {
+    const acceptance = resolveShipperDeclarationAcceptance({
+      current: {
+        shipperDeclarationAcceptedAt: new Date("2026-11-13T12:00:00.000Z"),
+        shipperDeclarationVersion: SHIPPER_DECLARATION_VERSION
+      },
+      requestedAcceptance: false,
+      shipmentDetailsChanged: true
+    });
+
+    assert.equal(hasCurrentShipperDeclarationAcceptance(acceptance), false);
   });
 });

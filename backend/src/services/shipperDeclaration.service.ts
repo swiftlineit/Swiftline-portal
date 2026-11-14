@@ -30,21 +30,22 @@ export function resolveShipperDeclarationAcceptance(input: {
 }): Required<ShipperDeclarationAcceptance> {
   const wasAccepted = hasCurrentShipperDeclarationAcceptance(input.current);
 
-  // Editing shipment details after accepting means the user must review the new
-  // declaration context and accept again, even if autosave carries a stale true.
-  if (wasAccepted && input.shipmentDetailsChanged) {
-    return { shipperDeclarationAcceptedAt: null, shipperDeclarationVersion: "" };
-  }
-
   if (input.requestedAcceptance === false) {
     return { shipperDeclarationAcceptedAt: null, shipperDeclarationVersion: "" };
   }
 
-  if (input.requestedAcceptance === true && !wasAccepted) {
+  // A checked declaration applies to the final details in this same PATCH.
+  // Autosave may have recorded an earlier acceptance before these details were
+  // saved, so refresh its timestamp when the shipment changes.
+  if (input.requestedAcceptance === true && (!wasAccepted || input.shipmentDetailsChanged)) {
     return {
       shipperDeclarationAcceptedAt: input.acceptedAt ?? new Date(),
       shipperDeclarationVersion: SHIPPER_DECLARATION_VERSION
     };
+  }
+
+  if (input.shipmentDetailsChanged) {
+    return { shipperDeclarationAcceptedAt: null, shipperDeclarationVersion: "" };
   }
 
   if (wasAccepted) {
