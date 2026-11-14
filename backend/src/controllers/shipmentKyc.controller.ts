@@ -14,6 +14,7 @@ import {
 } from "../services/shipmentDraftPolicy.service.js";
 import { validateShipmentDraftFields } from "../services/shipmentValidation.service.js";
 import { isAadhaarOcrFeatureEnabled } from "../services/aadhaarOcrFeature.service.js";
+import { AadhaarPdfInputError, prepareCompleteAadhaarPdf } from "../services/aadhaarPdf.service.js";
 import { isSupportedDocument, isSupportedImage, matchesDeclaredType } from "../services/storage/fileSignature.js";
 import {
   scanAadhaarWithSurepass,
@@ -191,8 +192,9 @@ export async function ocrShipmentDraftAadhaar(request: Request, response: Respon
   const files = request.files as Record<string, Express.Multer.File[] | undefined> | undefined;
   const front = files?.front?.[0];
   const back = files?.back?.[0];
-  if (!front || !back) {
-    return response.status(400).json({ success: false, message: "Upload both the Aadhaar front and back sides." });
+  const completePdf = files?.pdf?.[0];
+  if (completePdf ? Boolean(front || back) : !front || !back) {
+    return response.status(400).json({ success: false, message: "Upload a complete one- or two-page PDF, or both Aadhaar sides." });
   }
 
   const draftId = typeof request.params.id === "string" ? request.params.id : "";
@@ -224,12 +226,12 @@ export async function ocrShipmentDraftAadhaar(request: Request, response: Respon
     return response.status(409).json({ success: false, message: "Save the selected parcel before uploading its Aadhaar document." });
   }
 
-  const isPdf = front.mimetype === "application/pdf";
-  const backIsPdf = back.mimetype === "application/pdf";
-  if (isPdf !== backIsPdf) {
+  const isPdf = completePdf ? true : front!.mimetype === "application/pdf";
+  const backIsPdf = back?.mimetype === "application/pdf";
+  if (!completePdf && isPdf !== backIsPdf) {
     return response.status(400).json({ success: false, message: "Upload both sides as PDFs or both sides as images." });
   }
-  for (const file of [front, back]) {
+  for (const file of completePdf ? [completePdf] : [front!, back!]) {
     if (!isSupportedDocument(file.buffer) || !matchesDeclaredType(file.buffer, file.mimetype)) {
       return response.status(400).json({ success: false, message: "The Aadhaar file does not match its file type." });
     }
@@ -239,7 +241,12 @@ export async function ocrShipmentDraftAadhaar(request: Request, response: Respon
     if (!await isAadhaarOcrFeatureEnabled()) {
       return response.status(403).json({ success: false, message: "Aadhaar OCR is currently disabled." });
     }
-    const prefill = await scanAadhaarWithSurepass({ front, back, arePdfs: isPdf });
+    const splitPdf = completePdf ? await prepareCompleteAadhaarPdf(completePdf.buffer) : null;
+    const prefill = await scanAadhaarWithSurepass({
+      front: splitPdf?.front ?? front!,
+      back: splitPdf?.back ?? back!,
+      arePdfs: isPdf,
+    });
     const currentDraft = await ShipmentDraft.findById(draftId).exec();
     if (!currentDraft) return response.status(404).json({ success: false, message: "Shipment draft not found" });
 
@@ -274,24 +281,27 @@ export async function ocrShipmentDraftAadhaar(request: Request, response: Respon
 
     try {
       const storedFront = await storeKycDocument({
-        file: front,
+        file: completePdf ?? front!,
         draftId,
         type: "aadhaar",
         documentLabel: kycDocumentLabels.aadhaar,
         userId,
       });
       storedDocuments.push(storedFront);
-      const storedBack = await storeKycDocument({
-        file: back,
-        draftId,
-        type: "aadhaarBack",
-        documentLabel: kycDocumentLabels.aadhaarBack,
-        userId,
-      });
-      storedDocuments.push(storedBack);
-
       currentDraft.set(`${targetPath}.aadhaar`, storedFront);
-      currentDraft.set(`${targetPath}.aadhaarBack`, storedBack);
+      if (completePdf) {
+        currentDraft.set(`${targetPath}.aadhaarBack`, undefined);
+      } else {
+        const storedBack = await storeKycDocument({
+          file: back!,
+          draftId,
+          type: "aadhaarBack",
+          documentLabel: kycDocumentLabels.aadhaarBack,
+          userId,
+        });
+        storedDocuments.push(storedBack);
+        currentDraft.set(`${targetPath}.aadhaarBack`, storedBack);
+      }
       currentDraft.validationIssues = validateShipmentDraftFields(currentDraft);
       currentDraft.status = currentDraft.validationIssues.length ? "VALIDATION_FAILED" : "READY_FOR_DPD";
       await currentDraft.save();
@@ -318,10 +328,11 @@ export async function ocrShipmentDraftAadhaar(request: Request, response: Respon
         provider: getSurepassAadhaarOcrProviderName(),
         portalRole: getAuthenticatedPortalRole(request),
         consentConfirmed: true,
-        fileTypes: [front.mimetype, back.mimetype],
+        inputMode: completePdf ? "complete_pdf" : "front_back",
+        fileTypes: completePdf ? [completePdf.mimetype] : [front!.mimetype, back!.mimetype],
         kycScope,
         parcelSequence: kycScope === "parcel" ? parcelSequence : undefined,
-        storedDocumentTypes: ["aadhaar", "aadhaarBack"],
+        storedDocumentTypes: completePdf ? ["aadhaar"] : ["aadhaar", "aadhaarBack"],
       },
     });
     response.setHeader("Cache-Control", "no-store");
@@ -332,6 +343,9 @@ export async function ocrShipmentDraftAadhaar(request: Request, response: Respon
       parcelSequence: kycScope === "parcel" ? parcelSequence : undefined,
     });
   } catch (error) {
+    if (error instanceof AadhaarPdfInputError) {
+      return response.status(400).json({ success: false, message: error.message });
+    }
     if (error instanceof SurepassAadhaarOcrError) {
       return response.status(error.statusCode).json({ success: false, message: error.message });
     }

@@ -30,10 +30,13 @@ const arrowClasses = {
  */
 export default function InfoTooltip({
   text,
-  className = ""
+  className = "",
+  placement = "auto"
 }: {
   text: string;
   className?: string;
+  /** Position the tooltip bubble relative to its trigger, or choose automatically. */
+  placement?: "auto" | "left" | "right";
 }) {
   const containerRef = useRef<HTMLSpanElement | null>(null);
   const [open, setOpen] = useState(false);
@@ -52,6 +55,15 @@ export default function InfoTooltip({
     const rect = containerRef.current?.getBoundingClientRect();
 
     if (!rect) return;
+
+    if (placement === "left" && rect.right - tooltipWidth >= viewportMargin) {
+      setAlignment("right");
+      return;
+    }
+    if (placement === "right" && rect.left + tooltipWidth <= window.innerWidth - viewportMargin) {
+      setAlignment("left");
+      return;
+    }
 
     const iconCentre = rect.left + rect.width / 2;
     const halfWidth = tooltipWidth / 2;

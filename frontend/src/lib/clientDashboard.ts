@@ -6,7 +6,7 @@ import {
   AddressPrediction,
   AddressValidationResult,
   AadhaarOcrResult,
-  AadhaarOcrScope,
+  AadhaarOcrUploadInput,
   PortalAddress,
   ShipmentAmendment,
   ShipmentAmendmentFundingPreview,
@@ -679,16 +679,14 @@ export async function uploadClientShipmentKycDocument(input: {
   }>(response);
 }
 
-export async function ocrClientShipmentDraftAadhaar(input: {
-  shipmentDraftId: string;
-  front: File;
-  back: File;
-  kycScope: AadhaarOcrScope;
-  parcelSequence?: number;
-}) {
+export async function ocrClientShipmentDraftAadhaar(input: AadhaarOcrUploadInput) {
   const formData = new FormData();
-  formData.append("front", input.front);
-  formData.append("back", input.back);
+  if (input.pdf) {
+    formData.append("pdf", input.pdf);
+  } else {
+    formData.append("front", input.front);
+    formData.append("back", input.back);
+  }
   formData.append("consent", "true");
   formData.append("kycScope", input.kycScope);
   if (input.parcelSequence) formData.append("parcelSequence", String(input.parcelSequence));

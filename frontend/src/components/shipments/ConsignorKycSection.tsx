@@ -25,6 +25,7 @@ import {
   FiUploadCloud,
 } from "react-icons/fi";
 import { toast } from "react-toastify";
+import InfoTooltip from "@/components/ui/InfoTooltip";
 import {
   ShipmentFieldLabel,
   ShipmentFixedCountryField,
@@ -39,6 +40,7 @@ import type {
   AadhaarOcrResult,
   AadhaarOcrScope,
   AadhaarOcrPrefill,
+  AadhaarOcrUploadInput,
   AddressPrediction,
   ShipmentKycDocument,
   ShipmentKycDocumentType,
@@ -106,13 +108,7 @@ export type ConsignorKycApi = {
     sequence: number,
     type: ShipmentKycDocumentType,
   ) => Promise<Blob>;
-  ocrAadhaar?: (input: {
-    shipmentDraftId: string;
-    front: File;
-    back: File;
-    kycScope: AadhaarOcrScope;
-    parcelSequence?: number;
-  }) => Promise<AadhaarOcrResult>;
+  ocrAadhaar?: (input: AadhaarOcrUploadInput) => Promise<AadhaarOcrResult>;
 };
 
 type SlotConfig = {
@@ -337,8 +333,8 @@ export function ConsignorKycSection({
 
   return (
     <>
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/60 px-4 py-2.5">
+      <section className="overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-t-xl border-b border-slate-200 bg-slate-50/60 px-4 py-2.5">
           <div>
             <h2 className="text-[13px] font-semibold uppercase tracking-wide text-slate-600">
               Consignor Details
@@ -1019,7 +1015,7 @@ function AadhaarOcrControl({
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setError("Each Aadhaar side must be 5 MB or smaller.");
+      setError("Each Aadhaar file must be 5 MB or smaller.");
       if (side === "front") setFrontFile(null);
       else setBackFile(null);
       return;
@@ -1047,22 +1043,25 @@ function AadhaarOcrControl({
     if (busy) return;
     const files = Array.from(event.dataTransfer.files);
     if (files.length !== 1) {
-      setError("Drop one file into each side.");
+      setError("Drop one file into this upload area.");
       return;
     }
     acceptFile(files[0], side);
   }
 
   async function scan() {
-    if (!frontFile || !backFile || !consent) return;
+    const isCompletePdf = Boolean(frontFile?.type === "application/pdf" && !backFile);
+    const upload = isCompletePdf && frontFile
+      ? { pdf: frontFile }
+      : (frontFile && backFile ? { front: frontFile, back: backFile } : null);
+    if (!upload || !consent) return;
     setBusy(true);
     setError("");
     setPrefill(null);
     try {
       const result = await api({
         shipmentDraftId,
-        front: frontFile,
-        back: backFile,
+        ...upload,
         kycScope,
         parcelSequence: kycScope === "parcel" ? parcelSequence : undefined,
       });
@@ -1077,7 +1076,7 @@ function AadhaarOcrControl({
       setBackFile(null);
       if (frontInputRef.current) frontInputRef.current.value = "";
       if (backInputRef.current) backInputRef.current.value = "";
-      toast.success("Aadhaar front and back saved to this booking KYC.");
+      toast.success(isCompletePdf ? "Aadhaar PDF saved to this booking KYC." : "Aadhaar front and back saved to this booking KYC.");
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : "Aadhaar scanning failed. Try again.");
     } finally {
@@ -1155,19 +1154,20 @@ function AadhaarOcrControl({
   }
 
   const canScan = Boolean(
-    frontFile && backFile && consent && !busy && (kycScope === "shared" || selectedParcelSaved),
+    frontFile && (frontFile.type === "application/pdf" && !backFile || backFile)
+      && consent && !busy && (kycScope === "shared" || selectedParcelSaved),
   );
 
   return (
-    <section className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm" aria-label="Aadhaar OCR and KYC upload">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-100 bg-blue-50/50 px-3 py-3 sm:px-4">
+    <section className="overflow-visible rounded-md border border-slate-200 bg-white shadow-sm" aria-label="Aadhaar OCR and KYC upload">
+      <header className="flex flex-wrap items-center justify-between gap-3 rounded-t-md border-b border-blue-100 bg-blue-50/50 px-3 py-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white text-blue-900 shadow-sm ring-1 ring-blue-100">
             <FiFileText aria-hidden="true" className="h-[18px] w-[18px]" />
           </span>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-slate-900">Scan Aadhaar</h3>
-            <p className="mt-0.5 text-[11px] leading-4 text-slate-600">Review the extracted details; both sides are saved to Aadhaar KYC.</p>
+            <p className="mt-0.5 text-[11px] leading-4 text-slate-600">Scan to fill consignor details.</p>
           </div>
         </div>
         <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[10px] font-semibold ${csbType === "CSB_V" ? "border-blue-200 bg-white text-blue-900" : "border-slate-200 bg-white text-slate-600"}`}>
@@ -1195,10 +1195,10 @@ function AadhaarOcrControl({
         </div>
       ) : null}
 
-      <div className="grid gap-3 p-3 sm:p-4 lg:grid-cols-[minmax(210px,0.78fr)_minmax(0,2fr)]">
+      <div className="grid gap-3 p-3 sm:p-4 xl:grid-cols-[minmax(210px,0.78fr)_minmax(0,2fr)]">
         <aside className="flex flex-col justify-between gap-3" aria-label="Masked Aadhaar example">
           <div className="flex items-center justify-between gap-2">
-            <h4 className="text-xs font-semibold text-slate-800">Masked example</h4>
+            <h4 className="text-xs font-semibold text-slate-800">Masked Aadhaar</h4>
           </div>
           <Image
             src="/images/aadhaar-sample-card.webp"
@@ -1208,16 +1208,16 @@ function AadhaarOcrControl({
             sizes="(min-width: 1024px) 260px, 100vw"
             className="mx-auto h-auto w-full max-w-[260px] rounded-md border border-slate-200"
           />
-          <p className="text-[11px] leading-4 text-slate-600">Upload both sides. The Aadhaar number stays masked on screen.</p>
         </aside>
 
         <div className="grid content-start gap-3">
-          <div className="flex flex-wrap items-end justify-between gap-1.5">
-            <div>
-              <h4 className="text-xs font-semibold text-slate-800">Upload both sides</h4>
-              <p className="mt-0.5 text-[10px] text-slate-500">PDF, JPG, or PNG - up to 5 MB per file</p>
-            </div>
-            <span className="text-[10px] font-medium text-slate-500">Front + back required to scan</span>
+          <div className="flex items-center gap-2">
+            <h4 className="text-xs font-semibold text-slate-800">Upload Aadhaar</h4>
+            <InfoTooltip
+              className="shrink-0"
+              placement="left"
+              text="Scans fill consignor details and save the file to KYC. Upload a one-page PDF with both sides, a two-page PDF (front then back), or separate front and back files. PDF, JPG, or PNG, up to 5 MB per file."
+            />
           </div>
 
           <div className="grid gap-2.5 sm:grid-cols-2">
@@ -1229,15 +1229,14 @@ function AadhaarOcrControl({
               onDrop={(event) => handleDrop(event, "front")}
               className={`flex min-h-[104px] min-w-0 flex-col justify-between gap-3 rounded-md border border-dashed p-3 transition ${dropTarget === "front" ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100" : frontFile ? "border-emerald-300 bg-emerald-50/50" : "border-slate-300 bg-white hover:border-blue-400 hover:bg-blue-50/30"} ${busy ? "opacity-60" : ""}`}
             >
-              <input ref={frontInputRef} type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" disabled={busy} onChange={(event) => readFile(event, "front")} className="sr-only" aria-label="Choose Aadhaar front file" tabIndex={-1} aria-hidden="true" />
+              <input ref={frontInputRef} type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" disabled={busy} onChange={(event) => readFile(event, "front")} className="sr-only" aria-label="Choose Aadhaar front image or complete PDF" tabIndex={-1} aria-hidden="true" />
               <div className="flex min-w-0 items-start justify-between gap-2">
                 <span className="min-w-0">
-                  <span className="block text-[11px] font-semibold text-slate-800">Front side</span>
-                  <span className="mt-0.5 block text-[10px] text-slate-500">Photo and number</span>
+                  <span className="block text-[11px] font-semibold text-slate-800">Front side or complete PDF</span>
                 </span>
               </div>
               <button type="button" onClick={() => frontInputRef.current?.click()} disabled={busy} className="flex min-h-9 w-full min-w-0 items-center justify-between gap-2 border-t border-slate-100 pt-2 text-left text-[10px] text-slate-600 transition hover:text-blue-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
-                <span className="min-w-0 truncate" title={frontFile?.name}>{frontFile?.name || "Drop the front side here"}</span>
+                <span className="min-w-0 truncate" title={frontFile?.name}>{frontFile?.name || "Drop front image or full PDF"}</span>
                 {frontFile ? <FiCheck aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-emerald-700" /> : <FiUploadCloud aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
               </button>
             </div>
@@ -1267,10 +1266,7 @@ function AadhaarOcrControl({
           <div className="flex flex-col gap-2.5 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
             <label className="flex min-h-12 min-w-0 flex-1 items-center gap-2.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-medium text-slate-700">
               <input type="checkbox" checked={consent} disabled={busy} onChange={(event) => setConsent(event.target.checked)} className="h-4 w-4 shrink-0 accent-blue-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2" />
-              <span>
-                <span className="block font-semibold text-slate-800">Holder consent confirmed</span>
-                <span className="mt-0.5 block text-[10px] font-normal text-slate-500">Required before scanning and saving.</span>
-              </span>
+              <span className="font-semibold text-slate-800">I have the Aadhaar holder’s consent</span>
             </label>
             <button type="button" onClick={() => void scan()} disabled={!canScan} className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-md bg-blue-900 px-4 text-[11px] font-semibold text-white shadow-sm transition hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-blue-900 disabled:shadow-none">
               <FiFileText aria-hidden="true" className="h-4 w-4" />
@@ -1279,7 +1275,7 @@ function AadhaarOcrControl({
           </div>
         </div>
 
-        <div className="grid gap-2 lg:col-span-2">
+        <div className="grid gap-2 xl:col-span-2">
           {kycScope === "parcel" && !selectedParcelSaved ? <p className="text-[11px] text-amber-800">Save this parcel before scanning its Aadhaar.</p> : null}
           {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-medium text-red-800">{error}</p> : null}
 
@@ -1288,7 +1284,6 @@ function AadhaarOcrControl({
             <header className="border-b border-blue-100 bg-blue-50/60 px-3 py-2.5 sm:px-4">
               <div className="min-w-0">
                 <h4 className="text-[12px] font-semibold text-slate-900">Review extracted details</h4>
-                <p className="text-[11px] text-slate-600">Empty fields were filled where possible. Check the form before saving.</p>
               </div>
             </header>
 
@@ -1321,13 +1316,17 @@ function AadhaarOcrControl({
               </div>
             </dl>
 
-            {prefill.warnings.length || hasOverlengthValues || (hasExistingValuesToReplace && !confirmReplace) ? (
-              <div className="space-y-1.5 px-3 pb-3 sm:px-4">
-                {prefill.warnings.map((warning) => <p key={warning} className="flex gap-1.5 rounded-md bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-900"><FiInfo aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />{warning}</p>)}
-                {hasOverlengthValues ? <p className="flex gap-1.5 rounded-md bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-900"><FiInfo aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />Long values stay in the preview; enter them manually if a form field does not fit.</p> : null}
-                {hasExistingValuesToReplace ? <p className="text-[11px] text-slate-600">{confirmReplace ? "This will replace details you entered. Confirm to continue." : "Some existing details differ from the scan. Review them before replacing."}</p> : null}
-              </div>
-            ) : null}
+            <div className="mx-3 mb-3 flex gap-1.5 rounded-md border border-blue-100 bg-blue-50 px-2.5 py-2 text-[11px] leading-4 text-blue-900 sm:mx-4">
+              <FiInfo aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <p>
+                Please verify the scanned details against the Aadhaar document and correct any errors before booking.
+                {hasOverlengthValues ? " Enter values that do not fit the form manually." : ""}
+                {hasExistingValuesToReplace ? confirmReplace
+                  ? " Confirm only if you want to replace details you entered."
+                  : " Some existing values differ; review them before choosing to replace them."
+                  : ""}
+              </p>
+            </div>
 
             <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-3 py-2.5 sm:px-4">
               <button type="button" onClick={() => { setPrefill(null); setConfirmReplace(false); }} className="inline-flex h-8 items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-3 text-[11px] font-semibold text-blue-900 transition hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2">

@@ -1475,10 +1475,10 @@ export default function ClientDpdDraftReview({
         ) : (
           <div data-testid={operatorSlug ? "operator-booking-columns" : undefined} className={operatorSlug
             ? "grid gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_320px] xl:grid-rows-[minmax(0,1fr)]"
-            : "grid gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_320px]"}>
+            : "grid gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_360px]"}>
             <div data-testid={operatorSlug ? "operator-booking-fields" : undefined} className={operatorSlug
               ? "min-w-0 space-y-6 xl:min-h-0 xl:overflow-y-auto xl:pr-2 [scrollbar-width:thin] [scrollbar-color:#94a3b8_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400"
-              : "space-y-5 no-scrollbar lg:min-h-0 lg:overflow-y-auto lg:pr-2"}>
+              : "min-w-0 space-y-5 no-scrollbar xl:min-h-0 xl:overflow-y-auto xl:pr-2"}>
               <ShipmentImportBanner summary={shipmentImport} />
 
               {/* Customs route, first because CSB-V changes what is charged. */}
@@ -1804,8 +1804,10 @@ export default function ClientDpdDraftReview({
 
             <aside data-testid={operatorSlug ? "operator-booking-summary" : undefined} className={operatorSlug
               ? "min-w-0 space-y-4 xl:min-h-0 xl:overflow-y-auto xl:pr-2 [scrollbar-width:thin] [scrollbar-color:#94a3b8_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-400"
-              : "space-y-4 no-scrollbar lg:min-h-0 lg:overflow-y-auto lg:pr-2"}>
-              <section className="border border-slate-200 bg-white p-4 rounded-2xl">
+              : "min-w-0 space-y-4 no-scrollbar xl:min-h-0 xl:overflow-y-auto xl:pr-2"}>
+              <section className={operatorSlug
+                ? "border border-slate-200 bg-white p-4 rounded-2xl"
+                : "rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"}>
                 {operatorIndividualBooking ? (
                   <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
                     <h3 className="text-sm font-semibold text-amber-950">Payment received</h3>
@@ -1848,7 +1850,9 @@ export default function ClientDpdDraftReview({
                     onClick={() => void handleCreateLabel()}
                     disabled={busy || isCurrentCountryPaused || (!operatorSlug && !shipperDeclarationAccepted)}
                     title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
-                    className="inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                    className={operatorSlug
+                      ? "inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                      : "inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"}
                   >
                     {!operatorSlug ? <FiTruck aria-hidden="true" className="h-4 w-4" /> : null}
                     {pendingAction === "BOOKING" ? "Processing..." : operatorSlug ? "Book Shipment" : "Create Shipment"}
@@ -1861,7 +1865,7 @@ export default function ClientDpdDraftReview({
                     onClick={() => void handleCreateLabel(undefined, true)}
                     disabled={busy || isCurrentCountryPaused || !shipperDeclarationAccepted}
                     title={isCurrentCountryPaused ? "Booking paused for this destination" : undefined}
-                    className="mt-2 inline-flex h-10 w-full rounded-xl items-center justify-center gap-2 border border-amber-500 bg-amber-50 px-4 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-amber-800"
+                    className="mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-500 bg-amber-50 px-4 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-amber-800"
                   >
                     {/* <FiTruck aria-hidden="true" className="h-4 w-4" /> */}
                     {pendingAction === "BOOKING_NO_DPD" ? "Processing..." : "Create Shipment Without DPD Label"}
@@ -1881,7 +1885,9 @@ export default function ClientDpdDraftReview({
                   type="button"
                   onClick={() => void handleSaveDraft()}
                   disabled={busy || !draftChanged || draftAutosaveStatus === "saving"}
-                  className="mt-2 inline-flex rounded-xl h-10 w-full items-center justify-center gap-2 border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                  className={operatorSlug
+                    ? "mt-2 inline-flex rounded-xl h-10 w-full items-center justify-center gap-2 border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:border-slate-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                    : "mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:border-slate-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"}
                 >
                   <FiSave aria-hidden="true" className="h-4 w-4" />
                   {pendingAction === "DRAFT" ? "Saving..." : "Save as Draft"}
