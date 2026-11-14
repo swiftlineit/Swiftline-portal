@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import Image from "next/image";
-import Link from "next/link";
+import PublicFooter from "@/components/public/PublicFooter";
+import PublicHeader from "@/components/public/PublicHeader";
+import styles from "./privacy-policy.module.css";
 
 export const metadata: Metadata = {
   title: "Privacy Policy | Swiftline Cargo",
@@ -106,7 +107,7 @@ function DetailRow({ label, value, href }: { label: string; value: string; href?
           {value}
         </a>
       ) : (
-        <span className="wrap-break-words text-sm text-slate-700">{value}</span>
+        <span className="wrap-break-word text-sm text-slate-700">{value}</span>
       )}
     </div>
   );
@@ -114,21 +115,11 @@ function DetailRow({ label, value, href }: { label: string; value: string; href?
 
 export default function PrivacyPolicyPage() {
   return (
-    <div className="min-h-screen bg-white">
-      <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur print:hidden">
-        <div className="flex mx-auto max-w-6xl items-center justify-between gap-10 px-1 py-3.5">
-          <Link href="/" className="">
-            <Image src="/logo.svg" alt="Swiftline Cargo" width={150} height={148} className="h-12  rounded-md" />
-            {/* <span className="text-sm font-semibold tracking-tight text-slate-900">Swiftline Cargo</span> */}
-          </Link>
-          <Link href="/" className="text-sm text-[#0D1282] hover:underline">
-            Back to sign in
-          </Link>
-        </div>
-      </header>
-
-      <div className="bg-[#0D1282] text-white">
-        <div className="mx-auto max-w-6xl px-6 py-14 sm:py-16">
+    <div className="flex min-h-screen flex-col bg-white">
+      <PublicHeader />
+      <main className="flex-1">
+        <section className="bg-[#0D1282] text-white">
+          <div className="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#F5B942]">Swiftline&reg; Privacy Policy</p>
           <h1 className="mt-4 max-w-3xl text-3xl font-semibold tracking-tight sm:text-4xl">
             How we collect, use and protect personal data
@@ -154,10 +145,10 @@ export default function PrivacyPolicyPage() {
               </div>
             ))}
           </dl>
-        </div>
-      </div>
+          </div>
+        </section>
 
-      <main className="mx-auto max-w-6xl px-6 py-14">
+      <div className="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
         <section className="max-w-3xl">
           <h2 className="text-xl font-semibold tracking-tight text-slate-900">Privacy at Swiftline</h2>
           <p className="mt-4 text-sm leading-7 text-slate-600">
@@ -185,7 +176,16 @@ export default function PrivacyPolicyPage() {
           <nav aria-label="Contents" className="mb-12 lg:mb-0 print:hidden">
             <div className="lg:sticky lg:top-24">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Contents</p>
-              <ol className="mt-4 space-y-1.5 lg:max-h-[calc(100vh-9rem)] lg:overflow-y-auto lg:pr-2">
+              <ol
+                className={[
+                  styles.contentsList,
+                  "mt-4",
+                  "space-y-1.5",
+                  "lg:max-h-[calc(100vh-9rem)]",
+                  "lg:overflow-y-auto",
+                  "lg:pr-2",
+                ].join(" ")}
+              >
                 {SECTIONS.map((section, index) => (
                   <li key={section.id}>
                     <a
@@ -831,26 +831,9 @@ export default function PrivacyPolicyPage() {
             </Section>
           </div>
         </div>
+      </div>
       </main>
-
-      <footer className="border-t border-slate-200 bg-slate-50">
-        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-6 py-10 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.12em] text-[#0D1282]">
-              Every parcel a promise, swiftly delivered.
-            </p>
-            <p className="mt-1.5 text-xs text-slate-500">Confidentiality &bull; Transparency &bull; Accountability</p>
-          </div>
-          <a
-            href="https://www.swiftlinefreight.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm text-[#0D1282] hover:underline"
-          >
-            www.swiftlinefreight.com
-          </a>
-        </div>
-      </footer>
+      <PublicFooter />
     </div>
   );
 }

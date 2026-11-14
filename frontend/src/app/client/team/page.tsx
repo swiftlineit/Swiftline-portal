@@ -200,7 +200,16 @@ export default function ClientTeamPage() {
               className="mt-0.5 h-4 w-4 shrink-0"
             />
             <span>
-              I have read and accept Swiftline&apos;s terms and the{" "}
+              I have read and accept Swiftline&apos;s{" "}
+              <Link
+                href="/terms-and-conditions"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold text-blue-900 underline underline-offset-2"
+              >
+                Terms and Conditions
+              </Link>{" "}
+              and{" "}
               <Link
                 href="/privacy-policy"
                 target="_blank"

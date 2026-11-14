@@ -1,0 +1,21 @@
+.contentsList {
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.contentsList::-webkit-scrollbar {
+  width: 6px;
+}
+
+.contentsList::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.contentsList::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background-color: #cbd5e1;
+}
+
+.contentsList::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
+}

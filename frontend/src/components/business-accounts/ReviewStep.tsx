@@ -104,8 +104,8 @@ export function ReviewStep({
             <>
               I understand and acknowledge that by requesting a Swiftline business
               account, I have also read, understood and accepted Swiftline&apos;s{" "}
-              <Link href="/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                Terms of Use
+              <Link href="/terms-and-conditions" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                Terms and Conditions
               </Link>
               ,{" "}
               <Link href="/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">

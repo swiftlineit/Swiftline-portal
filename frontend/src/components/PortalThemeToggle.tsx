@@ -22,18 +22,27 @@ export default function PortalThemeToggle() {
   return (
     <button
       type="button"
-      aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
-      title={dark ? "Switch to light mode" : "Switch to dark mode"}
-      aria-pressed={dark}
+      role="switch"
+      aria-label="Dark mode"
+      aria-checked={dark}
+      title={dark ? "Turn off dark mode" : "Turn on dark mode"}
       onClick={() => {
         const next = dark ? "light" : "dark";
         setTheme(next);
         savePortalTheme(next);
       }}
-      className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]"
+      className="inline-flex min-h-11 shrink-0 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282] focus-visible:ring-offset-2"
     >
-      {dark ? <FiSun aria-hidden="true" className="h-4 w-4" /> : <FiMoon aria-hidden="true" className="h-4 w-4" />}
-      <span>{dark ? "Switch to light mode" : "Switch to dark mode"}</span>
+      <span
+        aria-hidden="true"
+        className={`relative block h-9 w-16 rounded-full transition-colors duration-500 ease-in-out motion-reduce:transition-none ${dark ? "bg-[#263a61]" : "bg-[#8ed8f8]"}`}
+      >
+        <span
+          className={`absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-full shadow-sm transition-[transform,background-color] duration-500 ease-in-out motion-reduce:transition-none ${dark ? "translate-x-7 bg-[#0b1730]" : "translate-x-0 bg-[#ffd54a]"}`}
+        >
+          {dark ? <FiMoon className="h-4 w-4 text-[#ffd54a]" /> : <FiSun className="h-4 w-4 text-[#765200]" />}
+        </span>
+      </span>
     </button>
   );
 }

@@ -1307,11 +1307,11 @@ function AadhaarOcrControl({
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-md bg-slate-50 px-3 py-2">
                   <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">State</dt>
-                  <dd className="mt-1 break-words font-medium text-slate-900">{prefill.address.county || "—"}</dd>
+                  <dd className="mt-1 break-words font-medium text-slate-900">{prefill.address.county || "-"}</dd>
                 </div>
                 <div className="rounded-md bg-slate-50 px-3 py-2">
                   <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">PIN</dt>
-                  <dd className="mt-1 font-medium text-slate-900">{prefill.address.postcode || "—"}</dd>
+                  <dd className="mt-1 font-medium text-slate-900">{prefill.address.postcode || "-"}</dd>
                 </div>
               </div>
             </dl>

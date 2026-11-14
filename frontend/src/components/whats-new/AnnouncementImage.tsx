@@ -40,7 +40,7 @@ export default function AnnouncementImage({ announcementId, imageId, alt, previe
 
   return (
     <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-slate-100">
-      {source ? <Image src={source} alt={alt} fill unoptimized sizes="(max-width: 768px) 100vw, 900px" className="object-contain" /> : (
+      {source ? <Image src={source} alt={alt} fill unoptimized sizes="(max-width: 768px) 100vw, 900px" className="object-cover" /> : (
         <div className="flex h-full items-center justify-center px-4 text-center text-sm text-slate-500" role={failed ? "status" : undefined}>
           {failed ? "This guide image is unavailable." : "Loading guide image…"}
         </div>

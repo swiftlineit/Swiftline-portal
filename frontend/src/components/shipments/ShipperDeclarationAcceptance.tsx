@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 type ShipperDeclarationAcceptanceProps = {
   checked: boolean;
@@ -80,7 +81,7 @@ export function ShipperDeclarationAcceptance({
           ))}
         </ol>
         <p className="mt-3">
-          By selecting “I Agree &amp; Continue,” I confirm that I have read, understood, and accepted this declaration and Swiftline’s applicable Terms &amp; Conditions.
+          By selecting “I Agree &amp; Continue,” I confirm that I have read, understood, and accepted this declaration and Swiftline’s <Link href="/terms-and-conditions" target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-900 underline underline-offset-2 hover:text-blue-700">applicable Terms &amp; Conditions</Link>.
         </p>
         <p className="mt-2 font-semibold">Every Parcel a Promise, Swiftly Delivered.</p>
       </div>

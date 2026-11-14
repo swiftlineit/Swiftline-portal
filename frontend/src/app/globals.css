@@ -137,6 +137,14 @@ input[type="reset"]:disabled {
   animation: advisory-glow 1.8s ease-out infinite;
 }
 
+html[data-portal-theme="dark"] [data-portal-theme-scope] :is(button, a):focus-visible {
+  outline-color: #c7d2fe;
+}
+
+html[data-portal-theme="dark"] .whats-new-modal {
+  border: 1px solid rgb(255 255 255 / 0.3);
+}
+
 /* Quill guide editor: keep the toolbar attached to the writing surface and
    let inserted screenshots scale to the editor width. */
 .feature-announcement-editor .ql-toolbar.ql-snow {

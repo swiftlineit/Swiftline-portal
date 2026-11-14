@@ -747,7 +747,16 @@ export default function Home() {
           </div>
 
           <p className="mt-2 text-center text-[10.5px] leading-relaxed text-slate-500">
-            By continuing, you agree to Swiftline&apos;s terms and{" "}
+            By continuing, you agree to Swiftline&apos;s{" "}
+            <Link
+              href="/terms-and-conditions"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-semibold text-[#0D1282] hover:underline"
+            >
+              Terms and Conditions
+            </Link>{" "}
+            and{" "}
             <Link
               href="/privacy-policy"
               target="_blank"

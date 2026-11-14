@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FiAlertCircle, FiCheckCircle, FiPower } from "react-icons/fi";
+import { FiAlertCircle } from "react-icons/fi";
 import { toast } from "react-toastify";
 import {
   getAadhaarOcrFeatureStatus,
@@ -63,20 +63,12 @@ export default function AadhaarOcrFeatureManager() {
             Standard KYC document uploads remain available when OCR is off.
           </p>
         </div>
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${
-          status?.enabled
-            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-            : "border-slate-200 bg-slate-100 text-slate-600"
-        }`}>
-          {status?.enabled ? <FiCheckCircle aria-hidden="true" /> : <FiPower aria-hidden="true" />}
-          {loadState === "loading" ? "Loading" : status?.enabled ? "Enabled" : "Disabled"}
-        </span>
       </div>
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-4">
         <div className="text-sm text-slate-600">
           <p>
-            Provider: <span className="font-medium capitalize text-slate-800">{status?.providerEnvironment ?? "—"}</span>
+            Provider: <span className="font-medium capitalize text-slate-800">{status?.providerEnvironment ?? "-"}</span>
             <span className="mx-2 text-slate-300">·</span>
             Configuration: <span className={`font-medium ${status?.providerConfigured ? "text-emerald-700" : "text-amber-700"}`}>
               {loadState === "loading" ? "Checking" : status?.providerConfigured ? "Ready" : "Incomplete"}
@@ -93,15 +85,22 @@ export default function AadhaarOcrFeatureManager() {
         <button
           type="button"
           role="switch"
+          aria-label="Aadhaar OCR uploads"
           aria-checked={status?.enabled ?? false}
           aria-busy={saving}
+          title={status?.enabled ? "Turn off Aadhaar OCR" : "Turn on Aadhaar OCR"}
           disabled={unavailable}
           onClick={() => void handleToggle()}
-          className={`relative inline-flex h-9 min-w-28 items-center justify-center rounded-lg px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-            status?.enabled ? "bg-emerald-700 text-white hover:bg-emerald-800" : "bg-slate-800 text-white hover:bg-slate-700"
-          }`}
+          className="inline-flex min-h-9 shrink-0 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {saving ? "Saving…" : status?.enabled ? "Turn off" : "Turn on"}
+          <span
+            aria-hidden="true"
+            className={`relative block h-7 w-12 rounded-full transition-colors duration-500 ease-in-out motion-reduce:transition-none ${status?.enabled ? "bg-green-600" : "bg-red-600"}`}
+          >
+            <span
+              className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-500 ease-in-out motion-reduce:transition-none ${status?.enabled ? "translate-x-5" : "translate-x-0"}`}
+            />
+          </span>
         </button>
       </div>
 

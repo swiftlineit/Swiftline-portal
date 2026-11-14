@@ -236,12 +236,12 @@ function ActivateClientAccountContent() {
                 <span>
                   I accept Swiftline terms and conditions.{" "}
                   <Link
-                    href="/privacy-policy"
+                    href="/terms-and-conditions"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-blue-900 hover:underline"
                   >
-                    Read here
+                    Read terms and conditions
                   </Link>
                   .
                 </span>
