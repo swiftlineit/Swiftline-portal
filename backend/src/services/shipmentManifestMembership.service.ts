@@ -50,8 +50,8 @@ export function shipmentManifestAssignmentAvailability(
     hasStaffCombined,
     canCreateAccount: actorRole === "client"
       ? !hasClientAccount
-      : !hasStaffAccount && !hasStaffCombined,
-    canCreateCombined: actorRole === "admin" && !hasStaffCombined
+      : true,
+    canCreateCombined: actorRole === "admin"
   };
 }
 
@@ -59,26 +59,10 @@ export function shipmentManifestAssignmentClaimFilter(
   shipmentDraftId: mongoose.Types.ObjectId,
   slot: ShipmentManifestAssignmentSlot
 ) {
-  const fieldsToKeepEmpty: Array<keyof ShipmentManifestAssignments> = slot === "CLIENT_ACCOUNT"
-    ? ["clientAccountManifestId"]
-    : slot === "STAFF_ACCOUNT"
-      ? ["staffAccountManifestId", "staffCombinedManifestId"]
-      : ["staffCombinedManifestId"];
-
   return {
     _id: shipmentDraftId,
-    ...Object.fromEntries(fieldsToKeepEmpty.map((field) => [`shipmentManifestAssignments.${field}`, null]))
+    ...(slot === "CLIENT_ACCOUNT" ? { "shipmentManifestAssignments.clientAccountManifestId": null } : {})
   };
-}
-
-function conflictMessage(slot: ShipmentManifestAssignmentSlot) {
-  if (slot === "CLIENT_ACCOUNT") {
-    return "One or more selected shipments already belong to a client manifest.";
-  }
-  if (slot === "STAFF_ACCOUNT") {
-    return "One or more selected shipments already belong to a staff manifest and cannot be added to another account-specific manifest.";
-  }
-  return "One or more selected shipments already belong to a staff combined manifest.";
 }
 
 export async function claimShipmentManifestAssignments(
@@ -88,6 +72,9 @@ export async function claimShipmentManifestAssignments(
   manifestType: ShipmentManifestType,
   session: mongoose.ClientSession
 ) {
+  // Staff manifests can reuse a shipment without a per-draft assignment lock.
+  // The manifest records remain the source of truth for their membership.
+  if (actorRole === "admin") return;
   const slot = shipmentManifestAssignmentSlot(actorRole, manifestType);
 
   for (const shipmentDraftId of shipmentDraftIds) {
@@ -98,7 +85,9 @@ export async function claimShipmentManifestAssignments(
       { $set: { [fieldPath]: manifestId } },
       { session }
     ).exec();
-    if (result.matchedCount !== 1) throw new ShipmentManifestServiceError(conflictMessage(slot), 409);
+    if (result.matchedCount !== 1) {
+      throw new ShipmentManifestServiceError("One or more selected shipments already belong to a client manifest.", 409);
+    }
   }
 }
 

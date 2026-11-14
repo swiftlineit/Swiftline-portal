@@ -777,10 +777,9 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
       && cancelledDraftIds.has(draftId) === false;
     const manifestEligible = baseManifestEligible && (filter.actorRole === "client"
       ? !accountManifests.some((item) => item.actorRole === "client")
-      : !accountManifests.some((item) => item.actorRole === "admin") && !combinedManifests.some((item) => item.actorRole === "admin"));
+      : true);
     const combinedManifestEligible = filter.actorRole === "admin"
-      && baseManifestEligible
-      && !combinedManifests.some((item) => item.actorRole === "admin");
+      && baseManifestEligible;
     const consignee = draft.consigneeValidatedAddress ?? draft.consigneeEnteredAddress;
     const parcels = snapshot?.parcels ?? [];
 

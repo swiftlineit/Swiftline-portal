@@ -39,6 +39,13 @@ function membershipBackfill(rows: ManifestMigrationRow[]) {
 async function migrateShipmentManifestIndexes() {
   await connectDatabase();
   try {
+    const collectionExists = await mongoose.connection.db?.listCollections(
+      { name: ShipmentManifest.collection.collectionName }, { nameOnly: true }
+    ).hasNext();
+    const existingIndexes = collectionExists ? await ShipmentManifest.collection.indexes() : [];
+    if (existingIndexes.some((index) => index.name === "tenant_client_manifest_shipment_draft_unique")) {
+      throw new Error("The legacy manifest backfill cannot run after staff manifest reuse is enabled. Use migrate:shipment-manifest-reuse-indexes instead.");
+    }
     await ShipmentManifest.collection.updateMany(
       { $or: [{ manifestType: { $exists: false } }, { manifestType: null }] },
       { $set: { manifestType: "ACCOUNT" } }

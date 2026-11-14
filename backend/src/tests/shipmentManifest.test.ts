@@ -3,8 +3,10 @@ import { describe, it } from "node:test";
 import zlib from "node:zlib";
 import ExcelJS from "exceljs";
 import mongoose from "mongoose";
+import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentManifest, type IShipmentManifest, type ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
 import { ShipmentManifestCounter } from "../models/shipmentManifestCounter.model.js";
+import { classifyShipmentManifestIndexes } from "../scripts/migrateShipmentManifestReuseIndexes.js";
 import {
   allocateShipmentManifestNumber,
   buildHandoverManifestLine,
@@ -24,6 +26,7 @@ import { buildShipmentManifestConsignorAadhaarByDraft } from "../services/shipme
 import { encryptShipmentDraftAadhaar } from "../services/shipmentDraftAadhaar.service.js";
 import { getTenantContext, runWithTenantContext } from "../services/tenantScope.service.js";
 import {
+  claimShipmentManifestAssignments,
   shipmentManifestAssignmentAvailability,
   shipmentManifestAssignmentClaimFilter,
   shipmentManifestAssignmentSlot
@@ -191,14 +194,14 @@ describe("shipment manifest membership rules", () => {
     assert.equal(shipmentManifestAssignmentAvailability(staffCombinedAssignment, "client").canCreateAccount, true);
   });
 
-  it("keeps staff account and combined eligibility separate", () => {
+  it("allows repeated staff account and combined manifests while keeping client manifests exclusive", () => {
     const staffAccountAssignment = { staffAccountManifestId: new mongoose.Types.ObjectId() };
-    assert.equal(shipmentManifestAssignmentAvailability(staffAccountAssignment, "admin").canCreateAccount, false);
+    assert.equal(shipmentManifestAssignmentAvailability(staffAccountAssignment, "admin").canCreateAccount, true);
     assert.equal(shipmentManifestAssignmentAvailability(staffAccountAssignment, "admin").canCreateCombined, true);
 
     const staffCombinedAssignment = { staffCombinedManifestId: new mongoose.Types.ObjectId() };
-    assert.equal(shipmentManifestAssignmentAvailability(staffCombinedAssignment, "admin").canCreateAccount, false);
-    assert.equal(shipmentManifestAssignmentAvailability(staffCombinedAssignment, "admin").canCreateCombined, false);
+    assert.equal(shipmentManifestAssignmentAvailability(staffCombinedAssignment, "admin").canCreateAccount, true);
+    assert.equal(shipmentManifestAssignmentAvailability(staffCombinedAssignment, "admin").canCreateCombined, true);
 
     const clientAndStaffAssignments = {
       clientAccountManifestId: new mongoose.Types.ObjectId(),
@@ -206,25 +209,76 @@ describe("shipment manifest membership rules", () => {
       staffCombinedManifestId: new mongoose.Types.ObjectId()
     };
     assert.equal(shipmentManifestAssignmentAvailability(clientAndStaffAssignments, "client").canCreateAccount, false);
+    assert.equal(shipmentManifestAssignmentAvailability(clientAndStaffAssignments, "admin").canCreateAccount, true);
+    assert.equal(shipmentManifestAssignmentAvailability(clientAndStaffAssignments, "admin").canCreateCombined, true);
   });
 
-  it("claims only the assignment slots each manifest policy requires", () => {
+  it("reserves the client slot without blocking either staff manifest type", () => {
     const shipmentDraftId = new mongoose.Types.ObjectId();
     assert.deepEqual(shipmentManifestAssignmentClaimFilter(shipmentDraftId, "CLIENT_ACCOUNT"), {
       _id: shipmentDraftId,
       "shipmentManifestAssignments.clientAccountManifestId": null
     });
     assert.deepEqual(shipmentManifestAssignmentClaimFilter(shipmentDraftId, "STAFF_ACCOUNT"), {
-      _id: shipmentDraftId,
-      "shipmentManifestAssignments.staffAccountManifestId": null,
-      "shipmentManifestAssignments.staffCombinedManifestId": null
+      _id: shipmentDraftId
     });
     assert.deepEqual(shipmentManifestAssignmentClaimFilter(shipmentDraftId, "STAFF_COMBINED"), {
-      _id: shipmentDraftId,
-      "shipmentManifestAssignments.staffCombinedManifestId": null
+      _id: shipmentDraftId
     });
     assert.equal(shipmentManifestAssignmentSlot("admin", "COMBINED"), "STAFF_COMBINED");
     assert.throws(() => shipmentManifestAssignmentSlot("client", "COMBINED"));
+  });
+
+  it("does not claim a single-value draft slot when staff creates another manifest", async () => {
+    const originalUpdateOne = ShipmentDraft.updateOne;
+    (ShipmentDraft as any).updateOne = () => { throw new Error("Staff manifest must not claim a draft slot."); };
+    try {
+      const draftIds = [new mongoose.Types.ObjectId()];
+      const manifestId = new mongoose.Types.ObjectId();
+      await claimShipmentManifestAssignments(draftIds, manifestId, "admin", "ACCOUNT", {} as mongoose.ClientSession);
+      await claimShipmentManifestAssignments(draftIds, manifestId, "admin", "COMBINED", {} as mongoose.ClientSession);
+    } finally {
+      (ShipmentDraft as any).updateOne = originalUpdateOne;
+    }
+  });
+
+  it("keeps database uniqueness for client manifests only", () => {
+    const indexes = ShipmentManifest.schema.indexes() as Array<[
+      Record<string, number>,
+      { name?: string; unique?: boolean; partialFilterExpression?: Record<string, unknown> }
+    ]>;
+    const clientIndex = indexes.find(([, options]) => options.name === "tenant_client_manifest_shipment_draft_unique");
+    assert.deepEqual(clientIndex?.[0], { tenantId: 1, shipmentDraftIds: 1 });
+    assert.deepEqual(clientIndex?.[1].partialFilterExpression, { actorRole: "client" });
+    assert.equal(clientIndex?.[1].unique, true);
+    assert.equal(indexes.some(([, options]) => options.name === "tenant_manifest_shipment_draft_actor_type_unique"), false);
+  });
+
+  it("migrates only known membership unique indexes after the client index is ready", () => {
+    const audit = classifyShipmentManifestIndexes([
+      {
+        name: "tenant_manifest_shipment_draft_actor_type_unique",
+        key: { tenantId: 1, shipmentDraftIds: 1, actorRole: 1, manifestType: 1 },
+        unique: true
+      },
+      {
+        name: "tenant_client_manifest_shipment_draft_unique",
+        key: { tenantId: 1, shipmentDraftIds: 1 },
+        unique: true,
+        partialFilterExpression: { actorRole: "client" }
+      },
+      { name: "shipmentDraftIds_1", key: { shipmentDraftIds: 1 } }
+    ]);
+    assert.deepEqual(audit, {
+      findings: [],
+      legacy: ["tenant_manifest_shipment_draft_actor_type_unique"],
+      clientIndexReady: true
+    });
+    const unknown = classifyShipmentManifestIndexes([
+      { name: "unexpected_unique", key: { shipmentDraftIds: 1 }, unique: true }
+    ]);
+    assert.equal(unknown.findings.length, 1);
+    assert.equal(unknown.legacy.length, 0);
   });
 });
 

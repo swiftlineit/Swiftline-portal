@@ -111,12 +111,10 @@ function parseShipmentSort(value: string | null) {
 }
 
 function hasRelevantManifestMembership(shipment: ShipmentListItem, audience: ShipmentAudience) {
+  if (audience !== "client") return false;
   const membership = shipment.manifestMembership;
   if (!membership) return shipment.manifest !== null;
-  if (audience === "client") {
-    return membership.account.some((manifest) => manifest.actorRole === "client");
-  }
-  return membership.account.some((manifest) => manifest.actorRole === "admin") || membership.combined.length > 0;
+  return membership.account.some((manifest) => manifest.actorRole === "client");
 }
 
 function readShipmentViewState(value: string | null): ShipmentViewState | null {
@@ -199,14 +197,14 @@ function DpdLabelAvailability({ status, onOpen, opening }: { status: DpdLabelSta
         type="button"
         onClick={onOpen}
         disabled={opening}
-        className={`mt-1 flex w-fit text-[10px] font-semibold leading-4 underline underline-offset-2 transition-colors hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-1 disabled:cursor-wait ${presentation.className}`}
+        className={`mt-1 block w-max whitespace-nowrap text-left text-[10px] font-semibold leading-4 underline underline-offset-2 transition-colors hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-1 disabled:cursor-wait ${presentation.className}`}
       >
         {label}
       </button>
     );
   }
   return (
-    <p className={`mt-1 text-[10px] font-semibold leading-4 ${presentation.className}`}>
+    <p className={`mt-1 w-max whitespace-nowrap text-left text-[10px] font-semibold leading-4 ${presentation.className}`}>
       {label}
     </p>
   );
@@ -947,24 +945,19 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     return () => window.clearTimeout(timer);
   }, [restoringView, searchInput]);
 
-  // Staff can keep manifested rows checked for totals and the combined flow.
-  // Client rows with any manifest membership stay disabled because clients can
-  // create account-specific manifests only.
+  // Clients can create only one account manifest per shipment; staff can reuse
+  // booked shipments in both account and combined manifests.
   const isRowCheckable = useCallback((shipment: ShipmentListItem) => (
     shipment.manifestEligible
     || (audience === "admin" && (
       shipment.combinedManifestEligible
-      || shipment.manifestMembership?.hasAny
-      || shipment.manifest !== null
       || isStatusUpdateEligible(shipment)
     ))
   ), [audience]);
-  // Header select-all covers staff rows that already have membership so they
-  // remain available for the combined flow and selection totals.
+  // Header select-all covers shipments eligible for either staff action.
   const selectable = useMemo(() => shipments.filter(isRowCheckable), [shipments, isRowCheckable]);
   const selectedList = useMemo(() => [...selected.values()], [selected]);
-  // Account and combined manifests have different membership rules. Keep their
-  // eligible subsets separate so neither action sends rows the server rejects.
+  // Keep each action's eligible subset separate for its account or branch rules.
   const accountManifestSelection = useMemo(
     () => selectedList.filter((shipment) => shipment.manifestEligible),
     [selectedList]
@@ -981,8 +974,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     pieces: manifestSelection.reduce((sum, shipment) => sum + shipment.pieces, 0),
     weightKg: manifestSelection.reduce((sum, shipment) => sum + shipment.weightKg, 0)
   }), [manifestSelection]);
-  // Stats over everything checked, including already-manifested rows, so the
-  // operator can verify total pieces/weight without opening the dialog.
+  // Stats over everything checked let the operator verify totals before opening the dialog.
   const selectionTotals = useMemo(() => ({
     pieces: selectedList.reduce((sum, shipment) => sum + shipment.pieces, 0),
     weightKg: selectedList.reduce((sum, shipment) => sum + shipment.weightKg, 0)
@@ -1523,10 +1515,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   </p>
                 ) : null}
                 {inManifestCount > 0 ? (
-                  <p className={`mt-1 text-xs font-semibold ${audience === "client" ? "text-red-700" : "text-amber-800"}`}>
-                    {audience === "client"
-                      ? `${inManifestCount} ${inManifestCount === 1 ? "shipment is" : "shipments are"} already in a manifest and cannot be added to another client manifest.`
-                    : `${inManifestCount} selected ${inManifestCount === 1 ? "shipment already has" : "shipments already have"} a manifest; only eligible shipments will be added.`}
+                  <p className="mt-1 text-xs font-semibold text-red-700">
+                    {inManifestCount} {inManifestCount === 1 ? "shipment is" : "shipments are"} already in a client manifest and cannot be added again.
                   </p>
                 ) : null}
                 {otherIneligibleCount > 0 ? (
@@ -1957,7 +1947,6 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
               {shipments.map((shipment) => {
                 const relevantManifestMembership = hasRelevantManifestMembership(shipment, audience);
                 const showManifestHighlight = activeFlow === "manifest" && relevantManifestMembership;
-                const clientAccountManifest = shipment.manifestMembership?.account.find((manifest) => manifest.actorRole === "client");
                 return (
                 <tr
                   key={shipment.id}
@@ -1978,16 +1967,12 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                       onChange={() => toggleOne(shipment)}
                       disabled={!isRowCheckable(shipment)}
                       aria-label={`Select shipment ${shipment.swiftlineTrackingNumber || shipment.id}`}
-                      title={showManifestHighlight && audience === "client"
-                        ? "This shipment is already in a manifest and cannot be added again"
-                        : showManifestHighlight && audience === "admin"
-                          ? "Already assigned; check eligibility before creating an account or combined manifest"
-                          : undefined}
-                      className={`h-4 w-4 rounded-sm ${showManifestHighlight && audience === "client"
+                      title={showManifestHighlight
+                        ? "This shipment is already in a client manifest and cannot be added again"
+                        : undefined}
+                      className={`h-4 w-4 rounded-sm ${showManifestHighlight
                         ? "accent-red-600 ring-2 ring-red-400 ring-offset-1 disabled:opacity-100"
-                        : showManifestHighlight && audience === "admin"
-                          ? "accent-amber-500 ring-2 ring-amber-400 ring-offset-1"
-                          : "accent-[#0D1282] disabled:opacity-40"}`}
+                        : "accent-[#0D1282] disabled:opacity-40"}`}
                     />
                   </td>
                   <td className="w-56 max-w-56 px-4 py-3 align-middle">
@@ -2058,26 +2043,6 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                         onOpen={shipment.dpdLabelStatus === "AVAILABLE" ? () => void handleOpenDpdLabel(shipment.id) : undefined}
                         opening={openingDpdLabelId === shipment.id}
                       />
-                    ) : null}
-                    {audience === "admin" && shipment.manifestMembership?.hasAny ? (
-                      <div className="mt-1 space-y-0.5 text-[10px] font-semibold leading-4 text-amber-800">
-                        {shipment.manifestMembership.account.map((manifest) => (
-                          <p key={`${manifest.actorRole}-${manifest.id}`}>
-                            {manifest.actorRole === "client" ? "Client account" : "Staff account"} manifest: {manifest.manifestNumber}
-                          </p>
-                        ))}
-                        {shipment.manifestMembership.combined.map((manifest) => (
-                          <p key={`combined-${manifest.id}`}>Staff combined manifest: {manifest.manifestNumber}</p>
-                        ))}
-                      </div>
-                    ) : audience === "client" && clientAccountManifest ? (
-                      <p className="mt-1 text-[10px] font-semibold leading-4 text-red-700">
-                        Manifest: {clientAccountManifest.manifestNumber}
-                      </p>
-                    ) : shipment.manifest ? (
-                      <p className="mt-1 text-[10px] font-semibold leading-4 text-slate-500">
-                        Manifest: {shipment.manifest.manifestNumber}
-                      </p>
                     ) : null}
                     {/* A booking that reached the carrier but has not completed is
                         shown here rather than being hidden from this table. */}

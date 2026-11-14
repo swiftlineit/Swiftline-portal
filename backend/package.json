@@ -49,6 +49,8 @@
     "audit:shipment-profitability": "tsx src/scripts/backfillShipmentProfitability.ts",
     "backfill:shipment-profitability": "tsx src/scripts/backfillShipmentProfitability.ts --apply",
     "migrate:shipment-manifest-indexes": "tsx src/scripts/migrateShipmentManifestIndexes.ts",
+    "audit:shipment-manifest-reuse-indexes": "tsx src/scripts/migrateShipmentManifestReuseIndexes.ts",
+    "migrate:shipment-manifest-reuse-indexes": "tsx src/scripts/migrateShipmentManifestReuseIndexes.ts --apply",
     "migrate:shipment-draft-indexes": "tsx src/scripts/migrateShipmentDraftIndexes.ts",
     "audit:shipment-draft-aadhaar-encryption": "tsx src/scripts/migrateShipmentDraftAadhaarEncryption.ts",
     "migrate:shipment-draft-aadhaar-encryption": "tsx src/scripts/migrateShipmentDraftAadhaarEncryption.ts --apply",

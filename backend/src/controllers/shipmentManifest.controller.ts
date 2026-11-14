@@ -375,10 +375,9 @@ async function createManifest(request: Request, response: Response, actorRole: "
     const [drafts, bookings, existingAssignment, cancelledEvent, assignedBranch] = await Promise.all([
       ShipmentDraft.find({ _id: { $in: selectedObjectIds } }).exec(),
       DpdShipment.find({ shipmentDraftId: { $in: selectedObjectIds }, status: "LABEL_RECEIVED" }).exec(),
-      ShipmentManifest.findOne(actorRole === "client"
-        ? { shipmentDraftIds: { $in: selectedObjectIds }, actorRole: "client" }
-        : { shipmentDraftIds: { $in: selectedObjectIds }, actorRole: "admin", manifestType: { $ne: "COMBINED" } })
-        .lean().exec(),
+      actorRole === "client"
+        ? ShipmentManifest.findOne({ shipmentDraftIds: { $in: selectedObjectIds }, actorRole: "client" }).lean().exec()
+        : Promise.resolve(null),
       ShipmentEvent.findOne({ shipmentDraftId: { $in: selectedObjectIds }, status: "SHIPMENT_CANCELLED" }).lean().exec(),
       Branch.findById(currentDraft.branchId).lean().exec()
     ]);
@@ -763,10 +762,9 @@ async function createBulkManifest(request: Request, response: Response, actorRol
 
     const [bookings, existingAssignment, cancelledEvent, assignedBranch] = await Promise.all([
       DpdShipment.find({ shipmentDraftId: { $in: selectedObjectIds }, status: "LABEL_RECEIVED" }).exec(),
-      ShipmentManifest.findOne(actorRole === "client"
-        ? { shipmentDraftIds: { $in: selectedObjectIds }, actorRole: "client" }
-        : { shipmentDraftIds: { $in: selectedObjectIds }, actorRole: "admin", manifestType: { $ne: "COMBINED" } })
-        .lean().exec(),
+      actorRole === "client"
+        ? ShipmentManifest.findOne({ shipmentDraftIds: { $in: selectedObjectIds }, actorRole: "client" }).lean().exec()
+        : Promise.resolve(null),
       ShipmentEvent.findOne({ shipmentDraftId: { $in: selectedObjectIds }, status: "SHIPMENT_CANCELLED" }).lean().exec(),
       Branch.findById(firstDraft.branchId).lean().exec()
     ]);
@@ -927,21 +925,13 @@ export async function createAdminCombinedShipmentManifest(request: Request, resp
       throw new ShipmentManifestServiceError("You do not have access to create a manifest for this branch.", 403);
     }
 
-    const [bookings, existingAssignment, cancelledEvent, assignedBranch] = await Promise.all([
+    const [bookings, cancelledEvent, assignedBranch] = await Promise.all([
       DpdShipment.find({ shipmentDraftId: { $in: selectedObjectIds }, status: "LABEL_RECEIVED" }).exec(),
-      ShipmentManifest.findOne({
-        shipmentDraftIds: { $in: selectedObjectIds },
-        actorRole: "admin",
-        manifestType: "COMBINED"
-      }).lean().exec(),
       ShipmentEvent.findOne({ shipmentDraftId: { $in: selectedObjectIds }, status: "SHIPMENT_CANCELLED" }).lean().exec(),
       Branch.findById(firstDraft.branchId).lean().exec()
     ]);
     if (bookings.length !== selectedIds.length) {
       throw new ShipmentManifestServiceError("Every selected shipment must be booked before it can be manifested.", 409);
-    }
-    if (existingAssignment) {
-      throw new ShipmentManifestServiceError("One of the selected shipments already belongs to a staff combined manifest.", 409);
     }
     if (cancelledEvent) throw new ShipmentManifestServiceError("Cancelled shipments cannot be added to a manifest.", 409);
     if (!assignedBranch) {

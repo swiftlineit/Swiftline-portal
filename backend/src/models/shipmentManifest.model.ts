@@ -147,8 +147,12 @@ shipmentManifestSchema.index(
   { unique: true, name: "tenant_manifest_number_unique" }
 );
 shipmentManifestSchema.index(
-  { tenantId: 1, shipmentDraftIds: 1, actorRole: 1, manifestType: 1 },
-  { unique: true, name: "tenant_manifest_shipment_draft_actor_type_unique" }
+  { tenantId: 1, shipmentDraftIds: 1 },
+  {
+    unique: true,
+    name: "tenant_client_manifest_shipment_draft_unique",
+    partialFilterExpression: { actorRole: "client" }
+  }
 );
 
 addTenantOwnership(shipmentManifestSchema);
