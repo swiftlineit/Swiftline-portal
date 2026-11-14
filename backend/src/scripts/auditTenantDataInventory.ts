@@ -471,7 +471,7 @@ async function countOrphans(
   if (!validIdentityFields) {
     throw new Error(`Reviewed shipment identity fields no longer match the schemas: ${link.childModel} -> ${link.parentModel}.`);
   }
-  const compareTenantOwners = hasTenantOwnership(child) && hasTenantOwnership(parent);
+  const compareTenantOwners = hasTenantOwnership(child as Parameters<typeof hasTenantOwnership>[0]) && hasTenantOwnership(parent as Parameters<typeof hasTenantOwnership>[0]);
   const compareParentIdentity = Boolean(link.identityFields?.length);
   if (!existingCollections.has(child.collection.collectionName)) {
     return {
