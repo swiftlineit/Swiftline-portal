@@ -24,6 +24,7 @@ import {
 import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
 import { buildShipmentManifestConsignorAadhaarByDraft } from "../services/shipmentManifestConsignorAadhaar.service.js";
 import { encryptShipmentDraftAadhaar } from "../services/shipmentDraftAadhaar.service.js";
+import { allShipmentStatuses, shipmentManifestEligibilityForBooking } from "../services/shipmentListing.service.js";
 import { getTenantContext, runWithTenantContext } from "../services/tenantScope.service.js";
 import {
   claimShipmentManifestAssignments,
@@ -39,6 +40,62 @@ import {
   shipmentManifestSections
 } from "../services/shipmentManifestPdf.service.js";
 import type { ShipmentBookingSnapshot } from "../services/shipmentBookingSnapshot.service.js";
+
+describe("shipment manifest selection eligibility", () => {
+  it("allows staff to create account and combined manifests for every snapshot-backed booking status", () => {
+    for (const bookingStatus of allShipmentStatuses) {
+      assert.deepEqual(shipmentManifestEligibilityForBooking({
+        actorRole: "admin",
+        bookingStatus,
+        hasUsableSnapshot: true,
+        hasClientManifest: false
+      }), {
+        manifestEligible: true,
+        combinedManifestEligible: true
+      });
+    }
+
+    assert.deepEqual(shipmentManifestEligibilityForBooking({
+      actorRole: "admin",
+      bookingStatus: "DPD_CREATED",
+      hasUsableSnapshot: false,
+      hasClientManifest: false
+    }), {
+      manifestEligible: false,
+      combinedManifestEligible: false
+    });
+  });
+
+  it("keeps clients to completed unassigned shipments while allowing staff reuse", () => {
+    assert.deepEqual(shipmentManifestEligibilityForBooking({
+      actorRole: "client",
+      bookingStatus: "DPD_CREATED",
+      hasUsableSnapshot: true,
+      hasClientManifest: false
+    }), {
+      manifestEligible: false,
+      combinedManifestEligible: false
+    });
+    assert.deepEqual(shipmentManifestEligibilityForBooking({
+      actorRole: "client",
+      bookingStatus: "LABEL_RECEIVED",
+      hasUsableSnapshot: true,
+      hasClientManifest: true
+    }), {
+      manifestEligible: false,
+      combinedManifestEligible: false
+    });
+    assert.deepEqual(shipmentManifestEligibilityForBooking({
+      actorRole: "admin",
+      bookingStatus: "LABEL_RECEIVED",
+      hasUsableSnapshot: true,
+      hasClientManifest: true
+    }), {
+      manifestEligible: true,
+      combinedManifestEligible: true
+    });
+  });
+});
 
 function drawnPdfText(pdf: Buffer) {
   const output: string[] = [];

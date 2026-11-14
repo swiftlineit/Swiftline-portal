@@ -128,6 +128,20 @@ export const allShipmentStatuses: DpdShipmentStatus[] = [
   "DPD_REJECTED"
 ];
 
+export function shipmentManifestEligibilityForBooking(input: {
+  actorRole: "admin" | "client";
+  bookingStatus?: DpdShipmentStatus;
+  hasUsableSnapshot: boolean;
+  hasClientManifest: boolean;
+}) {
+  const baseEligible = input.hasUsableSnapshot
+    && (input.actorRole === "admin" || input.bookingStatus === "LABEL_RECEIVED");
+  return {
+    manifestEligible: baseEligible && (input.actorRole === "admin" || !input.hasClientManifest),
+    combinedManifestEligible: input.actorRole === "admin" && baseEligible
+  };
+}
+
 /**
  * Per-parcel operational manifest scan state for the staff shipments table.
  *
@@ -671,12 +685,6 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     events: eventsByDraft.get(String(draft._id)) ?? [],
     bookingAt: bookingByDraft.get(String(draft._id))?.createdAt ?? null
   })));
-  // A cancelled shipment keeps its label, so cancellation is what makes it
-  // unmanifestable rather than the carrier status.
-  const cancelledDraftIds = new Set(events
-    .filter((event) => event.status === "SHIPMENT_CANCELLED")
-    .map((event) => String(event.shipmentDraftId)));
-
   // Carrier-label readiness is internal operational data. Only load it for the
   // staff list, and only for routes where a DPD label is actually applicable.
   // A carrier booking id alone is not proof that the document was stored.
@@ -772,14 +780,12 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
     const hasManifestMembership = filter.actorRole === "client"
       ? visibleAccountManifests.length > 0
       : assignedManifests.length > 0;
-    const baseManifestEligible = booking?.status === "LABEL_RECEIVED"
-      && Boolean(snapshot)
-      && cancelledDraftIds.has(draftId) === false;
-    const manifestEligible = baseManifestEligible && (filter.actorRole === "client"
-      ? !accountManifests.some((item) => item.actorRole === "client")
-      : true);
-    const combinedManifestEligible = filter.actorRole === "admin"
-      && baseManifestEligible;
+    const manifestEligibility = shipmentManifestEligibilityForBooking({
+      actorRole: filter.actorRole,
+      bookingStatus: booking?.status,
+      hasUsableSnapshot: Boolean(snapshot),
+      hasClientManifest: accountManifests.some((item) => item.actorRole === "client")
+    });
     const consignee = draft.consigneeValidatedAddress ?? draft.consigneeEnteredAddress;
     const parcels = snapshot?.parcels ?? [];
 
@@ -872,10 +878,12 @@ export async function listBookedShipments(filter: ShipmentListingFilter) {
           ? combinedManifests.map((item) => ({ id: String(item._id), manifestNumber: item.manifestNumber }))
           : []
       },
-      // Only a completed booking can be manifested: an unreconciled one has no
-      // final label set to hand over.
-      manifestEligible,
-      ...(filter.actorRole === "admin" ? { combinedManifestEligible } : {}),
+      // Swiftline staff can manifest any booking with usable shipment details;
+      // clients remain limited to the completed bookings shown in their list.
+      manifestEligible: manifestEligibility.manifestEligible,
+      ...(filter.actorRole === "admin"
+        ? { combinedManifestEligible: manifestEligibility.combinedManifestEligible }
+        : {}),
       ...(filter.actorRole === "admin"
         ? {
           dpdLabelStatus: isDpdLabelDestination(consignee?.countryCode)

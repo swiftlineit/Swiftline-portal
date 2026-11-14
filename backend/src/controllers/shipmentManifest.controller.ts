@@ -85,6 +85,16 @@ function getCreatorRole(request: Request): Role | null {
   return roleValues.includes(normalizedRole) ? normalizedRole : null;
 }
 
+function requiresCompletedManifestBooking(request: Request, actorRole: "admin" | "client") {
+  // Swiftline clients only see completed bookings. The separate operator portal
+  // retains its existing completed-booking requirement for every role.
+  return actorRole === "client" || Boolean(getOperatorContext(request));
+}
+
+function blocksCancelledManifestBooking(request: Request) {
+  return Boolean(getOperatorContext(request));
+}
+
 function getDraftId(request: Request) {
   const value = typeof request.params.draftId === "string" ? request.params.draftId : "";
   return mongoose.Types.ObjectId.isValid(value) ? new mongoose.Types.ObjectId(value) : null;
@@ -241,7 +251,7 @@ function serializeEligibleShipment(draft: IShipmentDraft, dpdShipment: IDpdShipm
   };
 }
 
-async function loadManifestContext(draftId: mongoose.Types.ObjectId, userId: mongoose.Types.ObjectId, actorRole: "admin" | "client") {
+async function loadManifestContext(request: Request, draftId: mongoose.Types.ObjectId, userId: mongoose.Types.ObjectId, actorRole: "admin" | "client") {
   const currentDraft = await ShipmentDraft.findById(draftId).exec();
   if (!currentDraft) throw new ShipmentManifestServiceError("Shipment not found.", 404);
 
@@ -279,15 +289,20 @@ async function loadManifestContext(draftId: mongoose.Types.ObjectId, userId: mon
 
   const draftIds = drafts.map((draft) => draft._id);
   const [bookings, assignedManifests, cancelledEvents] = await Promise.all([
-    DpdShipment.find({ shipmentDraftId: { $in: draftIds }, status: "LABEL_RECEIVED" }).exec(),
+    DpdShipment.find({
+      shipmentDraftId: { $in: draftIds },
+      ...(requiresCompletedManifestBooking(request, actorRole) ? { status: "LABEL_RECEIVED" } : {})
+    }).exec(),
     ShipmentManifest.find({ shipmentDraftIds: { $in: draftIds } })
       .select("manifestNumber manifestType actorRole shipmentDraftIds")
       .lean()
       .exec(),
-    ShipmentEvent.find({ shipmentDraftId: { $in: draftIds }, status: "SHIPMENT_CANCELLED" })
-      .select("shipmentDraftId")
-      .lean()
-      .exec()
+    blocksCancelledManifestBooking(request)
+      ? ShipmentEvent.find({ shipmentDraftId: { $in: draftIds }, status: "SHIPMENT_CANCELLED" })
+        .select("shipmentDraftId")
+        .lean()
+        .exec()
+      : Promise.resolve([])
   ]);
   const cancelledIds = new Set(cancelledEvents.map((event) => String(event.shipmentDraftId)));
   const manifestsByDraft = new Map<string, typeof assignedManifests>();
@@ -374,11 +389,16 @@ async function createManifest(request: Request, response: Response, actorRole: "
     const selectedObjectIds = selectedIds.map((id) => new mongoose.Types.ObjectId(id));
     const [drafts, bookings, existingAssignment, cancelledEvent, assignedBranch] = await Promise.all([
       ShipmentDraft.find({ _id: { $in: selectedObjectIds } }).exec(),
-      DpdShipment.find({ shipmentDraftId: { $in: selectedObjectIds }, status: "LABEL_RECEIVED" }).exec(),
+      DpdShipment.find({
+        shipmentDraftId: { $in: selectedObjectIds },
+        ...(requiresCompletedManifestBooking(request, actorRole) ? { status: "LABEL_RECEIVED" } : {})
+      }).exec(),
       actorRole === "client"
         ? ShipmentManifest.findOne({ shipmentDraftIds: { $in: selectedObjectIds }, actorRole: "client" }).lean().exec()
         : Promise.resolve(null),
-      ShipmentEvent.findOne({ shipmentDraftId: { $in: selectedObjectIds }, status: "SHIPMENT_CANCELLED" }).lean().exec(),
+      blocksCancelledManifestBooking(request)
+        ? ShipmentEvent.findOne({ shipmentDraftId: { $in: selectedObjectIds }, status: "SHIPMENT_CANCELLED" }).lean().exec()
+        : Promise.resolve(null),
       Branch.findById(currentDraft.branchId).lean().exec()
     ]);
     if (drafts.length !== selectedIds.length || bookings.length !== selectedIds.length) {
@@ -518,7 +538,7 @@ export async function getAdminShipmentManifestContext(request: Request, response
   if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
   if (!draftId) return response.status(404).json({ success: false, message: "Shipment not found." });
   try {
-    return response.status(200).json({ success: true, ...(await loadManifestContext(draftId, userId, "admin")) });
+    return response.status(200).json({ success: true, ...(await loadManifestContext(request, draftId, userId, "admin")) });
   } catch (error) {
     return sendManifestError(response, error);
   }
@@ -530,7 +550,7 @@ export async function getClientShipmentManifestContext(request: Request, respons
   if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
   if (!draftId) return response.status(404).json({ success: false, message: "Shipment not found." });
   try {
-    return response.status(200).json({ success: true, ...(await loadManifestContext(draftId, userId, "client")) });
+    return response.status(200).json({ success: true, ...(await loadManifestContext(request, draftId, userId, "client")) });
   } catch (error) {
     return sendManifestError(response, error);
   }
@@ -761,11 +781,16 @@ async function createBulkManifest(request: Request, response: Response, actorRol
     if (actorRole === "client") await assertClientAccess(userId, firstDraft, true);
 
     const [bookings, existingAssignment, cancelledEvent, assignedBranch] = await Promise.all([
-      DpdShipment.find({ shipmentDraftId: { $in: selectedObjectIds }, status: "LABEL_RECEIVED" }).exec(),
+      DpdShipment.find({
+        shipmentDraftId: { $in: selectedObjectIds },
+        ...(requiresCompletedManifestBooking(request, actorRole) ? { status: "LABEL_RECEIVED" } : {})
+      }).exec(),
       actorRole === "client"
         ? ShipmentManifest.findOne({ shipmentDraftIds: { $in: selectedObjectIds }, actorRole: "client" }).lean().exec()
         : Promise.resolve(null),
-      ShipmentEvent.findOne({ shipmentDraftId: { $in: selectedObjectIds }, status: "SHIPMENT_CANCELLED" }).lean().exec(),
+      blocksCancelledManifestBooking(request)
+        ? ShipmentEvent.findOne({ shipmentDraftId: { $in: selectedObjectIds }, status: "SHIPMENT_CANCELLED" }).lean().exec()
+        : Promise.resolve(null),
       Branch.findById(firstDraft.branchId).lean().exec()
     ]);
     if (bookings.length !== selectedIds.length) {
@@ -926,8 +951,13 @@ export async function createAdminCombinedShipmentManifest(request: Request, resp
     }
 
     const [bookings, cancelledEvent, assignedBranch] = await Promise.all([
-      DpdShipment.find({ shipmentDraftId: { $in: selectedObjectIds }, status: "LABEL_RECEIVED" }).exec(),
-      ShipmentEvent.findOne({ shipmentDraftId: { $in: selectedObjectIds }, status: "SHIPMENT_CANCELLED" }).lean().exec(),
+      DpdShipment.find({
+        shipmentDraftId: { $in: selectedObjectIds },
+        ...(requiresCompletedManifestBooking(request, "admin") ? { status: "LABEL_RECEIVED" } : {})
+      }).exec(),
+      blocksCancelledManifestBooking(request)
+        ? ShipmentEvent.findOne({ shipmentDraftId: { $in: selectedObjectIds }, status: "SHIPMENT_CANCELLED" }).lean().exec()
+        : Promise.resolve(null),
       Branch.findById(firstDraft.branchId).lean().exec()
     ]);
     if (bookings.length !== selectedIds.length) {

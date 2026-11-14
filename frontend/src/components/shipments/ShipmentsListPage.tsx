@@ -945,30 +945,23 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     return () => window.clearTimeout(timer);
   }, [restoringView, searchInput]);
 
-  // Clients can create only one account manifest per shipment; staff can reuse
-  // booked shipments in both account and combined manifests.
+  // Manifest mode includes every shipment row; the other selection flows keep
+  // their existing eligibility filter.
   const isRowCheckable = useCallback((shipment: ShipmentListItem) => (
-    shipment.manifestEligible
+    activeFlow === "manifest"
+    || shipment.manifestEligible
     || (audience === "admin" && (
       shipment.combinedManifestEligible
       || isStatusUpdateEligible(shipment)
     ))
-  ), [audience]);
-  // Header select-all covers shipments eligible for either staff action.
-  const selectable = useMemo(() => shipments.filter(isRowCheckable), [shipments, isRowCheckable]);
+  ), [activeFlow, audience]);
+  const selectable = useMemo(() => shipments.filter(isRowCheckable), [isRowCheckable, shipments]);
   const selectedList = useMemo(() => [...selected.values()], [selected]);
-  // Keep each action's eligible subset separate for its account or branch rules.
-  const accountManifestSelection = useMemo(
-    () => selectedList.filter((shipment) => shipment.manifestEligible),
-    [selectedList]
-  );
-  const combinedManifestSelection = useMemo(
-    () => selectedList.filter((shipment) => shipment.combinedManifestEligible),
-    [selectedList]
-  );
-  const manifestSelection = manifestDialogMode === "COMBINED"
-    ? combinedManifestSelection
-    : accountManifestSelection;
+  const manifestSelection = selectedList;
+  const blockedManifestSelection = useMemo(() => selectedList.filter((shipment) => (
+    !shipment.manifestEligible
+    || (audience === "admin" && !shipment.combinedManifestEligible)
+  )), [audience, selectedList]);
   const statusSelection = useMemo(() => selectedList.filter(isStatusUpdateEligible), [selectedList]);
   const manifestTotals = useMemo(() => ({
     pieces: manifestSelection.reduce((sum, shipment) => sum + shipment.pieces, 0),
@@ -979,24 +972,13 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     pieces: selectedList.reduce((sum, shipment) => sum + shipment.pieces, 0),
     weightKg: selectedList.reduce((sum, shipment) => sum + shipment.weightKg, 0)
   }), [selectedList]);
-  const inManifestCount = useMemo(
-    () => selectedList.filter((shipment) => hasRelevantManifestMembership(shipment, audience)).length,
-    [audience, selectedList]
-  );
-  const otherIneligibleCount = useMemo(
-    () => selectedList.filter((shipment) => !shipment.manifestEligible
-      && !shipment.combinedManifestEligible
-      && !hasRelevantManifestMembership(shipment, audience)).length,
-    [audience, selectedList]
-  );
-
   // A manifest covers one business account and branch, so a mixed selection
   // cannot become one document.
-  const mixedSelection = accountManifestSelection.length > 1 && accountManifestSelection.some((shipment) =>
-    shipment.businessAccountId !== accountManifestSelection[0]?.businessAccountId
-    || shipment.branchId !== accountManifestSelection[0]?.branchId);
-  const combinedBranchMismatch = combinedManifestSelection.length > 1 && combinedManifestSelection.some((shipment) =>
-    shipment.branchId !== combinedManifestSelection[0]?.branchId);
+  const mixedSelection = selectedList.length > 1 && selectedList.some((shipment) =>
+    shipment.businessAccountId !== selectedList[0]?.businessAccountId
+    || shipment.branchId !== selectedList[0]?.branchId);
+  const combinedBranchMismatch = selectedList.length > 1 && selectedList.some((shipment) =>
+    shipment.branchId !== selectedList[0]?.branchId);
   const canCreateCombinedManifest = audience === "admin"
     && (role === "admin" || role === "operations");
 
@@ -1033,9 +1015,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
   const allSelected = selectable.length > 0 && selectable.every((shipment) => selected.has(shipment.id));
 
-  // Selects/deselects only the current page's checkable rows (including
-  // already-manifested rows for stats), leaving any selections already made
-  // on other pages untouched.
+  // Selects/deselects every row on the current page, leaving selections on
+  // other pages untouched.
   function toggleAll() {
     setSelected((current) => {
       const next = new Map(current);
@@ -1058,7 +1039,13 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   }
 
   async function handleCreate(values: ManifestDialogValues) {
-    const shipmentDraftIds = manifestSelection.map((shipment) => shipment.id);
+    const actionBlocked = blockedManifestSelection.length > 0
+      || (manifestDialogMode === "COMBINED" ? combinedBranchMismatch : mixedSelection);
+    if (actionBlocked) {
+      toast.error("Remove the blocked shipments or fix the account and branch selection before creating a manifest.");
+      return;
+    }
+    const shipmentDraftIds = selectedList.map((shipment) => shipment.id);
     if (!shipmentDraftIds.length) {
       toast.error(`Select at least one shipment eligible for a ${manifestDialogMode === "COMBINED" ? "combined " : "account-specific "}manifest.`);
       return;
@@ -1504,32 +1491,34 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                   {selectedList.length} {selectedList.length === 1 ? "shipment" : "shipments"} selected
                   {" · "}{selectionTotals.pieces} pcs · {selectionTotals.weightKg.toFixed(2)} kg
                 </p>
-                {accountManifestSelection.length > 0 && accountManifestSelection.length < selectedList.length ? (
-                  <p className="mt-1 text-xs font-semibold text-[#0D1282]/80">
-                    {accountManifestSelection.length} eligible for an account-specific manifest
-                  </p>
-                ) : null}
-                {audience === "admin" && combinedManifestSelection.length > 0 ? (
-                  <p className="mt-1 text-xs font-semibold text-[#0D1282]/80">
-                    {combinedManifestSelection.length} eligible for a combined manifest
-                  </p>
-                ) : null}
-                {inManifestCount > 0 ? (
-                  <p className="mt-1 text-xs font-semibold text-red-700">
-                    {inManifestCount} {inManifestCount === 1 ? "shipment is" : "shipments are"} already in a client manifest and cannot be added again.
-                  </p>
-                ) : null}
-                {otherIneligibleCount > 0 ? (
-                  <p className="mt-1 text-xs font-semibold text-slate-600">
-                    {otherIneligibleCount} selected {otherIneligibleCount === 1 ? "shipment is" : "shipments are"} not
-                    manifest-eligible and will be left out.
-                  </p>
-                ) : null}
-                {!accountManifestSelection.length && !(audience === "admin" && combinedManifestSelection.length) ? (
-                  <p className="mt-1 text-xs font-semibold text-amber-700">
-                    None of the selected shipments is eligible for a new manifest. Clear the selection
-                    and choose shipments that meet the manifest rules.
-                  </p>
+                {blockedManifestSelection.length ? (
+                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+                    <p className="text-xs font-semibold text-amber-900">
+                      Remove these selected shipments before creating the manifest:
+                    </p>
+                    <ul className="mt-1 max-h-28 space-y-1 overflow-y-auto">
+                      {blockedManifestSelection.map((shipment) => {
+                        const shipmentNumber = shipment.swiftlineTrackingNumber || shipment.id;
+                        const reason = audience === "client" && hasRelevantManifestMembership(shipment, audience)
+                          ? "Already in a client manifest"
+                          : "Booking details are unavailable";
+                        return (
+                          <li key={shipment.id} className="flex flex-wrap items-center gap-x-2 text-xs text-amber-900">
+                            <span className="font-semibold">{shipmentNumber}</span>
+                            <span>{reason}</span>
+                            <button
+                              type="button"
+                              onClick={() => toggleOne(shipment)}
+                              aria-label={`Remove shipment ${shipmentNumber} from selection`}
+                              className="font-semibold text-[#0D1282] underline underline-offset-2"
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 ) : null}
                 {mixedSelection ? (
                   <p className="mt-1 text-xs font-semibold text-amber-700">
@@ -1556,8 +1545,10 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     setManifestDialogMode("ACCOUNT");
                     setDialogOpen(true);
                   }}
-                  disabled={mixedSelection || !accountManifestSelection.length}
-                  title={!accountManifestSelection.length ? "No selected shipment is eligible for an account-specific manifest" : undefined}
+                  disabled={!selectedList.length || blockedManifestSelection.length > 0 || mixedSelection}
+                  title={blockedManifestSelection.length
+                    ? "Remove selected shipments without usable booking details or already in a client manifest"
+                    : mixedSelection ? "An account manifest must use one business account and branch" : undefined}
                   className="h-9 rounded-4xl bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0D1282]/90 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
                   Create Manifest
@@ -1569,8 +1560,10 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                       setManifestDialogMode("COMBINED");
                       setDialogOpen(true);
                     }}
-                    disabled={!combinedManifestSelection.length || combinedBranchMismatch}
-                    title={combinedBranchMismatch ? "Combined manifests can include shipments from one branch only" : undefined}
+                    disabled={!selectedList.length || blockedManifestSelection.length > 0 || combinedBranchMismatch}
+                    title={blockedManifestSelection.length
+                      ? "Remove selected shipments without usable booking details"
+                      : combinedBranchMismatch ? "Combined manifests can include shipments from one branch only" : undefined}
                     className="h-9 rounded-4xl border border-[#0D1282] bg-white px-4 text-sm font-semibold text-[#0D1282] hover:bg-[#0D1282]/5 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
                   >
                     Create Combined Manifest
@@ -1972,7 +1965,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                         : undefined}
                       className={`h-4 w-4 rounded-sm ${showManifestHighlight
                         ? "accent-red-600 ring-2 ring-red-400 ring-offset-1 disabled:opacity-100"
-                        : "accent-[#0D1282] disabled:opacity-40"}`}
+                          : "accent-[#0D1282]"}`}
                     />
                   </td>
                   <td className="w-56 max-w-56 px-4 py-3 align-middle">

@@ -8,6 +8,7 @@ import { DpdShipment } from "../models/dpdShipment.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
+import { ShipmentManifest } from "../models/shipmentManifest.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { OperationsManifestConsignment } from "../models/operationsManifestConsignment.model.js";
 import { OperationsManifestScan } from "../models/operationsManifestScan.model.js";
@@ -15,6 +16,7 @@ import { listDpdShipments as listDpdShipmentsController } from "../controllers/d
 import { searchClientRecords, searchStaffRecords } from "../services/clientSearch.service.js";
 import {
   allShipmentStatuses,
+  bookedShipmentStatuses,
   listBookedShipments
 } from "../services/shipmentListing.service.js";
 
@@ -108,6 +110,7 @@ before(async () => {
     BusinessAccount.init(),
     ShipmentDraft.init(),
     DpdShipment.init(),
+    ShipmentManifest.init(),
     LabelDocument.init(),
     ShipmentEvent.init()
   ]);
@@ -124,6 +127,139 @@ after(async () => {
 });
 
 describe("shipment listing read path", () => {
+  test("allows staff manifests for any snapshot-backed booking status while retaining client restrictions", async () => {
+    const awaitingDocuments = await createBookedDraft(accountOneId, "MANIFEST-ELIGIBILITY-AWAITING");
+    const rejected = await createBookedDraft(accountOneId, "MANIFEST-ELIGIBILITY-REJECTED");
+    const unknown = await createBookedDraft(accountOneId, "MANIFEST-ELIGIBILITY-UNKNOWN");
+    const cancelled = await createBookedDraft(accountOneId, "MANIFEST-ELIGIBILITY-CANCELLED");
+    const missingSnapshot = await createBookedDraft(accountOneId, "MANIFEST-ELIGIBILITY-MISSING");
+
+    const usableSnapshot = (trackingNumber: string) => ({
+      version: 1,
+      source: { invoiceNumber: "", shipmentReference: trackingNumber },
+      tracking: { swiftlineTrackingNumber: trackingNumber, carrierShipmentId: "", carrierTransactionId: "" },
+      payment: { currency: "INR", totalAmountMinor: 100, advanceAmountMinor: 0, creditAmountMinor: 0 },
+      pricing: { baseAmount: 1, gstAmount: 0 },
+      service: { type: "COURIER", code: "TEST" },
+      consignee: { townOrCity: "London", countryCode: "GB", countryName: "United Kingdom" },
+      parcels: [{
+        sequence: 1,
+        actualWeightKg: 2,
+        carrierParcelNumber: "",
+        swiftlineParcelNumber: `${trackingNumber}-01`,
+        declaredGoodsValueMinor: 100
+      }]
+    });
+
+    await Promise.all([
+      DpdShipment.updateOne({ _id: awaitingDocuments.booking._id }, {
+        $set: { status: "DPD_CREATED", currentShipmentSnapshot: usableSnapshot("MANIFEST-AWAITING") }
+      }).exec(),
+      DpdShipment.updateOne({ _id: rejected.booking._id }, {
+        $set: { status: "DPD_REJECTED", currentShipmentSnapshot: usableSnapshot("MANIFEST-REJECTED") }
+      }).exec(),
+      DpdShipment.updateOne({ _id: unknown.booking._id }, {
+        $set: { status: "DPD_STATUS_UNKNOWN", currentShipmentSnapshot: usableSnapshot("MANIFEST-UNKNOWN") }
+      }).exec(),
+      DpdShipment.updateOne({ _id: cancelled.booking._id }, {
+        $set: { currentShipmentSnapshot: usableSnapshot("MANIFEST-CANCELLED") }
+      }).exec(),
+      DpdShipment.updateOne({ _id: missingSnapshot.booking._id }, {
+        $set: { status: "DPD_CREATING", bookingSnapshot: {}, currentShipmentSnapshot: {} }
+      }).exec(),
+      ShipmentEvent.create({
+        shipmentDraftId: cancelled.draft._id,
+        dpdShipmentId: cancelled.booking._id,
+        status: "SHIPMENT_CANCELLED",
+        customerVisible: true,
+        createdBy: userId,
+        eventAt: new Date()
+      })
+    ]);
+
+    const base = {
+      page: 1,
+      limit: 100,
+      status: "",
+      search: "MANIFEST-ELIGIBILITY",
+      sort: "",
+      businessAccountIds: [accountOneId]
+    };
+    const staff = await listBookedShipments({
+      ...base,
+      actorRole: "admin",
+      bookingStatuses: allShipmentStatuses
+    });
+    const staffById = new Map(staff.shipments.map((shipment) => [shipment.id, shipment]));
+
+    for (const shipment of [awaitingDocuments, rejected, unknown, cancelled]) {
+      const item = staffById.get(String(shipment.draft._id));
+      assert.equal(item?.manifestEligible, true, `${shipment.draft.parcelList[0]?.shipmentReference1} should allow account manifests`);
+      assert.equal(item?.combinedManifestEligible, true, `${shipment.draft.parcelList[0]?.shipmentReference1} should allow combined manifests`);
+    }
+    assert.equal(staffById.get(String(missingSnapshot.draft._id))?.manifestEligible, false);
+    assert.equal(staffById.get(String(missingSnapshot.draft._id))?.combinedManifestEligible, false);
+
+    const client = await listBookedShipments({
+      ...base,
+      actorRole: "client",
+      bookingStatuses: bookedShipmentStatuses
+    });
+    assert.ok(client.shipments.every((shipment) => shipment.bookingStatus === "LABEL_RECEIVED"));
+    const clientCancelled = client.shipments.find((shipment) => shipment.id === String(cancelled.draft._id));
+    assert.equal(clientCancelled?.manifestEligible, true, "a cancelled event must not reapply staff-only status filtering to the client booking");
+
+    await ShipmentManifest.create({
+      manifestNumber: `TEST-${new mongoose.Types.ObjectId().toString()}`,
+      manifestType: "ACCOUNT",
+      businessAccountId: accountOneId,
+      branchId,
+      shipmentDraftIds: [cancelled.draft._id],
+      headerSnapshot: {},
+      lineSnapshots: [{
+        shipmentDraftId: cancelled.draft._id,
+        dpdShipmentId: cancelled.booking._id,
+        consignmentNumber: "MANIFEST-CANCELLED",
+        pieces: 1,
+        weightKg: 2,
+        consignor: {},
+        consignee: {},
+        description: "Test goods",
+        declaredValueMinor: 100,
+        currency: "INR",
+        bagNumber: "1",
+        serviceInfo: "EXP"
+      }],
+      totalPieces: 1,
+      totalWeightKg: 2,
+      totalBags: 1,
+      createdBy: userId,
+      actorRole: "client",
+      generatedAt: new Date()
+    });
+
+    const clientAfterManifest = await listBookedShipments({
+      ...base,
+      actorRole: "client",
+      bookingStatuses: bookedShipmentStatuses
+    });
+    assert.equal(
+      clientAfterManifest.shipments.find((shipment) => shipment.id === String(cancelled.draft._id))?.manifestEligible,
+      false,
+      "a shipment already in a client manifest must not be offered for another client manifest"
+    );
+    const staffAfterClientManifest = await listBookedShipments({
+      ...base,
+      actorRole: "admin",
+      bookingStatuses: allShipmentStatuses
+    });
+    assert.equal(
+      staffAfterClientManifest.shipments.find((shipment) => shipment.id === String(cancelled.draft._id))?.manifestEligible,
+      true,
+      "client membership must not prevent staff reuse"
+    );
+  });
+
   test("filters staff shipments by displayed weight before pagination, with strict 10 kg boundaries", async () => {
     const light = await createBookedDraft(accountOneId, "WEIGHT-FILTER-LIGHT");
     const boundary = await createBookedDraft(accountOneId, "WEIGHT-FILTER-BOUNDARY");

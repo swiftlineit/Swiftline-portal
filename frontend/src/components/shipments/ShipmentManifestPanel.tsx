@@ -90,7 +90,8 @@ export default function ShipmentManifestPanel({
   const currentShipmentEligible = Boolean(currentShipment);
   const selectedPieces = selectedShipments.reduce((sum, shipment) => sum + shipment.pieces, 0);
   const selectedWeight = selectedShipments.reduce((sum, shipment) => sum + shipment.weightKg, 0);
-  const ownManifestExists = Boolean(context?.existingManifests.some((manifest) => manifest.actorRole === audience));
+  const clientManifestExists = audience === "client"
+    && Boolean(context?.existingManifests.some((manifest) => manifest.actorRole === "client"));
 
   function updateHeader(field: keyof typeof header, value: string) {
     setHeader((current) => ({
@@ -191,7 +192,7 @@ export default function ShipmentManifestPanel({
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Shipment Manifest</h2>
           <p className="mt-1 text-sm text-slate-600">Create and download dispatch manifests from booked shipments.</p>
         </div>
-        {context?.canCreate && !ownManifestExists && currentShipmentEligible ? (
+        {context?.canCreate && !clientManifestExists && currentShipmentEligible ? (
           <button
             type="button"
             onClick={() => setShowForm((value) => !value)}
@@ -207,7 +208,7 @@ export default function ShipmentManifestPanel({
         <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm font-medium text-red-700">{error}</div>
       ) : null}
 
-      {context?.existingManifests.length ? (
+      {context?.existingManifests.length && !showForm ? (
         <div className="divide-y divide-slate-100">
           {context.existingManifests.map((manifest) => (
             <div key={manifest.id} className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
@@ -247,7 +248,7 @@ export default function ShipmentManifestPanel({
             : context?.canCreate
             ? currentShipmentEligible
               ? "No manifest has been generated for this shipment."
-              : "Manifest creation becomes available after shipment booking and label generation are complete."
+              : "Manifest creation becomes available when shipment details are available."
             : "Manifest creation is available to account owners, account admins, and operations users."}
         </p>
       ) : null}
