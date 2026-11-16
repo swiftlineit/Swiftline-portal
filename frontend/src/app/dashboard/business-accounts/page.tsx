@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
 import { AssignBranchModal } from "@/components/business-accounts/AssignBranchModal";
+import BusinessAccountSuspensionDialog from "@/components/business-accounts/BusinessAccountSuspensionDialog";
 import {
   BusinessAccountsTable,
   getAssignedBranch,
@@ -14,6 +16,7 @@ import {
   assignBusinessAccountBranch,
   BusinessAccount,
   BusinessAccountOperationalAction,
+  BusinessAccountSuspensionDetails,
   BusinessAccountStatus,
   deleteBusinessAccountDraft,
   listBusinessAccounts,
@@ -43,6 +46,7 @@ export default function BusinessAccountsPage() {
     useState<BusinessAccount | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<BusinessAccount | null>(null);
+  const [pendingSuspension, setPendingSuspension] = useState<{ account: BusinessAccount; status: "active" | "suspended" } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -107,7 +111,8 @@ export default function BusinessAccountsPage() {
   async function refreshAccount(
     accountId: string,
     updater: () => Promise<{ account: BusinessAccount }>,
-  ) {
+    toastOnError = false,
+  ): Promise<boolean> {
     setUpdatingAction(accountId);
     setError("");
 
@@ -118,12 +123,12 @@ export default function BusinessAccountsPage() {
           account.accountId === accountId ? data.account : account,
         ),
       );
+      return true;
     } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Unable to update business account.",
-      );
+      const message = caughtError instanceof Error ? caughtError.message : "Unable to update business account.";
+      if (toastOnError) toast.error(message);
+      else setError(message);
+      return false;
     } finally {
       setUpdatingAction(null);
     }
@@ -132,10 +137,15 @@ export default function BusinessAccountsPage() {
   async function handleStatusAction(
     account: BusinessAccount,
     status: BusinessAccountStatus,
+    details?: BusinessAccountSuspensionDetails,
   ) {
-    await refreshAccount(account.accountId, () =>
-      updateBusinessAccountStatus(account.accountId, status),
+    const saved = await refreshAccount(
+      account.accountId,
+      () => updateBusinessAccountStatus(account.accountId, status, undefined, details),
+      Boolean(details),
     );
+    if (details && saved) setPendingSuspension(null);
+    return saved;
   }
 
   async function handleOperationalAction(
@@ -263,10 +273,12 @@ export default function BusinessAccountsPage() {
     }
 
     if (value.startsWith("status:")) {
-      await handleStatusAction(
-        account,
-        value.replace("status:", "") as BusinessAccountStatus,
-      );
+      const status = value.replace("status:", "") as BusinessAccountStatus;
+      if (status === "suspended" || (account.status === "suspended" && status === "active")) {
+        setPendingSuspension({ account, status });
+      } else {
+        await handleStatusAction(account, status);
+      }
       return;
     }
 
@@ -452,6 +464,14 @@ export default function BusinessAccountsPage() {
             onCancel={() => setPendingDelete(null)}
           />
         ) : null}
+        {pendingSuspension ? <BusinessAccountSuspensionDialog
+          accountName={pendingSuspension.account.company.companyName || pendingSuspension.account.accountId}
+          action={pendingSuspension.status === "suspended" ? "suspend" : "reactivate"}
+          initialMode={pendingSuspension.account.suspension?.mode ?? "OPERATIONAL_HOLD"}
+          busy={updatingAction === pendingSuspension.account.accountId}
+          onCancel={() => setPendingSuspension(null)}
+          onConfirm={(details) => handleStatusAction(pendingSuspension.account, pendingSuspension.status, details)}
+        /> : null}
       </div>
   );
 }

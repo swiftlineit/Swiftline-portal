@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
+import { availableClientAccountIds } from "../services/businessAccountSuspension.service.js";
 import { listClientActivity } from "../services/clientActivity.service.js";
 
 /**
@@ -19,10 +20,14 @@ export async function getClientActivity(request: Request, response: Response): P
     return response.status(401).json({ success: false, message: "Unauthorized" });
   }
 
-  const memberships = await BusinessAccountMember.find({ user: userId, status: "active" })
+  const allMemberships = await BusinessAccountMember.find({ user: userId, status: "active" })
     .select("businessAccount assignedBranches role")
     .lean()
     .exec();
+  const availableIds = new Set((await availableClientAccountIds(
+    allMemberships.map((item) => item.businessAccount as mongoose.Types.ObjectId)
+  )).map(String));
+  const memberships = allMemberships.filter((item) => availableIds.has(String(item.businessAccount)));
 
   const requested = typeof request.query.businessAccountId === "string" ? request.query.businessAccountId : "";
   const membership = requested

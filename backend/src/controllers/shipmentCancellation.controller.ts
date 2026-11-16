@@ -15,6 +15,7 @@ import {
 } from "../models/shipmentCancellation.model.js";
 import { ShipmentCreditNote } from "../models/shipmentCreditNote.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
+import { suspensionMode } from "../services/businessAccountSuspension.service.js";
 import { dateRangeCondition, dateRangeParams } from "../utils/dateRangeFilter.js";
 import {
   approveShipmentCancellation,
@@ -73,6 +74,11 @@ async function clientMembershipForDraft(currentUserId: mongoose.Types.ObjectId, 
     status: "active"
   }).exec();
   if (!membership) return null;
+  const account = await BusinessAccount.findById(draft.businessAccountId)
+    .select("status suspension.mode")
+    .lean()
+    .exec();
+  if (!account || suspensionMode(account) === "SECURITY_LOCK") return null;
   const assignedBranches = membership.assignedBranches.map(String);
   if (assignedBranches.length && !assignedBranches.includes(String(draft.branchId))) return null;
   return { membership, draft };
@@ -115,6 +121,10 @@ export async function requestClientShipmentCancellation(request: Request, respon
   }
   const access = await clientMembershipForDraft(currentUserId, draftId);
   if (!access) return response.status(404).json({ success: false, message: "Shipment not found." });
+  const account = await BusinessAccount.findById(access.draft.businessAccountId).select("status").lean().exec();
+  if (account?.status === "suspended") {
+    return response.status(423).json({ success: false, message: "Cancellation requests are paused while this account is suspended." });
+  }
   if (!clientCancellationRoles.includes(access.membership.role)) {
     return response.status(403).json({
       success: false,

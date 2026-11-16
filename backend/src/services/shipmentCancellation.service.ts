@@ -6,6 +6,7 @@ import { CancellationFeeInvoice } from "../models/cancellationFeeInvoice.model.j
 import { CreditBillingAdjustment } from "../models/creditBillingAdjustment.model.js";
 import { CreditBillingStatement } from "../models/creditBillingStatement.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
 import { ShipmentAmendment } from "../models/shipmentAmendment.model.js";
 import { ShipmentCancellation, type IShipmentCancellation } from "../models/shipmentCancellation.model.js";
 import { ShipmentCharge } from "../models/shipmentCharge.model.js";
@@ -27,6 +28,7 @@ import {
   getOperatorCancellationEligibility,
   terminalOperatorShipmentStatuses
 } from "./operatorShipmentCancellationPolicy.service.js";
+import { suspensionMessage } from "./businessAccountSuspension.service.js";
 
 // The default fee and threshold for requiring an additional-fee reason; lower
 // fees are valid and are not subject to a minimum.
@@ -246,6 +248,11 @@ export async function requestShipmentCancellation(input: {
   const ownerFilter = tenantContext ? { tenantId: tenantContext.tenantId } : {};
   const draft = await ShipmentDraft.findOne({ _id: input.shipmentDraftId, ...ownerFilter }).exec();
   if (!draft) throw new ShipmentCancellationError(404, "Shipment not found.");
+  const account = await BusinessAccount.findById(draft.businessAccountId).select("status accountKind").lean().exec();
+  if (!account) throw new ShipmentCancellationError(404, "Business account not found.");
+  if (account.status === "suspended" && account.accountKind !== "INDIVIDUAL_SENTINEL") {
+    throw new ShipmentCancellationError(423, suspensionMessage);
+  }
   const dpdShipment = await DpdShipment.findOne({ shipmentDraftId: draft._id, ...ownerFilter }).exec();
   if (!dpdShipment) throw new ShipmentCancellationError(409, "Only booked shipments can be cancelled.");
   const invoice = await ShipmentInvoice.findOne({ shipmentDraftId: draft._id, ...ownerFilter }).exec();

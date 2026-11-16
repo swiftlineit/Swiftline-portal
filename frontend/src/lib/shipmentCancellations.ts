@@ -48,6 +48,13 @@ export type ShipmentCancellation = {
   businessAccount?: { id: string; accountId: string; companyName: string } | null;
 };
 
+export class ShipmentCancellationRequestError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ShipmentCancellationRequestError";
+  }
+}
+
 async function fetchWithAuth(input: string, init: RequestInit = {}) {
   let token = getAccessToken() ?? await refreshAccessToken();
   const headers = new Headers(init.headers);
@@ -64,7 +71,10 @@ async function fetchWithAuth(input: string, init: RequestInit = {}) {
 async function parse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.success) {
-    throw new Error(data.message || "The cancellation request could not be completed.");
+    throw new ShipmentCancellationRequestError(
+      data.message || "The cancellation request could not be completed.",
+      response.status
+    );
   }
   return data as T;
 }

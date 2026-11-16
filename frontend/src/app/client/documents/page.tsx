@@ -97,7 +97,8 @@ export default function ClientDocumentsPage() {
     void getClientDashboard()
       .then((dashboard) => {
         if (!active) return;
-        const available = dashboard.accounts.filter((item) => item.dashboardAccess.state === "READY");
+        const available = dashboard.accounts.filter((item) => item.dashboardAccess.state === "READY"
+          || (item.account.status === "suspended" && item.account.suspensionMode !== "SECURITY_LOCK"));
         setAccounts(available);
         setAccountId(available[0]?.account.id ?? "");
         if (!available.length) setError("Documents are not available until a business account is active.");

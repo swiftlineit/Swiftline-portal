@@ -15,6 +15,7 @@ import {
   buildOperatorBranchAccessFilter,
   buildOperatorBranchRecordAccessFilter
 } from "../services/operatorDirectory.service.js";
+import { availableClientAccountIds } from "../services/businessAccountSuspension.service.js";
 
 const objectIdQuery = z.string().regex(/^[a-f\d]{24}$/i, "Enter a valid branch ID.");
 const directoryQuerySchema = z.object({
@@ -72,7 +73,7 @@ export async function listOperatorBusinessAccounts(request: Request, response: R
       .select("businessAccount")
       .lean()
       .exec();
-    clientAccountIds = memberships.map((membership) => membership.businessAccount as mongoose.Types.ObjectId);
+    clientAccountIds = await availableClientAccountIds(memberships.map((membership) => membership.businessAccount as mongoose.Types.ObjectId));
   }
 
   const clauses: Record<string, unknown>[] = [
@@ -101,7 +102,7 @@ export async function listOperatorBusinessAccounts(request: Request, response: R
   const [total, accounts] = await Promise.all([
     BusinessAccount.countDocuments(query).exec(),
     BusinessAccount.find(query)
-      .select("accountId accountKind status contact.firstName contact.lastName contact.email company.companyName assignedBranch kycReview.overallStatus createdAt updatedAt")
+      .select("accountId accountKind status suspension.mode suspension.previousStatus contact.firstName contact.lastName contact.email company.companyName assignedBranch kycReview.overallStatus createdAt updatedAt")
       .populate("assignedBranch", "name code status")
       .sort({ createdAt: -1, _id: -1 })
       .skip(skip)

@@ -13,6 +13,11 @@ export const businessAccountStatuses = [
   "suspended"
 ] as const;
 export type BusinessAccountStatus = (typeof businessAccountStatuses)[number];
+export type BusinessAccountSuspensionDetails = {
+  suspensionMode: "OPERATIONAL_HOLD" | "SECURITY_LOCK";
+  internalReason: string;
+  clientMessage?: string;
+};
 
 // Allowed lifecycle transitions, mirroring the backend state machine so the UI
 // only ever offers actions the API will accept.
@@ -106,6 +111,7 @@ export type BusinessAccount = {
   _id: string;
   accountId: string;
   status: BusinessAccountStatus;
+  suspension?: { mode: BusinessAccountSuspensionDetails["suspensionMode"]; previousStatus?: "active" | "approved"; changedAt?: string } | null;
   contact: {
     title: string;
     firstName: string;
@@ -481,11 +487,11 @@ export async function submitBusinessAccount(accountId: string, operatorSlug?: st
   return parseApiResponse<{ success: true; account: BusinessAccount; message: string }>(response);
 }
 
-export async function updateBusinessAccountStatus(accountId: string, status: BusinessAccountStatus, operatorSlug?: string) {
+export async function updateBusinessAccountStatus(accountId: string, status: BusinessAccountStatus, operatorSlug?: string, details?: BusinessAccountSuspensionDetails) {
   const response = await fetchWithAuth(apiUrl(businessAccountApiPath(`/${encodeURIComponent(accountId)}/status`, operatorSlug)), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status })
+    body: JSON.stringify({ status, ...details })
   });
 
   return parseApiResponse<{ success: true; account: BusinessAccount; message: string }>(response);

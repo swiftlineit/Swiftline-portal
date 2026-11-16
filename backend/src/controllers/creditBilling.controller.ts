@@ -102,7 +102,10 @@ async function financialMembership(request: Request, businessAccountId: mongoose
     businessAccount: businessAccountId,
     status: "active"
   }).exec();
-  return membership && canAccessCreditFinancials(membership.role) ? membership : null;
+  if (!membership || !canAccessCreditFinancials(membership.role)) return null;
+  const account = await BusinessAccount.findById(businessAccountId).select("status suspension.mode").lean().exec();
+  return account && !(account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK")
+    ? membership : null;
 }
 
 async function hasAcceptedCurrentTerms(

@@ -20,6 +20,7 @@ import {
   type IShipmentEvent
 } from "../models/shipmentEvent.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
 import { counterPaymentMethodValues } from "../models/counterPayment.model.js";
 import { recordCounterCollection } from "../services/individualCustomer.service.js";
 import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
@@ -2045,10 +2046,17 @@ export async function downloadDpdLabelWithToken(request: Request, response: Resp
   return runWithTenantContext(tenantContext, async () => {
     const shipmentId = new mongoose.Types.ObjectId(dpdShipmentId);
     const shipment = await DpdShipment.findOne({ _id: shipmentId, tenantId: tenantContext.tenantId })
-      .select("_id")
+      .select("_id shipmentDraftId")
       .lean()
       .exec();
     if (!shipment) return response.status(404).json({ success: false, message: "Label not found" });
+    // The bearer URL may have been issued before an account was locked.
+    const draft = await ShipmentDraft.findById(shipment.shipmentDraftId).select("businessAccountId").lean().exec();
+    const account = draft && await BusinessAccount.findById(draft.businessAccountId)
+      .select("status suspension.mode").lean().exec();
+    if (!account || (account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK")) {
+      return response.status(403).json({ success: false, message: "Label access is unavailable for this account." });
+    }
 
     const label = await LabelDocument.findOne({
       _id: new mongoose.Types.ObjectId(tokenPayload.labelId),

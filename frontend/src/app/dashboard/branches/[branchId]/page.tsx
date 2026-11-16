@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { toast } from "react-toastify";
 import { useCallback, useEffect, useState } from "react";
 import {
   FiChevronDown,
@@ -17,6 +18,7 @@ import BranchFinanceSection from "@/components/branches/BranchFinanceSection";
 import { BranchFileModal, BranchImage } from "@/components/branches/BranchFileView";
 import BranchUsersSection from "@/components/branches/BranchUsersSection";
 import { AssignBranchModal } from "@/components/business-accounts/AssignBranchModal";
+import BusinessAccountSuspensionDialog from "@/components/business-accounts/BusinessAccountSuspensionDialog";
 import {
   BusinessAccountsTable,
   getAssignedBranch,
@@ -37,6 +39,7 @@ import {
   assignBusinessAccountBranch,
   BusinessAccount,
   BusinessAccountOperationalAction,
+  BusinessAccountSuspensionDetails,
   BusinessAccountStatus,
   listBusinessAccounts,
   submitBusinessAccount,
@@ -155,6 +158,7 @@ export default function BranchDetailPage() {
   const [branchLoading, setBranchLoading] = useState(true);
   const [error, setError] = useState("");
   const [updatingAction, setUpdatingAction] = useState<string | null>(null);
+  const [pendingSuspension, setPendingSuspension] = useState<{ account: BusinessAccount; status: "active" | "suspended" } | null>(null);
   const [updatingBranchStatus, setUpdatingBranchStatus] = useState(false);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchSearch, setBranchSearch] = useState("");
@@ -255,7 +259,8 @@ export default function BranchDetailPage() {
   async function refreshAccount(
     accountId: string,
     updater: () => Promise<{ account: BusinessAccount }>,
-  ) {
+    toastOnError = false,
+  ): Promise<boolean> {
     setUpdatingAction(accountId);
     setError("");
 
@@ -271,12 +276,12 @@ export default function BranchDetailPage() {
           account.accountId === accountId ? data.account : account,
         );
       });
+      return true;
     } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Unable to update business account.",
-      );
+      const message = caughtError instanceof Error ? caughtError.message : "Unable to update business account.";
+      if (toastOnError) toast.error(message);
+      else setError(message);
+      return false;
     } finally {
       setUpdatingAction(null);
     }
@@ -344,10 +349,15 @@ export default function BranchDetailPage() {
     }
 
     if (value.startsWith("status:")) {
+      const status = value.replace("status:", "") as BusinessAccountStatus;
+      if (status === "suspended" || (account.status === "suspended" && status === "active")) {
+        setPendingSuspension({ account, status });
+        return;
+      }
       await refreshAccount(account.accountId, () =>
         updateBusinessAccountStatus(
           account.accountId,
-          value.replace("status:", "") as BusinessAccountStatus,
+          status,
         ),
       );
       return;
@@ -557,6 +567,20 @@ export default function BranchDetailPage() {
             onAssign={handleAssignBranch}
           />
         ) : null}
+        {pendingSuspension ? <BusinessAccountSuspensionDialog
+          accountName={pendingSuspension.account.company.companyName || pendingSuspension.account.accountId}
+          action={pendingSuspension.status === "suspended" ? "suspend" : "reactivate"}
+          initialMode={pendingSuspension.account.suspension?.mode ?? "OPERATIONAL_HOLD"}
+          busy={updatingAction === pendingSuspension.account.accountId}
+          onCancel={() => setPendingSuspension(null)}
+          onConfirm={async (details: BusinessAccountSuspensionDetails) => {
+            const saved = await refreshAccount(pendingSuspension.account.accountId, () => updateBusinessAccountStatus(
+              pendingSuspension.account.accountId, pendingSuspension.status, undefined, details
+            ), true);
+            if (saved) setPendingSuspension(null);
+            return saved;
+          }}
+        /> : null}
       </div>
   );
 }

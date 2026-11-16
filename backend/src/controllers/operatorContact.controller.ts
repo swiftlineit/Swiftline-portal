@@ -9,6 +9,7 @@ import { OperatorContactQuery, type IOperatorContactQuery } from "../models/oper
 import { TenantMembership } from "../models/tenantMembership.model.js";
 import { User } from "../models/user.model.js";
 import { notifyPortalUsers } from "../services/portalNotification.service.js";
+import { suspensionMode } from "../services/businessAccountSuspension.service.js";
 
 const submissionSchema = z.object({
   kind: z.enum(["ISSUE", "HELP"]),
@@ -56,12 +57,15 @@ export async function submitOperatorContactQuery(request: Request, response: Res
   const data = parsed.data;
   const awbNumbers = [...new Set(data.awbNumbers)];
 
-  const membership = await BusinessAccountMember.findOne({ user: userId, status: "active" })
+  const membership = await BusinessAccountMember.findOne({ user: userId, tenantId: context.tenantId, status: "active" })
     .select("businessAccount").lean().exec();
   if (!membership) return response.status(403).json({ success: false, message: "An active business account is required to contact this operator." });
   const account = await BusinessAccount.findById(membership.businessAccount)
-    .select("accountId company.companyName contact.firstName contact.lastName").lean().exec();
+    .select("status suspension.mode accountId company.companyName contact.firstName contact.lastName").lean().exec();
   if (!account) return response.status(404).json({ success: false, message: "Business account not found." });
+  if (suspensionMode(account) === "SECURITY_LOCK") {
+    return response.status(423).json({ success: false, message: "This business account is locked. Contact your account manager for assistance." });
+  }
 
   const recentCount = await OperatorContactQuery.countDocuments({
     submittedBy: userId,

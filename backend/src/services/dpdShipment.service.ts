@@ -720,6 +720,11 @@ async function createLabelForShipmentDraftInternal(
   );
   if (!branch) throw new DpdShipmentServiceError("The shipment branch could not be found.", 409);
   if (!businessAccount) throw new DpdShipmentServiceError("The business account could not be found.", 409);
+  // Recheck immediately before the carrier booking. Existing drafts and
+  // previously issued UI permissions cannot authorize a suspended account.
+  if (businessAccount.status === "suspended") {
+    throw new DpdShipmentServiceError("Business account bookings are paused while the account is suspended.", 423);
+  }
   if (operatorBooking) {
     const individualShipment = draft.customerType === "INDIVIDUAL";
     const individualAccount = businessAccount.accountKind === "INDIVIDUAL_SENTINEL";

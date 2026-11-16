@@ -12,6 +12,8 @@ export const businessAccountStatuses = [
   "suspended"
 ] as const;
 export type BusinessAccountStatus = (typeof businessAccountStatuses)[number];
+export const businessAccountSuspensionModes = ["OPERATIONAL_HOLD", "SECURITY_LOCK"] as const;
+export type BusinessAccountSuspensionMode = (typeof businessAccountSuspensionModes)[number];
 export const creditLimitStatusValues = ["not_reviewed", "approved", "not_approved"] as const;
 export type CreditLimitStatus = (typeof creditLimitStatusValues)[number];
 export const depositStatusValues = ["not_required", "required", "received"] as const;
@@ -122,6 +124,14 @@ export interface IBusinessAccount extends mongoose.Document {
   accountId: string;
   accountKind: BusinessAccountKind;
   status: BusinessAccountStatus;
+  suspension?: {
+    mode: BusinessAccountSuspensionMode;
+    previousStatus: "active" | "approved";
+    internalReason: string;
+    clientMessage: string;
+    changedAt: Date;
+    changedBy: mongoose.Types.ObjectId;
+  } | null;
   contact: {
     title: string;
     firstName: string;
@@ -315,6 +325,17 @@ const businessAccountSchema = new mongoose.Schema<IBusinessAccount>(
       enum: businessAccountStatuses,
       default: "draft",
       index: true
+    },
+    suspension: {
+      type: new mongoose.Schema({
+        mode: { type: String, enum: businessAccountSuspensionModes, required: true },
+        previousStatus: { type: String, enum: ["active", "approved"], required: true },
+        internalReason: { type: String, required: true, trim: true, maxlength: 1000 },
+        clientMessage: { type: String, default: "", trim: true, maxlength: 500 },
+        changedAt: { type: Date, required: true },
+        changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
+      }, { _id: false }),
+      default: null
     },
     /**
      * Identity fields (name, email, mobile) stay required: they are what the

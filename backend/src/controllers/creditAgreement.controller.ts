@@ -18,6 +18,7 @@ import {
   streamObjectToResponse
 } from "../services/storage/storage.service.js";
 import { getCreditActivationBlockers, getMemberCreditPermissions } from "../services/creditAccount.service.js";
+import { suspensionMode } from "../services/businessAccountSuspension.service.js";
 
 const listAdminQuerySchema = z.object({
   businessAccountId: z.string().trim().optional(),
@@ -44,11 +45,21 @@ function objectId(value: unknown) {
 async function clientMembership(request: Request, businessAccountId: mongoose.Types.ObjectId) {
   const userId = authenticatedUserId(request);
   if (!userId) return null;
-  return BusinessAccountMember.findOne({
+  const membership = await BusinessAccountMember.findOne({
     businessAccount: businessAccountId,
     user: userId,
     status: "active"
   }).exec();
+  if (!membership) return null;
+
+  // Agreement PDFs and terms are account-specific financial records. A user
+  // who can still work in another account must not use that session to read a
+  // security-locked account's agreements.
+  const account = await BusinessAccount.findById(businessAccountId)
+    .select("status suspension.mode")
+    .lean()
+    .exec();
+  return account && suspensionMode(account) !== "SECURITY_LOCK" ? membership : null;
 }
 
 function serviceErrorResponse(error: CreditAgreementServiceError, response: Response) {

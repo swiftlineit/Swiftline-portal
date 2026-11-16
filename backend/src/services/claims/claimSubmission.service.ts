@@ -6,6 +6,7 @@ import type { ClaimEventType } from "../../models/claimEvent.model.js";
 import { ClaimDocument } from "../../models/claimDocument.model.js";
 import { ClaimMessage } from "../../models/claimMessage.model.js";
 import { BusinessAccountMember } from "../../models/businessAccountMember.model.js";
+import { BusinessAccount } from "../../models/businessAccount.model.js";
 import { claimCategoryValues } from "../../models/claimTypes.js";
 import type { ClaimCategory } from "../../models/claimTypes.js";
 import { AuditLog } from "../../models/auditLog.model.js";
@@ -18,6 +19,7 @@ import { assertTransition } from "./claimStateMachine.js";
 import { notifyClaimSubmitted } from "./claimNotification.service.js";
 import { attachPortalDocuments } from "./claimPortalDocuments.service.js";
 import { currentDeclarationVersion as declarationVersion } from "./claimDeclaration.js";
+import { securityLockMessage, suspensionMessage, suspensionMode } from "../businessAccountSuspension.service.js";
 
 /**
  * Creating a claim draft and turning it into a filed claim.
@@ -424,6 +426,21 @@ async function loadOwnedClaim(claimId: string, userId: string) {
     .exec();
 
   if (!membership) throw new ClaimSubmissionError("Claim not found.", 404);
+
+  const account = await BusinessAccount.findById(claim.businessAccountId)
+    .select("status suspension.mode")
+    .lean()
+    .exec();
+  const accountSuspensionMode = account ? suspensionMode(account) : null;
+  if (!account || accountSuspensionMode === "SECURITY_LOCK") {
+    throw new ClaimSubmissionError(securityLockMessage, 404);
+  }
+  if (account.status !== "active") {
+    throw new ClaimSubmissionError(
+      accountSuspensionMode ? suspensionMessage : "Claims are available to active business accounts only.",
+      423
+    );
+  }
 
   const assigned = (membership.assignedBranches ?? []).map(String);
   if (assigned.length > 0 && !assigned.includes(String(claim.branchId))) {

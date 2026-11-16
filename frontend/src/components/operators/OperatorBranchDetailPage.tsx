@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "react-toastify";
 import { FiChevronDown, FiChevronLeft, FiDownload, FiEdit3, FiEye, FiSearch, FiX } from "react-icons/fi";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
+import BusinessAccountSuspensionDialog from "@/components/business-accounts/BusinessAccountSuspensionDialog";
 import { useOperatorSupportReadOnly } from "@/components/operators/OperatorSupportBoundary";
 import OperatorPageLoading from "@/components/operators/OperatorLoadingState";
 import {
@@ -17,7 +19,7 @@ import {
   updateBranchStatus,
   type BranchStatus
 } from "@/lib/branches";
-import { updateBusinessAccountStatus } from "@/lib/businessAccounts";
+import { updateBusinessAccountStatus, type BusinessAccountSuspensionDetails } from "@/lib/businessAccounts";
 import {
   getOperatorBranchDetails,
   getOperatorSession,
@@ -339,16 +341,17 @@ export default function OperatorBranchDetailPage({ operatorSlug, branchId, initi
     finally { setStatusBusy(false); }
   }
 
-  async function changeAccountStatus() {
-    if (!pendingAccountStatus || !canManage) return;
+  async function changeAccountStatus(details: BusinessAccountSuspensionDetails) {
+    if (!pendingAccountStatus || !canManage) return false;
     setStatusBusy(true); setAccountsError(""); setNotice("");
     try {
       const { account, status } = pendingAccountStatus;
-      const result = await updateBusinessAccountStatus(account.accountId, status, operatorSlug);
+      const result = await updateBusinessAccountStatus(account.accountId, status, operatorSlug, details);
       setAccounts((current) => current.map((item) => item._id === account._id ? { ...item, status: result.account.status } : item));
       setNotice(result.message || `Business account ${status === "active" ? "activated" : "deactivated"}.`);
       setPendingAccountStatus(null);
-    } catch (cause) { setAccountsError(cause instanceof Error ? cause.message : "Unable to update this business account."); setPendingAccountStatus(null); }
+      return true;
+    } catch (cause) { toast.error(cause instanceof Error ? cause.message : "Unable to update this business account."); return false; }
     finally { setStatusBusy(false); }
   }
 
@@ -514,7 +517,13 @@ export default function OperatorBranchDetailPage({ operatorSlug, branchId, initi
         ) : null}
       </div>
       {pendingBranchDelete ? <ConfirmDialog title="Delete draft branch?" description={<>The draft branch <strong>{branch?.name}</strong> will be permanently removed if it has no dependent accounts.</>} confirmLabel="Delete draft" busy={statusBusy} onConfirm={removeDraftBranch} onCancel={() => setPendingBranchDelete(false)} /> : null}
-      {pendingAccountStatus ? <ConfirmDialog title={pendingAccountStatus.status === "active" ? "Activate business account?" : "Deactivate business account?"} description={pendingAccountStatus.status === "active" ? <>This restores shipment booking for <strong>{pendingAccountStatus.account.company?.companyName || pendingAccountStatus.account.accountId}</strong>.</> : <>This blocks new shipment bookings for <strong>{pendingAccountStatus.account.company?.companyName || pendingAccountStatus.account.accountId}</strong> until it is activated again.</>} confirmLabel={pendingAccountStatus.status === "active" ? "Activate account" : "Deactivate account"} busy={statusBusy} onConfirm={changeAccountStatus} onCancel={() => setPendingAccountStatus(null)} /> : null}
+      {pendingAccountStatus ? <BusinessAccountSuspensionDialog
+        accountName={pendingAccountStatus.account.company?.companyName || pendingAccountStatus.account.accountId}
+        action={pendingAccountStatus.status === "suspended" ? "suspend" : "reactivate"}
+        busy={statusBusy}
+        onConfirm={changeAccountStatus}
+        onCancel={() => setPendingAccountStatus(null)}
+      /> : null}
       {previewDocument ? <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="branch-document-preview-title" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreviewDocument(null); }}><section className="flex h-[min(92vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-md bg-white shadow-2xl"><header className="flex min-h-14 items-center justify-between gap-4 border-b border-slate-200 px-4 sm:px-5"><h2 id="branch-document-preview-title" className="truncate text-sm font-semibold text-slate-950">{previewDocument.title}</h2><button ref={closePreviewButton} type="button" aria-label="Close document preview" onClick={() => setPreviewDocument(null)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-[#0D1282]"><FiX aria-hidden="true" /></button></header><iframe title={`Preview of ${previewDocument.title}`} src={previewDocument.url} className="min-h-0 flex-1 bg-slate-100" /></section></div> : null}
     </main>
   );

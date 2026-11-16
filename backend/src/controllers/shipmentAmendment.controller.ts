@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { z } from "zod";
 import { AuditLog } from "../models/auditLog.model.js";
 import { Branch } from "../models/branch.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
 import { CounterPayment, counterPaymentMethodValues } from "../models/counterPayment.model.js";
 import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
@@ -46,6 +47,7 @@ import { notifyActiveAdmins, notifyBusinessShipmentMembers } from "../services/p
 import { notifyOperatorShipmentAmendmentReviewers } from "../services/portalNotification.service.js";
 import { getTenantContext } from "../services/tenantScope.service.js";
 import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
+import { suspensionMessage } from "../services/businessAccountSuspension.service.js";
 import { operatorAmendmentBlockedTrackingStatuses } from "../services/operatorShipmentAmendmentPolicy.service.js";
 import { dateRangeCondition, dateRangeParams } from "../utils/dateRangeFilter.js";
 import {
@@ -437,6 +439,29 @@ async function assertShipmentCanBeAmended(
   shipmentDraftId: mongoose.Types.ObjectId,
   session?: mongoose.ClientSession
 ) {
+  const draftQuery = ShipmentDraft.findById(shipmentDraftId).select("businessAccountId");
+  if (session) draftQuery.session(session);
+  const draft = await draftQuery.lean().exec();
+  const accountQuery = draft
+    ? BusinessAccount.findById(draft.businessAccountId).select("status accountKind")
+    : null;
+  if (accountQuery && session) accountQuery.session(session);
+  const account = accountQuery ? await accountQuery.lean().exec() : null;
+  if (!account) {
+    return {
+      allowed: false as const,
+      message: "Business account not found.",
+      dpdShipment: null
+    };
+  }
+  if (account.status === "suspended" && account.accountKind !== "INDIVIDUAL_SENTINEL") {
+    return {
+      allowed: false as const,
+      message: suspensionMessage,
+      dpdShipment: null
+    };
+  }
+
   const dpdShipmentQuery = DpdShipment.findOne({ shipmentDraftId });
   const tenantContext = getTenantContext();
   const blockingStatuses = tenantContext?.kind === "OPERATOR"

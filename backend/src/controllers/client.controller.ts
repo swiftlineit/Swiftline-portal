@@ -455,17 +455,21 @@ export async function getClientDashboard(request: Request, response: Response): 
     })
       .populate({
         path: "businessAccount",
-        select: "accountId status contact company kycReview assignedBranch rateCardBand privateRateCardVersion privateRateCardReady submittedAt createdAt",
+        select: "accountId status suspension.mode suspension.clientMessage contact company kycReview assignedBranch rateCardBand privateRateCardVersion privateRateCardReady submittedAt createdAt",
         populate: { path: "assignedBranch", select: "name code status address city state" }
       })
       .populate("assignedBranches", "name code status address city state")
       .sort({ createdAt: -1 })
       .exec();
 
-  const accountContexts = memberships.map((membership) => {
+  const accountContexts = memberships.filter((membership) => {
+    const account = membership.businessAccount as unknown as { status?: string; suspension?: { mode?: string } } | null;
+    return account && !(account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK");
+  }).map((membership) => {
     const account = membership.businessAccount as unknown as {
       accountId?: string;
       status?: string;
+      suspension?: { mode?: string; clientMessage?: string } | null;
       contact?: {
         firstName?: string;
         lastName?: string;
@@ -518,6 +522,8 @@ export async function getClientDashboard(request: Request, response: Response): 
         id: accountDocumentId,
         accountId: account.accountId ?? "",
         status: account.status ?? "",
+        suspensionMode: account.status === "suspended" ? account.suspension?.mode ?? "OPERATIONAL_HOLD" : null,
+        suspensionMessage: account.status === "suspended" ? account.suspension?.clientMessage ?? "" : "",
         statusLabel: formatStatus(account.status),
         kycStatus: account.kycReview?.overallStatus ?? "",
         kycStatusLabel: formatStatus(account.kycReview?.overallStatus),
@@ -593,7 +599,7 @@ export async function listClientShipments(request: Request, response: Response):
   })
     .populate({
       path: "businessAccount",
-      select: "assignedBranch",
+      select: "assignedBranch status suspension.mode",
       populate: { path: "assignedBranch", select: "name code status address" }
     })
     .populate("assignedBranches", "name code status address")
@@ -606,7 +612,12 @@ export async function listClientShipments(request: Request, response: Response):
   const account = membership.businessAccount as unknown as {
     _id?: unknown;
     assignedBranch?: ClientBranchSnapshot | null;
+    status?: string;
+    suspension?: { mode?: string } | null;
   };
+  if (account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK") {
+    return response.status(403).json({ success: false, message: "Business account access is unavailable." });
+  }
   const memberBranches = membership.assignedBranches as unknown as ClientBranchSnapshot[];
   const effectiveBranches = memberBranches.length
     ? memberBranches

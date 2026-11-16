@@ -20,6 +20,7 @@ function accountFixture() {
     _id: accountKey,
     accountId,
     status: "pending_review",
+    suspension: null as { mode: "OPERATIONAL_HOLD" | "SECURITY_LOCK"; previousStatus: "active" | "approved" } | null,
     contact: {
       title: "ms.", firstName: "Asha", lastName: "Mehta", email: "asha@example.test",
       mobileType: "mobile", countryCode: "+91", mobileNumber: "9876543210",
@@ -74,8 +75,13 @@ test("operator admin reviews KYC, approves locally, and creates access in the op
       return json(route, { success: true, account });
     }
     if (path === `/api/v1/operators/${slug}/business-accounts/${accountId}/status` && request.method() === "PATCH") {
-      const payload = request.postDataJSON() as { status: string };
-      account.status = payload.status;
+      const payload = request.postDataJSON() as { status: string; suspensionMode?: "OPERATIONAL_HOLD" | "SECURITY_LOCK"; internalReason?: string };
+      if (payload.status === "suspended") {
+        expect(payload.internalReason?.length).toBeGreaterThanOrEqual(5);
+        account.suspension = { mode: payload.suspensionMode!, previousStatus: account.status as "active" | "approved" };
+      }
+      account.status = payload.status === "active" && account.suspension ? account.suspension.previousStatus : payload.status;
+      if (payload.status === "active") account.suspension = null;
       return json(route, { success: true, account, message: `Business account ${payload.status}.` });
     }
     if (path === `/api/v1/operators/${slug}/business-accounts/${accountId}/members` && request.method() === "GET") {
@@ -123,22 +129,24 @@ test("operator admin reviews KYC, approves locally, and creates access in the op
   await expect(page.getByText("Business account approved locally.")).toBeVisible();
 
   await page.getByRole("button", { name: "Deactivate account" }).click();
-  const deactivateDialog = page.getByRole("dialog", { name: "Deactivate business account?" });
+  const deactivateDialog = page.getByRole("dialog", { name: "Suspend business account" });
+  await deactivateDialog.getByLabel("Internal reason").fill("Account review is required.");
   const suspendResponse = page.waitForResponse((item) =>
     new URL(item.url()).pathname === `/api/v1/operators/${slug}/business-accounts/${accountId}/status`
     && item.request().method() === "PATCH"
   );
-  await deactivateDialog.getByRole("button", { name: "Deactivate account" }).click();
+  await deactivateDialog.getByRole("button", { name: "Confirm suspension" }).click();
   expect((await suspendResponse).status()).toBe(200);
   await expect(page.getByText("Business account deactivated. New shipment bookings are blocked.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Activate account" }).click();
-  const activateDialog = page.getByRole("dialog", { name: "Activate business account?" });
+  await page.getByRole("button", { name: "Reactivate account" }).click();
+  const activateDialog = page.getByRole("dialog", { name: "Reactivate business account" });
+  await activateDialog.getByLabel("Internal reason").fill("Account review is complete.");
   const reactivateResponse = page.waitForResponse((item) =>
     new URL(item.url()).pathname === `/api/v1/operators/${slug}/business-accounts/${accountId}/status`
     && item.request().method() === "PATCH"
   );
-  await activateDialog.getByRole("button", { name: "Activate account" }).click();
+  await activateDialog.getByRole("button", { name: "Reactivate account" }).click();
   expect((await reactivateResponse).status()).toBe(200);
   await expect(page.getByText("Business account activated and ready for bookings.")).toBeVisible();
 
@@ -168,6 +176,7 @@ test("operator administrators approve verified accounts and deactivate active ac
       accountId,
       accountKind: "BUSINESS",
       status: "pending_review",
+      suspension: null as { mode: "OPERATIONAL_HOLD" | "SECURITY_LOCK"; previousStatus: "active" | "approved" } | null,
       contact: { firstName: "Asha", lastName: "Mehta", email: "asha@example.test" },
       company: { companyName: "Northstar Parts" },
       kycReview: { overallStatus: "verified" },
@@ -180,6 +189,7 @@ test("operator administrators approve verified accounts and deactivate active ac
       accountId: "BA-2026-654321",
       accountKind: "BUSINESS",
       status: "active",
+      suspension: null as { mode: "OPERATIONAL_HOLD" | "SECURITY_LOCK"; previousStatus: "active" | "approved" } | null,
       contact: { firstName: "Ravi", lastName: "Kapoor", email: "ravi@example.test" },
       company: { companyName: "Harbor Trading" },
       kycReview: { overallStatus: "verified" },
@@ -210,8 +220,13 @@ test("operator administrators approve verified accounts and deactivate active ac
     if (statusMatch && request.method() === "PATCH") {
       const target = accounts.find((item) => item.accountId === statusMatch[1]);
       if (!target) return json(route, { success: false, message: "Account not found" }, 404);
-      const payload = request.postDataJSON() as { status: string };
-      target.status = payload.status;
+      const payload = request.postDataJSON() as { status: string; suspensionMode?: "OPERATIONAL_HOLD" | "SECURITY_LOCK"; internalReason?: string };
+      if (payload.status === "suspended") {
+        expect(payload.internalReason?.length).toBeGreaterThanOrEqual(5);
+        target.suspension = { mode: payload.suspensionMode!, previousStatus: target.suspension?.previousStatus ?? target.status as "active" | "approved" };
+      }
+      target.status = payload.status === "active" && target.suspension ? target.suspension.previousStatus : payload.status;
+      if (payload.status === "active") target.suspension = null;
       statusUpdates.push({ accountId: target.accountId, status: payload.status });
       return json(route, { success: true, account: target, message: `Business account ${payload.status}.` });
     }
@@ -240,48 +255,73 @@ test("operator administrators approve verified accounts and deactivate active ac
   await expect(pendingRow.getByText("Approved", { exact: true })).toBeVisible();
 
   await pendingRow.getByRole("button", { name: "Deactivate Northstar Parts" }).click();
-  const approvedAccountDialog = page.getByRole("dialog", { name: "Deactivate business account?" });
+  const approvedAccountDialog = page.getByRole("dialog", { name: "Suspend business account" });
+  await approvedAccountDialog.getByLabel("Internal reason").fill("Account review is required.");
   const suspendApprovedResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === `/api/v1/operators/${slug}/business-accounts/${accountId}/status`
     && response.request().method() === "PATCH"
   );
-  await approvedAccountDialog.getByRole("button", { name: "Deactivate account" }).click();
+  await approvedAccountDialog.getByRole("button", { name: "Confirm suspension" }).click();
   expect((await suspendApprovedResponse).status()).toBe(200);
   await expect(pendingRow.getByText("Suspended", { exact: true })).toBeVisible();
 
-  await pendingRow.getByRole("button", { name: "Activate Northstar Parts" }).click();
-  const activateApprovedDialog = page.getByRole("dialog", { name: "Activate business account?" });
+  await pendingRow.getByRole("button", { name: "Change hold mode" }).click();
+  const modeDialog = page.getByRole("dialog", { name: "Suspend business account" });
+  const modeRadio = await modeDialog.getByRole("radio", { name: /Operational hold/ }).boundingBox();
+  const modeHeading = await modeDialog.getByText("Operational hold", { exact: true }).boundingBox();
+  expect(modeRadio).not.toBeNull();
+  expect(modeHeading).not.toBeNull();
+  expect(Math.abs((modeRadio!.y + modeRadio!.height / 2) - (modeHeading!.y + modeHeading!.height / 2))).toBeLessThan(8);
+  await modeDialog.getByRole("radio", { name: /Security lock/ }).check();
+  await modeDialog.getByLabel("Internal reason").fill("Security review requires restricted access.");
+  const modeResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === `/api/v1/operators/${slug}/business-accounts/${accountId}/status`
+    && response.request().method() === "PATCH"
+  );
+  await modeDialog.getByRole("button", { name: "Confirm suspension" }).click();
+  expect((await modeResponse).status()).toBe(200);
+  expect(accounts[0].suspension?.mode).toBe("SECURITY_LOCK");
+  await pendingRow.getByRole("button", { name: "Change hold mode" }).click();
+  await expect(page.getByRole("dialog", { name: "Suspend business account" }).getByRole("radio", { name: /Security lock/ })).toBeChecked();
+  await page.getByRole("dialog", { name: "Suspend business account" }).getByRole("button", { name: "Cancel" }).click();
+
+  await pendingRow.getByRole("button", { name: "Reactivate Northstar Parts" }).click();
+  const activateApprovedDialog = page.getByRole("dialog", { name: "Reactivate business account" });
+  await activateApprovedDialog.getByLabel("Internal reason").fill("Account review is complete.");
   const reactivateApprovedResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === `/api/v1/operators/${slug}/business-accounts/${accountId}/status`
     && response.request().method() === "PATCH"
   );
-  await activateApprovedDialog.getByRole("button", { name: "Activate account" }).click();
+  await activateApprovedDialog.getByRole("button", { name: "Reactivate account" }).click();
   expect((await reactivateApprovedResponse).status()).toBe(200);
-  await expect(pendingRow.getByText("Active", { exact: true })).toBeVisible();
+  await expect(pendingRow.getByText("Approved", { exact: true })).toBeVisible();
 
   const activeRow = (testInfo.project.name === "mobile-chromium" ? page.getByRole("listitem") : page.getByRole("row")).filter({ hasText: "Harbor Trading" });
   await activeRow.getByRole("button", { name: "Deactivate Harbor Trading" }).click();
-  const dialog = page.getByRole("dialog", { name: "Deactivate business account?" });
-  await expect(dialog).toContainText("block new shipment bookings");
+  const dialog = page.getByRole("dialog", { name: "Suspend business account" });
+  await expect(dialog).toContainText("New account activity is paused.");
+  await dialog.getByLabel("Internal reason").fill("Account review is required.");
   const deactivateResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === `/api/v1/operators/${slug}/business-accounts/BA-2026-654321/status`
     && response.request().method() === "PATCH"
   );
-  await dialog.getByRole("button", { name: "Deactivate account" }).click();
+  await dialog.getByRole("button", { name: "Confirm suspension" }).click();
   expect((await deactivateResponse).status()).toBe(200);
   await expect(activeRow.getByText("Suspended", { exact: true })).toBeVisible();
 
-  await activeRow.getByRole("button", { name: "Activate Harbor Trading" }).click();
-  const activateHarborDialog = page.getByRole("dialog", { name: "Activate business account?" });
+  await activeRow.getByRole("button", { name: "Reactivate Harbor Trading" }).click();
+  const activateHarborDialog = page.getByRole("dialog", { name: "Reactivate business account" });
+  await activateHarborDialog.getByLabel("Internal reason").fill("Account review is complete.");
   const activateHarborResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === `/api/v1/operators/${slug}/business-accounts/BA-2026-654321/status`
     && response.request().method() === "PATCH"
   );
-  await activateHarborDialog.getByRole("button", { name: "Activate account" }).click();
+  await activateHarborDialog.getByRole("button", { name: "Reactivate account" }).click();
   expect((await activateHarborResponse).status()).toBe(200);
   await expect(activeRow.getByText("Active", { exact: true })).toBeVisible();
   expect(statusUpdates).toEqual([
     { accountId, status: "approved" },
+    { accountId, status: "suspended" },
     { accountId, status: "suspended" },
     { accountId, status: "active" },
     { accountId: "BA-2026-654321", status: "suspended" },

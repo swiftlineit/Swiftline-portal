@@ -108,13 +108,16 @@ async function loadClientPickupBranchAccess(userId: mongoose.Types.ObjectId) {
     .lean()
     .exec();
   const accounts = await BusinessAccount.find({ _id: { $in: memberships.map((item) => item.businessAccount) } })
-    .select("assignedBranch")
+    .select("assignedBranch status suspension.mode")
     .lean()
     .exec();
-  const defaultBranchByAccount = new Map(accounts.map((account) => [String(account._id), account.assignedBranch ? refId(account.assignedBranch) : ""]));
+  const availableAccounts = accounts.filter((account) => !(account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK"));
+  const availableIds = new Set(availableAccounts.map((account) => String(account._id)));
+  const defaultBranchByAccount = new Map(availableAccounts.map((account) => [String(account._id), account.assignedBranch ? refId(account.assignedBranch) : ""]));
   const branchesByAccount = new Map<string, Set<string>>();
   for (const membership of memberships) {
     const accountId = String(membership.businessAccount);
+    if (!availableIds.has(accountId)) continue;
     const assignedBranches = (membership.assignedBranches ?? []).map(String);
     const accessibleBranches = assignedBranches.length ? assignedBranches : [defaultBranchByAccount.get(accountId) ?? ""];
     const branches = branchesByAccount.get(accountId) ?? new Set<string>();

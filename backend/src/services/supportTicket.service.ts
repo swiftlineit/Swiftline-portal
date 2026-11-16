@@ -64,7 +64,11 @@ async function nextTicketNumber(now: Date, session: mongoose.ClientSession) {
 }
 
 async function activeMembership(userId: mongoose.Types.ObjectId, businessAccountId: mongoose.Types.ObjectId) {
-  return BusinessAccountMember.findOne({ user: userId, businessAccount: businessAccountId, status: "active" }).exec();
+  const [member, account] = await Promise.all([
+    BusinessAccountMember.findOne({ user: userId, businessAccount: businessAccountId, status: "active" }).exec(),
+    BusinessAccount.findById(businessAccountId).select("status suspension.mode").lean().exec()
+  ]);
+  return account && !(account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK") ? member : null;
 }
 
 function isShipmentIssueCategory(category: SupportTicketCategory) {
@@ -274,7 +278,11 @@ export async function listAdminSupportTickets(filters: SupportTicketFilters) {
 
 export async function listClientSupportTickets(userId: mongoose.Types.ObjectId, filters: SupportTicketFilters) {
   const memberships = await BusinessAccountMember.find({ user: userId, status: "active" }).select("businessAccount role").lean().exec();
-  const visibility = memberships.map((membership) => ["account_owner", "account_admin"].includes(membership.role)
+  const accounts = await BusinessAccount.find({ _id: { $in: memberships.map((member) => member.businessAccount) } })
+    .select("status suspension.mode").lean().exec();
+  const available = new Set(accounts.filter((account) => !(account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK"))
+    .map((account) => String(account._id)));
+  const visibility = memberships.filter((membership) => available.has(String(membership.businessAccount))).map((membership) => ["account_owner", "account_admin"].includes(membership.role)
     ? { businessAccountId: membership.businessAccount }
     : { businessAccountId: membership.businessAccount, createdBy: userId });
   const query = { $and: [ticketQuery(filters), { $or: visibility.length ? visibility : [{ _id: null }] }] };

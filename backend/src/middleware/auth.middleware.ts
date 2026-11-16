@@ -3,8 +3,10 @@ import { verifyAccessToken } from "../services/auth.service.js";
 import { User } from "../models/user.model.js";
 import { normalizePortalRole } from "../utils/portalRole.js";
 import { accountNotActiveMessage, touchSession, verifySession } from "../services/userSession.service.js";
+import { isSoleSecurityLockedClient, securityLockMessage } from "../services/businessAccountSuspension.service.js";
 
 export async function attachUser(req: Request, res: Response, next: NextFunction) {
+  let tokenVerified = false;
   try {
     const header = req.headers.authorization;
 
@@ -13,6 +15,7 @@ export async function attachUser(req: Request, res: Response, next: NextFunction
     const token = header.replace("Bearer ", "");
 
     const payload = verifyAccessToken(token);
+    tokenVerified = true;
 
     // A token whose session has been superseded, terminated or gone idle is
     // rejected outright rather than merely left unauthenticated: the client
@@ -38,6 +41,10 @@ export async function attachUser(req: Request, res: Response, next: NextFunction
       return res.status(401).json({ success: false, message: accountNotActiveMessage, sessionEnded: true });
     }
 
+    if (user && normalizePortalRole(user.role) === "client" && await isSoleSecurityLockedClient(user._id)) {
+      return res.status(401).json({ success: false, message: securityLockMessage, sessionEnded: true });
+    }
+
     if (user) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (req as any).user = { ...user, role: normalizePortalRole(user.role), sessionId: payload.sid };
@@ -47,7 +54,8 @@ export async function attachUser(req: Request, res: Response, next: NextFunction
       void touchSession(payload.sid);
     }
   } catch (error) {
-    // ignore invalid token
+    if (tokenVerified) return res.status(503).json({ success: false, message: "Account access could not be checked. Try again." });
+    // Ignore an invalid token; protected routes still require authentication.
   }
 
   return next();

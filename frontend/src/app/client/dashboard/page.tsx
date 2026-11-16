@@ -267,12 +267,13 @@ export default function ClientDashboardPage() {
   const selectedSummary = selectedShipmentSummary ?? emptyShipmentSummary();
   const selectedWallet = selectedAccount ? walletsByAccountId[selectedAccount.account.id] : undefined;
   const shipmentCreationAllowed = selectedAccount ? canCreateShipment(selectedAccount) : false;
+  const operationalHold = selectedAccount?.account.status === "suspended"
+    && selectedAccount.account.suspensionMode !== "SECURITY_LOCK";
 
   return (
       <div className="flex w-full flex-col gap-6">
         <OperationsMarquee variant="client" />
-        {selectedAccount ? <ClientQuickAccess account={selectedAccount} /> : null}
-
+        {operationalHold && selectedAccount ? <ClientAccessBlocked account={selectedAccount} /> : null}
         <ClientDashboardHeader
           user={user}
           accounts={accounts}
@@ -282,6 +283,8 @@ export default function ClientDashboardPage() {
           onAccountChange={(id) => void handleAccountChange(id)}
           onBranchChange={handleBranchChange}
         />
+
+        {selectedAccount?.dashboardAccess.state === "READY" ? <ClientQuickAccess account={selectedAccount} /> : null}
 
         {operatorWorkspaces.length ? (
           <section aria-label="Your operator workspaces" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -321,9 +324,9 @@ export default function ClientDashboardPage() {
           />
         ) : !selectedAccount ? (
           <EmptyState icon={FiBriefcase} title="No dashboard context" message="Select a business account to continue." surface="light" />
-        ) : selectedAccount.dashboardAccess.state !== "READY" ? (
+        ) : selectedAccount.dashboardAccess.state !== "READY" && !operationalHold ? (
           <ClientAccessBlocked account={selectedAccount} />
-        ) : (
+        ) : selectedAccount.dashboardAccess.state === "READY" ? (
           <>
             <ClientRateCardNotice account={selectedAccount} />
 
@@ -380,7 +383,7 @@ export default function ClientDashboardPage() {
               canCreateShipment={shipmentCreationAllowed}
             />
           </>
-        )}
+        ) : null}
       </div>
   );
 }

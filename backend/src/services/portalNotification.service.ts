@@ -12,6 +12,7 @@ import { formatIndiaDate } from "../utils/dateFormat.js";
 import type { IEmailAttachmentRef } from "../models/emailOutbox.model.js";
 import { enqueueEmails, resolveUserRecipients, type EmailRecipient } from "./email/enqueue.js";
 import { getTenantContext } from "./tenantScope.service.js";
+import { securityLockedClientAccountIds } from "./businessAccountSuspension.service.js";
 
 /**
  * Optional per-event email shaping. Without it a notification still emails,
@@ -19,6 +20,8 @@ import { getTenantContext } from "./tenantScope.service.js";
  * only when the email needs to say more than the in-app card does.
  */
 type NotificationEmailOptions = {
+  /** Limit email to these members while preserving the in-app audience. */
+  recipientUserIds?: mongoose.Types.ObjectId[];
   templateKey?: string;
   subject?: string;
   payload?: Record<string, unknown>;
@@ -82,7 +85,7 @@ async function insertNotifications(
   // for whichever types the email catalogue enables.
   try {
     const recipients = [
-      ...await resolveUserRecipients(uniqueRecipients, session),
+      ...await resolveUserRecipients(input.email?.recipientUserIds ?? uniqueRecipients, session),
       ...(input.email?.extraRecipients ?? [])
     ];
     await enqueueEmails({
@@ -396,11 +399,13 @@ export function serializePortalNotification(notification: InstanceType<typeof Po
 }
 
 export async function listPortalNotifications(recipientUserId: mongoose.Types.ObjectId) {
-  const notifications = await PortalNotification.find({ recipientUserId })
+  const lockedAccountIds = await securityLockedClientAccountIds(recipientUserId);
+  const visibleFilter = lockedAccountIds.length ? { businessAccountId: { $nin: lockedAccountIds } } : {};
+  const notifications = await PortalNotification.find({ recipientUserId, ...visibleFilter })
     .sort({ createdAt: -1 })
     .limit(100)
     .exec();
-  const unreadCount = await PortalNotification.countDocuments({ recipientUserId, readAt: null });
+  const unreadCount = await PortalNotification.countDocuments({ recipientUserId, readAt: null, ...visibleFilter });
   return { notifications: notifications.map(serializePortalNotification), unreadCount };
 }
 
@@ -408,16 +413,18 @@ export async function markPortalNotificationRead(
   recipientUserId: mongoose.Types.ObjectId,
   notificationId: mongoose.Types.ObjectId
 ) {
+  const lockedAccountIds = await securityLockedClientAccountIds(recipientUserId);
   return PortalNotification.findOneAndUpdate(
-    { _id: notificationId, recipientUserId },
+    { _id: notificationId, recipientUserId, ...(lockedAccountIds.length ? { businessAccountId: { $nin: lockedAccountIds } } : {}) },
     { $set: { readAt: new Date() } },
     { returnDocument: "after", runValidators: true }
   ).exec();
 }
 
 export async function markAllPortalNotificationsRead(recipientUserId: mongoose.Types.ObjectId) {
+  const lockedAccountIds = await securityLockedClientAccountIds(recipientUserId);
   await PortalNotification.updateMany(
-    { recipientUserId, readAt: null },
+    { recipientUserId, readAt: null, ...(lockedAccountIds.length ? { businessAccountId: { $nin: lockedAccountIds } } : {}) },
     { $set: { readAt: new Date() } }
   ).exec();
 }

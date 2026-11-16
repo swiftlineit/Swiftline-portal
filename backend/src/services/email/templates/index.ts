@@ -11,6 +11,7 @@ import { pickupOtpTemplate } from "./pickupOtp.js";
 import { rateCardSharedTemplate } from "./rateCardShared.js";
 import { claimDecisionTemplate } from "./claimDecision.js";
 import { businessAccountOtpTemplate } from "./businessAccountOtp.js";
+import { businessAccountSuspensionTemplate } from "./businessAccountSuspension.js";
 import { publicShipmentBookedTemplate } from "./publicShipmentBooked.js";
 import {
   pickupRequestedClientTemplate, pickupRequestedStaffTemplate,
@@ -63,6 +64,7 @@ const registry: Record<string, EmailTemplate> = {
   PASSWORD_RESET: passwordResetTemplate,
   LOGIN_OTP: loginOtpTemplate,
   BUSINESS_ACCOUNT_EMAIL_OTP: businessAccountOtpTemplate,
+  BUSINESS_ACCOUNT_SUSPENSION: businessAccountSuspensionTemplate,
   PICKUP_OTP: pickupOtpTemplate,
   PICKUP_REQUESTED_CLIENT: pickupRequestedClientTemplate,
   PICKUP_REQUESTED_STAFF: pickupRequestedStaffTemplate,

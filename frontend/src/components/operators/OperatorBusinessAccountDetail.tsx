@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "react-toastify";
 import { BusinessAccountAccessPanel } from "@/components/business-accounts/BusinessAccountAccessPanel";
-import ConfirmDialog from "@/components/ui/ConfirmDialog";
+import BusinessAccountSuspensionDialog from "@/components/business-accounts/BusinessAccountSuspensionDialog";
+import type { BusinessAccountSuspensionDetails } from "@/lib/businessAccounts";
 import RateCardWorkspace from "@/components/rate-cards/RateCardWorkspace";
 import OperatorBusinessAccountBillingAddress from "@/components/operators/OperatorBusinessAccountBillingAddress";
 import {
@@ -181,7 +183,7 @@ export default function OperatorBusinessAccountDetail({ operatorSlug, accountId 
     return () => { active = false; };
   }, [accountId, operatorSlug, router]);
 
-  async function updateAccountAction(action: () => Promise<{ account: BusinessAccount }>, successMessage: string): Promise<boolean> {
+  async function updateAccountAction(action: () => Promise<{ account: BusinessAccount }>, successMessage: string, toastOnError = false): Promise<boolean> {
     setSaving(true);
     setError("");
     setNotice("");
@@ -192,7 +194,9 @@ export default function OperatorBusinessAccountDetail({ operatorSlug, accountId 
       setNotice(successMessage);
       return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The business account could not be updated.");
+      const message = cause instanceof Error ? cause.message : "The business account could not be updated.";
+      if (toastOnError) toast.error(message);
+      else setError(message);
       return false;
     } finally {
       setSaving(false);
@@ -263,17 +267,19 @@ export default function OperatorBusinessAccountDetail({ operatorSlug, accountId 
     );
   }
 
-  async function confirmStatusChange() {
-    if (!account || !pendingStatusChange) return;
+  async function confirmStatusChange(details: BusinessAccountSuspensionDetails) {
+    if (!account || !pendingStatusChange) return false;
     const targetStatus = pendingStatusChange;
     const successMessage = targetStatus === "active"
       ? "Business account activated and ready for bookings."
       : "Business account deactivated. New shipment bookings are blocked.";
     const updated = await updateAccountAction(
-      () => updateBusinessAccountStatus(account.accountId, targetStatus, operatorSlug),
-      successMessage
+      () => updateBusinessAccountStatus(account.accountId, targetStatus, operatorSlug, details),
+      successMessage,
+      true
     );
     if (updated) setPendingStatusChange(null);
+    return updated;
   }
 
   const workspaceHref = `/portal/${encodeURIComponent(operatorSlug)}`;
@@ -295,7 +301,10 @@ export default function OperatorBusinessAccountDetail({ operatorSlug, accountId 
               <button type="button" onClick={() => setPendingStatusChange("suspended")} disabled={saving} className="inline-flex min-h-10 items-center justify-center rounded-md border border-rose-300 bg-white px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700 disabled:cursor-wait disabled:opacity-50">Deactivate account</button>
             ) : null}
             {isOperatorAdmin && account?.status === "suspended" ? (
-              <button type="button" onClick={() => setPendingStatusChange("active")} disabled={saving || account.kycReview?.overallStatus !== "verified"} title={account.kycReview?.overallStatus !== "verified" ? "KYC must be verified before this account can be activated." : undefined} className="inline-flex min-h-10 items-center justify-center rounded-md border border-emerald-300 bg-white px-3 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">Activate account</button>
+              <>
+                <button type="button" onClick={() => setPendingStatusChange("active")} disabled={saving || account.kycReview?.overallStatus !== "verified"} title={account.kycReview?.overallStatus !== "verified" ? "KYC must be verified before this account can be activated." : undefined} className="inline-flex min-h-10 items-center justify-center rounded-md border border-emerald-300 bg-white px-3 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">Reactivate account</button>
+                <button type="button" onClick={() => setPendingStatusChange("suspended")} disabled={saving} className="inline-flex min-h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">Change hold mode</button>
+              </>
             ) : null}
             <Link href={`${workspaceHref}/business-accounts`} className="inline-flex min-h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">Business accounts</Link>
             <Link href={workspaceHref} className="inline-flex min-h-10 items-center justify-center rounded-md bg-[#0D1282] px-3 text-sm font-semibold text-white transition hover:bg-[#10166F] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]">Workspace home</Link>
@@ -430,16 +439,12 @@ export default function OperatorBusinessAccountDetail({ operatorSlug, accountId 
         ) : null}
       </main>
       {account && pendingStatusChange ? (
-        <ConfirmDialog
-          title={pendingStatusChange === "active" ? "Activate business account?" : "Deactivate business account?"}
-          description={pendingStatusChange === "active"
-            ? <>This will reactivate <span className="font-semibold text-slate-900">{account.company.companyName || account.accountId}</span> for new shipment bookings.</>
-            : <>This will suspend <span className="font-semibold text-slate-900">{account.company.companyName || account.accountId}</span> and block new shipment bookings until it is activated again.</>}
-          confirmLabel={pendingStatusChange === "active" ? "Activate account" : "Deactivate account"}
-          tone={pendingStatusChange === "active" ? "primary" : "danger"}
+        <BusinessAccountSuspensionDialog
+          accountName={account.company.companyName || account.accountId}
+          action={pendingStatusChange === "suspended" ? "suspend" : "reactivate"}
+          initialMode={account.suspension?.mode ?? "OPERATIONAL_HOLD"}
           busy={saving}
-          busyLabel={pendingStatusChange === "active" ? "Activating..." : "Deactivating..."}
-          onConfirm={() => void confirmStatusChange()}
+          onConfirm={confirmStatusChange}
           onCancel={() => setPendingStatusChange(null)}
         />
       ) : null}

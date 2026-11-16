@@ -38,11 +38,16 @@ function userId(request: Request) {
 async function membershipFor(request: Request, businessAccountId: string) {
   const currentUserId = userId(request);
   if (!currentUserId || !mongoose.Types.ObjectId.isValid(businessAccountId)) return null;
-  return BusinessAccountMember.findOne({
+  const membership = await BusinessAccountMember.findOne({
     user: currentUserId,
     businessAccount: new mongoose.Types.ObjectId(businessAccountId),
     status: "active"
   }).exec();
+  if (!membership) return null;
+  const account = await BusinessAccount.findById(membership.businessAccount)
+    .select("status suspension.mode").lean().exec();
+  return account && !(account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK")
+    ? membership : null;
 }
 
 export async function getClientCreditSummary(request: Request, response: Response): Promise<Response> {
@@ -65,7 +70,7 @@ export async function getClientCreditSummary(request: Request, response: Respons
     gracePeriodDays: account.gracePeriodDays,
     maxOverdueDays: account.maxOverdueDays
   });
-  const effectiveBookingCapacityMinor = restriction.level === "ALL_BOOKINGS_BLOCKED"
+  const effectiveBookingCapacityMinor = business.status === "suspended" || restriction.level === "ALL_BOOKINGS_BLOCKED"
     ? 0
     : restriction.level === "CREDIT_BLOCKED"
       ? serialized.availableAdvanceMinor
@@ -100,7 +105,7 @@ export async function getClientCreditSummary(request: Request, response: Respons
     creditAccount: canViewBalances ? {
       ...serialized,
       billing,
-      canUseCredit: serialized.status === "ACTIVE"
+      canUseCredit: serialized.status === "ACTIVE" && business.status !== "suspended"
         && permissions.includes("useCreditPayment")
         && !["CREDIT_BLOCKED", "ALL_BOOKINGS_BLOCKED"].includes(restriction.level),
       availableBookingCapacityMinor: effectiveBookingCapacityMinor,
@@ -114,7 +119,7 @@ export async function getClientCreditSummary(request: Request, response: Respons
       paymentTermsDays: serialized.paymentTermsDays,
       billingCycle: serialized.billingCycle,
       validUntil: serialized.validUntil,
-      canUseCredit: serialized.status === "ACTIVE"
+      canUseCredit: serialized.status === "ACTIVE" && business.status !== "suspended"
         && permissions.includes("useCreditPayment")
         && !["CREDIT_BLOCKED", "ALL_BOOKINGS_BLOCKED"].includes(restriction.level),
       restriction,
@@ -249,6 +254,10 @@ export async function requestClientCreditLimitIncrease(request: Request, respons
 
   const membership = await membershipFor(request, parsed.data.businessAccountId);
   if (!membership) return response.status(404).json({ success: false, message: "Business account access was not found." });
+  const businessAccount = await BusinessAccount.findById(membership.businessAccount).select("status").lean().exec();
+  if (businessAccount?.status === "suspended") {
+    return response.status(423).json({ success: false, message: "Credit limit increases are paused while this account is suspended." });
+  }
   const permissions = getMemberCreditPermissions(membership.role, membership.creditPermissions);
   if (!permissions.includes("requestCredit")) {
     return response.status(403).json({ success: false, message: "Your account role cannot request a credit limit increase." });

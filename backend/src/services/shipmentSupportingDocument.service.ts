@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { DpdShipment } from "../models/dpdShipment.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import {
@@ -13,6 +14,7 @@ import { notifyPortalUsers } from "./portalNotification.service.js";
 import { matchesDeclaredType } from "./storage/fileSignature.js";
 import { shipmentSupportingDocumentKey } from "./storage/keys.js";
 import { putObject } from "./storage/storage.service.js";
+import { suspensionMessage } from "./businessAccountSuspension.service.js";
 
 export const maxSupportingDocumentBytes = 10 * 1024 * 1024;
 
@@ -108,6 +110,15 @@ export async function addSupportingDocument(input: {
     .lean()
     .exec();
   if (!draft) throw new ShipmentSupportingDocumentError("Shipment not found.", 404);
+
+  const account = await BusinessAccount.findById(draft.businessAccountId)
+    .select("status accountKind")
+    .lean()
+    .exec();
+  if (!account) throw new ShipmentSupportingDocumentError("Shipment not found.", 404);
+  if (account.status === "suspended" && account.accountKind !== "INDIVIDUAL_SENTINEL") {
+    throw new ShipmentSupportingDocumentError(suspensionMessage, 423);
+  }
 
   const eligibility = await canAcceptSupportingDocuments(input.shipmentDraftId);
   if (!eligibility.allowed) throw new ShipmentSupportingDocumentError(eligibility.reason, 409);

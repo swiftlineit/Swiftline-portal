@@ -6,6 +6,8 @@ import { z } from "zod";
 import { AddressBookEntry, type IAddressBookEntry } from "../models/addressBookEntry.model.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
+import { securityLockMessage, suspensionMode } from "../services/businessAccountSuspension.service.js";
 import {
   addressBookImportInputSchema,
   addressBookInputSchema,
@@ -52,6 +54,12 @@ async function getScope(request: Request, response: Response, businessAccountId:
   }).select("businessAccount role").lean().exec();
   if (!membership || !addressBookRoles.has(membership.role)) {
     response.status(404).json({ success: false, message: "Address book is not available." });
+    return null;
+  }
+  const account = await BusinessAccount.findById(membership.businessAccount)
+    .select("status suspension.mode").lean().exec();
+  if (!account || suspensionMode(account) === "SECURITY_LOCK") {
+    response.status(403).json({ success: false, message: securityLockMessage });
     return null;
   }
   return { userId, businessAccountId: membership.businessAccount as mongoose.Types.ObjectId };

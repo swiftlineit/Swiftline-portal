@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
+import { availableClientAccountIds } from "../services/businessAccountSuspension.service.js";
 import { buildCustomsKycOverview } from "../services/customsKyc.service.js";
 
 /**
@@ -15,10 +16,14 @@ export async function getClientCustomsKyc(request: Request, response: Response):
     return response.status(401).json({ success: false, message: "Unauthorized" });
   }
 
-  const memberships = await BusinessAccountMember.find({ user: userId, status: "active" })
+  const allMemberships = await BusinessAccountMember.find({ user: userId, status: "active" })
     .select("businessAccount assignedBranches")
     .lean()
     .exec();
+  const availableIds = new Set((await availableClientAccountIds(
+    allMemberships.map((item) => item.businessAccount as mongoose.Types.ObjectId)
+  )).map(String));
+  const memberships = allMemberships.filter((item) => availableIds.has(String(item.businessAccount)));
   if (!memberships.length) {
     return response.status(200).json({
       success: true,

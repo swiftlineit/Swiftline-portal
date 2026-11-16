@@ -11,6 +11,7 @@ import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import { ShipmentManifest, type IShipmentManifest } from "../models/shipmentManifest.model.js";
 import { User, roleValues, type Role } from "../models/user.model.js";
 import { clientCanAccessShipmentDraft } from "../services/shipmentDraftPolicy.service.js";
+import { getAccountSuspension } from "../services/businessAccountSuspension.service.js";
 import { readShipmentBookingSnapshot, snapshotDeclaredGoodsValueMinor } from "../services/shipmentBookingSnapshot.service.js";
 import { notifyAdminsOfClientManifest } from "../services/shipmentManifestNotification.service.js";
 import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
@@ -376,6 +377,9 @@ async function createManifest(request: Request, response: Response, actorRole: "
   try {
     const currentDraft = await ShipmentDraft.findById(manifestInput.currentShipmentDraftId).exec();
     if (!currentDraft) throw new ShipmentManifestServiceError("Shipment not found.", 404);
+    if (await getAccountSuspension(currentDraft.businessAccountId)) {
+      throw new ShipmentManifestServiceError("Manifest changes are paused while this account is suspended.", 423);
+    }
     if (actorRole === "client") await assertClientAccess(userId, currentDraft, true);
 
     const selectedIds = [...new Set(manifestInput.lines.map((line) => line.shipmentDraftId))];
@@ -773,6 +777,9 @@ async function createBulkManifest(request: Request, response: Response, actorRol
 
     const [firstDraft] = drafts;
     if (!firstDraft) throw new ShipmentManifestServiceError("Select at least one shipment.");
+    if (await getAccountSuspension(firstDraft.businessAccountId)) {
+      throw new ShipmentManifestServiceError("Manifest changes are paused while this account is suspended.", 423);
+    }
     if (drafts.some((draft) => String(draft.businessAccountId) !== String(firstDraft.businessAccountId)
       || String(draft.branchId) !== String(firstDraft.branchId))) {
       throw new ShipmentManifestServiceError("All manifest shipments must belong to the same business account and branch.");
@@ -943,6 +950,10 @@ export async function createAdminCombinedShipmentManifest(request: Request, resp
     });
     const firstDraft = orderedDrafts[0];
     if (!firstDraft) throw new ShipmentManifestServiceError("Select at least one shipment.");
+    if (orderedDrafts.some((draft) => draft.customerType !== "INDIVIDUAL")
+      && (await Promise.all(orderedDrafts.map((draft) => getAccountSuspension(draft.businessAccountId)))).some(Boolean)) {
+      throw new ShipmentManifestServiceError("Manifest changes are paused for a suspended business account.", 423);
+    }
     if (orderedDrafts.some((draft) => String(draft.branchId) !== String(firstDraft.branchId))) {
       throw new ShipmentManifestServiceError("All combined manifest shipments must belong to the same branch.");
     }

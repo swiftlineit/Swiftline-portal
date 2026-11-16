@@ -57,7 +57,7 @@ async function getClientBusinessAccount(userId: mongoose.Types.ObjectId, busines
   }
 
   const membership = await BusinessAccountMember.findOne(filters)
-    .populate("businessAccount", "accountId company.companyName status depositStatus")
+    .populate("businessAccount", "accountId company.companyName status suspension.mode depositStatus")
     .sort({ createdAt: -1 })
     .exec();
 
@@ -69,7 +69,11 @@ async function getClientBusinessAccount(userId: mongoose.Types.ObjectId, busines
     accountId?: string;
     company?: { companyName?: string };
     depositStatus?: string;
+    status?: string;
+    suspension?: { mode?: string } | null;
   };
+
+  if (account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK") return null;
 
   return account._id ? { membership, account, businessAccountId: account._id } : null;
 }
@@ -225,6 +229,9 @@ export async function createClientPrepaidTopUp(request: Request, response: Respo
 
   const clientAccount = await getClientBusinessAccount(userId, parsed.data.businessAccountId);
   if (!clientAccount) return response.status(404).json({ success: false, message: "Business account not found" });
+  if (clientAccount.account.status === "suspended") {
+    return response.status(423).json({ success: false, message: "Prepaid top-ups are paused while this account is suspended." });
+  }
 
   const creditAccount = await BusinessCreditAccount.findOne({ businessAccountId: clientAccount.businessAccountId }).lean().exec();
   if (parsed.data.purpose === "SECURITY_DEPOSIT") {

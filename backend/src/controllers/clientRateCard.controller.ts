@@ -6,6 +6,7 @@ import { CountryRateCard, type RateCardBand } from "../models/countryRateCard.mo
 import { CountryRouteCharge } from "../models/countryRouteCharge.model.js";
 import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 import { accountRateCardScope, rateCardFilter } from "../services/rateCardScope.service.js";
+import { availableClientAccountIds, suspensionMode } from "../services/businessAccountSuspension.service.js";
 
 function userId(request: Request) {
   const id = (request as Request & { user?: { _id?: unknown } }).user?._id;
@@ -14,6 +15,8 @@ function userId(request: Request) {
 
 type ClientRateCardAccount = {
   _id: unknown;
+  status?: string;
+  suspension?: { mode?: "OPERATIONAL_HOLD" | "SECURITY_LOCK" } | null;
   company?: { companyName?: string };
   rateCardBand?: RateCardBand | null;
   privateRateCardVersion?: number | null;
@@ -21,6 +24,9 @@ type ClientRateCardAccount = {
 };
 
 async function returnClientRateCard(account: ClientRateCardAccount | null | undefined, response: Response, fallbackTitle: string) {
+  if (account && suspensionMode(account) === "SECURITY_LOCK") {
+    return response.status(404).json({ success: false, message: "Business account access is not available." });
+  }
   const title = account?.company?.companyName ? `${account.company.companyName} Rate Card` : fallbackTitle;
   if (!account || (account.privateRateCardVersion != null ? !account.privateRateCardReady : !account.rateCardBand)) {
     return response.status(200).json({
@@ -56,11 +62,19 @@ export async function listClientCountryRateCards(request: Request, response: Res
     return response.status(400).json({ success: false, message: "Select a valid business account." });
   }
 
-  const membership = await BusinessAccountMember.findOne({
+  const candidateMemberships = await BusinessAccountMember.find({
     user: actor,
     status: "active",
     ...(requestedAccount ? { businessAccount: requestedAccount } : {})
-  }).populate("businessAccount", "rateCardBand privateRateCardVersion privateRateCardReady company.companyName").exec();
+  }).select("businessAccount").lean().exec();
+  const availableIds = await availableClientAccountIds(
+    candidateMemberships.map((membership) => membership.businessAccount as mongoose.Types.ObjectId)
+  );
+  const membership = availableIds.length
+    ? await BusinessAccountMember.findOne({ user: actor, status: "active", businessAccount: { $in: availableIds } })
+      .populate("businessAccount", "status suspension.mode rateCardBand privateRateCardVersion privateRateCardReady company.companyName")
+      .exec()
+    : null;
 
   if (!membership) {
     return response.status(404).json({ success: false, message: "Business account access is not available." });
@@ -90,7 +104,7 @@ export async function listOperatorClientCountryRateCards(request: Request, respo
     _id: membership.businessAccount,
     tenantId: context.tenantId,
     accountKind: { $ne: "INDIVIDUAL_SENTINEL" }
-  }).select("company.companyName rateCardBand privateRateCardVersion privateRateCardReady").lean().exec();
+  }).select("status suspension.mode company.companyName rateCardBand privateRateCardVersion privateRateCardReady").lean().exec();
   if (!account) {
     return response.status(404).json({ success: false, message: "Business account access is not available." });
   }

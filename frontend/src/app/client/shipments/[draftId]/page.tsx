@@ -3,6 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { FiCheckCircle, FiClock, FiFileText, FiMapPin, FiPackage, FiTruck } from "react-icons/fi";
+import { toast } from "react-toastify";
 import {
   ClientDashboardLoading,
   ClientShellUser
@@ -37,6 +38,7 @@ import { ShipmentAmendmentInput } from "@/lib/dpdLabels";
 import {
   getClientShipmentCancellation,
   requestClientShipmentCancellation,
+  ShipmentCancellationRequestError,
   type ShipmentCancellation
 } from "@/lib/shipmentCancellations";
 
@@ -300,8 +302,12 @@ export default function ClientShipmentDetailsPage() {
       const result = await requestClientShipmentCancellation(params.draftId, reason);
       setCancellation(result.cancellation);
     } catch (caughtError) {
+      if (caughtError instanceof ShipmentCancellationRequestError && caughtError.status === 423) {
+        toast.error(caughtError.message);
+        return;
+      }
+
       setCancellationError(caughtError instanceof Error ? caughtError.message : "Unable to request cancellation.");
-      throw caughtError;
     } finally {
       setCancellationBusy(false);
     }

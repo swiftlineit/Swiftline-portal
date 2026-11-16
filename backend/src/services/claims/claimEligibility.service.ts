@@ -296,6 +296,9 @@ export async function listClaimableShipments(input: {
 
   if (!membership || !clientCan(membership.role, "CREATE")) return [];
 
+  const account = await BusinessAccount.findById(input.businessAccountId).select("status").lean().exec();
+  if (!account || account.status !== "active") return [];
+
   const assigned = (membership.assignedBranches ?? []).map(String);
   const query: Record<string, unknown> = {
     businessAccountId: new mongoose.Types.ObjectId(input.businessAccountId),

@@ -5,6 +5,7 @@ import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { SupportTicketDraft, type ISupportTicketDraft } from "../models/supportTicketDraft.model.js";
 import { SupportTicketError } from "./supportTicket.service.js";
 import { createClientSupportTicket } from "./supportTicket.service.js";
+import { availableClientAccountIds, suspensionMode } from "./businessAccountSuspension.service.js";
 import {
   shipmentIssueCategoryValues,
   type SupportTicketCategory,
@@ -17,6 +18,10 @@ function isShipmentIssueCategory(category: SupportTicketCategory) {
 async function assertMembership(userId: mongoose.Types.ObjectId, businessAccountId: mongoose.Types.ObjectId) {
   const membership = await BusinessAccountMember.findOne({ user: userId, businessAccount: businessAccountId, status: "active" }).exec();
   if (!membership) throw new SupportTicketError("You do not have access to this business account.", 403);
+  const account = await BusinessAccount.findById(businessAccountId).select("status suspension.mode").lean().exec();
+  if (!account || suspensionMode(account) === "SECURITY_LOCK") {
+    throw new SupportTicketError("You do not have access to this business account.", 403);
+  }
   return membership;
 }
 
@@ -27,6 +32,10 @@ async function canViewDraft(draft: ISupportTicketDraft, userId: mongoose.Types.O
     status: "active",
   }).exec();
   if (!membership) throw new SupportTicketError("Draft not found.", 404);
+  const account = await BusinessAccount.findById(draft.businessAccountId).select("status suspension.mode").lean().exec();
+  if (!account || suspensionMode(account) === "SECURITY_LOCK") {
+    throw new SupportTicketError("Draft not found.", 404);
+  }
   const isOwner = String(draft.createdBy) === String(userId);
   const isAdminLike = ["account_owner", "account_admin"].includes(membership.role);
   if (!isOwner && !isAdminLike) throw new SupportTicketError("Draft not found.", 404);
@@ -44,7 +53,7 @@ export type UpsertDraftInput = {
 
 export async function listTicketDrafts(userId: mongoose.Types.ObjectId) {
   const memberships = await BusinessAccountMember.find({ user: userId, status: "active" }).select("businessAccount").lean().exec();
-  const accountIds = memberships.map((m) => m.businessAccount);
+  const accountIds = await availableClientAccountIds(memberships.map((m) => m.businessAccount as mongoose.Types.ObjectId));
   if (!accountIds.length) return [];
   const drafts = await SupportTicketDraft.find({
     businessAccountId: { $in: accountIds },

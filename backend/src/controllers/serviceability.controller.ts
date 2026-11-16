@@ -5,6 +5,7 @@ import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { checkServiceability } from "../services/serviceability.service.js";
 import { accountRateCardScope } from "../services/rateCardScope.service.js";
+import { availableClientAccountIds, suspensionMode } from "../services/businessAccountSuspension.service.js";
 
 const querySchema = z.object({
   destinationCountryCode: z.string().trim().length(2),
@@ -30,15 +31,30 @@ export async function checkClientServiceability(request: Request, response: Resp
     return response.status(400).json({ success: false, message: "Choose a destination country to check." });
   }
 
-  const membership = await BusinessAccountMember.findOne({ user: userId, status: "active" })
+  const memberships = await BusinessAccountMember.find({ user: userId, status: "active" })
     .select("businessAccount")
     .lean()
     .exec();
+  const availableIds = await availableClientAccountIds(
+    memberships.map((item) => item.businessAccount as mongoose.Types.ObjectId)
+  );
+  const membership = availableIds.length
+    ? await BusinessAccountMember.findOne({ user: userId, status: "active", businessAccount: { $in: availableIds } })
+      .select("businessAccount")
+      .lean()
+      .exec()
+    : null;
   if (!membership) {
     return response.status(403).json({ success: false, message: "No active business account is available for your login." });
   }
 
-  const account = await BusinessAccount.findById(membership.businessAccount).select("rateCardBand privateRateCardVersion privateRateCardReady").lean().exec();
+  const account = await BusinessAccount.findById(membership.businessAccount)
+    .select("status suspension.mode rateCardBand privateRateCardVersion privateRateCardReady")
+    .lean()
+    .exec();
+  if (account && suspensionMode(account) === "SECURITY_LOCK") {
+    return response.status(404).json({ success: false, message: "Business account access is not available." });
+  }
   if (!account || (account.privateRateCardVersion != null ? !account.privateRateCardReady : !account.rateCardBand)) {
     return response.status(409).json({
       success: false,

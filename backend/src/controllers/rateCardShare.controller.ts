@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { z } from "zod";
 import { BusinessAccount } from "../models/businessAccount.model.js";
+import { availableClientAccountIds, suspensionMode } from "../services/businessAccountSuspension.service.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { countryRateServiceValues, rateCardBandValues } from "../models/countryRateCard.model.js";
 import {
@@ -335,7 +336,7 @@ async function getMemberAccountIds(userId: mongoose.Types.ObjectId) {
     .select("businessAccount")
     .lean()
     .exec();
-  return memberships.map((membership) => membership.businessAccount);
+  return availableClientAccountIds(memberships.map((membership) => membership.businessAccount));
 }
 
 /**
@@ -486,6 +487,15 @@ async function findPublicShare(request: Request) {
   if (!share) return null;
   if (!shareTokenMatches(token, share.publicTokenHash)) return null;
   if (!isShareOpen(share)) return null;
+  const linkedAccountIds = [
+    ...(share.businessAccountId ? [share.businessAccountId] : []),
+    ...(share.recipientAccounts ?? []).map((recipient) => recipient.businessAccountId)
+  ];
+  if (linkedAccountIds.length) {
+    const accounts = await BusinessAccount.find({ _id: { $in: linkedAccountIds } })
+      .select("status suspension.mode").lean().exec();
+    if (accounts.some((account) => suspensionMode(account) === "SECURITY_LOCK")) return null;
+  }
 
   return share;
 }

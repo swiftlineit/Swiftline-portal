@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { BusinessAccount } from "../models/businessAccount.model.js";
+import { availableClientAccountIds } from "../services/businessAccountSuspension.service.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
@@ -254,7 +255,7 @@ export async function listClientBookedShipments(request: Request, response: Resp
   }
 
   const requestedAccountId = objectIdParam(request, "businessAccountId");
-  const allowedAccountIds = memberships.map((membership) => membership.businessAccount);
+  const allowedAccountIds = await availableClientAccountIds(memberships.map((membership) => membership.businessAccount));
   if (requestedAccountId && !allowedAccountIds.some((id) => String(id) === String(requestedAccountId))) {
     return response.status(403).json({ success: false, message: "This business account is not available for your login." });
   }

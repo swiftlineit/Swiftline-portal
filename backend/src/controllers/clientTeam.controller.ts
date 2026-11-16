@@ -33,6 +33,10 @@ async function adminMembership(userId: mongoose.Types.ObjectId) {
     status: "active",
     role: { $in: accountAdminRoles }
   }).select("businessAccount role").lean().exec();
+  if (membership) {
+    const account = await BusinessAccount.findById(membership.businessAccount).select("status suspension.mode").lean().exec();
+    if (!account || (account.status === "suspended" && account.suspension?.mode === "SECURITY_LOCK")) return null;
+  }
   return membership ?? null;
 }
 
@@ -118,6 +122,8 @@ export async function requestClientTeamInvite(request: Request, response: Respon
   if (!membership) {
     return response.status(403).json({ success: false, message: "Team members are managed by account owners and administrators." });
   }
+  const accountStatus = await BusinessAccount.findById(membership.businessAccount).select("status").lean().exec();
+  if (accountStatus?.status === "suspended") return response.status(423).json({ success: false, message: "Team changes are paused while this account is suspended." });
 
   const parsed = inviteSchema.safeParse(request.body);
   if (!parsed.success) {
@@ -213,6 +219,8 @@ export async function updateClientTeamMemberRole(request: Request, response: Res
   if (!membership) {
     return response.status(403).json({ success: false, message: "Team members are managed by account owners and administrators." });
   }
+  const account = await BusinessAccount.findById(membership.businessAccount).select("status").lean().exec();
+  if (account?.status === "suspended") return response.status(423).json({ success: false, message: "Team changes are paused while this account is suspended." });
 
   const parsed = roleChangeSchema.safeParse(request.body);
   if (!parsed.success) {

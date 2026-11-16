@@ -216,6 +216,7 @@ export function BusinessAccountsTable({
                                 {action.label}
                               </option>
                             ))}
+                          {account.status === "suspended" ? <option value="status:suspended">Change suspension mode</option> : null}
                           {["approved", "active"].includes(account.status)
                             ? operationalActions
                               .filter((action) => action.action !== "ledger_viewed" || Boolean(credit))

@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import { canAccessCreditFinancials } from "../services/creditAccount.service.js";
+import { suspensionMode, securityLockMessage } from "../services/businessAccountSuspension.service.js";
 
 /**
  * What one client request is allowed to read.
@@ -60,6 +61,12 @@ export async function resolveClientScope(request: Request): Promise<ClientScope>
     return { ok: false, status: 404, message: "Business account access is not available." };
   }
 
+  const account = await BusinessAccount.findById(membership.businessAccount)
+    .select("status suspension.mode").lean().exec();
+  if (!account || suspensionMode(account) === "SECURITY_LOCK") {
+    return { ok: false, status: 403, message: securityLockMessage };
+  }
+
   let branchIds = await resolveMembershipBranchIds(membership);
 
   const requestedBranchId = typeof request.query.branchId === "string" ? request.query.branchId : "";
@@ -98,7 +105,11 @@ export async function resolveClientAccountBranchScopes(userId: mongoose.Types.Ob
     .select("businessAccount assignedBranches")
     .lean()
     .exec();
-  return Promise.all(memberships.map(async (membership) => ({
+  const accounts = await BusinessAccount.find({ _id: { $in: memberships.map((membership) => membership.businessAccount) } })
+    .select("status suspension.mode").lean().exec();
+  const available = new Set(accounts.filter((account) => suspensionMode(account) !== "SECURITY_LOCK")
+    .map((account) => String(account._id)));
+  return Promise.all(memberships.filter((membership) => available.has(String(membership.businessAccount))).map(async (membership) => ({
     businessAccountId: membership.businessAccount as mongoose.Types.ObjectId,
     branchIds: await resolveMembershipBranchIds(membership)
   })));

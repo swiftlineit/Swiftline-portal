@@ -16,6 +16,7 @@ import { ShipmentInvoice, type IShipmentInvoice } from "../models/shipmentInvoic
 import { Tenant } from "../models/tenant.model.js";
 import { getCreditBalances, getMemberCreditPermissions } from "../services/creditAccount.service.js";
 import { buildOperatorAccountAccessFilter } from "../services/operatorDirectory.service.js";
+import { availableClientAccountIds } from "../services/businessAccountSuspension.service.js";
 
 const recentLimit = 5;
 const dayCount = 14;
@@ -69,9 +70,12 @@ export async function getOperatorHome(request: Request, response: Response) {
   const memberRows = isClient ? await BusinessAccountMember.find({
     tenantId, user: new mongoose.Types.ObjectId(String(user._id)), status: "active"
   }).select("businessAccount role creditPermissions").lean().exec() : [];
-  const clientAccountIds = memberRows.map((member) => member.businessAccount);
+  const clientAccountIds = isClient
+    ? await availableClientAccountIds(memberRows.map((member) => member.businessAccount))
+    : [];
   const financialAccountIds = memberRows
-    .filter((member) => getMemberCreditPermissions(member.role, member.creditPermissions).includes("viewCreditDetails"))
+    .filter((member) => clientAccountIds.some((accountId) => String(accountId) === String(member.businessAccount))
+      && getMemberCreditPermissions(member.role, member.creditPermissions).includes("viewCreditDetails"))
     .map((member) => member.businessAccount);
   const accountFilter: QueryFilter<IBusinessAccount> = {
     tenantId,

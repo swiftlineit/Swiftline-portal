@@ -28,7 +28,7 @@ export default function PortalToasts() {
       pauseOnFocusLoss
       pauseOnHover
       theme={theme}
-      toastClassName="border border-slate-200 rounded-none shadow-lg text-sm font-medium"
+      toastClassName="rounded-xl border border-slate-200 shadow-lg text-sm font-medium"
     />
   );
 }

@@ -224,10 +224,9 @@ export default function DashboardBanner() {
         alt={slideLabel}
         height={240}
         width={520}
-        className="absolute inset-0 h-full w-full object-fill transition-transform duration-700 ease-out group-hover:scale-[1.025]"
+        className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.025]"
       />
-
-     
+      <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/25 to-transparent" />
 
       {/* Banner copy */}
       <div className="relative z-10 flex h-full min-h-52.5 flex-col justify-end px-5 py-5 text-white sm:min-h-55 sm:px-6 sm:py-6 lg:min-h-60 lg:px-7 lg:py-7">

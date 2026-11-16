@@ -281,10 +281,27 @@ describe("business account lifecycle", () => {
       }
     }).exec();
 
+    const activeBranch = await Branch.create({
+      name: "Suspension Test Hub",
+      code: "SUS-HUB",
+      status: "ACTIVE",
+      createdBy: adminId
+    });
+    await BusinessAccount.updateOne({ _id: account._id }, { $set: { assignedBranch: activeBranch._id } }).exec();
+
     for (const status of ["approved", "active", "suspended", "active"]) {
       const ok = createResponseRecorder();
+      const body: Record<string, unknown> = { status };
+      if (status === "suspended") {
+        body.suspensionMode = "OPERATIONAL_HOLD";
+        body.internalReason = "Compliance documents require review.";
+        body.clientMessage = "Please contact your branch team.";
+      } else if (status === "active" && (await BusinessAccount.findById(account._id).select("status").lean().exec())?.status === "suspended") {
+        body.suspensionMode = "OPERATIONAL_HOLD";
+        body.internalReason = "Compliance review is complete.";
+      }
       await updateBusinessAccountStatus(
-        controllerRequest({ userId: adminId, params: { accountId: account.accountId }, body: { status } }),
+        controllerRequest({ userId: adminId, params: { accountId: account.accountId }, body }),
         ok.response
       );
       assert.equal(ok.statusCode(), 200, `transition to ${status} should succeed`);
@@ -292,6 +309,14 @@ describe("business account lifecycle", () => {
 
     const finalAccount = await BusinessAccount.findById(account._id).lean().exec();
     assert.equal(finalAccount?.status, "active");
+    assert.equal(finalAccount?.suspension, null, "reactivation clears active suspension metadata");
+    const suspensionAudit = await AuditLog.findOne({
+      entityType: "BUSINESS_ACCOUNT",
+      entityId: account._id,
+      action: "BUSINESS_ACCOUNT_STATUS_CHANGED",
+      "metadata.suspensionMode": "OPERATIONAL_HOLD"
+    }).lean().exec();
+    assert.equal((suspensionAudit?.metadata as { internalReason?: string } | undefined)?.internalReason, "Compliance documents require review.");
   });
 
   test("operational actions and branch assignment do not change lifecycle status", async () => {

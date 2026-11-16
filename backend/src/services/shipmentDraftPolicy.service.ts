@@ -142,13 +142,16 @@ export async function clientCanAccessShipmentDraft(input: {
   if (!membership) return false;
   if (input.requireEditPermission && !clientShipmentEditorRoles.has(membership.role)) return false;
 
+  // A hold still permits reading historical drafts. A security lock does not.
+  // Every draft mutation calls this policy with requireEditPermission.
+  const account = await BusinessAccount.findById(input.draft.businessAccountId)
+    .select("assignedBranch status suspension.mode").lean().exec();
+  if (!account || (account.status === "suspended"
+    && (input.requireEditPermission || account.suspension?.mode === "SECURITY_LOCK"))) return false;
+
   const explicitBranchIds = (membership.assignedBranches ?? []).map(String);
   if (explicitBranchIds.length) return explicitBranchIds.includes(String(input.draft.branchId));
 
-  const account = await BusinessAccount.findById(input.draft.businessAccountId)
-    .select("assignedBranch")
-    .lean()
-    .exec();
   return Boolean(account?.assignedBranch && String(account.assignedBranch) === String(input.draft.branchId));
 }
 
@@ -182,6 +185,9 @@ export async function canModifyShipmentDraft(input: {
   userId: string | mongoose.Types.ObjectId;
   portalRole: string;
 }) {
+  const account = await BusinessAccount.findById(input.draft.businessAccountId)
+    .select("status accountKind").lean().exec();
+  if (account?.status === "suspended" && account.accountKind !== "INDIVIDUAL_SENTINEL") return false;
   if (input.portalRole === "admin") return true;
 
   if (input.portalRole === "operations") {

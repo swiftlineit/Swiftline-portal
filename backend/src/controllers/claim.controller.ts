@@ -72,6 +72,12 @@ import { buildClaimDecisionPdf } from "../services/claims/claimDecisionPdf.servi
 import { decryptSecret } from "../services/credentialEncryption.service.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import type { Role } from "../models/user.model.js";
+import {
+  availableClientAccountIds,
+  securityLockMessage,
+  suspensionMessage,
+  suspensionMode
+} from "../services/businessAccountSuspension.service.js";
 
 /**
  * HTTP surface for claims- client and staff.
@@ -181,10 +187,29 @@ async function clientAccess(claimId: string, userId: string) {
 
   if (!membership) return null;
 
+  const account = await BusinessAccount.findById(claim.businessAccountId)
+    .select("status suspension.mode")
+    .lean()
+    .exec();
+  const accountSuspensionMode = account ? suspensionMode(account) : null;
+  if (!account || accountSuspensionMode === "SECURITY_LOCK") return null;
+
   const assigned = (membership.assignedBranches ?? []).map(String);
   if (assigned.length > 0 && !assigned.includes(String(claim.branchId))) return null;
 
-  return { claim, membership };
+  return { claim, membership, accountSuspensionMode };
+}
+
+/** Client claims remain readable during an operational hold, but not mutable. */
+function rejectSuspendedClientClaimMutation(
+  access: { accountSuspensionMode: ReturnType<typeof suspensionMode> },
+  response: Response
+) {
+  if (!access.accountSuspensionMode) return null;
+  return response.status(423).json({
+    success: false,
+    message: access.accountSuspensionMode === "SECURITY_LOCK" ? securityLockMessage : suspensionMessage
+  });
 }
 
 /** Staff scoping: admins see everything, everyone else their assigned branches. */
@@ -284,13 +309,18 @@ export async function listClientClaims(request: Request, response: Response, nex
     const user = actor(request);
     if (!user) return response.status(401).json({ success: false, message: "Sign in to continue." });
 
-    const memberships = await BusinessAccountMember.find({
+    const allMemberships = await BusinessAccountMember.find({
       user: new mongoose.Types.ObjectId(user.id),
       status: "active"
     })
       .select("businessAccount role assignedBranches")
       .lean()
       .exec();
+
+    const visibleAccountIds = new Set((await availableClientAccountIds(
+      allMemberships.map((membership) => membership.businessAccount as mongoose.Types.ObjectId)
+    )).map(String));
+    const memberships = allMemberships.filter((membership) => visibleAccountIds.has(String(membership.businessAccount)));
 
     if (memberships.length === 0) return response.json({ success: true, claims: [] });
 
@@ -388,7 +418,7 @@ export async function getClientClaim(request: Request, response: Response, next:
       events,
       decision,
       beneficiary,
-      availableActions: availableTransitions({
+      availableActions: access.accountSuspensionMode ? [] : availableTransitions({
         status: claim.status,
         actorKind: "CLIENT",
         decisionOutcome: claim.decisionOutcome,
@@ -460,6 +490,8 @@ export async function updateClientClaimDraft(request: Request, response: Respons
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     if (!clientCan(access.membership.role, "EDIT_DRAFT")) {
       return response.status(403).json({ success: false, message: "Your role cannot edit claims." });
     }
@@ -487,6 +519,8 @@ export async function deleteClientClaimDraft(request: Request, response: Respons
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     if (!clientCan(access.membership.role, "EDIT_DRAFT")) {
       return response.status(403).json({ success: false, message: "Your role cannot delete claims." });
     }
@@ -509,6 +543,8 @@ export async function submitClientClaim(request: Request, response: Response, ne
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     if (!clientCan(access.membership.role, "CREATE")) {
       return response.status(403).json({ success: false, message: "Your role cannot submit claims." });
     }
@@ -541,6 +577,8 @@ export async function uploadClientClaimDocument(request: Request, response: Resp
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     if (!clientCan(access.membership.role, "UPLOAD_DOCUMENT")) {
       return response.status(403).json({ success: false, message: "Your role cannot upload documents." });
     }
@@ -598,6 +636,8 @@ export async function deleteClientClaimDocument(request: Request, response: Resp
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     if (!clientCan(access.membership.role, "UPLOAD_DOCUMENT")) {
       return response.status(403).json({ success: false, message: "Your role cannot remove documents." });
     }
@@ -621,6 +661,8 @@ export async function postClientClaimMessage(request: Request, response: Respons
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     if (!clientCan(access.membership.role, "SEND_MESSAGE")) {
       return response.status(403).json({ success: false, message: "Your role cannot send messages." });
     }
@@ -652,6 +694,8 @@ export async function acceptClientSettlement(request: Request, response: Respons
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
 
     // Accepting binds the company to a figure, so it stays with owners and admins.
     if (!clientCan(access.membership.role, "ACCEPT_SETTLEMENT")) {
@@ -679,6 +723,8 @@ export async function submitClientAppeal(request: Request, response: Response, n
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     if (!clientCan(access.membership.role, "SUBMIT_APPEAL")) {
       return response.status(403).json({
         success: false,
@@ -716,6 +762,8 @@ export async function submitClientBeneficiary(request: Request, response: Respon
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     if (!clientCan(access.membership.role, "MANAGE_BANK_DETAILS")) {
       return response.status(403).json({
         success: false,
@@ -764,6 +812,8 @@ export async function withdrawClientClaim(request: Request, response: Response, 
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     if (!clientCan(access.membership.role, "WITHDRAW")) {
       return response.status(403).json({ success: false, message: "Your role cannot withdraw claims." });
     }
@@ -792,6 +842,8 @@ export async function disputeClientSettlement(request: Request, response: Respon
 
     const access = await clientAccess(String(request.params.claimId), user.id);
     if (!access) return response.status(404).json({ success: false, message: "Claim not found." });
+    const suspensionResponse = rejectSuspendedClientClaimMutation(access, response);
+    if (suspensionResponse) return suspensionResponse;
     // Disputing commits the company to a position, so it sits with the roles
     // that can also accept or appeal.
     if (!clientCan(access.membership.role, "ACCEPT_SETTLEMENT")) {

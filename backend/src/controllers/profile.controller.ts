@@ -16,6 +16,7 @@ import {
   streamObjectToResponse
 } from "../services/storage/storage.service.js";
 import { normalizeUserPhone } from "../services/userIdentity.service.js";
+import { availableClientAccountIds } from "../services/businessAccountSuspension.service.js";
 import { serializeStaffProfile } from "./staff.controller.js";
 import {
   emailValidationMessage,
@@ -225,10 +226,14 @@ async function loadProfile(userId: mongoose.Types.ObjectId) {
     .exec();
   if (!user) return null;
 
-  const memberships = await BusinessAccountMember.find({ user: userId, status: "active" })
+  const allMemberships = await BusinessAccountMember.find({ user: userId, status: "active" })
     .select("businessAccount role joinedAt assignedBranches")
     .lean()
     .exec();
+  const availableAccountIds = new Set((await availableClientAccountIds(
+    allMemberships.map((membership) => membership.businessAccount as mongoose.Types.ObjectId)
+  )).map(String));
+  const memberships = allMemberships.filter((membership) => availableAccountIds.has(String(membership.businessAccount)));
   const accounts = memberships.length
     ? await BusinessAccount.find({ _id: { $in: memberships.map((membership) => membership.businessAccount) } })
       .lean<IBusinessAccount[]>()
@@ -390,6 +395,12 @@ export async function updateProfileBusinessAccount(request: Request, response: R
 
   const account = await BusinessAccount.findById(accountId).exec();
   if (!account) return response.status(404).json({ success: false, message: "Business account not found." });
+  if (account.status === "suspended") {
+    return response.status(423).json({
+      success: false,
+      message: "Business account details cannot be changed while the account is suspended. Contact your account manager for assistance."
+    });
+  }
 
   const { company, contact } = parsed.data;
 

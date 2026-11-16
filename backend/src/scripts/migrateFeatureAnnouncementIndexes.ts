@@ -48,7 +48,7 @@ async function auditIndexes() {
   for (const model of models) {
     const exists = await db.listCollections({ name: model.collection.collectionName }, { nameOnly: true }).hasNext();
     const existing = exists ? await model.collection.listIndexes().toArray() : [];
-    const expected = model.schema.indexes();
+    const expected = model.schema.indexes() as Array<[Record<string, 1 | -1>, { name?: string; unique?: boolean }]>;
     const missing = expected.filter(([, options]) => !existing.some((index) => index.name === options.name));
     missingCount += missing.length;
     for (const [keys, options] of expected) {

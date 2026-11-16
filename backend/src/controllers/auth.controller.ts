@@ -27,6 +27,7 @@ import {
   OperatorClientInvitationError
 } from "../services/operatorClientInvitation.service.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
+import { isSoleSecurityLockedClient, securityLockMessage } from "../services/businessAccountSuspension.service.js";
 import { sendLoginOtpEmail, sendPasswordResetEmail } from "../services/mail.service.js";
 import { normalizePortalRole } from "../utils/portalRole.js";
 import mongoose from "mongoose";
@@ -237,6 +238,9 @@ function canSignIn(user: IUser | null): user is IUser {
  */
 async function issueSignedInResponse(req: Request, res: Response, user: IUser): Promise<Response> {
   const role = normalizePortalRole(user.role);
+  if (role === "client" && await isSoleSecurityLockedClient(user._id as mongoose.Types.ObjectId)) {
+    return res.status(403).json({ success: false, message: securityLockMessage });
+  }
   if (user.role !== role) {
     user.role = role;
     await User.updateOne({ _id: user._id }, { $set: { role } }).exec();
@@ -644,6 +648,11 @@ export async function refresh(req: Request, res: Response): Promise<Response> {
     // check here would let a suspended login renew itself indefinitely.
     if ((user.userStatus ?? "active") !== "active") {
       return res.status(401).json({ success: false, message: accountNotActiveMessage, sessionEnded: true });
+    }
+
+    if (normalizePortalRole(user.role) === "client"
+      && await isSoleSecurityLockedClient(user._id as mongoose.Types.ObjectId)) {
+      return res.status(401).json({ success: false, message: securityLockMessage, sessionEnded: true });
     }
 
     const role = normalizePortalRole(user.role);

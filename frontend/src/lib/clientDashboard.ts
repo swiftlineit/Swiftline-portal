@@ -31,6 +31,8 @@ export type ClientDashboardAccount = {
     id: string;
     accountId: string;
     status: string;
+    suspensionMode?: "OPERATIONAL_HOLD" | "SECURITY_LOCK" | null;
+    suspensionMessage?: string;
     statusLabel: string;
     kycStatus: string;
     kycStatusLabel: string;

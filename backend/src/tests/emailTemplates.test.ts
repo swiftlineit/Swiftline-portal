@@ -55,6 +55,35 @@ function render(templateKey: string, payload: Record<string, unknown>, recipient
   return { content, ...renderEmail(content, "Footer note.") };
 }
 
+test("suspension email explains an operational hold without exposing the internal reason", () => {
+  const { content, html, text } = render("BUSINESS_ACCOUNT_SUSPENSION", {
+    accountName: "Northline Exports",
+    accountId: "BA-2026-200001",
+    suspensionMode: "OPERATIONAL_HOLD",
+    clientMessage: "Please contact your branch team.",
+    supportTeam: "your Swiftline branch",
+    href: "/client/dashboard#business-accounts"
+  });
+  assert.match(content.subject, /Northline Exports/);
+  assert.match(text, /New bookings and account changes are paused/);
+  assert.match(text, /Please contact your branch team/);
+  assert.match(html, /https:\/\/portal\.swiftline\.example\/client\/dashboard#business-accounts/);
+  assert.doesNotMatch(text, /internal reason/i);
+});
+
+test("security lock email does not offer a portal link when access is blocked", () => {
+  const { content, html, text } = render("BUSINESS_ACCOUNT_SUSPENSION", {
+    accountName: "Northline Exports",
+    suspensionMode: "SECURITY_LOCK",
+    supportTeam: "your operator",
+    href: "/portal/northline/business-accounts"
+  });
+  assert.match(content.heading, /security lock/i);
+  assert.match(text, /temporarily unavailable/);
+  assert.match(text, /your operator/);
+  assert.doesNotMatch(html, /View business account/);
+});
+
 test("shipment booked client template renders the invoice and shipment facts", () => {
   const { content, html, text } = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, labelsAttached: true });
 

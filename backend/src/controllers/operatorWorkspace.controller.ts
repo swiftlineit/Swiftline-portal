@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { env } from "../config/env.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
+import { suspensionMode } from "../services/businessAccountSuspension.service.js";
 import { Tenant } from "../models/tenant.model.js";
 import { TenantMembership } from "../models/tenantMembership.model.js";
 
@@ -58,14 +60,17 @@ export async function getMyClientWorkspaceAccess(request: Request, response: Res
     return response.status(403).json({ success: false, message: "Client access is required." });
   }
 
-  const [swiftlineMembership, operatorWorkspaces] = await Promise.all([
-    BusinessAccountMember.exists({ user: userId, status: { $in: ["active", "suspended"] } }),
+  const [swiftlineMemberships, operatorWorkspaces] = await Promise.all([
+    BusinessAccountMember.find({ user: userId, status: { $in: ["active", "suspended"] } })
+      .select("businessAccount").lean().exec(),
     env.OPERATOR_PORTAL_ENABLED ? findOperatorWorkspaces(userId) : Promise.resolve([])
   ]);
+  const accounts = await BusinessAccount.find({ _id: { $in: swiftlineMemberships.map((member) => member.businessAccount) } })
+    .select("status suspension.mode").lean().exec();
 
   return response.status(200).json({
     success: true,
-    swiftline: Boolean(swiftlineMembership),
+    swiftline: accounts.some((account) => suspensionMode(account) !== "SECURITY_LOCK"),
     operators: operatorWorkspaces
   });
 }

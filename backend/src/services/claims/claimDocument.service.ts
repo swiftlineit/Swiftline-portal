@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
 import { Claim } from "../../models/claim.model.js";
+import { BusinessAccount } from "../../models/businessAccount.model.js";
 import { ClaimDocument, ClaimDocumentAccess } from "../../models/claimDocument.model.js";
 import type { ClaimDocumentCategory } from "../../models/claimDocument.model.js";
 import { ClaimEvent } from "../../models/claimEvent.model.js";
@@ -9,6 +10,7 @@ import { claimDocumentKey, putObject, streamObjectToResponse } from "../storage/
 import type { ClaimDocumentStorageType } from "../storage/keys.js";
 import type { Response } from "express";
 import { notifyClaimDocumentRejected } from "./claimNotification.service.js";
+import { securityLockMessage, suspensionMessage, suspensionMode } from "../businessAccountSuspension.service.js";
 
 /**
  * Claim evidence: accepting it, and giving it back only to people entitled to
@@ -65,6 +67,16 @@ export async function uploadClaimDocument(input: {
 }) {
   const claim = await Claim.findById(input.claimId).exec();
   if (!claim) throw new ClaimDocumentError("Claim not found.", 404);
+
+  if (input.uploadedByKind === "CLIENT") {
+    const account = await BusinessAccount.findById(claim.businessAccountId)
+      .select("status suspension.mode")
+      .lean()
+      .exec();
+    const mode = account ? suspensionMode(account) : null;
+    if (!account || mode === "SECURITY_LOCK") throw new ClaimDocumentError(securityLockMessage, 404);
+    if (mode) throw new ClaimDocumentError(suspensionMessage, 423);
+  }
 
   if (input.buffer.length === 0) throw new ClaimDocumentError("The uploaded file is empty.");
   if (input.buffer.length > maxClaimDocumentBytes) {

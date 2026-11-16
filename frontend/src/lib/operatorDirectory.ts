@@ -20,6 +20,7 @@ export type OperatorBusinessAccount = {
   accountId: string;
   accountKind: "BUSINESS" | "INDIVIDUAL_SENTINEL";
   status: string;
+  suspension?: { mode: "OPERATIONAL_HOLD" | "SECURITY_LOCK"; previousStatus?: "active" | "approved" } | null;
   contact?: { firstName?: string; lastName?: string; email?: string };
   company?: { companyName?: string };
   kycReview?: { overallStatus?: string };

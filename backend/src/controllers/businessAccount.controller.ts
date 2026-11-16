@@ -9,6 +9,7 @@ import {
   BusinessKycCheckStatus,
   BusinessKycOverallStatus,
   BusinessAccountStatus,
+  businessAccountSuspensionModes,
   DocumentType,
   GstBillingPreference,
   IBusinessAccount,
@@ -31,7 +32,9 @@ import {
   putObject,
   streamObjectToResponse
 } from "../services/storage/storage.service.js";
-import { notifyActiveAdmins, notifyBusinessAccountManagers, notifyOperatorAccountReviewers } from "../services/portalNotification.service.js";
+import { notifyActiveAdmins, notifyBusinessAccountManagers, notifyOperatorAccountReviewers, notifyPortalUsers } from "../services/portalNotification.service.js";
+import { hasUsableClientWorkspace, securityLockMessage, suspensionMessage, suspensionMode, suspensionRestorationStatus } from "../services/businessAccountSuspension.service.js";
+import { endSessions } from "../services/userSession.service.js";
 import {
   BUSINESS_ACCOUNT_CREDIT_LIMIT_MAX,
   compactRegistrationId,
@@ -1726,7 +1729,149 @@ export async function updateBusinessAccountStatus(request: Request, response: Re
   if (!account) return response.status(404).json({ success: false, message: "Business account not found" });
 
   const currentStatus = account.status;
-  const targetStatus = parsed.data;
+  const requestedStatus = parsed.data;
+  if (account.accountKind === "INDIVIDUAL_SENTINEL" && requestedStatus === "suspended") {
+    return response.status(409).json({ success: false, message: "The walk-in shipment account cannot be suspended." });
+  }
+  if (currentStatus === "suspended" && requestedStatus !== "suspended" && requestedStatus !== "active") {
+    return response.status(409).json({ success: false, message: "Reactivate the account to restore its previous status." });
+  }
+  const targetStatus = currentStatus === "suspended" && requestedStatus !== "suspended"
+    ? suspensionRestorationStatus(account)
+    : requestedStatus;
+  const suspensionChange = targetStatus === "suspended" && (
+    currentStatus !== "suspended" || request.body?.suspensionMode !== suspensionMode(account)
+  );
+  const liftingSuspension = currentStatus === "suspended" && targetStatus !== "suspended";
+
+  if (suspensionChange || liftingSuspension) {
+    const details = z.object({
+      internalReason: z.string().trim().min(5).max(1000),
+      clientMessage: z.string().trim().max(500).optional().default("")
+    }).safeParse(request.body);
+    const mode = z.enum(businessAccountSuspensionModes).safeParse(request.body?.suspensionMode);
+    if (!details.success || (suspensionChange && !mode.success)) {
+      return response.status(400).json({ success: false, message: "Choose a suspension mode and enter an internal reason of at least five characters." });
+    }
+    if (currentStatus !== "suspended" && currentStatus !== "active"
+      && !(getTenantContext()?.kind === "OPERATOR" && currentStatus === "approved")) {
+      return response.status(409).json({ success: false, message: "Only an active account can be suspended." });
+    }
+    if (liftingSuspension) {
+      if (targetStatus !== "active" && targetStatus !== "approved") {
+        return response.status(409).json({ success: false, message: "This account cannot be reactivated to that status." });
+      }
+      if (account.kycReview?.overallStatus !== "verified") {
+        return response.status(409).json({ success: false, message: "KYC must be verified before reactivation." });
+      }
+      if (!account.assignedBranch || !await Branch.exists({ _id: account.assignedBranch, status: "ACTIVE" })) {
+        return response.status(409).json({ success: false, message: "Assign an active branch before reactivation." });
+      }
+    }
+
+    // The state, audit entry, and in-app notices commit together. A retry of the
+    // same transition sees the new state and cannot send another notice.
+    const session = await mongoose.startSession();
+    let changedAt = new Date();
+    let recipientIds: mongoose.Types.ObjectId[] = [];
+    try {
+      await session.withTransaction(async () => {
+        const fresh = await BusinessAccount.findById(account._id).session(session).exec();
+        if (!fresh || fresh.status !== currentStatus || (currentStatus === "suspended"
+          && suspensionMode(fresh) !== suspensionMode(account))) {
+          throw new Error("BUSINESS_ACCOUNT_STATUS_CONFLICT");
+        }
+        if (liftingSuspension && (fresh.kycReview?.overallStatus !== "verified"
+          || !fresh.assignedBranch
+          || !await Branch.exists({ _id: fresh.assignedBranch, status: "ACTIVE" }).session(session))) {
+          throw new Error("BUSINESS_ACCOUNT_REACTIVATION_CONFLICT");
+        }
+        changedAt = new Date();
+        const previousStatus = suspensionRestorationStatus(fresh);
+        fresh.status = targetStatus;
+        fresh.updatedBy = userId;
+        fresh.suspension = targetStatus === "suspended"
+          ? {
+              mode: mode.data!,
+              // Older suspended accounts have no snapshot. Their only safe
+              // restoration target is the normal active client state.
+              previousStatus,
+              internalReason: details.data.internalReason,
+              clientMessage: details.data.clientMessage,
+              changedAt,
+              changedBy: userId
+            }
+          : null;
+        await fresh.save({ session });
+        await AuditLog.create([{
+          action: "BUSINESS_ACCOUNT_STATUS_CHANGED",
+          entityType: "BUSINESS_ACCOUNT",
+          entityId: fresh._id,
+          performedBy: userId,
+          performedAt: changedAt,
+          metadata: {
+            accountId: fresh.accountId,
+            fromStatus: currentStatus,
+            toStatus: targetStatus,
+            suspensionMode: targetStatus === "suspended" ? mode.data : null,
+            internalReason: details.data.internalReason
+          }
+        }], { session });
+        const members = await BusinessAccountMember.find({ businessAccount: fresh._id, status: "active" })
+          .select("user role").session(session).lean().exec();
+        recipientIds = members.map((member) => member.user);
+        const administratorIds = members
+          .filter((member) => member.role === "account_owner" || member.role === "account_admin")
+          .map((member) => member.user);
+        const operatorSlug = typeof request.params.operatorSlug === "string" ? request.params.operatorSlug : "";
+        const clientMessage = details.data.clientMessage || (targetStatus === "suspended"
+          ? mode.data === "SECURITY_LOCK" ? securityLockMessage : suspensionMessage
+          : "Your business account has been reactivated.");
+        await notifyPortalUsers(recipientIds, {
+          type: "BUSINESS_ACCOUNT_STATUS_CHANGED",
+          title: targetStatus === "suspended" ? "Business account suspended" : "Business account reactivated",
+          message: clientMessage,
+          href: getTenantContext()?.kind === "OPERATOR"
+            ? `/portal/${encodeURIComponent(operatorSlug)}/business-accounts`
+            : "/client/dashboard#business-accounts",
+          businessAccountId: fresh._id as mongoose.Types.ObjectId,
+          idempotencyKey: `BUSINESS_ACCOUNT_SUSPENSION:${String(fresh._id)}:${changedAt.getTime()}`,
+          metadata: { accountId: fresh.accountId, status: targetStatus },
+          email: targetStatus === "suspended" ? {
+            recipientUserIds: administratorIds,
+            templateKey: "BUSINESS_ACCOUNT_SUSPENSION",
+            subject: `Business account update: ${fresh.company.companyName || fresh.accountId}`,
+            payload: {
+              accountName: fresh.company.companyName || fresh.accountId,
+              accountId: fresh.accountId,
+              suspensionMode: mode.data,
+              clientMessage: details.data.clientMessage,
+              supportTeam: getTenantContext()?.kind === "OPERATOR" ? "your operator" : "your Swiftline branch"
+            }
+          } : undefined
+        }, session);
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "BUSINESS_ACCOUNT_STATUS_CONFLICT") {
+        return response.status(409).json({ success: false, message: "Account status changed. Reload and try again." });
+      }
+      if (error instanceof Error && error.message === "BUSINESS_ACCOUNT_REACTIVATION_CONFLICT") {
+        return response.status(409).json({ success: false, message: "KYC or branch status changed. Reload and try again." });
+      }
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+    if (targetStatus === "suspended" && mode.data === "SECURITY_LOCK") {
+      for (const memberId of recipientIds) {
+        if (!await hasUsableClientWorkspace(memberId)) {
+          await endSessions({ userId: memberId }, "terminated_by_admin", userId);
+        }
+      }
+    }
+    const updatedAccount = await getPopulatedBusinessAccount(account.accountId);
+    return response.status(200).json({ success: true, message: statusActionMessages[targetStatus], account: updatedAccount });
+  }
 
   // Enforce the lifecycle state machine. Re-applying the current status is a
   // harmless no-op; any transition not defined in the map is rejected.

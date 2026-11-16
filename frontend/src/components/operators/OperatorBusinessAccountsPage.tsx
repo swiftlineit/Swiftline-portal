@@ -3,10 +3,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "react-toastify";
 import { FiBriefcase, FiChevronLeft, FiPlus, FiSearch } from "react-icons/fi";
-import ConfirmDialog from "@/components/ui/ConfirmDialog";
+import BusinessAccountSuspensionDialog from "@/components/business-accounts/BusinessAccountSuspensionDialog";
 import { useOperatorSupportReadOnly } from "@/components/operators/OperatorSupportBoundary";
-import { updateBusinessAccountStatus } from "@/lib/businessAccounts";
+import { updateBusinessAccountStatus, type BusinessAccountSuspensionDetails } from "@/lib/businessAccounts";
 import {
   getOperatorSession,
   listOperatorBusinessAccounts,
@@ -60,7 +61,8 @@ function AccountRowActions({
   busy,
   onApprove,
   onDeactivate,
-  onActivate
+  onActivate,
+  onChangeMode
 }: {
   account: OperatorBusinessAccount;
   href: string;
@@ -70,6 +72,7 @@ function AccountRowActions({
   onApprove: () => void;
   onDeactivate: () => void;
   onActivate: () => void;
+  onChangeMode: () => void;
 }) {
   const name = account.company?.companyName || "business account";
   const canApprove = account.status === "pending_review";
@@ -108,16 +111,22 @@ function AccountRowActions({
         </button>
       ) : null}
       {canManageStatus && canActivate ? (
-        <button
-          type="button"
-          onClick={onActivate}
-          disabled={busy || !kycVerified}
-          title={!kycVerified ? "KYC must be verified before this account can be activated." : undefined}
-          aria-label={`Activate ${name}`}
-          className="inline-flex min-h-9 items-center justify-center rounded-md border border-emerald-300 px-3 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Activate
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={onActivate}
+            disabled={busy || !kycVerified}
+            title={!kycVerified ? "KYC must be verified before this account can be activated." : undefined}
+            aria-label={`Reactivate ${name}`}
+            className="inline-flex min-h-9 items-center justify-center rounded-md border border-emerald-300 px-3 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Reactivate
+          </button>
+          <button type="button" onClick={onChangeMode} disabled={busy}
+            className="inline-flex min-h-9 items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+            Change hold mode
+          </button>
+        </>
       ) : null}
       {!canOpen && !canManageStatus ? <span className="text-sm text-slate-500">View only</span> : null}
     </div>
@@ -226,31 +235,34 @@ export default function OperatorBusinessAccountsPage({ operatorSlug }: { operato
     setRefreshKey((value) => value + 1);
   }
 
-  async function changeAccountStatus(account: OperatorBusinessAccount, status: "approved" | "active" | "suspended") {
+  async function changeAccountStatus(account: OperatorBusinessAccount, status: "approved" | "active" | "suspended", details?: BusinessAccountSuspensionDetails) {
     setUpdatingAccountId(account._id);
     setError("");
     setNotice("");
     try {
-      const result = await updateBusinessAccountStatus(account.accountId, status, operatorSlug);
+      const result = await updateBusinessAccountStatus(account.accountId, status, operatorSlug, details);
       setAccounts((current) => current.map((item) => item._id === account._id
-        ? { ...item, status: result.account.status, kycReview: { overallStatus: result.account.kycReview?.overallStatus } }
+        ? { ...item, status: result.account.status, suspension: result.account.suspension, kycReview: { overallStatus: result.account.kycReview?.overallStatus } }
         : item));
-      const action = status === "approved" ? "approved" : status === "active" ? "activated" : "deactivated";
+      const action = status === "approved" ? "approved" : status === "active" ? "reactivated" : "suspended";
       setNotice(result.message || `Business account ${action}.`);
       return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update this business account.");
+      const message = cause instanceof Error ? cause.message : "Unable to update this business account.";
+      if (details) toast.error(message);
+      else setError(message);
       return false;
     } finally {
       setUpdatingAccountId("");
     }
   }
 
-  async function confirmStatusChange() {
+  async function confirmStatusChange(details: BusinessAccountSuspensionDetails) {
     if (!pendingStatusChange) return;
     const { account, status } = pendingStatusChange;
-    const updated = await changeAccountStatus(account, status);
+    const updated = await changeAccountStatus(account, status, details);
     if (updated) setPendingStatusChange(null);
+    return updated;
   }
 
   function changePage(nextPage: number) {
@@ -362,6 +374,7 @@ export default function OperatorBusinessAccountsPage({ operatorSlug }: { operato
                           onApprove={() => void changeAccountStatus(account, "approved")}
                           onDeactivate={() => setPendingStatusChange({ account, status: "suspended" })}
                           onActivate={() => setPendingStatusChange({ account, status: "active" })}
+                          onChangeMode={() => setPendingStatusChange({ account, status: "suspended" })}
                         />
                       </div>
                     </li>
@@ -400,6 +413,7 @@ export default function OperatorBusinessAccountsPage({ operatorSlug }: { operato
                             onApprove={() => void changeAccountStatus(account, "approved")}
                             onDeactivate={() => setPendingStatusChange({ account, status: "suspended" })}
                             onActivate={() => setPendingStatusChange({ account, status: "active" })}
+                            onChangeMode={() => setPendingStatusChange({ account, status: "suspended" })}
                           /></div></td>
                         </tr>
                       );
@@ -415,16 +429,12 @@ export default function OperatorBusinessAccountsPage({ operatorSlug }: { operato
         {operator?.membership.role === "CLIENT" ? <p className="mt-4 text-xs text-slate-500">Your account list is limited to the business accounts assigned to your login.</p> : null}
       </div>
       {pendingStatusChange ? (
-        <ConfirmDialog
-          title={pendingStatusChange.status === "active" ? "Activate business account?" : "Deactivate business account?"}
-          description={pendingStatusChange.status === "active"
-            ? <>This will reactivate <span className="font-semibold text-slate-900">{pendingStatusChange.account.company?.companyName || pendingStatusChange.account.accountId}</span> for new shipment bookings.</>
-            : <>This will suspend <span className="font-semibold text-slate-900">{pendingStatusChange.account.company?.companyName || pendingStatusChange.account.accountId}</span> and block new shipment bookings until it is activated again.</>}
-          confirmLabel={pendingStatusChange.status === "active" ? "Activate account" : "Deactivate account"}
-          tone={pendingStatusChange.status === "active" ? "primary" : "danger"}
+        <BusinessAccountSuspensionDialog
+          accountName={pendingStatusChange.account.company?.companyName || pendingStatusChange.account.accountId}
+          action={pendingStatusChange.status === "suspended" ? "suspend" : "reactivate"}
+          initialMode={pendingStatusChange.account.suspension?.mode ?? "OPERATIONAL_HOLD"}
           busy={updatingAccountId === pendingStatusChange.account._id}
-          busyLabel={pendingStatusChange.status === "active" ? "Activating..." : "Deactivating..."}
-          onConfirm={() => void confirmStatusChange()}
+          onConfirm={confirmStatusChange}
           onCancel={() => setPendingStatusChange(null)}
         />
       ) : null}
