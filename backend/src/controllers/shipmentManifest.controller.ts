@@ -579,7 +579,7 @@ export async function downloadClientShipmentManifest(request: Request, response:
 const bulkManifestSchema = z.object({
   shipmentDraftIds: z.array(
     z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select valid shipments.")
-  ).min(1, "Select at least one shipment.").max(200, "A manifest can hold up to 200 shipments."),
+  ).min(1, "Select at least one shipment."),
   origin: z.string().trim().min(1, "Origin is required.").max(120),
   destination: z.string().trim().min(1, "Destination is required.").max(120),
   coloader: z.string().trim().max(120).default(""),
