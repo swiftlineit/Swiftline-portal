@@ -133,11 +133,14 @@ describe("shipment manifest identifiers and search", () => {
       `${operatorTenant.tenantId}:shipment-manifest:SLC`
     );
     assert.equal(new ShipmentManifest({ manifestNumber: "routes-001" }).manifestNumber, "routes-001");
+    assert.equal(new ShipmentManifest({ manifestNumber: "SLC-001", manifestName: "UK Dispatch" }).manifestName, "UK Dispatch");
   });
 
   it("treats manifest search input literally and searches manifest/account/shipment references", () => {
     const conditions = shipmentManifestSearchConditions("AIC.001");
-    assert.equal(conditions.length, 8);
+    assert.equal(conditions.length, 9);
+    const nameCondition = conditions.find((condition) => "manifestName" in condition) as { manifestName?: RegExp } | undefined;
+    assert.equal(nameCondition?.manifestName?.test("AIC.001"), true);
     const numberCondition = conditions.find((condition) => "manifestNumber" in condition) as { manifestNumber?: RegExp } | undefined;
     const numberPattern = numberCondition?.manifestNumber as RegExp;
     assert.equal(numberPattern.test("AIC.001"), true);
@@ -504,6 +507,7 @@ describe("shipment manifest workbook", () => {
     const manifest = {
       _id: new mongoose.Types.ObjectId(),
       manifestNumber: "SLC-001",
+      manifestName: "UK Air Dispatch",
       businessAccountId: new mongoose.Types.ObjectId(),
       branchId: new mongoose.Types.ObjectId(),
       shipmentDraftIds: [line.shipmentDraftId],
@@ -545,18 +549,19 @@ describe("shipment manifest workbook", () => {
     assert.equal(sheet.getCell("I4").value, "TOTAL PCS : 2");
     assert.equal(sheet.getCell("I5").value, "TOTAL WEIGHT: 10.00");
     assert.equal(sheet.getCell("I6").value, "MANIFEST #: SLC-001");
-    assert.equal(sheet.getCell("I7").value, "COLOADER: Sky Cargo");
-    assert.equal(sheet.getCell("I8").value, "PAYMENT TYPE: PREPAID");
+    assert.equal(sheet.getCell("I7").value, "MANIFEST NAME: UK Air Dispatch");
+    assert.equal(sheet.getCell("I8").value, "COLOADER: Sky Cargo");
+    assert.equal(sheet.getCell("I9").value, "PAYMENT TYPE: PREPAID");
     for (let column = 1; column <= 14; column += 1) {
       const labelCellBorder: Partial<ExcelJS.Borders> = sheet.getCell(3, column).border;
       assert.equal(labelCellBorder.top?.style, "thin", `missing header top border at column ${column}`);
       assert.equal(labelCellBorder.bottom?.style, "thin", `missing label divider at column ${column}`);
     }
-    for (let row = 4; row <= 8; row += 1) {
+    for (let row = 4; row <= 9; row += 1) {
       for (let column = 1; column <= 8; column += 1) {
         const cellBorder: Partial<ExcelJS.Borders> = sheet.getCell(row, column).border;
         if (row === 4) assert.equal(cellBorder.top?.style, "thin", `missing origin/destination top at ${row},${column}`);
-        if (row === 8) assert.equal(cellBorder.bottom?.style, "thin", `missing origin/destination bottom at ${row},${column}`);
+        if (row === 9) assert.equal(cellBorder.bottom?.style, "thin", `missing origin/destination bottom at ${row},${column}`);
         if (column === 1 || column === 5) assert.equal(cellBorder.left?.style, "thin", `missing section left at ${row},${column}`);
         if (column === 4 || column === 8) assert.equal(cellBorder.right?.style, "thin", `missing section right at ${row},${column}`);
       }
@@ -568,39 +573,42 @@ describe("shipment manifest workbook", () => {
         if (column === 14) assert.equal(cellBorder.right?.style, "thin", `missing metadata right at ${row}`);
       }
     }
-    assert.deepEqual(Array.from({ length: 14 }, (_value, index) => sheet.getCell(10, index + 1).value), [
+    assert.deepEqual(Array.from({ length: 14 }, (_value, index) => sheet.getCell(11, index + 1).value), [
       "Sr.\nNo.", "AWB No. /\nParcel No", "Consignor Name", "Consignor Full\nAddress",
       "Consignor Contact\nNumber", "Consignor Aadhaar\nNumber", "Consignee Name", "Consignee Full\nAddress",
       "Consignee Contact\nNumber", "Pcs", "Description", "Weight", "Chg Wt", "Remark"
     ]);
-    assert.equal(sheet.getCell("A11").value, 1);
-    assert.equal(sheet.getCell("B11").value, "S1");
-    assert.equal(sheet.getCell("C11").value, "Example Exporter\nMr. Ravi Sharma");
-    assert.equal(sheet.getCell("D11").value, "1 Export Road\nDelhi\n110001\nIndia");
-    assert.equal(sheet.getCell("E11").value, "+919000000000");
-    assert.equal(sheet.getCell("F11").value, "2345 6789 0124");
-    assert.equal(sheet.getCell("G11").value, "Example Consignee\nAsha Patel");
-    assert.equal(sheet.getCell("H11").value, "10 Downing Street\nLondon\nSW1A 2AA\nUnited Kingdom");
-    assert.equal(sheet.getCell("I11").value, "+447123456789");
-    assert.equal(sheet.getCell("J11").value, 1);
-    assert.equal(sheet.getCell("K11").value, fullDescription);
-    assert.equal(sheet.getCell("L11").value, 4.5);
-    assert.equal(sheet.getCell("M11").value, 4.5);
-    assert.equal(sheet.getCell("N11").value, "DONE");
-    assert.equal(sheet.getCell("B12").value, "S2");
-    assert.equal(sheet.getCell("K12").value, "Documents");
-    assert.equal(sheet.getCell("L12").value, 5.5);
-    assert.equal(String(sheet.getCell("A14").value).startsWith("We hereby declare"), true);
-    assert.equal(sheet.getCell("A16").value, "FOR AHMEDABAD (SIGN AND STAMP)");
+    assert.equal(sheet.getCell("A12").value, 1);
+    assert.equal(sheet.getCell("B12").value, "S1");
+    assert.equal(sheet.getCell("C12").value, "Example Exporter\nMr. Ravi Sharma");
+    assert.equal(sheet.getCell("D12").value, "1 Export Road\nDelhi\n110001\nIndia");
+    assert.equal(sheet.getCell("E12").value, "+919000000000");
+    assert.equal(sheet.getCell("F12").value, "2345 6789 0124");
+    assert.equal(sheet.getCell("G12").value, "Example Consignee\nAsha Patel");
+    assert.equal(sheet.getCell("H12").value, "10 Downing Street\nLondon\nSW1A 2AA\nUnited Kingdom");
+    assert.equal(sheet.getCell("I12").value, "+447123456789");
+    assert.equal(sheet.getCell("J12").value, 1);
+    assert.equal(sheet.getCell("K12").value, fullDescription);
+    assert.equal(sheet.getCell("L12").value, 4.5);
+    assert.equal(sheet.getCell("M12").value, 4.5);
+    assert.equal(sheet.getCell("N12").value, "DONE");
+    assert.equal(sheet.getCell("B13").value, "S2");
+    assert.equal(sheet.getCell("K13").value, "Documents");
+    assert.equal(sheet.getCell("L13").value, 5.5);
+    assert.equal(String(sheet.getCell("A15").value).startsWith("We hereby declare"), true);
+    assert.equal(sheet.getCell("A17").value, "FOR AHMEDABAD (SIGN AND STAMP)");
     assert.equal(sheet.autoFilter, undefined);
     assert.equal(sheet.views[0]?.state, "normal");
     assert.equal(Object.hasOwn(sheet.views[0] ?? {}, "ySplit"), false);
     assert.equal(sheet.getCell("A1").font.bold, true);
-    assert.equal(sheet.getCell("A10").font.bold, true);
+    assert.equal(sheet.getCell("A11").font.bold, true);
 
     const pdf = await buildShipmentManifestPdf(manifest, aadhaarByDraft);
     assert.equal(pdf.subarray(0, 5).toString("ascii"), "%PDF-");
-    assert.ok(drawnPdfText(pdf).includes("2345 6789 0124"));
+    const pdfText = drawnPdfText(pdf);
+    assert.ok(pdfText.includes("2345 6789 0124"));
+    assert.ok(pdfText.includes("MANIFEST NAME:"));
+    assert.ok(pdfText.includes("UK Air Dispatch"));
   });
 
   it("uses each parcel's consignor Aadhaar when KYC is stored per parcel", () => {

@@ -377,6 +377,8 @@ function isStatusUpdateEligible(shipment: ShipmentListItem) {
  * rendered here.
  */
 export default function ShipmentsListPage({ audience, role }: { audience: ShipmentAudience; role?: string }) {
+  const canSetManifestName = audience === "admin"
+    && ["admin", "operations"].includes(String(role ?? "").trim().toLowerCase());
   const router = useRouter();
   const searchParams = useSearchParams();
   const attentionOnlyFromQuery = searchParams.get("attention") === "1" || searchParams.get("attention") === "true";
@@ -1056,7 +1058,10 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
       const result = manifestDialogMode === "COMBINED"
         ? await createCombinedShipmentManifest(input)
         : await createBulkShipmentManifest(input, audience);
-      toast.success(`Manifest ${result.manifest.manifestNumber} generated with ${shipmentDraftIds.length} `
+      const manifestLabel = result.manifest.manifestName
+        ? `${result.manifest.manifestName} (${result.manifest.manifestNumber})`
+        : `Manifest ${result.manifest.manifestNumber}`;
+      toast.success(`${manifestLabel} generated with ${shipmentDraftIds.length} `
         + `${shipmentDraftIds.length === 1 ? "shipment" : "shipments"}.`);
       setLastManifestNumber(result.manifest.manifestNumber);
       setDialogOpen(false);
@@ -2168,6 +2173,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
           shipmentCount={manifestSelection.length}
           totalPieces={manifestTotals.pieces}
           totalWeightKg={manifestTotals.weightKg}
+          canSetManifestName={canSetManifestName}
           busy={creating}
           defaults={{
             origin: (manifestSelection[0]?.branch.city || manifestSelection[0]?.branch.name || "").toUpperCase(),

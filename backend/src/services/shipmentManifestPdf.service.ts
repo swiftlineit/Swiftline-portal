@@ -317,6 +317,7 @@ export function buildShipmentManifestPdf(
     headerLine(2, 1, "TOTAL PCS :", String(manifest.totalPieces));
     headerLine(2, 2, "TOTAL WEIGHT:", manifest.totalWeightKg.toFixed(2));
     headerLine(2, 4, "MANIFEST #:", manifest.manifestNumber);
+    if (text(manifest.manifestName)) headerLine(2, 3, "MANIFEST NAME:", text(manifest.manifestName));
     headerLine(2, 5, "COLOADER:", text(header.coloader));
     headerLine(2, 6, "PAYMENT TYPE:", text(header.paymentType));
     y += headerHeight;

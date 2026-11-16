@@ -582,6 +582,7 @@ const bulkManifestSchema = z.object({
   ).min(1, "Select at least one shipment."),
   origin: z.string().trim().min(1, "Origin is required.").max(120),
   destination: z.string().trim().min(1, "Destination is required.").max(120),
+  manifestName: z.string().trim().max(120, "Manifest name must be 120 characters or fewer.").optional(),
   coloader: z.string().trim().max(120).default(""),
   paymentType: z.string().trim().max(60).default("")
 });
@@ -767,6 +768,13 @@ async function createBulkManifest(request: Request, response: Response, actorRol
     });
   }
 
+  const manifestName = parsed.data.manifestName || undefined;
+  if (manifestName && (actorRole !== "admin"
+    || getOperatorContext(request)
+    || (createdByRole !== "admin" && createdByRole !== "operations"))) {
+    return response.status(403).json({ success: false, message: "Only Swiftline admin and operations staff can set a manifest name." });
+  }
+
   try {
     const selectedIds = [...new Set(parsed.data.shipmentDraftIds)];
     const selectedObjectIds = selectedIds.map((id) => new mongoose.Types.ObjectId(id));
@@ -838,9 +846,16 @@ async function createBulkManifest(request: Request, response: Response, actorRol
       manifestType: "ACCOUNT",
       shipmentDraftIds: selectedObjectIds,
       userId,
-      auditMetadata: { manifestNumber, shipmentDraftIds: selectedObjectIds, actorRole, source: "BULK" },
+      auditMetadata: {
+        manifestNumber,
+        ...(manifestName ? { manifestName } : {}),
+        shipmentDraftIds: selectedObjectIds,
+        actorRole,
+        source: "BULK"
+      },
       manifestData: {
       manifestNumber,
+      ...(manifestName ? { manifestName } : {}),
       businessAccountId: firstDraft.businessAccountId,
       branchId: firstDraft.branchId,
       shipmentDraftIds: selectedObjectIds,
@@ -935,6 +950,11 @@ export async function createAdminCombinedShipmentManifest(request: Request, resp
     });
   }
 
+  const manifestName = parsed.data.manifestName || undefined;
+  if (manifestName && getOperatorContext(request)) {
+    return response.status(403).json({ success: false, message: "Custom manifest names are available only in the Swiftline portal." });
+  }
+
   try {
     const selectedIds = [...new Set(parsed.data.shipmentDraftIds)];
     const selectedObjectIds = selectedIds.map((id) => new mongoose.Types.ObjectId(id));
@@ -1012,6 +1032,7 @@ export async function createAdminCombinedShipmentManifest(request: Request, resp
       userId,
       auditMetadata: {
         manifestNumber,
+        ...(manifestName ? { manifestName } : {}),
         manifestType: "COMBINED",
         shipmentDraftIds: selectedObjectIds,
         businessAccountIds,
@@ -1020,6 +1041,7 @@ export async function createAdminCombinedShipmentManifest(request: Request, resp
       },
       manifestData: {
       manifestNumber,
+      ...(manifestName ? { manifestName } : {}),
       businessAccountIds,
       branchId: firstDraft.branchId,
       shipmentDraftIds: selectedObjectIds,

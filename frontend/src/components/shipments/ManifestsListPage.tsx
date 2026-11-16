@@ -333,7 +333,12 @@ export default function ManifestsListPage({
                     </td>
                   ) : null}
                   <td className="px-4 py-3 font-semibold text-[#0D1282]">
-                    <span>{manifest.manifestNumber}</span>
+                    <span>{manifest.manifestName || manifest.manifestNumber}</span>
+                    {manifest.manifestName ? (
+                      <span className="mt-0.5 block text-xs font-medium text-slate-500">
+                        {manifest.manifestNumber}
+                      </span>
+                    ) : null}
                     {manifest.manifestType === "COMBINED" ? (
                       <span className="mt-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                         Combined

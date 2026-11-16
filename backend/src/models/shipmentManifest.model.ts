@@ -59,6 +59,8 @@ export interface ShipmentManifestParcelSnapshot {
 
 export interface IShipmentManifest extends mongoose.Document, TenantOwnedFields {
   manifestNumber: string;
+  /** Optional staff-entered label; manifestNumber remains the stable unique reference. */
+  manifestName?: string;
   manifestType: ShipmentManifestType;
   /** Primary account for an account-specific manifest; absent on combined manifests. */
   businessAccountId?: mongoose.Types.ObjectId;
@@ -123,6 +125,7 @@ const shipmentManifestSchema = new mongoose.Schema<IShipmentManifest>({
   // Existing manifest numbers are unchanged; the larger limit accommodates a
   // maximum-length company name plus its sequence suffix.
   manifestNumber: { type: String, required: true, trim: true, maxlength: 140 },
+  manifestName: { type: String, trim: true, maxlength: 120 },
   manifestType: { type: String, enum: ["ACCOUNT", "COMBINED"], default: "ACCOUNT", index: true },
   businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", index: true },
   businessAccountIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount" }],

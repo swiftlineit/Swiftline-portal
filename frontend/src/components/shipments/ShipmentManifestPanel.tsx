@@ -216,7 +216,12 @@ export default function ShipmentManifestPanel({
                 <FiFileText aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-blue-900" />
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-semibold text-slate-950">{manifest.manifestNumber}</p>
+                    <p className="font-semibold text-slate-950">
+                      {manifest.manifestName || manifest.manifestNumber}
+                    </p>
+                    {manifest.manifestName ? (
+                      <p className="mt-0.5 text-xs font-medium text-slate-500">{manifest.manifestNumber}</p>
+                    ) : null}
                     {audience === "admin" ? (
                       <span className="border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-600">
                         {manifest.manifestType === "COMBINED"

@@ -446,6 +446,7 @@ export function shipmentManifestSearchConditions(searchValue: string) {
   );
   return [
     { manifestNumber: pattern },
+    { manifestName: pattern },
     { "headerSnapshot.businessAccountName": pattern },
     { "headerSnapshot.flightNumber": pattern },
     { "headerSnapshot.mawbNumber": pattern },
@@ -531,6 +532,7 @@ export function serializeShipmentManifest(manifest: IShipmentManifest) {
   return {
     id: String(manifest._id),
     manifestNumber: manifest.manifestNumber,
+    manifestName: text(manifest.manifestName),
     manifestType: manifest.manifestType ?? "ACCOUNT",
     businessAccountId: manifest.businessAccountId ? String(manifest.businessAccountId) : "",
     businessAccountIds: (manifest.businessAccountIds ?? []).map(String),

@@ -8,6 +8,7 @@ export type ShipmentManifestAudience = "admin" | "client";
 export type ShipmentManifestSummary = {
   id: string;
   manifestNumber: string;
+  manifestName?: string;
   manifestType: "ACCOUNT" | "COMBINED";
   businessAccountId: string;
   businessAccountIds: string[];
@@ -44,6 +45,7 @@ export type CreateBulkShipmentManifestInput = {
   destination: string;
   coloader: string;
   paymentType: string;
+  manifestName?: string;
 };
 
 export type ManifestEligibleShipment = {

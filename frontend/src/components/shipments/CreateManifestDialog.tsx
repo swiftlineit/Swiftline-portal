@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useId, useState } from "react";
 import { FiChevronDown, FiX } from "react-icons/fi";
 
 export type ManifestDialogValues = {
@@ -8,6 +8,7 @@ export type ManifestDialogValues = {
   destination: string;
   coloader: string;
   paymentType: string;
+  manifestName?: string;
 };
 
 const paymentTypes = ["PREPAID", "COLLECT", "CREDIT", "CASH"];
@@ -23,6 +24,7 @@ export default function CreateManifestDialog({
   totalPieces,
   totalWeightKg,
   defaults,
+  canSetManifestName = false,
   busy,
   error,
   onCancel,
@@ -33,12 +35,14 @@ export default function CreateManifestDialog({
   totalPieces: number;
   totalWeightKg: number;
   defaults: ManifestDialogValues;
+  canSetManifestName?: boolean;
   busy: boolean;
   error?: string;
   onCancel: () => void;
   onConfirm: (values: ManifestDialogValues) => void;
 }) {
   const [values, setValues] = useState<ManifestDialogValues>(defaults);
+  const fieldIds = useId();
   const canSubmit = Boolean(values.origin.trim() && values.destination.trim()) && !busy;
 
   function update(field: keyof ManifestDialogValues, value: string) {
@@ -52,7 +56,10 @@ export default function CreateManifestDialog({
       origin: values.origin.trim(),
       destination: values.destination.trim(),
       coloader: values.coloader.trim(),
-      paymentType: values.paymentType.trim()
+      paymentType: values.paymentType.trim(),
+      ...(canSetManifestName && values.manifestName?.trim()
+        ? { manifestName: values.manifestName.trim() }
+        : {})
     });
   }
 
@@ -82,50 +89,91 @@ export default function CreateManifestDialog({
           </button>
         </div>
 
-        <div className="grid gap-4 px-5 py-5 sm:grid-cols-2">
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Origin <span className="text-red-600">*</span></span>
+        <div className="grid gap-x-4 gap-y-6 px-5 py-6 sm:grid-cols-2">
+          {canSetManifestName ? (
+            <div className="relative sm:col-span-2">
+              <label
+                htmlFor={`${fieldIds}-manifest-name`}
+                className="absolute -top-2 left-3 z-10 bg-white px-1 text-xs font-semibold text-slate-600"
+              >
+                Manifest display name <span className="font-normal text-slate-500">(optional)</span>
+              </label>
+              <input
+                id={`${fieldIds}-manifest-name`}
+                value={values.manifestName ?? ""}
+                onChange={(event) => update("manifestName", event.target.value)}
+                maxLength={120}
+                autoComplete="off"
+                aria-describedby={`${fieldIds}-manifest-name-hint`}
+                placeholder="For example, UK Air Dispatch"
+                className="h-11 w-full rounded-md border-2 border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15"
+              />
+              <p id={`${fieldIds}-manifest-name-hint`} className="mt-1.5 text-xs text-slate-500">
+                Leave blank for the automatic name; the generated manifest number stays as its reference.
+              </p>
+            </div>
+          ) : null}
+          <div className="relative">
+            <label
+              htmlFor={`${fieldIds}-origin`}
+              className="absolute -top-2 left-3 z-10 bg-white px-1 text-xs font-semibold text-slate-600"
+            >
+              Origin <span className="text-red-600">*</span>
+            </label>
             <input
+              id={`${fieldIds}-origin`}
               value={values.origin}
               onChange={(event) => update("origin", event.target.value)}
               maxLength={120}
               placeholder="AHMEDABAD"
-              className="mt-2 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-900 focus:border-[#0D1282] focus:outline-none"
+              className="h-11 w-full rounded-md border-2 border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15"
             />
-          </label>
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Destination <span className="text-red-600">*</span></span>
+          </div>
+          <div className="relative">
+            <label
+              htmlFor={`${fieldIds}-destination`}
+              className="absolute -top-2 left-3 z-10 bg-white px-1 text-xs font-semibold text-slate-600"
+            >
+              Destination <span className="text-red-600">*</span>
+            </label>
             <input
+              id={`${fieldIds}-destination`}
               value={values.destination}
               onChange={(event) => update("destination", event.target.value)}
               maxLength={120}
               placeholder="UK SERVICE DEL"
-              className="mt-2 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-900 focus:border-[#0D1282] focus:outline-none"
+              className="h-11 w-full rounded-md border-2 border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15"
             />
-          </label>
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Coloader</span>
+          </div>
+          <div className="relative">
+            <label
+              htmlFor={`${fieldIds}-coloader`}
+              className="absolute -top-2 left-3 z-10 bg-white px-1 text-xs font-semibold text-slate-600"
+            >Coloader</label>
             <input
+              id={`${fieldIds}-coloader`}
               value={values.coloader}
               onChange={(event) => update("coloader", event.target.value)}
               maxLength={120}
-              className="mt-2 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-900 focus:border-[#0D1282] focus:outline-none"
+              className="h-11 w-full rounded-md border-2 border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15"
             />
-          </label>
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Payment Type</span>
-            <span className="relative mt-2 block">
-              <select
-                value={values.paymentType}
-                onChange={(event) => update("paymentType", event.target.value)}
-                className="h-11 w-full appearance-none rounded-md border border-slate-300 bg-white py-2 pl-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/20"
-              >
-                <option value="">Not specified</option>
-                {paymentTypes.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-              <FiChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
-            </span>
-          </label>
+          </div>
+          <div className="relative">
+            <label
+              htmlFor={`${fieldIds}-payment-type`}
+              className="absolute -top-2 left-3 z-10 bg-white px-1 text-xs font-semibold text-slate-600"
+            >Payment Type</label>
+            <select
+              id={`${fieldIds}-payment-type`}
+              value={values.paymentType}
+              onChange={(event) => update("paymentType", event.target.value)}
+              className="h-11 w-full appearance-none rounded-md border-2 border-slate-300 bg-white py-2 pl-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-[#0D1282] focus:ring-2 focus:ring-[#0D1282]/15"
+            >
+              <option value="">Not specified</option>
+              {paymentTypes.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+            <FiChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
+          </div>
         </div>
 
         {error ? <p role="alert" className="mx-5 mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p> : null}

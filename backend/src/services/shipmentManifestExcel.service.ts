@@ -69,7 +69,9 @@ export async function buildShipmentManifestHandoverWorkbook(
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Swiftline Portal";
   workbook.company = "Swiftline Cargo and Express Logistics";
-  workbook.subject = `Shipment manifest ${manifest.manifestNumber}`;
+  workbook.subject = `Shipment manifest ${text(manifest.manifestName)
+    ? `${text(manifest.manifestName)} (${manifest.manifestNumber})`
+    : manifest.manifestNumber}`;
   workbook.created = manifest.generatedAt;
 
   const worksheet = workbook.addWorksheet("Manifest", {
@@ -100,7 +102,10 @@ export async function buildShipmentManifestHandoverWorkbook(
   worksheet.getCell("A1").border = border;
 
   worksheet.getRow(2).height = 8;
-  for (let row = 3; row <= 8; row += 1) worksheet.getRow(row).height = 19;
+  const manifestName = text(manifest.manifestName);
+  const headerBottomRow = manifestName ? 9 : 8;
+  const headingRowNumber = manifestName ? 11 : 10;
+  for (let row = 3; row <= headerBottomRow; row += 1) worksheet.getRow(row).height = 19;
 
   const styleMergedHeaderRange = (
     range: string,
@@ -140,21 +145,24 @@ export async function buildShipmentManifestHandoverWorkbook(
   styleMergedHeaderRange("A3:D3", 3, 1, 3, 4, "FROM,", { bold: true });
   styleMergedHeaderRange("E3:H3", 3, 5, 3, 8, "TO,", { bold: true });
   styleMergedHeaderRange("I3:N3", 3, 9, 3, 14, `DATE: ${manifestDate(manifest.generatedAt)}`, { bold: true });
-  styleMergedHeaderRange("A4:D8", 4, 1, 8, 4, text(header.origin).toUpperCase() || "-", { bold: true, vertical: "top" });
-  styleMergedHeaderRange("E4:H8", 4, 5, 8, 8, text(header.destination).toUpperCase() || "-", { bold: true, vertical: "top" });
-  [
+  styleMergedHeaderRange(`A4:D${headerBottomRow}`, 4, 1, headerBottomRow, 4, text(header.origin).toUpperCase() || "-", { bold: true, vertical: "top" });
+  styleMergedHeaderRange(`E4:H${headerBottomRow}`, 4, 5, headerBottomRow, 8, text(header.destination).toUpperCase() || "-", { bold: true, vertical: "top" });
+  const headerDetails = [
     `TOTAL PCS : ${manifest.totalPieces}`,
     `TOTAL WEIGHT: ${manifest.totalWeightKg.toFixed(2)}`,
     `MANIFEST #: ${manifest.manifestNumber}`,
+    ...(manifestName ? [`MANIFEST NAME: ${manifestName}`] : []),
     `COLOADER:${text(header.coloader) ? ` ${text(header.coloader)}` : ""}`,
     `PAYMENT TYPE:${text(header.paymentType) ? ` ${text(header.paymentType)}` : ""}`
-  ].forEach((value, index) => {
+  ];
+  headerDetails.forEach((value, index) => {
     const row = index + 4;
     styleMergedHeaderRange(`I${row}:N${row}`, row, 9, row, 14, value, { bold: true });
   });
+  if (manifestName) worksheet.getRow(7).height = manifestName.length > 75 ? 36 : 19;
 
-  worksheet.getRow(9).height = 8;
-  const headingRow = worksheet.getRow(10);
+  worksheet.getRow(headingRowNumber - 1).height = 8;
+  const headingRow = worksheet.getRow(headingRowNumber);
   headingRow.values = [...shipmentManifestTableHeadings];
   headingRow.height = 30;
   for (let column = 1; column <= shipmentManifestTableHeadings.length; column += 1) {
@@ -205,7 +213,7 @@ export async function buildShipmentManifestHandoverWorkbook(
     addRows(rows);
   });
 
-  const afterRows = Math.max(worksheet.rowCount, 10) + 2;
+  const afterRows = Math.max(worksheet.rowCount, headingRowNumber) + 2;
   const declaration = shipmentManifestDeclaration(manifest);
   worksheet.mergeCells(`A${afterRows}:N${afterRows}`);
   const declarationCell = worksheet.getCell(`A${afterRows}`);
