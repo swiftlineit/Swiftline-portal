@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { FiAlertTriangle, FiBriefcase } from "react-icons/fi";
 import {
   ClientDashboardLoading,
@@ -269,6 +268,12 @@ export default function ClientDashboardPage() {
   const shipmentCreationAllowed = selectedAccount ? canCreateShipment(selectedAccount) : false;
   const operationalHold = selectedAccount?.account.status === "suspended"
     && selectedAccount.account.suspensionMode !== "SECURITY_LOCK";
+  const activeOperatorWorkspaces = operatorWorkspaces.filter((workspace) => workspace.status === "ACTIVE");
+  const operatorWorkspaceHref = activeOperatorWorkspaces.length === 1
+    ? `/portal/${encodeURIComponent(activeOperatorWorkspaces[0].slug)}`
+    : activeOperatorWorkspaces.length > 1
+      ? "/workspaces"
+      : undefined;
 
   return (
       <div className="flex w-full flex-col gap-6">
@@ -280,31 +285,12 @@ export default function ClientDashboardPage() {
           selectedAccount={selectedAccount}
           selectedBranchId={selectedBranchId}
           selectedBranch={selectedBranch}
+          operatorWorkspaceHref={operatorWorkspaceHref}
           onAccountChange={(id) => void handleAccountChange(id)}
           onBranchChange={handleBranchChange}
         />
 
         {selectedAccount?.dashboardAccess.state === "READY" ? <ClientQuickAccess account={selectedAccount} /> : null}
-
-        {operatorWorkspaces.length ? (
-          <section aria-label="Your operator workspaces" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <h2 className="text-base font-semibold text-slate-900">Your operator workspaces</h2>
-            <p className="mt-1 text-sm text-slate-600">Choose a company to work in its separate portal.</p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {operatorWorkspaces.map((workspace) => (
-                <div key={workspace.slug} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-3">
-                  <div className="min-w-0">
-                    <p className="font-semibold text-slate-900">{workspace.companyName}</p>
-                    <p className="text-xs text-slate-600">{workspace.role === "OPERATOR_ADMIN" ? "Operator administrator" : workspace.role === "CLIENT" ? "Operator client" : workspace.role === "FINANCE" ? "Finance" : "Operations"} · /portal/{workspace.slug}</p>
-                  </div>
-                  {workspace.status === "ACTIVE"
-                    ? <Link href={`/portal/${encodeURIComponent(workspace.slug)}`} className="inline-flex min-h-10 items-center rounded-md bg-[#0D1282] px-4 text-sm font-semibold text-white">Open workspace</Link>
-                    : <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-900">Awaiting activation</span>}
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
 
         {error ? (
           <p className="flex items-start gap-2 rounded-xl border border-[#D71313]/25 bg-[#D71313]/[0.06] px-4 py-3 text-sm font-medium text-[#D71313]">

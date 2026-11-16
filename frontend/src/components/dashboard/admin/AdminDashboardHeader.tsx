@@ -7,7 +7,6 @@ import {
   FiPlus,
   FiUserPlus,
 } from "react-icons/fi";
-import { describeRole } from "@/lib/dashboardOverview";
 import type { AuthenticatedUser } from "@/lib/useAdminUser";
 import { panelSurface } from "@/components/dashboard/DashboardWidgets";
 import DashboardBanner from "@/components/dashboard/DashboardBanner";
@@ -130,7 +129,7 @@ export default function AdminDashboardHeader({
                     key={action.href}
                     href={action.href}
                     data-portal-theme-dashboard-action={action.primary ? "primary" : "secondary"}
-                    className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11 ${
+                    className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition duration-200 ease-out hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0 sm:min-h-11 ${
                       action.primary
                         ? "bg-[#F0DE36] text-[#0D1282] shadow-sm border border-slate-300 hover:bg-[#e5d331]"
                         : "border border-slate-300 bg-white/90 text-slate-700 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282]"

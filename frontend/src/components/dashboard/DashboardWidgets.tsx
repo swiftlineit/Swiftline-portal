@@ -209,11 +209,13 @@ export function Shimmer({ className = "", surface = "dark" }: { className?: stri
 
 export function KpiCardSkeleton() {
   return (
-    <div className={`flex h-full flex-col p-5 ${panelSurface}`}>
-      <Shimmer className="h-10 w-10 rounded-xl" />
-      <Shimmer className="mt-4 h-3 w-24" />
-      <Shimmer className="mt-2 h-7 w-20" />
-      <Shimmer className="mt-2 h-3 w-32" />
+    <div className="flex min-h-[8.5rem] h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <Shimmer className="h-2.5 w-24" />
+      <Shimmer className="mt-3 h-7 w-20" />
+      <div className="mt-auto space-y-1.5 pt-3">
+        <Shimmer className="h-2.5 w-full" />
+        <Shimmer className="h-2.5 w-2/3" />
+      </div>
     </div>
   );
 }

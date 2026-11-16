@@ -573,7 +573,7 @@ export default function Sidebar({
                 </button>
 
                 {expanded && isOpen ? (
-                  <div className="mt-1 ml-6.5 space-y-0.5 border-l border-white/10 pl-3">
+                  <div className="mt-1 ml-6.5 space-y-0.5 border-l border-white/10 pl-1">
                     {entry.items.map((item) => {
                       const isActive = matchesRoute(
                         pathname,
@@ -586,7 +586,7 @@ export default function Sidebar({
                           href={item.href}
                           onNavigate={guardNavigate(item.href)}
                           onClick={handleNavigated}
-                          className={`flex h-9 items-center rounded-lg px-3 text-[13px] transition-colors duration-200 ${
+                          className={`flex h-9 items-center rounded-lg px-2 text-[13px] transition-colors duration-200 ${
                             isActive
                               ? "bg-[#252B83] font-semibold text-white"
                               : "font-medium text-[#AEB4D9] hover:bg-white/[0.06] hover:text-white"

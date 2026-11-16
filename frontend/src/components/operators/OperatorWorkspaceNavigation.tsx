@@ -10,6 +10,7 @@ import {
   FiCreditCard,
   FiFileText,
   FiGitBranch,
+  FiGrid,
   FiMapPin,
   FiMessageSquare,
   FiPackage,
@@ -20,15 +21,20 @@ import {
 } from "react-icons/fi";
 import type { OperatorSession } from "@/lib/operatorDirectory";
 
-type NavigationLink = { label: string; path: string; icon: IconType };
+type NavigationLink = { label: string; path: string; icon: IconType; exact?: boolean };
 type NavigationGroup = { label: string; links: NavigationLink[] };
 type QuickAction = NavigationLink & { primary?: boolean };
+
+function navigationLinkIsActive(pathname: string, link: NavigationLink) {
+  return pathname === link.path || (!link.exact && pathname.startsWith(`${link.path}/`));
+}
 
 function navigationFor(operator: OperatorSession, operatorSlug: string): NavigationGroup[] {
   const base = `/portal/${encodeURIComponent(operatorSlug)}`;
   const role = operator.membership.role;
   const supportReadOnly = operator.access.mode === "PLATFORM_SUPPORT" || operator.access.readOnly;
   const operations: NavigationLink[] = [
+    { label: "Dashboard", path: base, icon: FiGrid, exact: true },
     { label: "Shipments", path: `${base}/shipments`, icon: FiPackage }
   ];
   const accounts: NavigationLink[] = [];
@@ -126,7 +132,7 @@ function WorkspaceMenu({ group, pathname }: { group: NavigationGroup; pathname: 
     };
   }, []);
 
-  const isActive = group.links.some(({ path }) => pathname === path || pathname.startsWith(`${path}/`));
+  const isActive = group.links.some((link) => navigationLinkIsActive(pathname, link));
 
   return (
     <details ref={menuRef} className="group relative min-w-0 sm:flex-none">
@@ -141,8 +147,9 @@ function WorkspaceMenu({ group, pathname }: { group: NavigationGroup; pathname: 
         aria-label={`${group.label} pages`}
         className={`absolute ${group.label === "Accounts" || group.label === "Account" ? "right-0" : "left-0"} top-[calc(100%+0.5rem)] z-40 min-w-56 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg`}
       >
-        {group.links.map(({ label, path, icon: Icon }) => {
-          const active = pathname === path || pathname.startsWith(`${path}/`);
+        {group.links.map((link) => {
+          const { label, path, icon: Icon } = link;
+          const active = navigationLinkIsActive(pathname, link);
           return (
             <Link
               key={path}

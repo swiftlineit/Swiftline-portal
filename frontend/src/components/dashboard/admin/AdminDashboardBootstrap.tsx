@@ -14,7 +14,7 @@ export default function AdminDashboardBootstrap() {
         <Shimmer surface="light" className="mt-3 h-3 w-full max-w-xl" />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {Array.from({ length: 8 }).map((_, index) => <KpiCardSkeleton key={index} />)}
       </div>
 

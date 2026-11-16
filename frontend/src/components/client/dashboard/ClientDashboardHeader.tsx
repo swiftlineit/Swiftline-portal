@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   FiCalendar,
   FiCreditCard,
+  FiExternalLink,
   FiSearch,
 } from "react-icons/fi";
 import { BsQuote } from "react-icons/bs";
@@ -44,6 +45,7 @@ export default function ClientDashboardHeader({
   selectedAccount,
   selectedBranchId,
   selectedBranch,
+  operatorWorkspaceHref,
   onAccountChange,
   onBranchChange,
 }: {
@@ -54,6 +56,7 @@ export default function ClientDashboardHeader({
   selectedBranch:
     | ClientDashboardAccount["assignedBranches"][number]
     | null;
+  operatorWorkspaceHref?: string;
   onAccountChange: (accountId: string) => void;
   onBranchChange: (branchId: string) => void;
 }) {
@@ -150,22 +153,9 @@ export default function ClientDashboardHeader({
 
             {/* Primary quick actions */}
             <div className="mt-5 flex flex-wrap items-center gap-2 sm:gap-2.5">
-              {canCreate ? (
-                <Link
-                  href="/client/get-quote"
-                  className="inline-flex min-h-10 border border-gray-500 items-center justify-center gap-2 rounded-lg bg-[#FFD400] px-4 py-2.5 text-xs font-semibold text-[#0D1282] shadow-sm transition-colors duration-200 hover:bg-[#ffffff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
-                >
-                  <BsQuote
-                    aria-hidden="true"
-                    className="h-4 w-4 shrink-0"
-                  />
-        Get Live Quote
-                  </Link>
-              ) : null}
-
               <Link
                 href="/client/tracking"
-                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200/90 bg-white/90 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition-colors duration-200 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200/90 bg-white/90 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition duration-200 ease-out hover:-translate-y-0.5 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0 sm:min-h-11"
               >
                 <FiSearch
                   aria-hidden="true"
@@ -175,16 +165,30 @@ export default function ClientDashboardHeader({
                 Track Shipment
               </Link>
 
-              {canPay ? (
+              {canCreate ? (
+                <Link
+                  href="/client/get-quote"
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200/90 bg-white/90 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition duration-200 ease-out hover:-translate-y-0.5 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0 sm:min-h-11"
+                >
+                  <BsQuote aria-hidden="true" className="h-4 w-4 shrink-0" />
+                  Get Live Quote
+                </Link>
+              ) : null}
+
+              {operatorWorkspaceHref ? (
+                <Link
+                  href={operatorWorkspaceHref}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200/90 bg-white/90 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition duration-200 ease-out hover:-translate-y-0.5 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0 sm:min-h-11"
+                >
+                  <FiExternalLink aria-hidden="true" className="h-4 w-4 shrink-0" />
+                  Open workspace
+                </Link>
+              ) : canPay ? (
                 <Link
                   href="/client/rate-card"
-                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200/90 bg-white/90 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition-colors duration-200 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 sm:min-h-11"
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200/90 bg-white/90 px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.02)] transition duration-200 ease-out hover:-translate-y-0.5 hover:border-[#0D1282]/25 hover:bg-white hover:text-[#0D1282] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0 sm:min-h-11"
                 >
-                  <FiCreditCard
-                    aria-hidden="true"
-                    className="h-4 w-4 shrink-0"
-                  />
-
+                  <FiCreditCard aria-hidden="true" className="h-4 w-4 shrink-0" />
                   Rate Card
                 </Link>
               ) : null}
