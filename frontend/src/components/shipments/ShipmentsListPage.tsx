@@ -515,9 +515,8 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     }
   }, [audience]);
 
-  // A selection may span pages, but it must never survive a change to the
-  // query that defines those pages. Otherwise hidden rows from an earlier
-  // filter can travel into a later bulk update.
+  // Client manifest selections remain scoped to the current query. Staff may
+  // collect shipments across searches and filters for a single bulk action.
   const selectionScope = JSON.stringify({
     audience,
     attentionOnly,
@@ -906,10 +905,15 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   useEffect(() => {
     if (previousSelectionScope.current === selectionScope) return;
     previousSelectionScope.current = selectionScope;
-    setSelected(new Map());
-    setActiveFlow(null);
-    setBulkStatusResult(null);
-  }, [selectionScope]);
+    const timer = window.setTimeout(() => {
+      if (audience === "client") {
+        setSelected(new Map());
+        setActiveFlow(null);
+      }
+      setBulkStatusResult(null);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [audience, selectionScope]);
 
   // The account list powers the staff filter. All accounts are shown, not just
   // active ones, so a suspended account's historical shipments stay findable.
@@ -1386,10 +1390,21 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
               <div className="flex flex-wrap items-center gap-2 xl:justify-end">
               {selectedList.length ? (
-                <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                  {selectedList.length} {selectedList.length === 1 ? "shipment" : "shipments"} selected
-                  {" · "}{selectionTotals.pieces} pcs · {selectionTotals.weightKg.toFixed(2)} kg
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                    {selectedList.length} {selectedList.length === 1 ? "shipment" : "shipments"} selected
+                    {" · "}{selectionTotals.pieces} pcs · {selectionTotals.weightKg.toFixed(2)} kg
+                  </span>
+                  {audience === "admin" ? (
+                    <button
+                      type="button"
+                      onClick={() => setSelected(new Map())}
+                      className="text-xs font-semibold text-[#0D1282] hover:underline focus-visible:rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D1282]"
+                    >
+                      Clear selection
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
               <div className="flex flex-wrap items-center gap-2">
               <button

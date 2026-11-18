@@ -59,6 +59,9 @@ async function mockShipmentListApis(
         }
       });
     }
+    if (path.endsWith("/auth/client-workspaces")) {
+      return route.fulfill({ json: { success: true, swiftline: true, operators: [] } });
+    }
     if (path.endsWith("/notifications")) {
       return route.fulfill({ json: { success: true, notifications: [], unreadCount: 0 } });
     }
@@ -282,4 +285,66 @@ test("keeps the latest shipment query when a delayed page response arrives", asy
   releasePageTwo();
   await expect(page.getByText("SLCDEL090926PAGE-TWO", { exact: true })).toHaveCount(0);
   await expect(page.getByText("SLCDEL090926FILTERED", { exact: true })).toBeVisible();
+});
+
+test("keeps staff bulk selections while searching and filtering new shipments", async ({ page }) => {
+  const rows = [
+    { ...shipment("ALPHA", "AVAILABLE"), manifestEligible: true, combinedManifestEligible: true, weightKg: 1 },
+    { ...shipment("BETA", "AVAILABLE"), manifestEligible: true, combinedManifestEligible: true, weightKg: 5 },
+    { ...shipment("GAMMA", "AVAILABLE"), manifestEligible: true, combinedManifestEligible: true, weightKg: 12 }
+  ];
+  await mockShipmentListApis(page, "operations");
+  await page.route("http://localhost:5000/api/v1/shipments**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/v1/shipments") return route.fallback();
+
+    const search = url.searchParams.get("search")?.toUpperCase() ?? "";
+    const weightRange = url.searchParams.get("weightRange");
+    const filtered = rows.filter((row) =>
+      (!search || row.swiftlineTrackingNumber.includes(search))
+      && (weightRange !== "gt10" || row.weightKg > 10)
+    );
+    return route.fulfill({
+      json: {
+        success: true,
+        shipments: filtered,
+        pagination: { page: 1, limit: 20, total: filtered.length, totalPages: 1 }
+      }
+    });
+  });
+
+  await page.goto("/dashboard/shipments");
+  const alpha = page.getByRole("checkbox", { name: "Select shipment SLCDEL090926ALPHA" });
+  const beta = page.getByRole("checkbox", { name: "Select shipment SLCDEL090926BETA" });
+  const gamma = page.getByRole("checkbox", { name: "Select shipment SLCDEL090926GAMMA" });
+  await expect(alpha).toBeVisible();
+  await page.getByRole("button", { name: "Update Status", exact: true }).first().click();
+  await alpha.check();
+
+  const clearSelection = page.getByRole("button", { name: "Clear selection" });
+  const selectedSummary = clearSelection.locator("..").locator("span");
+  await expect(selectedSummary).toContainText("1 shipment selected");
+
+  await page.getByRole("textbox", { name: "Search" }).fill("BETA");
+  await expect(beta).toBeVisible();
+  await expect(alpha).toHaveCount(0);
+  await expect(selectedSummary).toContainText("1 shipment selected");
+  await beta.check();
+  await expect(page.getByText("Update 2 shipments to a new status.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Create Manifest", exact: true }).first().click();
+  await page.getByRole("button", { name: "Clear search" }).click();
+  await expect(alpha).toBeVisible();
+  await page.getByRole("button", { name: "Greater than 10 kg" }).click();
+  await expect(gamma).toBeVisible();
+  await expect(alpha).toHaveCount(0);
+  await gamma.check();
+  await expect(selectedSummary).toContainText("3 shipments selected");
+  await expect(page.getByRole("button", { name: "Create Manifest", exact: true }).last()).toBeEnabled();
+
+  await page.getByRole("checkbox", { name: "Select all shipments on this page" }).uncheck();
+  await expect(selectedSummary).toContainText("2 shipments selected");
+  await clearSelection.click();
+  await expect(clearSelection).toHaveCount(0);
+  await expect(gamma).not.toBeChecked();
 });
