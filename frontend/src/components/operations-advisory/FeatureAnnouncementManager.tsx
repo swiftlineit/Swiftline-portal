@@ -11,6 +11,9 @@ const staffRoles: AnnouncementRole[] = ["admin", "operations", "finance", "deliv
 const istOffset = 330 * 60_000;
 const toIstInput = (iso: string | null) => iso ? new Date(new Date(iso).getTime() + istOffset).toISOString().slice(0, 16) : "";
 const fromIstInput = (value: string) => value ? new Date(`${value}:00+05:30`).toISOString() : null;
+const targetOptionLabel = (href: string) => href === "/dashboard/dpd-labels"
+  ? "DPD label booking"
+  : href;
 const defaultForm = (): FeatureAnnouncementInput => ({
   title: "", summary: "", body: "", contentBlocks: [{ type: "text", text: "" }], targetHref: "/client/dashboard", clientTargetHref: null, roles: ["client"], videoUrl: null,
   status: "DRAFT", startsAt: new Date().toISOString(), endsAt: new Date(Date.now() + 14 * 86400_000).toISOString()
@@ -74,7 +77,8 @@ export default function FeatureAnnouncementManager() {
     const roles = checked ? [...form.roles, role] : form.roles.filter((value) => value !== role);
     if (!roles.some((value) => value !== "client")) return;
     const destination = targets.find((target) => target.href === form.targetHref);
-    setForm((currentForm) => ({ ...currentForm, roles, targetHref: destination && roles.filter((value) => value !== "client").every((value) => destination.roles.includes(value)) ? currentForm.targetHref : "/dashboard" }));
+    const canKeepTarget = destination && roles.filter((value) => value !== "client").every((value) => destination.roles.includes(value));
+    setForm((currentForm) => ({ ...currentForm, roles, targetHref: canKeepTarget ? currentForm.targetHref : "/dashboard" }));
   }
   async function loadOlder() {
     if (!nextCursor || loadingMore) return;
@@ -195,7 +199,7 @@ export default function FeatureAnnouncementManager() {
                   {targets.filter((target) => form.roles
                     .filter((role) => audienceMode === "both" ? role !== "client" : true)
                     .every((role) => target.roles.includes(role)))
-                    .map((target) => <option key={target.href} value={target.href}>{target.href}</option>)}
+                    .map((target) => <option key={target.href} value={target.href}>{targetOptionLabel(target.href)}</option>)}
                 </select>
                 <FiChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
               </span>

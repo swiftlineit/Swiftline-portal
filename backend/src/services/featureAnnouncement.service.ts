@@ -1,15 +1,18 @@
 import { z } from "zod";
-import { announcementRoles, announcementStatuses } from "../models/featureAnnouncement.model.js";
+import { announcementRoles, announcementStatuses, type FeatureAnnouncementTextRun } from "../models/featureAnnouncement.model.js";
+import { env } from "../config/env.js";
 
-// These are actual sidebar destinations. Keep this list aligned when navigation changes.
+// Keep this list aligned with staff and client destinations exposed to announcement authors.
 export const announcementTargets = [
-  "/dashboard", "/dashboard/shipments?view=all", "/dashboard/tracking", "/dashboard/amendments",
+  "/dashboard", "/dashboard/shipments?view=all", "/dashboard/tracking", "/dashboard/dpd-labels",
+  "/dashboard/amendments",
   "/dashboard/cancellations", "/dashboard/shipment-manifests", "/dashboard/operations-manifests",
   "/dashboard/flight-linehauls", "/dashboard/operations-scans", "/dashboard/pickups", "/dashboard/drivers",
   "/dashboard/pod", "/dashboard/operations-advisory", "/dashboard/flight-cost-drafts",
   "/dashboard/swiftline-routes", "/dashboard/quote-requests", "/dashboard/counter-sales",
   "/dashboard/country-rate-card", "/dashboard/finance/profitability", "/dashboard/business-accounts",
   "/dashboard/credit-accounts", "/dashboard/branches", "/dashboard/users",
+  ...(env.OPERATOR_PORTAL_ENABLED ? ["/dashboard/operators"] as const : []),
   "/dashboard/tickets", "/dashboard/claims",
   "/client/dashboard", "/client/dpd-labels", "/client/dpd-labels#drafts", "/client/shipments",
   "/client/address-book", "/client/tracking", "/client/pickups", "/client/manifests", "/client/pods",
@@ -24,7 +27,7 @@ const operationsOnly = new Set<string>([
   "/dashboard/operations-manifests", "/dashboard/flight-linehauls", "/dashboard/operations-scans",
   "/dashboard/pickups", "/dashboard/drivers", "/dashboard/pod", "/dashboard/operations-advisory",
   "/dashboard/flight-cost-drafts", "/dashboard/swiftline-routes", "/dashboard/quote-requests",
-  "/dashboard/business-accounts", "/dashboard/tickets"
+  "/dashboard/business-accounts", "/dashboard/tickets", "/dashboard/dpd-labels"
 ]);
 const shipmentView = new Set<string>(["/dashboard/shipments?view=all", "/dashboard/tracking"]);
 const operationsFinance = new Set<string>(["/dashboard/counter-sales", "/dashboard/country-rate-card", "/dashboard/credit-accounts"]);
@@ -38,8 +41,9 @@ export function allowedRolesForTarget(target: string): readonly (typeof announce
   if (target === "/dashboard/finance/profitability") return ["admin", "finance"];
   if (target === "/dashboard/branches") return ["admin", "operations", "finance", "hr"];
   if (target === "/dashboard/users") return ["admin", "hr"];
+  if (target === "/dashboard/operators") return ["admin"];
   if (target === "/dashboard/claims") return ["admin", "operations", "finance", "delivery"];
-  return ["admin"]; // Remaining known staff destination: Operators.
+  return ["admin"];
 }
 
 export function canonicalVideoUrl(input: string | null): string | null {
@@ -62,8 +66,18 @@ export function canonicalVideoUrl(input: string | null): string | null {
   throw new Error("Use a standard YouTube or Vimeo video URL.");
 }
 
+const announcementTextRunSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("paragraph"), text: z.string().max(2000) }),
+  z.object({ type: z.literal("heading"), level: z.union([z.literal(2), z.literal(3)]), text: z.string().max(2000) }),
+  z.object({
+    type: z.literal("list"),
+    style: z.enum(["ordered", "bullet"]),
+    items: z.array(z.string().max(2000)).min(1).max(500)
+  })
+]);
+
 const announcementContentBlockSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text"), text: z.string().max(2000) }),
+  z.object({ type: z.literal("text"), text: z.string().max(2000), runs: z.array(announcementTextRunSchema).max(500).optional() }),
   z.object({
     type: z.literal("image"),
     imageId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
@@ -73,6 +87,14 @@ const announcementContentBlockSchema = z.discriminatedUnion("type", [
     message: "Each guide image must reference an existing image or an uploaded file."
   })
 ]);
+
+export function announcementTextFromRuns(runs: FeatureAnnouncementTextRun[]) {
+  return runs.map((run) => run.type === "list" ? run.items.join("\n") : run.text).join("\n");
+}
+
+export function announcementTextFromBlock(block: { text: string; runs?: FeatureAnnouncementTextRun[] }) {
+  return block.runs?.length ? announcementTextFromRuns(block.runs) : block.text;
+}
 
 export const announcementInputSchema = z.object({
   title: z.string().trim().min(3).max(100),
@@ -89,7 +111,7 @@ export const announcementInputSchema = z.object({
 }).superRefine((value, context) => {
   if (value.contentBlocks) {
     const imageBlocks = value.contentBlocks.filter((block) => block.type === "image");
-    const text = value.contentBlocks.filter((block) => block.type === "text").map((block) => block.text.trim()).filter(Boolean).join("\n\n");
+    const text = value.contentBlocks.filter((block) => block.type === "text").map((block) => announcementTextFromBlock(block).trim()).filter(Boolean).join("\n\n");
     if (imageBlocks.length > 4) {
       context.addIssue({ code: "custom", path: ["contentBlocks"], message: "An announcement can include up to four images." });
     }

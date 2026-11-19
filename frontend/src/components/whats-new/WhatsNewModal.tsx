@@ -3,9 +3,39 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { FiArrowLeft, FiArrowRight, FiPlay, FiX } from "react-icons/fi";
-import { embeddableVideoUrl, type FeatureAnnouncement } from "@/lib/featureAnnouncements";
+import { embeddableVideoUrl, type FeatureAnnouncement, type FeatureAnnouncementTextBlock, type FeatureAnnouncementTextRun } from "@/lib/featureAnnouncements";
 import { useGuardedNavigate } from "@/lib/useUnsavedChanges";
 import AnnouncementImage from "./AnnouncementImage";
+
+function textForRun(run: FeatureAnnouncementTextRun) {
+  return run.type === "list" ? run.items.join("\n") : run.text;
+}
+
+function AnnouncementText({ block }: { block: FeatureAnnouncementTextBlock }) {
+  if (!block.runs?.length) {
+    return <p className="whitespace-pre-line text-sm leading-7 text-slate-600">{block.text}</p>;
+  }
+
+  return (
+    <div className="space-y-3 text-sm leading-7">
+      {block.runs.map((run, runIndex) => {
+        if (run.type === "heading") {
+          const Heading = run.level === 2 ? "h3" : "h4";
+          return <Heading key={`heading-${runIndex}`} className={`${run.level === 2 ? "text-base" : "text-sm"} font-semibold leading-6 text-slate-900`}>{run.text}</Heading>;
+        }
+        if (run.type === "list") {
+          const List = run.style === "ordered" ? "ol" : "ul";
+          return (
+            <List key={`list-${runIndex}`} className={`${run.style === "ordered" ? "list-decimal" : "list-disc"} space-y-1 pl-6 text-slate-600 marker:font-semibold marker:text-[#0D1282]`}>
+              {run.items.map((item, itemIndex) => <li key={`item-${itemIndex}`} className="pl-1">{item}</li>)}
+            </List>
+          );
+        }
+        return run.text ? <p key={`paragraph-${runIndex}`} className="whitespace-pre-line text-slate-600">{textForRun(run)}</p> : null;
+      })}
+    </div>
+  );
+}
 
 export default function WhatsNewModal({ items, onSeen, onClose, preview = false }: {
   items: FeatureAnnouncement[];
@@ -15,6 +45,7 @@ export default function WhatsNewModal({ items, onSeen, onClose, preview = false 
 }) {
   const [index, setIndex] = useState(0);
   const [playVideo, setPlayVideo] = useState(false);
+  const [portalTheme, setPortalTheme] = useState<"light" | "dark">("light");
   const dialog = useRef<HTMLDivElement>(null);
   const guardNavigate = useGuardedNavigate();
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -31,6 +62,13 @@ export default function WhatsNewModal({ items, onSeen, onClose, preview = false 
   useEffect(() => {
     if (item) void onSeen(item);
   }, [item, onSeen]);
+
+  useEffect(() => {
+    const syncTheme = () => setPortalTheme(document.documentElement.dataset.portalTheme === "dark" ? "dark" : "light");
+    syncTheme();
+    window.addEventListener("portal-theme-change", syncTheme);
+    return () => window.removeEventListener("portal-theme-change", syncTheme);
+  }, []);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -51,7 +89,7 @@ export default function WhatsNewModal({ items, onSeen, onClose, preview = false 
   const advance = (next: number) => { setPlayVideo(false); setIndex(next); closeButton.current?.focus(); };
   return (
     <div data-portal-theme-scope className="fixed inset-0 z-100 flex items-center justify-center bg-[#0A1038]/70 p-3 backdrop-blur-sm sm:p-6" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="whats-new-title" aria-describedby="whats-new-summary" className="whats-new-modal flex max-h-[min(92dvh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl outline-none">
+      <div ref={dialog} data-portal-theme={portalTheme} role="dialog" aria-modal="true" aria-labelledby="whats-new-title" aria-describedby="whats-new-summary" className="whats-new-modal flex max-h-[min(92dvh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl outline-none">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 sm:px-7">
           <div className="flex items-center gap-3">
             <span className="rounded-md bg-[#F0DE36] px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-[#12185A]">New</span>
@@ -66,7 +104,7 @@ export default function WhatsNewModal({ items, onSeen, onClose, preview = false 
             {item.contentBlocks?.length ? item.contentBlocks.map((block, blockIndex) => block.type === "image" ? (
               <AnnouncementImage key={`${block.imageId}-${blockIndex}`} announcementId={item.id} imageId={block.imageId} alt={block.alt} previewUrl={block.previewUrl} />
             ) : block.text.trim() ? (
-              <p key={`text-${blockIndex}`} className="whitespace-pre-line text-sm leading-7 text-slate-600">{block.text}</p>
+              <AnnouncementText key={`text-${blockIndex}`} block={block} />
             ) : null) : <p className="whitespace-pre-line text-sm leading-7 text-slate-600">{item.body}</p>}
           </div>
           {videoUrl ? (

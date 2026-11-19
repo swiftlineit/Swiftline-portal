@@ -141,10 +141,6 @@ html[data-portal-theme="dark"] [data-portal-theme-scope] :is(button, a):focus-vi
   outline-color: #c7d2fe;
 }
 
-html[data-portal-theme="dark"] .whats-new-modal {
-  border: 1px solid rgb(255 255 255 / 0.3);
-}
-
 /* Quill guide editor: keep the toolbar attached to the writing surface and
    let inserted screenshots scale to the editor width. */
 .feature-announcement-editor .ql-toolbar.ql-snow {
@@ -152,6 +148,20 @@ html[data-portal-theme="dark"] .whats-new-modal {
   border-bottom: 1px solid #e2e8f0;
   background: #f8fafc;
   padding: 0.625rem 0.75rem;
+}
+
+.feature-announcement-editor .ql-toolbar .ql-formats {
+  margin-right: 0.9rem;
+}
+
+.feature-announcement-editor .ql-toolbar button:hover,
+.feature-announcement-editor .ql-toolbar button.ql-active {
+  color: #0d1282;
+}
+
+.feature-announcement-editor .ql-toolbar button:hover .ql-stroke,
+.feature-announcement-editor .ql-toolbar button.ql-active .ql-stroke {
+  stroke: #0d1282;
 }
 
 .feature-announcement-editor .ql-container.ql-snow {
@@ -206,6 +216,20 @@ html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-e
 
 html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-fill {
   fill: #d6e2f1;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-picker {
+  color: #d6e2f1;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-picker-options {
+  border-color: #526889;
+  background: #152137;
+}
+
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-picker-item:hover,
+html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-picker-item.ql-selected {
+  color: #c7d2fe;
 }
 
 html[data-portal-theme="dark"] [data-portal-theme-scope] .feature-announcement-editor .ql-editor img {

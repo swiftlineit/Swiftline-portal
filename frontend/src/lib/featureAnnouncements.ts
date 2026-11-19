@@ -2,7 +2,11 @@ import { requestJson } from "@/lib/shipmentsList";
 
 export type AnnouncementRole = "admin" | "operations" | "finance" | "delivery" | "hr" | "client";
 export type AnnouncementStatus = "DRAFT" | "PUBLISHED" | "PAUSED" | "ARCHIVED";
-export type FeatureAnnouncementTextBlock = { type: "text"; text: string };
+export type FeatureAnnouncementTextRun =
+  | { type: "paragraph"; text: string }
+  | { type: "heading"; level: 2 | 3; text: string }
+  | { type: "list"; style: "ordered" | "bullet"; items: string[] };
+export type FeatureAnnouncementTextBlock = { type: "text"; text: string; runs?: FeatureAnnouncementTextRun[] };
 export type FeatureAnnouncementImageBlock = { type: "image"; imageId: string; alt: string; previewUrl?: string };
 export type FeatureAnnouncementContentBlock = FeatureAnnouncementTextBlock | FeatureAnnouncementImageBlock;
 export type FeatureAnnouncementDraftBlock = FeatureAnnouncementTextBlock | {

@@ -6,8 +6,13 @@ export type AnnouncementRole = (typeof announcementRoles)[number];
 export const announcementStatuses = ["DRAFT", "PUBLISHED", "PAUSED", "ARCHIVED"] as const;
 export type AnnouncementStatus = (typeof announcementStatuses)[number];
 
+export type FeatureAnnouncementTextRun =
+  | { type: "paragraph"; text: string }
+  | { type: "heading"; level: 2 | 3; text: string }
+  | { type: "list"; style: "ordered" | "bullet"; items: string[] };
+
 export type FeatureAnnouncementContentBlock =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; runs?: FeatureAnnouncementTextRun[] }
   | { type: "image"; imageId: mongoose.Types.ObjectId; alt: string };
 
 export interface IFeatureAnnouncementImage {
@@ -47,6 +52,16 @@ const announcementSchema = new mongoose.Schema<IFeatureAnnouncement>({
     type: [new mongoose.Schema({
       type: { type: String, required: true, enum: ["text", "image"] },
       text: { type: String, maxlength: 2000 },
+      runs: {
+        type: [new mongoose.Schema({
+          type: { type: String, required: true, enum: ["paragraph", "heading", "list"] },
+          text: { type: String, maxlength: 2000 },
+          level: { type: Number, enum: [2, 3] },
+          style: { type: String, enum: ["ordered", "bullet"] },
+          items: { type: [String], default: undefined }
+        }, { _id: false })],
+        default: undefined
+      },
       imageId: { type: mongoose.Schema.Types.ObjectId },
       alt: { type: String, trim: true, maxlength: 200, default: "" }
     }, { _id: false })],

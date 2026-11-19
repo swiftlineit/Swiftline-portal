@@ -4,7 +4,7 @@ import { attachUser, requireAuthenticated } from "../middleware/auth.middleware.
 import { featureAnnouncementUpload } from "../middleware/featureAnnouncementUpload.middleware.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { FeatureAnnouncement, FeatureAnnouncementView, announcementRoles, type AnnouncementRole, type IFeatureAnnouncement } from "../models/featureAnnouncement.model.js";
-import { allowedRolesForTarget, announcementInputSchema, announcementTargets, canonicalVideoUrl } from "../services/featureAnnouncement.service.js";
+import { allowedRolesForTarget, announcementInputSchema, announcementTargets, announcementTextFromBlock, canonicalVideoUrl } from "../services/featureAnnouncement.service.js";
 import { getTenantIdForWrite } from "../services/tenantScope.service.js";
 import { matchesDeclaredType } from "../services/storage/fileSignature.js";
 import { assertValidStorageKey, featureAnnouncementImageKey } from "../services/storage/keys.js";
@@ -16,11 +16,20 @@ const safe = (handler: (request: Request, response: Response) => Promise<void>) 
   (request: Request, response: Response, next: NextFunction) => { void handler(request, response).catch(next); };
 const validId = (id: unknown): id is string => typeof id === "string" && mongoose.isValidObjectId(id);
 
+function serializeTextBlock(block: Extract<IFeatureAnnouncement["contentBlocks"][number], { type: "text" }>) {
+  const runs = block.runs?.map((run) => run.type === "list"
+    ? { type: "list" as const, style: run.style, items: [...run.items] }
+    : run.type === "heading"
+      ? { type: "heading" as const, level: run.level, text: run.text }
+      : { type: "paragraph" as const, text: run.text });
+  return { type: "text" as const, text: block.text ?? "", ...(runs?.length ? { runs } : {}) };
+}
+
 function dto(item: IFeatureAnnouncement, seen = false, role?: AnnouncementRole) {
   const contentBlocks = item.contentBlocks?.length
     ? item.contentBlocks.map((block) => block.type === "image"
       ? { type: "image" as const, imageId: String(block.imageId), alt: block.alt ?? "" }
-      : { type: "text" as const, text: block.text ?? "" })
+      : serializeTextBlock(block))
     : [{ type: "text" as const, text: item.body }];
   return {
     id: String(item._id), title: item.title, summary: item.summary, body: item.body, contentBlocks,
@@ -34,7 +43,7 @@ function dto(item: IFeatureAnnouncement, seen = false, role?: AnnouncementRole) 
 function contentBlockSnapshot(blocks: IFeatureAnnouncement["contentBlocks"]) {
   return JSON.stringify(blocks.map((block) => block.type === "image"
     ? { type: "image", imageId: String(block.imageId), alt: block.alt ?? "" }
-    : { type: "text", text: block.text ?? "" }));
+    : serializeTextBlock(block)));
 }
 
 async function writeAudit(action: "FEATURE_ANNOUNCEMENT_CREATED" | "FEATURE_ANNOUNCEMENT_UPDATED" | "FEATURE_ANNOUNCEMENT_STATUS_CHANGED", item: IFeatureAnnouncement, by: mongoose.Types.ObjectId, previousStatus?: string) {
@@ -145,7 +154,9 @@ function parseInput(request: Request, response: Response) {
     return null;
   }
   try {
-    const contentBlocks = result.data.contentBlocks ?? [{ type: "text" as const, text: result.data.body }];
+    const contentBlocks = (result.data.contentBlocks ?? [{ type: "text" as const, text: result.data.body }]).map((block) => block.type === "text"
+      ? { ...block, text: announcementTextFromBlock(block) }
+      : block);
     const body = contentBlocks.filter((block) => block.type === "text").map((block) => block.text.trim()).filter(Boolean).join("\n\n");
     return { ...result.data, body, contentBlocks, videoUrl: canonicalVideoUrl(result.data.videoUrl ?? null) };
   }
@@ -208,7 +219,11 @@ async function buildMedia(
   const newImageIds = storedImages.map((image) => String(image._id));
   let newImageIndex = 0;
   const contentBlocks = blocks.map((block) => {
-    if (block.type === "text") return { type: "text" as const, text: block.text.trim() };
+    if (block.type === "text") return {
+      type: "text" as const,
+      text: announcementTextFromBlock(block),
+      ...(block.runs?.length ? { runs: block.runs } : {})
+    };
     if (block.imageId) return { type: "image" as const, imageId: new mongoose.Types.ObjectId(block.imageId), alt: block.alt };
     const imageId = new mongoose.Types.ObjectId(newImageIds[newImageIndex++]!);
     return { type: "image" as const, imageId, alt: block.alt };
@@ -252,7 +267,7 @@ featureAnnouncementRouter.patch("/manage/:id", featureAnnouncementUpload, safe(a
   const previousStatus = item.status;
   const contentChanged = item.title !== input.title || item.summary !== input.summary || item.body !== media.body || item.videoUrl !== input.videoUrl || item.targetHref !== input.targetHref || item.clientTargetHref !== (input.clientTargetHref ?? null) || JSON.stringify([...item.roles].sort()) !== JSON.stringify([...input.roles].sort()) || contentBlockSnapshot(item.contentBlocks ?? []) !== JSON.stringify(media.contentBlocks.map((block) => block.type === "image"
     ? { type: "image", imageId: String(block.imageId), alt: block.alt ?? "" }
-    : { type: "text", text: block.text ?? "" }));
+    : serializeTextBlock(block)));
   if (contentChanged && (item.status === "PUBLISHED" || input.status === "PUBLISHED")) item.revision += 1;
   item.set({ ...input, body: media.body, contentBlocks: media.contentBlocks, images: media.images, startsAt: input.startsAt ? new Date(input.startsAt) : null, endsAt: input.endsAt ? new Date(input.endsAt) : null, updatedBy: actor(request)._id });
   try { await item.save(); }

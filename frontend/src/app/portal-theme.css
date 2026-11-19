@@ -465,6 +465,51 @@
   html[data-portal-theme="dark"] [data-portal-theme-scope] .invoice-sheet [class~="border-slate-200"] { border-color: #e2e8f0 !important; }
   html[data-portal-theme="dark"] [data-portal-theme-scope] .invoice-sheet [class~="border-slate-100"] { border-color: #f1f5f9 !important; }
 
+  /* Announcement modals carry their active theme explicitly because they can
+     render outside a dashboard's themed content subtree. */
+  .whats-new-modal[data-portal-theme="dark"] {
+    border: 1px solid rgb(255 255 255 / 0.78) !important;
+    background-color: #111a34 !important;
+    color: #f1f5fb !important;
+  }
+
+  .whats-new-modal[data-portal-theme="dark"] > div {
+    border-color: #394a65 !important;
+  }
+
+  .whats-new-modal[data-portal-theme="dark"] #whats-new-title {
+    color: #ffffff !important;
+  }
+
+  .whats-new-modal[data-portal-theme="dark"] :is(h3, h4) {
+    color: #ffffff !important;
+  }
+
+  .whats-new-modal[data-portal-theme="dark"] :is(p, li) {
+    color: #e6edf7 !important;
+  }
+
+  .whats-new-modal[data-portal-theme="dark"] li::marker {
+    color: #b6c8ff !important;
+  }
+
+  .whats-new-modal[data-portal-theme="dark"] [class~="text-slate-500"] {
+    color: #c3d0e4 !important;
+  }
+
+  .whats-new-modal[data-portal-theme="dark"] :is(a, button) {
+    color: #f1f5fb !important;
+  }
+
+  .whats-new-modal[data-portal-theme="dark"] :is(a, button)[class~="bg-white"] {
+    border-color: #526889 !important;
+    background-color: #1b2940 !important;
+  }
+
+  .whats-new-modal[data-portal-theme="dark"] :is(a, button)[class~="bg-white"]:hover {
+    background-color: #263650 !important;
+  }
+
   html[data-portal-theme="dark"] .Toastify__toast-theme--dark {
     border-color: #394a65;
   }
