@@ -72,7 +72,7 @@ export async function inspectPrepaidRelease(db: Db, options: ReleaseOptions = {}
     report.records[collection] = await target.countDocuments({}, queryOptions);
     const indexes = collections.has(collection) ? await target.listIndexes().toArray() as ExistingIndexShape[] : [];
     const unowned = await target.countDocuments({ tenantId: null }, queryOptions);
-    const tenantOwned = models.find((model) => model.collection.collectionName === collection)?.schema.path("tenantId");
+    const tenantOwned = models.find((model) => model.collection.collectionName === collection)?.schema.paths.tenantId;
     if (tenantOwned && unowned) {
       if (!ownershipCollections.includes(collection)) {
         report.blockers.push(`${collection}: unowned records require separate review.`);
