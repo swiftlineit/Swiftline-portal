@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import mongoose from "mongoose";
 import { z } from "zod";
 import {
   clientDocumentTypeValues,
@@ -40,6 +41,10 @@ export async function listClientDocuments(
     if (!scope.ok) {
       return response.status(scope.status).json({ success: false, message: scope.message });
     }
+    const authenticatedUserId = (request as Request & { user?: { _id?: unknown } }).user?._id;
+    if (!authenticatedUserId || !mongoose.Types.ObjectId.isValid(String(authenticatedUserId))) {
+      return response.status(401).json({ success: false, message: "Unauthorized" });
+    }
 
     const result = await listClientDocumentCentre(scope, {
       documentType: parsed.data.documentType,
@@ -49,7 +54,7 @@ export async function listClientDocuments(
       dateTo: parsed.data.dateTo ? new Date(`${parsed.data.dateTo}T23:59:59.999Z`) : undefined,
       page: parsed.data.page,
       limit: parsed.data.limit
-    });
+    }, new mongoose.Types.ObjectId(String(authenticatedUserId)));
 
     return response.status(200).json({ success: true, ...result });
   } catch (error) {

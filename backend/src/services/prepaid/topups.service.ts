@@ -6,10 +6,12 @@ import { CreditLedgerEntry } from "../../models/creditLedgerEntry.model.js";
 import { PaymentTopUp } from "../../models/paymentTopUp.model.js";
 import { PrepaidAccount } from "../../models/prepaidAccount.model.js";
 import type { PrepaidCurrency } from "../../models/financialTypes.js";
-import { appendCreditLedgerEntry, ensureCreditAccount } from "../creditAccount.service.js";
 import { notifyActiveAdmins, notifyBusinessFinancialMembers } from "../portalNotification.service.js";
 import { formatMinorRupees } from "./dailyTopUpLimit.service.js";
 import { createLedgerEntry, findLedgerEntryByIdempotencyKey } from "./ledger.service.js";
+import { getDataAccessTenantId, getTenantContext } from "../tenantScope.service.js";
+import { getSwiftlineTenantId } from "../swiftlineTenant.service.js";
+import { assertTenantWriteAllowed } from "../../models/plugins/tenantOwnedSchema.plugin.js";
 
 type EnsureAccountInput = {
   businessAccountId: mongoose.Types.ObjectId;
@@ -34,7 +36,7 @@ type CreatePaymentTopUpInput = {
   purpose?: "CUSTOMER_ADVANCE" | "SECURITY_DEPOSIT";
   internalReference: string;
   idempotencyKey: string;
-  razorpayOrderId: string;
+  razorpayOrderId?: string;
 };
 
 type MarkTopUpFailedInput = {
@@ -66,8 +68,77 @@ function assertPositiveMinorAmount(amountMinor: number) {
   }
 }
 
+async function initializeFundingCycleBaseline(
+  account: InstanceType<typeof PrepaidAccount>,
+  session?: mongoose.ClientSession
+) {
+  const availableMinor = Math.max(account.cashBalanceMinor - account.reservedBalanceMinor, 0);
+  if (availableMinor <= 0) return account;
+  if (account.fundingCycleSequence > 0 && account.fundingCycleBaselineMinor > 0) return account;
+
+  const updated = await PrepaidAccount.findOneAndUpdate(
+    {
+      _id: account._id,
+      version: account.version,
+      fundingCycleSequence: account.fundingCycleSequence,
+      fundingCycleBaselineMinor: account.fundingCycleBaselineMinor
+    },
+    {
+      $set: {
+        fundingCycleSequence: Math.max(account.fundingCycleSequence, 1),
+        fundingCycleBaselineMinor: account.fundingCycleBaselineMinor > 0
+          ? account.fundingCycleBaselineMinor
+          : availableMinor,
+        fundingCycleStartedAt: account.fundingCycleStartedAt ?? new Date()
+      },
+      $inc: { version: 1 }
+    },
+    { returnDocument: "after", runValidators: true, session }
+  ).exec();
+  if (updated) return updated;
+
+  return PrepaidAccount.findById(account._id).session(session ?? null).orFail().exec();
+}
+
 export async function ensurePrepaidAccount(input: EnsureAccountInput, session?: mongoose.ClientSession) {
-  return PrepaidAccount.findOneAndUpdate(
+  const existing = await PrepaidAccount.findOne({ businessAccountId: input.businessAccountId })
+    .session(session ?? null).exec();
+  if (existing) return initializeFundingCycleBaseline(existing, session);
+
+  const tenantId = await getDataAccessTenantId();
+  if (tenantId && getTenantContext()?.kind === "OPERATOR") {
+    const business = await BusinessAccount.findOne({ _id: input.businessAccountId }).select("_id").session(session ?? null).lean().exec();
+    if (!business) throw new Error("Business account access was not found for this wallet.");
+  }
+  if (tenantId && getTenantContext()?.kind !== "OPERATOR" && String(tenantId) === String(await getSwiftlineTenantId())) {
+    // Before tenant ownership was introduced wallets were unique per business.
+    // Adopt only an unowned legacy Swiftline wallet after proving its business
+    // belongs to Swiftline. Never read or reassign an explicitly different owner.
+    const business = await BusinessAccount.collection.findOne({
+      _id: input.businessAccountId,
+      $or: [{ tenantId }, { tenantId: null }]
+    }, { projection: { _id: 1 }, session });
+    if (business) {
+      const legacyWallet = await PrepaidAccount.collection.findOne({
+        businessAccountId: input.businessAccountId,
+        tenantId: null
+      }, { projection: { _id: 1 }, session });
+      if (legacyWallet) {
+        assertTenantWriteAllowed("updateOne", {});
+        await PrepaidAccount.collection.updateOne(
+          { _id: legacyWallet._id, businessAccountId: input.businessAccountId, tenantId: null },
+          { $set: { tenantId } },
+          { session }
+        );
+        const adopted = await PrepaidAccount.findOne({ _id: legacyWallet._id, businessAccountId: input.businessAccountId })
+          .session(session ?? null).exec();
+        if (adopted) return initializeFundingCycleBaseline(adopted, session);
+      }
+    }
+  }
+
+  try {
+    const account = await PrepaidAccount.findOneAndUpdate(
     { businessAccountId: input.businessAccountId },
     {
       $setOnInsert: {
@@ -77,11 +148,24 @@ export async function ensurePrepaidAccount(input: EnsureAccountInput, session?: 
         reservedBalanceMinor: 0,
         status: "ACTIVE",
         version: 0,
-        minimumBalanceWarningMinor: 0
+        minimumBalanceWarningMinor: 0,
+        fundingCycleSequence: 0,
+        fundingCycleBaselineMinor: 0,
+        fundingCycleStartedAt: null,
+        lowBalanceAlertedCycle: null
       }
     },
     { returnDocument: "after", upsert: true, runValidators: true, setDefaultsOnInsert: true, session }
-  ).exec();
+    ).exec();
+    return account ? initializeFundingCycleBaseline(account, session) : account;
+  } catch (error) {
+    if (typeof error !== "object" || error === null || (error as { code?: number }).code !== 11000 || session?.inTransaction()) throw error;
+    // A concurrent first request may have inserted the same scoped wallet.
+    // Read only through the normal tenant filter, never return the conflicting row.
+    const raced = await PrepaidAccount.findOne({ businessAccountId: input.businessAccountId }).exec();
+    if (raced) return initializeFundingCycleBaseline(raced, session);
+    throw new Error("Wallet ownership needs reconciliation. Contact Swiftline Accounts; your existing funds have been preserved.");
+  }
 }
 
 export async function findPaymentTopUpByIdempotencyKey(idempotencyKey: string) {
@@ -106,13 +190,26 @@ export async function createPaymentTopUp(input: CreatePaymentTopUpInput) {
     purpose: input.purpose ?? "CUSTOMER_ADVANCE",
     internalReference: input.internalReference,
     idempotencyKey: input.idempotencyKey,
-    razorpayOrderId: input.razorpayOrderId,
+    razorpayOrderId: input.razorpayOrderId ?? "",
     status: "CREATED"
   }]);
 
   if (!topUp) throw new Error("Payment top-up could not be created.");
 
   return { created: true as const, topUp };
+}
+
+export async function attachRazorpayOrderToTopUp(input: {
+  paymentTopUpId: mongoose.Types.ObjectId;
+  razorpayOrderId: string;
+}) {
+  const topUp = await PaymentTopUp.findOneAndUpdate(
+    { _id: input.paymentTopUpId, status: "CREATED", razorpayOrderId: "" },
+    { $set: { razorpayOrderId: input.razorpayOrderId, status: "CHECKOUT_OPENED" } },
+    { returnDocument: "after", runValidators: true }
+  ).exec();
+  if (!topUp) throw new Error("The top-up order could not be attached to its local payment intent.");
+  return topUp;
 }
 
 /**
@@ -177,7 +274,7 @@ export async function creditCapturedTopUp(input: CreditCapturedTopUpInput) {
     let result;
     await session.withTransaction(async () => {
       const topUp = await PaymentTopUp.findOneAndUpdate(
-        { _id: input.paymentTopUpId, status: { $ne: "CAPTURED" } },
+        { _id: input.paymentTopUpId, status: { $in: ["CREATED", "CHECKOUT_OPENED", "AUTHORIZED", "PROCESSING", "FAILED"] } },
         {
           $set: {
             status: "CAPTURED",
@@ -257,30 +354,60 @@ export async function creditCapturedTopUp(input: CreditCapturedTopUpInput) {
         return;
       }
 
-      const account = await ensureCreditAccount(topUp.businessAccountId, session);
-      const updatedAccount = await BusinessCreditAccount.findOneAndUpdate(
-        { _id: account._id },
-        { $inc: { customerAdvanceBalanceMinor: topUp.amountMinor, version: 1 } },
-        { returnDocument: "after", runValidators: true, session }
-      ).exec();
-      if (!updatedAccount) throw new Error("Customer Advance could not be credited.");
+      const account = await ensurePrepaidAccount({
+        businessAccountId: topUp.businessAccountId,
+        currency: topUp.currency
+      }, session);
+      if (account.status !== "ACTIVE") throw new Error("Business wallet is not active.");
 
-      const ledgerEntry = await appendCreditLedgerEntry({
-        account: updatedAccount,
-        type: "CUSTOMER_ADVANCE_RECEIVED",
-        reference: topUp.internalReference,
-        description: `Customer Advance received: ${topUp.internalReference}`,
+      const updatedAccount = await PrepaidAccount.findOneAndUpdate(
+        { _id: account._id, status: "ACTIVE", version: account.version },
+        [
+          {
+            $set: {
+              cashBalanceMinor: { $add: ["$cashBalanceMinor", topUp.amountMinor] },
+              version: { $add: ["$version", 1] },
+              fundingCycleSequence: { $add: ["$fundingCycleSequence", 1] },
+              fundingCycleStartedAt: "$$NOW",
+              lowBalanceAlertedCycle: null
+            }
+          },
+          {
+            $set: {
+              fundingCycleBaselineMinor: { $subtract: ["$cashBalanceMinor", "$reservedBalanceMinor"] }
+            }
+          }
+        ],
+        { returnDocument: "after", session, updatePipeline: true }
+      ).exec();
+      if (!updatedAccount) throw new Error("Wallet balance changed while the top-up was being posted. Please retry reconciliation.");
+
+      const ledgerEntry = await createLedgerEntry({
+        businessAccountId: topUp.businessAccountId,
+        transactionType: "TOP_UP_SUCCESS",
+        direction: "CREDIT",
         amountMinor: topUp.amountMinor,
+        currency: topUp.currency,
+        referenceType: "PAYMENT_TOP_UP",
+        referenceId: topUp._id as mongoose.Types.ObjectId,
         idempotencyKey: input.idempotencyKey,
+        paymentSource: "CLIENT_PREPAID",
+        before: {
+          cashBalanceMinor: updatedAccount.cashBalanceMinor - topUp.amountMinor,
+          reservedBalanceMinor: updatedAccount.reservedBalanceMinor
+        },
+        after: {
+          cashBalanceMinor: updatedAccount.cashBalanceMinor,
+          reservedBalanceMinor: updatedAccount.reservedBalanceMinor
+        },
+        description: `Wallet top-up received: ${topUp.internalReference}`,
         createdBy: input.createdBy ?? topUp.clientUserId,
-        metadata: { paymentTopUpId: topUp._id },
-        session
-      });
+      }, session);
 
       await notifyBusinessFinancialMembers(topUp.businessAccountId, {
         type: "CUSTOMER_ADVANCE_CREDITED",
-        title: "Customer Advance credited",
-        message: `${formatMinorRupees(topUp.amountMinor)} was received and added to your Customer Advance balance.`,
+        title: "Wallet top-up confirmed",
+        message: `${formatMinorRupees(topUp.amountMinor)} was received and added to your prepaid wallet.`,
         href: "/client/payments#payment-history",
         idempotencyKey: `CUSTOMER_ADVANCE_CREDITED:${String(topUp._id)}`,
         metadata: { paymentTopUpId: topUp._id, amountMinor: topUp.amountMinor }

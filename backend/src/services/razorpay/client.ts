@@ -117,11 +117,23 @@ export async function captureRazorpayPayment(input: {
 }
 
 /** Idempotent refund for a captured payment whose shipment never became durable. */
+export async function fetchRazorpayRefund(refundId: string) {
+  const credentials = getRazorpayCredentials();
+  const auth = Buffer.from(`${credentials.keyId}:${credentials.keySecret}`).toString("base64");
+  const response = await fetch(`https://api.razorpay.com/v1/refunds/${encodeURIComponent(refundId)}`, { headers: { Authorization: `Basic ${auth}` } });
+  const data = await response.json() as Partial<RazorpayRefundResponse> & { error?: { description?: string } };
+  if (!response.ok || data.id !== refundId || typeof data.amount !== "number" || !data.status) throw new Error(data.error?.description || "Razorpay refund status could not be verified.");
+  return data as RazorpayRefundResponse;
+}
+
 export async function createRazorpayRefund(input: {
   paymentId: string;
   amountMinor: number;
   idempotencyKey: string;
 }) {
+  if (!/^[A-Za-z0-9_-]{10,256}$/.test(input.idempotencyKey)) {
+    throw new Error("Razorpay refund idempotency keys must be 10-256 characters using letters, numbers, hyphens or underscores.");
+  }
   const credentials = getRazorpayCredentials();
   const auth = Buffer.from(`${credentials.keyId}:${credentials.keySecret}`).toString("base64");
   const response = await fetch(
@@ -131,7 +143,7 @@ export async function createRazorpayRefund(input: {
       headers: {
         Authorization: `Basic ${auth}`,
         "Content-Type": "application/json",
-        "X-Razorpay-Idempotency-Key": input.idempotencyKey,
+        "X-Refund-Idempotency": input.idempotencyKey,
       },
       body: JSON.stringify({ amount: input.amountMinor, speed: "normal" }),
     },

@@ -122,6 +122,8 @@ export type ShipmentPricingEstimate = {
     sequence: number;
     actualWeightKg: number;
     volumetricWeightKg: number;
+    /** Kilograms removed from the volumetric excess by the account discount. */
+    volumetricDiscountKg?: number;
     chargeableWeightKg: number;
     rateCardId: string | null;
     rateFromKg: number | null;
@@ -175,6 +177,8 @@ export type ShipmentPricingEstimate = {
    * and they are read back as this type.
    */
   routeMaxBoxKg?: number | null;
+  /** Discount configured for this business account, if any. */
+  volumetricDiscountPercent?: number;
   gstRate: number;
   /** Frozen commercial treatment used for this estimate and any resulting booking. */
   taxTreatment?: ShipmentTaxTreatment;
@@ -213,6 +217,7 @@ export type ShipmentPricingEstimate = {
     rateCardBand?: RateCardBand;
     businessAccountId?: string;
     privateRateCardVersion?: number;
+    volumetricDiscountPercent?: number;
     rateCardIds: string[];
     routeChargesUpdatedAt: Date | null;
     taxTreatment?: ShipmentTaxTreatment;
@@ -244,6 +249,27 @@ export function roundShipmentMoney(value: number) {
 export function billableWeightKg(weightKg: number) {
   if (!(weightKg > 0)) return 0;
   return Math.ceil(Number(weightKg.toFixed(3)));
+}
+
+/**
+ * Discounts only the portion of volumetric weight that exceeds actual weight.
+ * Fractional kilograms are retained when a discount is active. Accounts without
+ * a discount keep the existing whole-kilogram billing rule.
+ */
+export function discountedChargeableWeightKg(actualWeightKg: number, volumetricWeightKg: number, discountPercent: number) {
+  const actual = Math.max(0, numeric(actualWeightKg));
+  const volumetric = Math.max(0, numeric(volumetricWeightKg));
+  const percent = Number.isFinite(discountPercent) ? Math.min(Math.max(discountPercent, 0), 100) : 0;
+  const excess = Math.max(volumetric - actual, 0);
+  const discountKg = Number((excess * percent / 100).toFixed(3));
+  const discountedWeight = Math.max(actual, volumetric - discountKg);
+
+  return {
+    discountKg,
+    chargeableWeightKg: percent > 0
+      ? Number(discountedWeight.toFixed(3))
+      : billableWeightKg(Math.max(actual, volumetric))
+  };
 }
 
 function toMinor(amount: number) {
@@ -434,6 +460,7 @@ type AccountPricingContext = {
   rateCardBand?: RateCardBand;
   scope?: RateCardScope;
   privateRateCardVersion?: number;
+  volumetricDiscountPercent: number;
   noGstEligible: boolean;
   gstBillingVersion: number;
   gstBillingEffectiveFrom: Date | null;
@@ -446,6 +473,7 @@ async function resolveAccountPricingContext(input: Pick<ShipmentPricingInput, "b
   if (!input.businessAccountId) {
     if (explicitBand) return {
       rateCardBand: explicitBand,
+      volumetricDiscountPercent: 0,
       noGstEligible: false,
       gstBillingVersion: 1,
       gstBillingEffectiveFrom: null
@@ -455,7 +483,7 @@ async function resolveAccountPricingContext(input: Pick<ShipmentPricingInput, "b
 
   const accountId = String(input.businessAccountId);
   if (!mongoose.Types.ObjectId.isValid(accountId)) throw new RateCardAccountNotFoundError();
-  const query = BusinessAccount.findById(accountId).select("rateCardBand accountKind gstBilling privateRateCardVersion privateRateCardReady").lean();
+  const query = BusinessAccount.findById(accountId).select("rateCardBand accountKind gstBilling privateRateCardVersion privateRateCardReady volumetricDiscountPercent").lean();
   if (input.session) query.session(input.session);
   const account = await query.exec();
 
@@ -465,6 +493,7 @@ async function resolveAccountPricingContext(input: Pick<ShipmentPricingInput, "b
   if (!account) throw new RateCardAccountNotFoundError();
   if (account.accountKind === "INDIVIDUAL_SENTINEL") return {
     rateCardBand: publicBookingRateCardBand,
+    volumetricDiscountPercent: 0,
     noGstEligible: false,
     gstBillingVersion: account.gstBilling?.version ?? 1,
     gstBillingEffectiveFrom: null
@@ -484,6 +513,7 @@ async function resolveAccountPricingContext(input: Pick<ShipmentPricingInput, "b
     rateCardBand: scope.band ?? undefined,
     scope,
     ...(privateCard ? { privateRateCardVersion: account.privateRateCardVersion! } : {}),
+    volumetricDiscountPercent: Math.min(Math.max(Number(account.volumetricDiscountPercent) || 0, 0), 100),
     noGstEligible: account.gstBilling?.requestedTreatment === "NO_GST"
       && account.gstBilling?.status === "APPROVED"
       && Boolean(account.gstBilling?.effectiveFrom)
@@ -551,7 +581,12 @@ export async function calculateShipmentPricingEstimate(
     const volumetricWeightKg = calculateParcelVolumetricWeight(parcel, input.serviceType);
     // Rounded up here rather than at the amount, so the slab lookup, the max-box
     // check and the figure shown as "chargeable" are all the weight actually billed.
-    const chargeableWeightKg = billableWeightKg(Math.max(actualWeightKg, volumetricWeightKg));
+    const volumetricAdjustment = discountedChargeableWeightKg(
+      actualWeightKg,
+      volumetricWeightKg,
+      accountContext.volumetricDiscountPercent
+    );
+    const chargeableWeightKg = volumetricAdjustment.chargeableWeightKg;
     const exactRate = rates.find((candidate) =>
       chargeableWeightKg >= candidate.fromKg
       && chargeableWeightKg <= candidate.toKg
@@ -565,6 +600,7 @@ export async function calculateShipmentPricingEstimate(
       sequence: numeric(parcel.sequence) || index + 1,
       actualWeightKg,
       volumetricWeightKg,
+      volumetricDiscountKg: volumetricAdjustment.discountKg,
       chargeableWeightKg,
       rateCardId: rate ? String(rate._id) : null,
       rateFromKg: rate?.fromKg ?? null,
@@ -617,6 +653,7 @@ export async function calculateShipmentPricingEstimate(
     exceedsMaxBoxKg: parcels.some((parcel) => parcel.exceedsMaxBoxKg),
     routeMaxBoxKg: rates.length ? Math.max(...rates.map((rate) => rate.maxBoxKg)) : null,
     gstRate,
+    ...(accountContext.volumetricDiscountPercent > 0 ? { volumetricDiscountPercent: accountContext.volumetricDiscountPercent } : {}),
     taxTreatment,
     noGstEligible: accountContext.noGstEligible,
     gstForced,
@@ -624,6 +661,7 @@ export async function calculateShipmentPricingEstimate(
     pricingBasis: {
       rateCardBand,
       ...(scope.businessAccountId ? { businessAccountId: String(scope.businessAccountId), privateRateCardVersion: accountContext.privateRateCardVersion } : {}),
+      ...(accountContext.volumetricDiscountPercent > 0 ? { volumetricDiscountPercent: accountContext.volumetricDiscountPercent } : {}),
       rateCardIds: [...new Set(parcels.map((parcel) => parcel.rateCardId).filter((id): id is string => Boolean(id)))],
       routeChargesUpdatedAt: routeCharges.updatedAt,
       taxTreatment,

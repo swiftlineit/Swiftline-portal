@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import { z } from "zod";
 import { CreditPayment } from "../models/creditPayment.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
-import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
+import { BusinessAccountMember, financialRoles } from "../models/businessAccountMember.model.js";
 import { PaymentTermsAcceptance } from "../models/paymentTerms.model.js";
 import { CreditLimitIncreaseRequest } from "../models/creditLimitIncreaseRequest.model.js";
 import { maxCreditLimitLabel, maxCreditLimitMinor } from "../models/financialTypes.js";
@@ -15,6 +15,17 @@ import { getCreditRestrictionState } from "../services/creditOverdue.service.js"
 import { getCreditBillingSummary } from "../services/creditBilling.summary.service.js";
 import { notifyCreditFacilityReviewers } from "../services/portalNotification.service.js";
 import { formatMinorRupees } from "../services/prepaid/dailyTopUpLimit.service.js";
+import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
+
+function blockNewSwiftlineCreditFacility(request: Request, response: Response) {
+  if (getOperatorContext(request)?.accessMode === "MEMBER") return false;
+  response.status(410).json({
+    success: false,
+    code: "CREDIT_FACILITY_RETIRED",
+    message: "New Swiftline credit facilities are no longer available. Fund the prepaid wallet or pay when booking."
+  });
+  return true;
+}
 
 const requestCreditSchema = z.object({
   businessAccountId: z.string().trim().min(1),
@@ -131,6 +142,7 @@ export async function getClientCreditSummary(request: Request, response: Respons
 export async function requestClientCredit(request: Request, response: Response): Promise<Response> {
   const currentUserId = userId(request);
   if (!currentUserId) return response.status(401).json({ success: false, message: "Please sign in again." });
+  if (blockNewSwiftlineCreditFacility(request, response)) return response;
   const parsed = requestCreditSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ success: false, message: parsed.error.issues[0]?.message || "Check the credit request details." });
 
@@ -199,8 +211,7 @@ export async function acceptClientPaymentTerms(request: Request, response: Respo
   if (!parsed.success) return response.status(400).json({ success: false, message: "Payment terms acceptance is incomplete." });
   const membership = await membershipFor(request, parsed.data.businessAccountId);
   if (!membership) return response.status(404).json({ success: false, message: "Business account access was not found." });
-  const permissions = getMemberCreditPermissions(membership.role, membership.creditPermissions);
-  if (!permissions.includes("makeCreditPayment")) {
+  if (!financialRoles.includes(membership.role)) {
     return response.status(403).json({ success: false, message: "Your account role cannot make payments for this business account." });
   }
   const currentTerms = await getCurrentPaymentTerms();
@@ -247,6 +258,7 @@ export async function getClientCreditLimitIncrease(request: Request, response: R
 export async function requestClientCreditLimitIncrease(request: Request, response: Response): Promise<Response> {
   const currentUserId = userId(request);
   if (!currentUserId) return response.status(401).json({ success: false, message: "Please sign in again." });
+  if (blockNewSwiftlineCreditFacility(request, response)) return response;
   const parsed = limitIncreaseSchema.safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ success: false, message: parsed.error.issues[0]?.message || "Check the request details." });

@@ -57,6 +57,7 @@ import {
   formatShipmentEventLabel
 } from "./shipmentStatusSequence.service.js";
 import { resolveShipmentEventNote } from "./shipmentEventCopy.service.js";
+import { assertShipmentsFundingCompleted, isShipmentPaymentCompleted, ShipmentPaymentRequiredError } from "./prepaid/shipmentFunding.service.js";
 import { isValidFlightNumber, normalizeFlightNumber } from "../utils/flightNumber.js";
 import { setIstDatePreservingTime } from "../utils/indiaDateTime.js";
 import {
@@ -1132,6 +1133,9 @@ export async function scanOperationsParcel(input: {
   if (!shipment || !snapshot) {
     return recordRejectedScan({ manifestId, bagId, parcelNumber, scanRequestId, userId: input.userId, ...scanMetadata, message: "Shipment information is incomplete. Contact Swiftline support before packing it." });
   }
+  if (!await isShipmentPaymentCompleted(shipment.shipmentDraftId as mongoose.Types.ObjectId)) {
+    throw new OperationsManifestServiceError("Shipment payment must be completed before operations can pack it.", 402);
+  }
   const storedParcelNumber = resolveStoredSwiftlineParcelNumber(
     inputParcelNumber,
     snapshot.parcels.map((parcel) => parcel.swiftlineParcelNumber.toUpperCase())
@@ -2169,6 +2173,14 @@ export async function sealOperationsManifest(
       ]);
       const issues = sealingIssues(manifest, bags, consignments);
       const shipmentDraftIds = consignments.map((item) => item.shipmentDraftId);
+      try {
+        await assertShipmentsFundingCompleted(shipmentDraftIds);
+      } catch (error) {
+        if (error instanceof ShipmentPaymentRequiredError) {
+          throw new OperationsManifestServiceError("Every shipment must be fully paid before this manifest can be sealed.", 402);
+        }
+        throw error;
+      }
       const [sealEvents, sealCancellations] = shipmentDraftIds.length
         ? await Promise.all([
             ShipmentEvent.find({ shipmentDraftId: { $in: shipmentDraftIds } })
@@ -2328,6 +2340,14 @@ export async function dispatchOperationsManifest(
         manifestId: manifest._id,
         status: { $ne: "REMOVED" }
       }).select("shipmentDraftId dpdShipmentId consignmentNumber scannedParcelNumbers").session(session).lean().exec();
+      try {
+        await assertShipmentsFundingCompleted(consignments.map((item) => item.shipmentDraftId));
+      } catch (error) {
+        if (error instanceof ShipmentPaymentRequiredError) {
+          throw new OperationsManifestServiceError("Every moving shipment must be fully paid before this manifest can be dispatched.", 402);
+        }
+        throw error;
+      }
 
       // A consignment with no scanned parcels is being held/deferred in full;
       // it must not be allocated to the flight or receive a departure milestone.

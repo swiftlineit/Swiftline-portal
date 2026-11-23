@@ -1,8 +1,23 @@
 import mongoose from "mongoose";
 import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
-export const shipmentAmendmentStatusValues = ["REQUESTED", "APPROVED", "REJECTED", "APPLIED"] as const;
+export const shipmentAmendmentStatusValues = [
+  "AWAITING_PAYMENT",
+  "PAYMENT_SECURED",
+  "REQUESTED",
+  "APPROVED",
+  "REJECTED",
+  "APPLIED"
+] as const;
 export type ShipmentAmendmentStatus = (typeof shipmentAmendmentStatusValues)[number];
+export const shipmentAmendmentPaymentStatusValues = [
+  "NOT_REQUIRED",
+  "AWAITING_PAYMENT",
+  "SECURED",
+  "COMPLETED",
+  "RELEASED"
+] as const;
+export type ShipmentAmendmentPaymentStatus = (typeof shipmentAmendmentPaymentStatusValues)[number];
 
 export interface IShipmentAmendment extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
@@ -10,9 +25,18 @@ export interface IShipmentAmendment extends mongoose.Document, TenantOwnedFields
   businessAccountId: mongoose.Types.ObjectId;
   branchId: mongoose.Types.ObjectId;
   requestedBy: mongoose.Types.ObjectId;
+  activeRequestKey?: string | null;
   reviewedBy?: mongoose.Types.ObjectId | null;
   actorRole: "admin" | "client";
   status: ShipmentAmendmentStatus;
+  paymentStatus: ShipmentAmendmentPaymentStatus;
+  paymentSource: "" | "BUSINESS_WALLET" | "CASH_RECEIPT" | "DIRECT_RAZORPAY";
+  paymentAmountMinor: number;
+  paymentReferenceId?: mongoose.Types.ObjectId | null;
+  paymentSecuredAt?: Date | null;
+  paymentCompletedAt?: Date | null;
+  paymentMetadata?: Record<string, unknown> | null;
+  refundStatus: "NOT_REQUIRED" | "CREDITED_TO_WALLET" | "CASH_REFUND_RECORDED";
   reason: string;
   reviewNote?: string;
   requestedChanges: Record<string, unknown>;
@@ -80,6 +104,7 @@ const shipmentAmendmentSchema = new mongoose.Schema<IShipmentAmendment>(
       required: true,
       index: true
     },
+    activeRequestKey: { type: String, trim: true, default: null },
     reviewedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -88,6 +113,14 @@ const shipmentAmendmentSchema = new mongoose.Schema<IShipmentAmendment>(
     },
     actorRole: { type: String, enum: ["admin", "client"], required: true, index: true },
     status: { type: String, enum: shipmentAmendmentStatusValues, default: "REQUESTED", index: true },
+    paymentStatus: { type: String, enum: shipmentAmendmentPaymentStatusValues, default: "NOT_REQUIRED", index: true },
+    paymentSource: { type: String, enum: ["", "BUSINESS_WALLET", "CASH_RECEIPT", "DIRECT_RAZORPAY"], default: "" },
+    paymentAmountMinor: { type: Number, min: 0, default: 0 },
+    paymentReferenceId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
+    paymentSecuredAt: { type: Date, default: null },
+    paymentCompletedAt: { type: Date, default: null },
+    paymentMetadata: { type: mongoose.Schema.Types.Mixed, default: null },
+    refundStatus: { type: String, enum: ["NOT_REQUIRED", "CREDITED_TO_WALLET", "CASH_REFUND_RECORDED"], default: "NOT_REQUIRED" },
     reason: { type: String, trim: true, maxlength: 500, default: "" },
     reviewNote: { type: String, trim: true, maxlength: 500, default: "" },
     requestedChanges: { type: mongoose.Schema.Types.Mixed, required: true },
@@ -108,6 +141,11 @@ const shipmentAmendmentSchema = new mongoose.Schema<IShipmentAmendment>(
 
 shipmentAmendmentSchema.index({ shipmentDraftId: 1, requestedAt: -1 });
 shipmentAmendmentSchema.index({ dpdShipmentId: 1, requestedAt: -1 });
+shipmentAmendmentSchema.index({ tenantId: 1, status: 1, requestedAt: -1 }, { name: "tenant_amendment_queue" });
+shipmentAmendmentSchema.index(
+  { tenantId: 1, activeRequestKey: 1 },
+  { unique: true, name: "tenant_one_active_shipment_amendment", partialFilterExpression: { activeRequestKey: { $type: "string" } } }
+);
 
 addTenantOwnership(shipmentAmendmentSchema);
 

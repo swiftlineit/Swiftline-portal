@@ -17,6 +17,8 @@ import { getObjectBuffer } from "../storage/storage.service.js";
 import { labelContentType, labelFileExtension } from "../labelStorage.service.js";
 import { getTenantContext } from "../tenantScope.service.js";
 import type { OutboundAttachment } from "./transport.js";
+import { CashReceipt } from "../../models/cashReceipt.model.js";
+import { renderCashReceiptPdf } from "../cashReceiptPdf.service.js";
 
 export type ResolvedAttachment = OutboundAttachment & { kind: EmailAttachmentKind };
 
@@ -149,13 +151,25 @@ async function resolvePickupDocument(ref: IEmailAttachmentRef): Promise<Resolved
   };
 }
 
+async function resolveCashReceiptPdf(ref: IEmailAttachmentRef): Promise<ResolvedAttachment | null> {
+  const receipt = await CashReceipt.findOne({ _id: ref.refId, status: "FINALIZED" }).exec();
+  if (!receipt) return null;
+  return {
+    kind: "CASH_RECEIPT_PDF",
+    filename: safeFilename(ref.filename || `CASH-RECEIPT-${receipt.receiptNumber}.pdf`),
+    content: await renderCashReceiptPdf(receipt),
+    contentType: "application/pdf"
+  };
+}
+
 const resolvers: Partial<Record<EmailAttachmentKind, (ref: IEmailAttachmentRef) => Promise<ResolvedAttachment | null>>> = {
   SHIPMENT_INVOICE_PDF: resolveShipmentInvoicePdf,
   LABEL_DOCUMENT: resolveLabelDocument,
   SHIPMENT_MANIFEST_PDF: resolveShipmentManifestPdf,
   RATE_CARD_SHARE_PDF: resolveRateCardSharePdf,
   RATE_CARD_SHARE_XLSX: resolveRateCardShareWorkbook,
-  PICKUP_DOCUMENT: resolvePickupDocument
+  PICKUP_DOCUMENT: resolvePickupDocument,
+  CASH_RECEIPT_PDF: resolveCashReceiptPdf
 };
 
 // These first-release operator attachments resolve through tenant-owned models.

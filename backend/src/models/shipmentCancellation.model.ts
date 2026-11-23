@@ -3,6 +3,15 @@ import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwne
 import { isMinorUnitInteger } from "./financialTypes.js";
 import type { ShipmentInvoiceTaxTreatment } from "./shipmentInvoice.model.js";
 
+export type CancellationGatewayRefundPlan = {
+  amountMinor: number;
+  allocations: Array<{
+    source: "DIRECT_RAZORPAY" | "PUBLIC_RAZORPAY";
+    paymentId: string;
+    amountMinor: number;
+  }>;
+};
+
 export const shipmentCancellationStatusValues = ["REQUESTED", "COMPLETED", "REJECTED"] as const;
 export type ShipmentCancellationStatus = (typeof shipmentCancellationStatusValues)[number];
 
@@ -29,6 +38,11 @@ export interface IShipmentCancellation extends mongoose.Document, TenantOwnedFie
   carrierConfirmed: boolean;
   carrierConfirmationRequired: boolean;
   settlementConfirmed: boolean;
+  paymentRefundStatus: "NOT_REQUIRED" | "CREDITED_TO_WALLET" | "RAZORPAY_REFUNDED" | "CASH_REFUNDED";
+  paymentRefundAmountMinor: number;
+  paymentRefundReference: string;
+  paymentRefundedAt?: Date | null;
+  gatewayRefundPlan?: CancellationGatewayRefundPlan | null;
   carrierReference: string;
   reviewNote: string;
   reviewedBy?: mongoose.Types.ObjectId | null;
@@ -78,6 +92,11 @@ const shipmentCancellationSchema = new mongoose.Schema<IShipmentCancellation>({
   carrierConfirmed: { type: Boolean, default: false },
   carrierConfirmationRequired: { type: Boolean, default: true },
   settlementConfirmed: { type: Boolean, default: false },
+  paymentRefundStatus: { type: String, enum: ["NOT_REQUIRED", "CREDITED_TO_WALLET", "RAZORPAY_REFUNDED", "CASH_REFUNDED"], default: "NOT_REQUIRED" },
+  paymentRefundAmountMinor: { type: Number, default: 0, min: 0, validate: { validator: isMinorUnitInteger } },
+  paymentRefundReference: { type: String, trim: true, maxlength: 120, default: "" },
+  paymentRefundedAt: { type: Date, default: null },
+  gatewayRefundPlan: { type: mongoose.Schema.Types.Mixed, default: null },
   carrierReference: { type: String, trim: true, maxlength: 120, default: "" },
   reviewNote: { type: String, trim: true, maxlength: 500, default: "" },
   reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },

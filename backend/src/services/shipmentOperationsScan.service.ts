@@ -7,6 +7,7 @@ import { ShipmentCancellation } from "../models/shipmentCancellation.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent, shipmentMilestoneKey } from "../models/shipmentEvent.model.js";
 import { ShipmentOperationsParcelScan } from "../models/shipmentOperationsParcelScan.model.js";
+import { isShipmentPaymentCompleted } from "./prepaid/shipmentFunding.service.js";
 import { markShipmentChargeFinalized } from "./shipmentInvoice.service.js";
 import { resolveShipmentEventNote } from "./shipmentEventCopy.service.js";
 import {
@@ -184,6 +185,9 @@ async function recordResolvedParcelScan(input: {
   const { shipment, parcelNumbers, parcelNumber } = input;
   const draft = await ShipmentDraft.findById(shipment.shipmentDraftId).select("branchId").lean().exec();
   if (!draft) throw new ShipmentOperationsScanError("The shipment record is incomplete.", 409);
+  if (!await isShipmentPaymentCompleted(shipment.shipmentDraftId as mongoose.Types.ObjectId)) {
+    throw new ShipmentOperationsScanError("Shipment payment must be completed before operations can move it.", 402);
+  }
   if (input.allowedBranchIds !== null && input.allowedBranchIds !== undefined
     && !input.allowedBranchIds.includes(String(draft.branchId))) {
     throw new ShipmentOperationsScanError("This shipment belongs to a branch you cannot access.", 403);

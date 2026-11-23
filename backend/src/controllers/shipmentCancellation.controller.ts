@@ -19,7 +19,9 @@ import { suspensionMode } from "../services/businessAccountSuspension.service.js
 import { dateRangeCondition, dateRangeParams } from "../utils/dateRangeFilter.js";
 import {
   approveShipmentCancellation,
+  cancelShipmentDirectly,
   getShipmentCancellation,
+  getShipmentCancellationPreview,
   rejectShipmentCancellation,
   requestShipmentCancellation,
   serializeShipmentCancellation,
@@ -43,6 +45,19 @@ const reviewSchema = z.object({
   // Only sent for walk-in shipments, where the refund is paid back outside the
   // portal. The service decides whether it was required and rejects the approval
   // when a counter sale is refundable but no payout was recorded.
+  refundPayout: z.object({
+    method: z.enum(counterPaymentMethodValues),
+    reference: z.string().trim().max(80).optional(),
+    note: z.string().trim().max(300).optional()
+  }).optional()
+});
+const directCancellationSchema = z.object({
+  reason: z.string().trim().min(5, "Enter a clear reason for cancellation.").max(500),
+  feeBaseMinor: z.number().int().min(0, "The cancellation fee cannot be negative."),
+  feeReason: z.string().trim().max(500).optional().default(""),
+  carrierConfirmed: z.literal(true, { error: "Confirm cancellation with the carrier before completing this action." }),
+  settlementConfirmed: z.literal(true, { error: "Review and confirm the cancellation settlement before completing this action." }),
+  carrierReference: z.string().trim().max(120).optional().default(""),
   refundPayout: z.object({
     method: z.enum(counterPaymentMethodValues),
     reference: z.string().trim().max(80).optional(),
@@ -113,6 +128,17 @@ export async function getAdminShipmentCancellation(request: Request, response: R
   return response.status(200).json({ success: true, canRequest: true, cancellation: await getShipmentCancellation(draftId) });
 }
 
+export async function getAdminShipmentCancellationPreview(request: Request, response: Response): Promise<Response> {
+  const draftId = objectId(request.params.draftId);
+  if (!draftId) return response.status(404).json({ success: false, message: "Shipment not found." });
+  try {
+    const preview = await getShipmentCancellationPreview(draftId);
+    return response.status(200).json({ success: true, preview });
+  } catch (error) {
+    return sendError(error, response);
+  }
+}
+
 export async function requestClientShipmentCancellation(request: Request, response: Response): Promise<Response> {
   const currentUserId = userId(request);
   const draftId = objectId(request.params.draftId);
@@ -171,6 +197,34 @@ export async function requestAdminShipmentCancellation(request: Request, respons
   }
 }
 
+export async function cancelAdminShipmentDirectly(request: Request, response: Response): Promise<Response> {
+  const currentUserId = userId(request);
+  const draftId = objectId(request.params.draftId);
+  if (!currentUserId || !draftId) return response.status(404).json({ success: false, message: "Shipment not found." });
+  const parsed = directCancellationSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return response.status(400).json({
+      success: false,
+      message: parsed.error.issues[0]?.message ?? "Cancellation details are invalid."
+    });
+  }
+  try {
+    const result = await cancelShipmentDirectly({
+      shipmentDraftId: draftId,
+      requestedBy: currentUserId,
+      ...parsed.data
+    });
+    return response.status(result.completed ? 200 : 202).json({
+      success: true,
+      completed: result.completed,
+      message: result.message,
+      cancellation: serializeShipmentCancellation(result.cancellation)
+    });
+  } catch (error) {
+    return sendError(error, response);
+  }
+}
+
 export async function listShipmentCancellations(request: Request, response: Response): Promise<Response> {
   const status = typeof request.query.status === "string" ? request.query.status.toUpperCase() : "";
   const filter: Record<string, unknown> = shipmentCancellationStatusValues.includes(status as ShipmentCancellationStatus)
@@ -196,7 +250,7 @@ export async function listShipmentCancellations(request: Request, response: Resp
       .select("consigneeEnteredAddress businessAccountId branchId customerType consignorAddress.contactName")
       .lean()
       .exec(),
-    DpdShipment.find({ shipmentDraftId: { $in: draftIds } }).select("shipmentDraftId dpdShipmentId swiftlineTrackingNumber").lean().exec(),
+    DpdShipment.find({ shipmentDraftId: { $in: draftIds } }).select("shipmentDraftId dpdShipmentId swiftlineTrackingNumber paymentSource").lean().exec(),
     Branch.find({ _id: { $in: cancellations.map((item) => item.branchId) } }).select("name code").lean().exec(),
     BusinessAccount.find({ _id: { $in: cancellations.map((item) => item.businessAccountId) } }).select("accountId company.companyName").lean().exec()
   ]);
@@ -211,12 +265,11 @@ export async function listShipmentCancellations(request: Request, response: Resp
       const shipment = shipmentMap.get(String(item.shipmentDraftId));
       const branch = branchMap.get(String(item.branchId));
       const account = accountMap.get(String(item.businessAccountId));
-      // A walk-in cancellation refunds money that left the portal, so the review
-      // screen needs to know to ask how it was paid back.
       const isIndividual = draft?.customerType === "INDIVIDUAL";
       return {
         ...serializeShipmentCancellation(item),
         customerType: draft?.customerType ?? "BUSINESS",
+        paymentSource: shipment?.paymentSource ?? "",
         shipmentReference: shipment?.swiftlineTrackingNumber || "AWB Pending",
         consignee: draft?.consigneeEnteredAddress?.companyName
           || draft?.consigneeEnteredAddress?.contactName

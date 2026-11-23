@@ -420,6 +420,7 @@ export async function fulfillCapturedPublicPayment(paymentId: mongoose.Types.Obj
     const result = await createLabelForShipmentDraft(String(payment.shipmentDraftId), SYSTEM_ACTOR_ID, {
       actor: "public",
       paymentSource: "PUBLIC_RAZORPAY",
+      fundingReferenceId: String(payment._id),
       acceptedPricingHash: payment.pricingHash,
       skipDpdLabel: true,
     });
@@ -458,8 +459,12 @@ export async function fulfillCapturedPublicPayment(paymentId: mongoose.Types.Obj
     booking.state = "REFUND_PENDING";
     await Promise.all([payment.save(), booking.save()]);
     try {
-      const refund = await createRazorpayRefund({ paymentId: payment.razorpayPaymentId, amountMinor: payment.amountMinor, idempotencyKey: `PUBLIC_REFUND:${String(payment._id)}` });
+      const refund = await createRazorpayRefund({ paymentId: payment.razorpayPaymentId, amountMinor: payment.amountMinor, idempotencyKey: `PUBLIC_REFUND_${String(payment._id)}` });
+      if (refund.payment_id !== payment.razorpayPaymentId || refund.amount !== payment.amountMinor || refund.currency !== "INR") {
+        throw new Error("The Razorpay refund response did not match this public shipment payment.");
+      }
       payment.razorpayRefundId = refund.id;
+      payment.razorpayRefundAmountMinor = payment.amountMinor;
       payment.status = refund.status === "processed" ? "REFUNDED" : "REFUND_PENDING";
       payment.refundedAt = refund.status === "processed" ? new Date() : null;
       booking.state = payment.status === "REFUNDED" ? "REFUNDED" : "REFUND_PENDING";

@@ -1,7 +1,7 @@
-import type { PipelineStage, Types } from "mongoose";
+import { Types } from "mongoose";
+import type { PipelineStage } from "mongoose";
 import { Claim } from "../models/claim.model.js";
 import { ClaimDocument } from "../models/claimDocument.model.js";
-import { CreditBillingStatement } from "../models/creditBillingStatement.model.js";
 import { DeliveryAssignment, PodRevision } from "../models/pod.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
@@ -10,6 +10,8 @@ import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
 import { ShipmentSupportingDocument } from "../models/shipmentSupportingDocument.model.js";
+import { CashReceipt } from "../models/cashReceipt.model.js";
+import { CashReceiptRead } from "../models/cashReceiptRead.model.js";
 import { getDataAccessTenantId } from "./tenantScope.service.js";
 import { formatSwiftlineParcelNumberForDisplay, swiftlineParcelNumberAliases } from "./swiftlineTracking.service.js";
 import type { ClientScope } from "../utils/clientScope.js";
@@ -21,9 +23,9 @@ export const clientDocumentTypeValues = [
   "POD",
   "BILLING_INVOICE",
   "CREDIT_NOTE",
-  "STATEMENT",
   "CLAIM_DOCUMENT",
-  "CUSTOMS_DOCUMENT"
+  "CUSTOMS_DOCUMENT",
+  "CASH_RECEIPT"
 ] as const;
 
 export type ClientDocumentType = (typeof clientDocumentTypeValues)[number];
@@ -35,15 +37,15 @@ export const clientDocumentTypeLabels: Record<ClientDocumentType, string> = {
   POD: "POD",
   BILLING_INVOICE: "Billing Invoices",
   CREDIT_NOTE: "Credit Notes",
-  STATEMENT: "Statements",
   CLAIM_DOCUMENT: "Claim Documents",
-  CUSTOMS_DOCUMENT: "Customs Documents"
+  CUSTOMS_DOCUMENT: "Customs Documents",
+  CASH_RECEIPT: "Cash Receipt"
 };
 
 const financialDocumentTypes = new Set<ClientDocumentType>([
   "BILLING_INVOICE",
   "CREDIT_NOTE",
-  "STATEMENT"
+  "CASH_RECEIPT"
 ]);
 
 export type ClientDocumentCentreItem = {
@@ -74,7 +76,7 @@ export type ClientDocumentCentreFilters = {
 };
 
 type AggregateResult = {
-  items: Array<Omit<ClientDocumentCentreItem, "id" | "documentTypeLabel"> & {
+  items: Array<Omit<ClientDocumentCentreItem, "id" | "documentTypeLabel" | "isNew"> & {
     _id: string;
     labelType?: string;
     parcelNumber?: string;
@@ -416,55 +418,6 @@ function creditNotePipeline(scope: TenantScopedClientScope) {
   ];
 }
 
-function statementPipeline(scope: TenantScopedClientScope) {
-  return [
-    { $match: { businessAccountId: scope.businessAccountId, ...(scope.tenantId ? { tenantId: scope.tenantId } : {}) } },
-    scopedLookup(
-      ShipmentDraft.collection.name,
-      "lines.shipmentDraftId",
-      "_id",
-      "drafts",
-      scopeMatch(scope)
-    ),
-    {
-      $match: {
-        $expr: {
-          $setIsSubset: [
-            { $map: { input: "$drafts", as: "draft", in: "$$draft.branchId" } },
-            scope.branchIds
-          ]
-        }
-      }
-    },
-    {
-      $project: {
-        _id: { $concat: ["STATEMENT:", { $toString: "$_id" }] },
-        documentType: { $literal: "STATEMENT" },
-        title: { $literal: "Account Statement" },
-        reference: "$statementNumber",
-        awb: { $ifNull: [{ $arrayElemAt: ["$drafts.allocatedTrackingNumber", 0] }, ""] },
-        awbCount: { $size: { $ifNull: ["$drafts", []] } },
-        destination: { $ifNull: [{ $arrayElemAt: ["$drafts.consigneeEnteredAddress.countryName", 0] }, "Multiple destinations"] },
-        documentDate: "$issuedAt",
-        format: { $literal: "PDF" },
-        fileName: { $concat: ["STATEMENT-", "$statementNumber", ".pdf"] },
-        status: "$status",
-        downloadPath: {
-          $concat: [
-            "/api/v1/client/credit/statements/",
-            { $toString: "$_id" },
-            "/pdf?businessAccountId=",
-            { $toString: "$businessAccountId" }
-          ]
-        },
-        downloadMode: { $literal: "BLOB" },
-        searchAwbs: { $ifNull: ["$drafts.allocatedTrackingNumber", []] },
-        searchDestinations: { $ifNull: ["$drafts.consigneeEnteredAddress.countryName", []] }
-      }
-    }
-  ];
-}
-
 function claimDocumentPipeline(scope: TenantScopedClientScope) {
   const destination = destinationExpression("$draft");
   return [
@@ -545,6 +498,49 @@ function customsDocumentPipeline(scope: TenantScopedClientScope) {
   ];
 }
 
+function cashReceiptPipeline(scope: TenantScopedClientScope) {
+  return [
+    {
+      $match: {
+        status: "FINALIZED",
+        issuedAt: { $ne: null },
+        customerType: "BUSINESS",
+        shipmentDraftId: { $type: "objectId" },
+        receiptType: { $ne: "STANDALONE" },
+        ...scopeMatch(scope)
+      }
+    },
+    lookupBooking("shipmentDraftId", scope),
+    { $unwind: { path: "$booking", preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        _id: { $concat: ["CASH_RECEIPT:", { $toString: "$_id" }] },
+        documentType: { $literal: "CASH_RECEIPT" },
+        title: { $literal: "Cash Receipt" },
+        reference: "$receiptNumber",
+        awb: { $ifNull: ["$booking.swiftlineTrackingNumber", ""] },
+        awbCount: { $literal: 1 },
+        destination: "$destinationSnapshot",
+        documentDate: "$issuedAt",
+        format: { $literal: "PDF" },
+        fileName: { $concat: ["CASH-RECEIPT-", "$receiptNumber", ".pdf"] },
+        status: { $literal: "Finalized" },
+        downloadPath: {
+          $concat: [
+            "/api/v1/client/documents/cash-receipts/",
+            { $toString: "$_id" },
+            "/pdf?businessAccountId=",
+            { $toString: "$businessAccountId" }
+          ]
+        },
+        downloadMode: { $literal: "BLOB" },
+        searchAwbs: [{ $ifNull: ["$booking.swiftlineTrackingNumber", ""] }, "$receiptNumber"],
+        searchDestinations: ["$destinationSnapshot"]
+      }
+    }
+  ];
+}
+
 const sourcePipelines: Record<
   ClientDocumentType,
   (scope: TenantScopedClientScope) => Array<Record<string, unknown>>
@@ -555,9 +551,9 @@ const sourcePipelines: Record<
   POD: podPipeline,
   BILLING_INVOICE: billingInvoicePipeline,
   CREDIT_NOTE: creditNotePipeline,
-  STATEMENT: statementPipeline,
   CLAIM_DOCUMENT: claimDocumentPipeline,
-  CUSTOMS_DOCUMENT: customsDocumentPipeline
+  CUSTOMS_DOCUMENT: customsDocumentPipeline,
+  CASH_RECEIPT: cashReceiptPipeline
 };
 
 const sourceCollections: Record<ClientDocumentType, string> = {
@@ -567,9 +563,9 @@ const sourceCollections: Record<ClientDocumentType, string> = {
   POD: PodRevision.collection.name,
   BILLING_INVOICE: ShipmentInvoice.collection.name,
   CREDIT_NOTE: ShipmentCreditNote.collection.name,
-  STATEMENT: CreditBillingStatement.collection.name,
   CLAIM_DOCUMENT: ClaimDocument.collection.name,
-  CUSTOMS_DOCUMENT: ShipmentSupportingDocument.collection.name
+  CUSTOMS_DOCUMENT: ShipmentSupportingDocument.collection.name,
+  CASH_RECEIPT: CashReceipt.collection.name
 };
 
 export function availableClientDocumentTypes(canViewFinancials: boolean) {
@@ -580,7 +576,8 @@ export function availableClientDocumentTypes(canViewFinancials: boolean) {
 
 export async function listClientDocumentCentre(
   scope: SuccessfulClientScope,
-  filters: ClientDocumentCentreFilters
+  filters: ClientDocumentCentreFilters,
+  userId: Types.ObjectId
 ) {
   const availableTypes = availableClientDocumentTypes(scope.canViewFinancials);
   const tenantId = await getDataAccessTenantId();
@@ -594,12 +591,28 @@ export async function listClientDocumentCentre(
     .aggregate<AggregateResult>(pipeline as unknown as PipelineStage[], { allowDiskUse: true })
     .toArray();
   const total = result?.metadata[0]?.total ?? 0;
-  const items = (result?.items ?? []).map(({ _id, labelType, parcelNumber, format, ...item }) => {
+  const sourceItems = result?.items ?? [];
+  const receiptIds = sourceItems
+    .filter((item) => item.documentType === "CASH_RECEIPT" && item._id.startsWith("CASH_RECEIPT:"))
+    .map((item) => item._id.slice("CASH_RECEIPT:".length))
+    .filter(Types.ObjectId.isValid)
+    .map((id) => new Types.ObjectId(id));
+  const readReceiptIds = receiptIds.length
+    ? new Set((await CashReceiptRead.find({ userId, cashReceiptId: { $in: receiptIds } })
+        .select("cashReceiptId")
+        .lean()
+        .exec()).map((read) => String(read.cashReceiptId)))
+    : new Set<string>();
+  const items = sourceItems.map(({ _id, labelType, parcelNumber, format, ...item }) => {
+    const receiptId = item.documentType === "CASH_RECEIPT" && _id.startsWith("CASH_RECEIPT:")
+      ? _id.slice("CASH_RECEIPT:".length)
+      : "";
     const displayParcelNumber = labelType === "SWIFTLINE" && parcelNumber
       ? formatSwiftlineParcelNumberForDisplay(parcelNumber)
       : parcelNumber;
     return {
       ...item,
+      isNew: item.documentType === "CASH_RECEIPT" && !readReceiptIds.has(receiptId),
       format,
       ...(displayParcelNumber ? {
         reference: displayParcelNumber,

@@ -20,6 +20,7 @@ import {
 } from "../models/businessAccount.model.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
+import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { businessAccountBranchFilter } from "../middleware/businessAccountBranchAccess.middleware.js";
@@ -468,6 +469,11 @@ const businessKycReviewBodySchema = z.object({
   }
 });
 
+const volumetricDiscountBodySchema = z.object({
+  volumetricDiscountPercent: z.number().finite().min(0).max(100),
+  expectedVersion: z.number().int().min(0)
+}).strict();
+
 type BusinessKycReviewBody = z.infer<typeof businessKycReviewBodySchema>;
 type AssignBranchBody = z.infer<typeof assignBranchBodySchema>;
 
@@ -761,7 +767,7 @@ function resolveRegistrationIdStorage(
   };
 }
 
-function buildAccountPayload(data: BusinessAccountBody, existingEncryptedRegistrationId = "") {
+function buildAccountPayload(data: BusinessAccountBody, existingEncryptedRegistrationId = "", newAccount = false) {
   // GST fields belong only to accounts that capture them. Dropping them
   // otherwise stops a country switch- or a hand-rolled request- leaving GST
   // data stranded on an account that has no GST at all.
@@ -776,10 +782,8 @@ function buildAccountPayload(data: BusinessAccountBody, existingEncryptedRegistr
     ? false
     : data.company.useCompanyAddressAsBillingAddress;
 
-  return {
-    contact: data.contact,
-    company: {
-      registrationCountry: data.company.registrationCountry,
+  const companyPayload: Record<string, unknown> = {
+    registrationCountry: data.company.registrationCountry,
       registrationIdType: data.company.registrationIdType,
       // Store the normalized registration ID so lookups and duplicate checks
       // stay consistent regardless of spacing or letter case on input.
@@ -813,12 +817,19 @@ function buildAccountPayload(data: BusinessAccountBody, existingEncryptedRegistr
       operatingCountries: data.company.operatingCountries,
       website: data.company.website || null,
       industry: data.company.industry,
-      monthlyShipmentVolume: data.company.monthlyShipmentVolume,
-      requestedCreditLimit: {
-        currency: data.company.requestedCreditCurrency,
-        amount: data.company.requestedCreditLimit ?? null
-      }
-    }
+    monthlyShipmentVolume: data.company.monthlyShipmentVolume
+  };
+  const isOperatorTenant = getTenantContext()?.kind === "OPERATOR";
+  if (isOperatorTenant || newAccount) {
+    companyPayload.requestedCreditLimit = {
+      currency: isOperatorTenant ? data.company.requestedCreditCurrency : "INR",
+      amount: isOperatorTenant ? data.company.requestedCreditLimit ?? null : null
+    };
+  }
+
+  return {
+    contact: data.contact,
+    company: companyPayload
   };
 }
 
@@ -1212,7 +1223,9 @@ async function getPopulatedBusinessAccount(accountId: string) {
     .lean()
     .exec();
 
-  return account ? normalizeBusinessAccountSnapshot(account) : null;
+  if (!account) return null;
+  const [accountWithWallet] = await includeAvailableWalletBalances([account]);
+  return normalizeBusinessAccountSnapshot(accountWithWallet!);
 }
 
 // Store newly uploaded documents and return the storage keys of any they
@@ -1328,10 +1341,11 @@ export async function listBusinessAccounts(request: Request, response: Response)
     const pageSize = Number.isInteger(requestedSize) ? Math.min(Math.max(requestedSize, 1), 100) : 10;
     const total = await BusinessAccount.countDocuments(scopedFilters);
     const accounts = await query.skip((requestedPage - 1) * pageSize).limit(pageSize).lean().exec();
+    const accountsWithWallets = await includeAvailableWalletBalances(accounts);
 
     return response.status(200).json({
       success: true,
-      accounts: accounts.map(normalizeBusinessAccountSnapshot),
+      accounts: accountsWithWallets.map(normalizeBusinessAccountSnapshot),
       total,
       page: requestedPage,
       pageSize
@@ -1339,7 +1353,24 @@ export async function listBusinessAccounts(request: Request, response: Response)
   }
 
   const accounts = await query.lean().exec();
-  return response.status(200).json({ success: true, accounts: accounts.map(normalizeBusinessAccountSnapshot) });
+  const accountsWithWallets = await includeAvailableWalletBalances(accounts);
+  return response.status(200).json({ success: true, accounts: accountsWithWallets.map(normalizeBusinessAccountSnapshot) });
+}
+
+async function includeAvailableWalletBalances<T extends { _id: mongoose.Types.ObjectId }>(accounts: T[]) {
+  if (!accounts.length) return accounts.map((account) => ({ ...account, walletAvailableBalanceMinor: 0 }));
+  const wallets = await PrepaidAccount.find({ businessAccountId: { $in: accounts.map((account) => account._id) } })
+    .select("businessAccountId cashBalanceMinor reservedBalanceMinor")
+    .lean()
+    .exec();
+  const availableByAccountId = new Map(wallets.map((wallet) => [
+    String(wallet.businessAccountId),
+    Math.max(wallet.cashBalanceMinor - wallet.reservedBalanceMinor, 0)
+  ]));
+  return accounts.map((account) => ({
+    ...account,
+    walletAvailableBalanceMinor: availableByAccountId.get(String(account._id)) ?? 0
+  }));
 }
 
 export async function createBusinessAccount(request: Request, response: Response): Promise<Response> {
@@ -1422,7 +1453,7 @@ export async function createBusinessAccount(request: Request, response: Response
     const account = await createBusinessAccountRecord({
       _id: accountObjectId,
       status: "draft",
-      ...buildAccountPayload(parsed.data),
+      ...buildAccountPayload(parsed.data, "", true),
       gstBilling: initialGstBilling(parsed.data.gstBilling, userId),
       documents,
       createdBy: userId,
@@ -1461,8 +1492,55 @@ export async function getBusinessAccount(request: Request, response: Response): 
     .exec();
 
   if (!account) return response.status(404).json({ success: false, message: "Business account not found" });
+  const [accountWithWallet] = await includeAvailableWalletBalances([account]);
+  return response.status(200).json({ success: true, account: normalizeBusinessAccountSnapshot(accountWithWallet!) });
+}
 
-  return response.status(200).json({ success: true, account: normalizeBusinessAccountSnapshot(account) });
+export async function updateBusinessAccountVolumetricDiscount(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+
+  const parsed = volumetricDiscountBodySchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ success: false, message: "Enter a discount from 0% to 100%.", errors: parsed.error.format() });
+
+  const account = await BusinessAccount.findOne({
+    accountId: request.params.accountId,
+    accountKind: { $ne: "INDIVIDUAL_SENTINEL" }
+  }).select("_id accountId status volumetricDiscountPercent volumetricDiscountVersion").exec();
+  if (!account) return response.status(404).json({ success: false, message: "Business account was not found." });
+
+  const currentVersion = account.volumetricDiscountVersion ?? 0;
+  if (currentVersion !== parsed.data.expectedVersion) {
+    return response.status(409).json({ success: false, message: "The volumetric discount changed in another session. Reload the account and try again." });
+  }
+
+  const versionMatch = parsed.data.expectedVersion === 0
+    ? { $or: [{ volumetricDiscountVersion: 0 }, { volumetricDiscountVersion: { $exists: false } }] }
+    : { volumetricDiscountVersion: parsed.data.expectedVersion };
+  const updated = await BusinessAccount.findOneAndUpdate({
+    accountId: request.params.accountId,
+    accountKind: { $ne: "INDIVIDUAL_SENTINEL" },
+    ...versionMatch
+  }, {
+    $set: {
+      volumetricDiscountPercent: parsed.data.volumetricDiscountPercent,
+      volumetricDiscountUpdatedAt: new Date(),
+      volumetricDiscountUpdatedBy: userId
+    },
+    $inc: { volumetricDiscountVersion: 1 }
+  }, { returnDocument: "after", runValidators: true }).exec();
+
+  if (!updated) return response.status(409).json({ success: false, message: "The volumetric discount changed in another session. Reload the account and try again." });
+
+  await recordBusinessAccountAudit(
+    "BUSINESS_ACCOUNT_VOLUMETRIC_DISCOUNT_UPDATED",
+    updated,
+    userId,
+    { volumetricDiscountPercent: { from: account.volumetricDiscountPercent ?? 0, to: updated.volumetricDiscountPercent ?? 0 } }
+  );
+
+  const updatedAccount = await getPopulatedBusinessAccount(updated.accountId);
+  return response.status(200).json({ success: true, account: updatedAccount ?? updated, message: "Volumetric discount saved." });
 }
 
 export async function updateBusinessAccount(request: Request, response: Response): Promise<Response> {
@@ -1507,6 +1585,7 @@ export async function updateBusinessAccount(request: Request, response: Response
   // previously reviewed checks are now invalidated by the change.
   const previousContact = JSON.stringify(account.contact);
   const previousCompany = JSON.stringify(account.company);
+  const legacyRequestedCreditLimit = account.company.requestedCreditLimit;
   const replacedDocumentTypes = (Object.keys(files) as DocumentType[]).filter((type) => files[type]);
 
   const documents = account.documents ?? {};
@@ -1529,6 +1608,9 @@ export async function updateBusinessAccount(request: Request, response: Response
     documents,
     updatedBy: userId
   });
+  if (getTenantContext()?.kind !== "OPERATOR") {
+    account.company.requestedCreditLimit = legacyRequestedCreditLimit;
+  }
 
   // A replaced document or an edited contact/company field group must not keep a
   // prior "verified" outcome, so reset those checks for re-review before deriving

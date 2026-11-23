@@ -3,6 +3,9 @@ import { aadhaarOcrUpload } from "../middleware/aadhaarOcrUpload.middleware.js";
 import { requireAadhaarOcrFeatureEnabled } from "../middleware/aadhaarOcrFeature.middleware.js";
 import {
   createClientShipmentAmendment,
+  createClientShipmentAmendmentDirectPayment,
+  fundClientShipmentAmendmentFromWallet,
+  getClientPendingShipmentAmendment,
   downloadClientCustomsInvoicePdf,
   downloadClientCustomsInvoiceWorkbook,
   downloadClientShipmentInvoicePdf,
@@ -32,6 +35,7 @@ import {
   getClientShipmentDraftCostEstimate,
   ocrClientShipmentDraftAadhaar,
   previewClientShipmentAmendment,
+  verifyClientShipmentAmendmentDirectPayment,
   createClientShipmentImportBatch,
   createClientShipmentImportDrafts,
   downloadClientShipmentImportTemplate,
@@ -44,6 +48,7 @@ import {
   getClientPrepaidTopUp,
   listClientPrepaidTopUps,
   listClientPrepaidTransactions,
+  getClientAccountLedger,
   verifyClientPrepaidTopUp
 } from "../controllers/prepaid.controller.js";
 import {
@@ -86,27 +91,8 @@ import { shipmentImportUpload } from "../middleware/shipmentImportUpload.middlew
 import { shipmentKycUpload } from "../middleware/shipmentKycUpload.middleware.js";
 import { shipmentSupportingDocumentUpload } from "../middleware/shipmentSupportingDocumentUpload.middleware.js";
 import {
-  acceptClientPaymentTerms, getClientCreditLimitIncrease, getClientCreditSummary, getClientPaymentTerms,
-  requestClientCredit, requestClientCreditLimitIncrease
+  acceptClientPaymentTerms, getClientPaymentTerms
 } from "../controllers/clientCredit.controller.js";
-import {
-  getClientCreditAgreement,
-  getClientCreditAgreementPdf,
-  listClientCreditAgreements
-} from "../controllers/creditAgreement.controller.js";
-import {
-  closeClientBillingCycle,
-  createClientOnlinePayment,
-  downloadClientStatement,
-  exportClientLedger,
-  getClientLedger,
-  getClientStatement,
-  handleCreditBillingError,
-  listClientPayments,
-  listClientStatements,
-  submitClientOfflinePayment,
-  verifyClientOnlinePayment
-} from "../controllers/creditBilling.controller.js";
 import {
   getClientCancellationCreditNotePdf,
   getClientCancellationFeeInvoicePdf,
@@ -135,6 +121,15 @@ import { listClientTeam, requestClientTeamInvite, updateClientTeamMemberRole } f
 import { createPodDispute, downloadClientPodPdf, emailClientPod, getClientPod, listClientPodCentre, viewPodEvidence } from "../controllers/pod.controller.js";
 import { addressBookRouter } from "./addressBook.routes.js";
 import { listClientDocuments } from "../controllers/clientDocumentCentre.controller.js";
+import {
+  createClientShipmentDirectPayment,
+  verifyClientShipmentDirectPayment
+} from "../controllers/shipmentDirectPayment.controller.js";
+import {
+  downloadClientCashReceiptPdf,
+  getClientShipmentCashReceipt,
+  getClientCashReceiptUnreadCount
+} from "../controllers/cashReceipt.controller.js";
 import { supportTicketDraftRouter } from "./supportTicketDraft.routes.js";
 
 export const clientRouter = Router();
@@ -144,6 +139,8 @@ clientRouter.use(requireRole("client"));
 
 clientRouter.use("/address-book", addressBookRouter);
 clientRouter.get("/documents", listClientDocuments);
+clientRouter.get("/documents/cash-receipts/unread-count", getClientCashReceiptUnreadCount);
+clientRouter.get("/documents/cash-receipts/:receiptId/pdf", downloadClientCashReceiptPdf);
 
 // Operations advisory: the header marquee, the Holiday & Cut-Off Calendar and
 // the customs & regulatory updates published alongside it.
@@ -176,25 +173,8 @@ clientRouter.get("/quotes", listClientShipmentQuotes);
 clientRouter.post("/quotes", createClientShipmentQuote);
 clientRouter.get("/quotes/:quoteId", getClientShipmentQuote);
 clientRouter.post("/quotes/:quoteId/convert", convertClientShipmentQuote);
-clientRouter.get("/credit", getClientCreditSummary);
-clientRouter.post("/credit/request", requestClientCredit);
-clientRouter.get("/credit/limit-increase", getClientCreditLimitIncrease);
-clientRouter.post("/credit/limit-increase", requestClientCreditLimitIncrease);
-clientRouter.get("/credit/payment-terms", getClientPaymentTerms);
-clientRouter.post("/credit/payment-terms/accept", acceptClientPaymentTerms);
-clientRouter.get("/credit/statements", listClientStatements);
-clientRouter.post("/credit/statements/close-cycle", closeClientBillingCycle);
-clientRouter.get("/credit/statements/:statementId", getClientStatement);
-clientRouter.get("/credit/statements/:statementId/pdf", downloadClientStatement);
-clientRouter.post("/credit/payments/online", createClientOnlinePayment);
-clientRouter.post("/credit/payments/online/verify", verifyClientOnlinePayment);
-clientRouter.post("/credit/payments/offline", submitClientOfflinePayment);
-clientRouter.get("/credit/payments", listClientPayments);
-clientRouter.get("/credit/ledger", getClientLedger);
-clientRouter.get("/credit/ledger/export", exportClientLedger);
-clientRouter.get("/credit-agreements", listClientCreditAgreements);
-clientRouter.get("/credit-agreements/:agreementId/pdf", getClientCreditAgreementPdf);
-clientRouter.get("/credit-agreements/:agreementId", getClientCreditAgreement);
+clientRouter.get("/payment-terms", getClientPaymentTerms);
+clientRouter.post("/payment-terms/accept", acceptClientPaymentTerms);
 clientRouter.get("/country-rate-cards", listClientCountryRateCards);
 clientRouter.get("/rate-card-shares", listClientRateCardShares);
 clientRouter.get("/rate-card-shares/:shareId", getClientRateCardShare);
@@ -203,6 +183,7 @@ clientRouter.get("/rate-card-shares/:shareId/xlsx", downloadClientRateCardShareW
 clientRouter.post("/rate-card-shares/:shareId/read", markClientRateCardShareRead);
 clientRouter.get("/prepaid-account", getClientPrepaidAccount);
 clientRouter.get("/prepaid-transactions", listClientPrepaidTransactions);
+clientRouter.get("/account-ledger", getClientAccountLedger);
 clientRouter.post("/prepaid-topups", createClientPrepaidTopUp);
 clientRouter.post("/prepaid-topups/:id/verify", verifyClientPrepaidTopUp);
 clientRouter.get("/prepaid-topups/:id", getClientPrepaidTopUp);
@@ -223,6 +204,8 @@ clientRouter.post("/dpd-labels/drafts/:id/restore", restoreClientShipmentDraft);
 // POST because the booking form prices the values it currently holds, which are
 // sent in the body. Nothing is written.
 clientRouter.post("/dpd-labels/drafts/:id/cost-estimate", getClientShipmentDraftCostEstimate);
+clientRouter.post("/dpd-labels/drafts/:id/direct-payment", createClientShipmentDirectPayment);
+clientRouter.post("/dpd-labels/drafts/:id/direct-payment/verify", verifyClientShipmentDirectPayment);
 clientRouter.post("/dpd-labels/drafts/:id/aadhaar-ocr", requireAadhaarOcrFeatureEnabled, aadhaarOcrUpload, ocrClientShipmentDraftAadhaar);
 clientRouter.post("/dpd-labels/drafts/:id/kyc-documents/:type", shipmentKycUpload, uploadClientShipmentKycDocument);
 clientRouter.delete("/dpd-labels/drafts/:id/kyc-documents/:type", deleteClientShipmentKycDocument);
@@ -265,11 +248,16 @@ clientRouter.get("/shipment-manifests/:manifestId/download", downloadClientShipm
 clientRouter.get("/shipment-manifests/:manifestId/xlsx", downloadClientShipmentManifestExcel);
 clientRouter.get("/shipment-manifests/:manifestId/pdf", downloadClientShipmentManifestPdf);
 clientRouter.get("/shipments/:draftId/cancellation", getClientShipmentCancellation);
+clientRouter.get("/shipments/:draftId/cash-receipt", getClientShipmentCashReceipt);
 clientRouter.post("/shipments/:draftId/cancellation", requestClientShipmentCancellation);
 clientRouter.get("/shipment-cancellations/:id/credit-note/pdf", getClientCancellationCreditNotePdf);
 clientRouter.get("/shipment-cancellations/:id/fee-invoice/pdf", getClientCancellationFeeInvoicePdf);
 clientRouter.post("/shipments/:id/amendments/preview", previewClientShipmentAmendment);
 clientRouter.post("/shipments/:id/amendments", createClientShipmentAmendment);
+clientRouter.get("/shipments/:draftId/amendments/pending", getClientPendingShipmentAmendment);
+clientRouter.post("/shipment-amendments/:id/fund-wallet", fundClientShipmentAmendmentFromWallet);
+clientRouter.post("/shipment-amendments/:id/direct-payment", createClientShipmentAmendmentDirectPayment);
+clientRouter.post("/shipment-amendments/:id/direct-payment/verify", verifyClientShipmentAmendmentDirectPayment);
 clientRouter.get("/shipments/:draftId/invoice", getClientShipmentInvoice);
 clientRouter.get("/shipments/:draftId/invoice/pdf", downloadClientShipmentInvoicePdf);
 // Document-only revised copies of the GST invoice, read-only for clients.
@@ -286,10 +274,3 @@ clientRouter.get("/dpd-labels/addresses/consignor/places/:placeId", getConsignor
 clientRouter.get("/dpd-labels/addresses/places/:placeId", getPlaceAddress);
 clientRouter.post("/dpd-labels/addresses/validate", validateAddress);
 clientRouter.post("/dpd-labels/addresses/confirm", confirmValidatedAddress);
-clientRouter.use((error: unknown, _request: import("express").Request, response: import("express").Response, next: import("express").NextFunction) => {
-  try {
-    handleCreditBillingError(error, response);
-  } catch (unhandled) {
-    next(unhandled);
-  }
-});

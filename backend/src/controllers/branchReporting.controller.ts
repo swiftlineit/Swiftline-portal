@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
-import { BusinessCreditAccount } from "../models/businessCreditAccount.model.js";
+import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import {
   CounterPayment,
   counterPaymentMethodValues,
@@ -13,7 +13,6 @@ import { DpdShipment } from "../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { User } from "../models/user.model.js";
-import { getCreditBalances } from "../services/creditAccount.service.js";
 import { normalizePortalRole } from "../utils/portalRole.js";
 
 const INDIA_OFFSET = "+05:30";
@@ -145,7 +144,7 @@ export async function getBranchFinanceSummary(request: Request, response: Respon
     recordedAt: { $gte: range.fromDate, $lt: range.toExclusive }
   };
 
-  const [businessInvoiceRows, individualShipmentCount, creditAccounts, counterTotals, counterMethods, recentPayments] = await Promise.all([
+  const [businessInvoiceRows, individualShipmentCount, prepaidAccounts, counterTotals, counterMethods, recentPayments] = await Promise.all([
     ShipmentInvoice.aggregate<{ shipments: number; invoicedMinor: number }>([
       { $match: businessInvoiceMatch },
       { $group: { _id: null, shipments: { $sum: 1 }, invoicedMinor: { $sum: "$totalAmountMinor" } } }
@@ -153,7 +152,7 @@ export async function getBranchFinanceSummary(request: Request, response: Respon
     individualAccount?._id
       ? ShipmentInvoice.countDocuments({ ...validInvoice, businessAccountId: individualAccount._id }).exec()
       : Promise.resolve(0),
-    BusinessCreditAccount.find({ businessAccountId: { $in: businessAccountIds } }).lean().exec(),
+    PrepaidAccount.find({ businessAccountId: { $in: businessAccountIds } }).lean().exec(),
     CounterPayment.aggregate<{ collectedMinor: number; refundedMinor: number }>([
       { $match: counterMatch },
       {
@@ -183,31 +182,30 @@ export async function getBranchFinanceSummary(request: Request, response: Respon
   ]);
 
   const accountById = new Map(businessAccounts.map((account) => [String(account._id), account]));
-  const creditRows = creditAccounts.map((credit) => {
-    const account = accountById.get(String(credit.businessAccountId));
-    const balances = getCreditBalances(credit);
+  const walletRows = prepaidAccounts.map((wallet) => {
+    const account = accountById.get(String(wallet.businessAccountId));
+    const availableBalanceMinor = wallet.status === "ACTIVE"
+      ? Math.max(wallet.cashBalanceMinor - wallet.reservedBalanceMinor, 0)
+      : 0;
     return {
-      id: String(credit._id),
-      businessAccountId: String(credit.businessAccountId),
+      id: String(wallet._id),
+      businessAccountId: String(wallet.businessAccountId),
       accountId: account?.accountId ?? "",
       companyName: account?.company?.companyName ?? account?.accountId ?? "",
-      status: credit.status,
-      approvedCreditLimitMinor: credit.approvedCreditLimitMinor,
-      usedCreditMinor: balances.usedCreditMinor,
-      invoicedOutstandingMinor: credit.invoicedOutstandingMinor,
-      customerAdvanceBalanceMinor: credit.customerAdvanceBalanceMinor,
-      availableCreditMinor: balances.availableCreditMinor
+      status: wallet.status,
+      walletBalanceMinor: wallet.cashBalanceMinor,
+      reservedBalanceMinor: wallet.reservedBalanceMinor,
+      availableBalanceMinor
     };
   });
 
-  const creditTotals = creditRows.reduce(
-    (totals, credit) => ({
-      creditLimitMinor: totals.creditLimitMinor + credit.approvedCreditLimitMinor,
-      usedCreditMinor: totals.usedCreditMinor + credit.usedCreditMinor,
-      outstandingMinor: totals.outstandingMinor + credit.invoicedOutstandingMinor,
-      advancesMinor: totals.advancesMinor + credit.customerAdvanceBalanceMinor
+  const walletTotals = walletRows.reduce(
+    (totals, wallet) => ({
+      walletBalanceMinor: totals.walletBalanceMinor + wallet.walletBalanceMinor,
+      reservedBalanceMinor: totals.reservedBalanceMinor + wallet.reservedBalanceMinor,
+      availableBalanceMinor: totals.availableBalanceMinor + wallet.availableBalanceMinor
     }),
-    { creditLimitMinor: 0, usedCreditMinor: 0, outstandingMinor: 0, advancesMinor: 0 }
+    { walletBalanceMinor: 0, reservedBalanceMinor: 0, availableBalanceMinor: 0 }
   );
 
   const recentDraftIds = recentPayments.map((payment) => payment.shipmentDraftId);
@@ -247,24 +245,19 @@ export async function getBranchFinanceSummary(request: Request, response: Respon
 
   const businessInvoices = businessInvoiceRows[0];
   const individualMoney = counterTotals[0] ?? { collectedMinor: 0, refundedMinor: 0 };
-  const utilizationPercent = creditTotals.creditLimitMinor > 0
-    ? Number(((creditTotals.usedCreditMinor / creditTotals.creditLimitMinor) * 100).toFixed(1))
-    : 0;
-
   return response.status(200).json({
     success: true,
     period: { from: range.from, to: range.to },
-    // Counter payments and business credit accounts are stored in INR today.
+    // Counter payments and prepaid accounts are stored in INR today.
     // Do not relabel them with a branch profile currency that may differ.
     currency: "INR",
     business: {
       shipments: numberValue(businessInvoices?.shipments),
       invoicedMinor: numberValue(businessInvoices?.invoicedMinor),
       linkedAccounts: businessAccounts.length,
-      withCreditAccount: creditRows.length,
-      ...creditTotals,
-      utilizationPercent,
-      creditAccounts: creditRows
+      walletCount: walletRows.length,
+      ...walletTotals,
+      wallets: walletRows
     },
     individual: {
       shipments: individualShipmentCount,

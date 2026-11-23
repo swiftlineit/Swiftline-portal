@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 import { AuditLog } from "../models/auditLog.model.js";
+import { CashAllocationEvent } from "../models/cashAllocationEvent.model.js";
+import { CashReceipt } from "../models/cashReceipt.model.js";
 import { BusinessCreditAccount } from "../models/businessCreditAccount.model.js";
 import { CancellationDocumentCounter } from "../models/cancellationDocumentCounter.model.js";
 import { CancellationFeeInvoice } from "../models/cancellationFeeInvoice.model.js";
@@ -10,6 +12,10 @@ import { BusinessAccount } from "../models/businessAccount.model.js";
 import { ShipmentAmendment } from "../models/shipmentAmendment.model.js";
 import { ShipmentCancellation, type IShipmentCancellation } from "../models/shipmentCancellation.model.js";
 import { ShipmentCharge } from "../models/shipmentCharge.model.js";
+import { ShipmentDirectPayment } from "../models/shipmentDirectPayment.model.js";
+import { ShipmentFunding } from "../models/shipmentFunding.model.js";
+import { PublicShipmentPayment } from "../models/publicShipmentPayment.model.js";
+import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import { CounterPayment, type CounterPaymentMethod } from "../models/counterPayment.model.js";
 import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
 import { ShipmentCreditNote } from "../models/shipmentCreditNote.model.js";
@@ -29,6 +35,8 @@ import {
   terminalOperatorShipmentStatuses
 } from "./operatorShipmentCancellationPolicy.service.js";
 import { suspensionMessage } from "./businessAccountSuspension.service.js";
+import { createLedgerEntry } from "./prepaid/ledger.service.js";
+import { ensureCancellationGatewayRefund } from "./prepaid/cancellationRefunds.service.js";
 
 // The default fee and threshold for requiring an additional-fee reason; lower
 // fees are valid and are not subject to a minimum.
@@ -87,6 +95,13 @@ export function calculateCancellationAmounts(
     feeWasCapped: true
   };
 }
+
+export type ShipmentCancellationPreview = ReturnType<typeof calculateCancellationAmounts> & {
+  originalAmountMinor: number;
+  taxTreatment: "GST_APPLICABLE" | "NO_GST";
+  manualRefundRequired: boolean;
+  manualRefundSource: boolean;
+};
 
 export function calculateCancellationSettlement(input: {
   originalAmountMinor: number;
@@ -220,6 +235,11 @@ export function serializeShipmentCancellation(cancellation: IShipmentCancellatio
     carrierConfirmed: cancellation.carrierConfirmed,
     carrierConfirmationRequired: cancellation.carrierConfirmationRequired !== false,
     settlementConfirmed: cancellation.settlementConfirmed,
+    paymentRefundStatus: cancellation.paymentRefundStatus ?? "NOT_REQUIRED",
+    paymentRefundAmountMinor: cancellation.paymentRefundAmountMinor ?? 0,
+    paymentRefundReference: cancellation.paymentRefundReference ?? "",
+    paymentRefundedAt: cancellation.paymentRefundedAt ?? null,
+    gatewayRefundStarted: Boolean(cancellation.gatewayRefundPlan),
     carrierReference: cancellation.carrierReference,
     reviewNote: cancellation.reviewNote,
     settlement: cancellation.settlement ?? null,
@@ -242,7 +262,10 @@ export async function requestShipmentCancellation(input: {
   requesterType: "CLIENT" | "ADMIN";
   requesterRole: string;
   reason: string;
+  requestedFeeBaseMinor?: number;
+  feeReason?: string;
   portalSlug?: string;
+  notifyReviewers?: boolean;
 }) {
   const tenantContext = getTenantContext();
   const ownerFilter = tenantContext ? { tenantId: tenantContext.tenantId } : {};
@@ -260,7 +283,10 @@ export async function requestShipmentCancellation(input: {
 
   const gate = await cancellationGate(draft._id as mongoose.Types.ObjectId, input.requesterType);
   if (!gate.allowed) throw new ShipmentCancellationError(409, gate.message);
-  if (await ShipmentAmendment.exists({ shipmentDraftId: draft._id, status: "REQUESTED" })) {
+  if (await ShipmentAmendment.exists({
+    shipmentDraftId: draft._id,
+    status: { $in: ["REQUESTED", "AWAITING_PAYMENT", "PAYMENT_SECURED"] }
+  })) {
     throw new ShipmentCancellationError(409, "Approve or reject the pending amendment before requesting cancellation.");
   }
   const existing = await ShipmentCancellation.findOne({ shipmentDraftId: draft._id, status: "REQUESTED" }).exec();
@@ -284,7 +310,9 @@ export async function requestShipmentCancellation(input: {
     status: "REQUESTED",
     originalAmountMinor: invoice.totalAmountMinor,
     taxTreatment: invoice.taxTreatment ?? (invoice.gstRatePercent === 0 ? "NO_GST" : "GST_APPLICABLE"),
-    requestedFeeBaseMinor: tenantContext?.kind === "OPERATOR" ? 0 : DEFAULT_CANCELLATION_FEE_BASE_MINOR,
+    requestedFeeBaseMinor: input.requestedFeeBaseMinor
+      ?? (tenantContext?.kind === "OPERATOR" ? 0 : DEFAULT_CANCELLATION_FEE_BASE_MINOR),
+    feeReason: input.feeReason?.trim() ?? "",
     carrierConfirmationRequired: tenantContext?.kind !== "OPERATOR",
     requestedAt: new Date()
   });
@@ -297,23 +325,86 @@ export async function requestShipmentCancellation(input: {
     performedAt: cancellation.requestedAt,
     metadata: { shipmentDraftId: draft._id, dpdShipmentId: dpdShipment._id, requesterType: input.requesterType }
   });
-  const notification = {
-    type: "SHIPMENT_CANCELLATION_REQUESTED" as const,
-    title: "Shipment cancellation requested",
-    message: `A cancellation request for shipment ${dpdShipment.dpdShipmentId || String(dpdShipment._id)} requires review.`,
-    idempotencyKey: `SHIPMENT_CANCELLATION_REQUESTED:${String(cancellation._id)}`,
-    businessAccountId: draft.businessAccountId,
-    metadata: { cancellationId: String(cancellation._id), shipmentDraftId: String(draft._id) }
-  };
-  if (tenantContext?.kind === "OPERATOR") {
-    await notifyOperatorShipmentCancellationReviewers(notification);
-  } else {
-    await notifyActiveAdmins({
-      ...notification,
-      href: `/dashboard/cancellations#cancellation-${String(cancellation._id)}`
-    });
+  if (input.notifyReviewers !== false) {
+    const notification = {
+      type: "SHIPMENT_CANCELLATION_REQUESTED" as const,
+      title: "Shipment cancellation requested",
+      message: `A cancellation request for shipment ${dpdShipment.dpdShipmentId || String(dpdShipment._id)} requires review.`,
+      idempotencyKey: `SHIPMENT_CANCELLATION_REQUESTED:${String(cancellation._id)}`,
+      businessAccountId: draft.businessAccountId,
+      metadata: { cancellationId: String(cancellation._id), shipmentDraftId: String(draft._id) }
+    };
+    if (tenantContext?.kind === "OPERATOR") {
+      await notifyOperatorShipmentCancellationReviewers(notification);
+    } else {
+      await notifyActiveAdmins({
+        ...notification,
+        href: `/dashboard/cancellations#cancellation-${String(cancellation._id)}`
+      });
+    }
   }
   return cancellation;
+}
+
+/**
+ * Read-only preflight for the admin shipment-list cancellation dialog. All
+ * eligibility and amount checks are repeated by the write path; this preview
+ * exists so the admin can review the fee and refund before confirming them.
+ */
+export async function getShipmentCancellationPreview(
+  shipmentDraftId: mongoose.Types.ObjectId,
+  requestedFeeBaseMinor = DEFAULT_CANCELLATION_FEE_BASE_MINOR
+): Promise<ShipmentCancellationPreview> {
+  if (!Number.isSafeInteger(requestedFeeBaseMinor) || requestedFeeBaseMinor < 0) {
+    throw new ShipmentCancellationError(400, "The cancellation fee must be a non-negative amount.");
+  }
+  const tenantContext = getTenantContext();
+  const ownerFilter = tenantContext ? { tenantId: tenantContext.tenantId } : {};
+  const draft = await ShipmentDraft.findOne({ _id: shipmentDraftId, ...ownerFilter }).exec();
+  if (!draft) throw new ShipmentCancellationError(404, "Shipment not found.");
+
+  const account = await BusinessAccount.findById(draft.businessAccountId).select("status accountKind").lean().exec();
+  if (!account) throw new ShipmentCancellationError(404, "Business account not found.");
+  if (account.status === "suspended" && account.accountKind !== "INDIVIDUAL_SENTINEL") {
+    throw new ShipmentCancellationError(423, suspensionMessage);
+  }
+
+  const [dpdShipment, invoice] = await Promise.all([
+    DpdShipment.findOne({ shipmentDraftId: draft._id, ...ownerFilter }).exec(),
+    ShipmentInvoice.findOne({ shipmentDraftId: draft._id, ...ownerFilter }).exec()
+  ]);
+  if (!dpdShipment) throw new ShipmentCancellationError(409, "Only booked shipments can be cancelled.");
+  if (!invoice || invoice.paymentStatus === "VOID") {
+    throw new ShipmentCancellationError(409, "Active shipment billing information is unavailable.");
+  }
+
+  const gate = await cancellationGate(draft._id as mongoose.Types.ObjectId, "ADMIN");
+  if (!gate.allowed) throw new ShipmentCancellationError(409, gate.message);
+  if (await ShipmentAmendment.exists({
+    shipmentDraftId: draft._id,
+    status: { $in: ["REQUESTED", "AWAITING_PAYMENT", "PAYMENT_SECURED"] }
+  })) {
+    throw new ShipmentCancellationError(409, "Resolve the pending amendment before cancelling this shipment.");
+  }
+  if (await ShipmentCancellation.exists({ shipmentDraftId: draft._id, status: "REQUESTED" })) {
+    throw new ShipmentCancellationError(409, "A cancellation is already pending review for this shipment.");
+  }
+
+  const taxTreatment = invoice.taxTreatment ?? (invoice.gstRatePercent === 0 ? "NO_GST" : "GST_APPLICABLE");
+  const amounts = calculateCancellationAmounts(invoice.totalAmountMinor, requestedFeeBaseMinor, taxTreatment);
+  const [funding, counterCharge] = await Promise.all([
+    ShipmentFunding.findOne({ shipmentDraftId: draft._id, status: "COMPLETED" }).select("source").lean().exec(),
+    ShipmentCharge.exists({ shipmentDraftId: draft._id, paymentSource: "ADMIN_DIRECT" })
+  ]);
+
+  const manualRefundSource = funding?.source === "CASH_RECEIPT" || Boolean(counterCharge);
+  return {
+    ...amounts,
+    originalAmountMinor: invoice.totalAmountMinor,
+    taxTreatment,
+    manualRefundSource,
+    manualRefundRequired: amounts.refundableAmountMinor > 0 && manualRefundSource
+  };
 }
 
 export async function rejectShipmentCancellation(input: {
@@ -323,7 +414,7 @@ export async function rejectShipmentCancellation(input: {
   portalSlug?: string;
 }) {
   const cancellation = await ShipmentCancellation.findOneAndUpdate(
-    { _id: input.cancellationId, status: "REQUESTED" },
+    { _id: input.cancellationId, status: "REQUESTED", gatewayRefundPlan: null },
     {
       $set: {
         status: "REJECTED",
@@ -334,7 +425,7 @@ export async function rejectShipmentCancellation(input: {
     },
     { returnDocument: "after", runValidators: true }
   ).exec();
-  if (!cancellation) throw new ShipmentCancellationError(409, "Only pending cancellation requests can be rejected.");
+  if (!cancellation) throw new ShipmentCancellationError(409, "Only pending cancellation requests without a started gateway refund can be rejected.");
 
   await AuditLog.create({
     action: "SHIPMENT_CANCELLATION_REJECTED",
@@ -408,6 +499,60 @@ export async function approveShipmentCancellation(input: {
     throw new ShipmentCancellationError(400, "Explain the additional carrier or handling fee.");
   }
 
+  const preflightCancellation = await ShipmentCancellation.findById(input.cancellationId).exec();
+  if (!preflightCancellation) throw new ShipmentCancellationError(404, "Cancellation request not found.");
+  if (preflightCancellation.status === "COMPLETED") return preflightCancellation;
+  if (preflightCancellation.status !== "REQUESTED") {
+    throw new ShipmentCancellationError(409, "Only pending cancellation requests can be approved.");
+  }
+  if (preflightCancellation.carrierConfirmationRequired !== false && !input.carrierConfirmed) {
+    throw new ShipmentCancellationError(400, "Confirm carrier cancellation before completing the refund.");
+  }
+  if (preflightCancellation.carrierConfirmationRequired === false && tenantContext?.kind !== "OPERATOR") {
+    throw new ShipmentCancellationError(404, "Cancellation request not found.");
+  }
+  const preflightGate = await cancellationGate(preflightCancellation.shipmentDraftId, "ADMIN");
+  if (!preflightGate.allowed) throw new ShipmentCancellationError(409, preflightGate.message);
+  if (await ShipmentAmendment.exists({
+    shipmentDraftId: preflightCancellation.shipmentDraftId,
+    status: { $in: ["REQUESTED", "AWAITING_PAYMENT", "PAYMENT_SECURED"] }
+  })) {
+    throw new ShipmentCancellationError(409, "Approve or reject the pending amendment before completing cancellation.");
+  }
+  const preflightInvoice = await ShipmentInvoice.findOne({
+    _id: preflightCancellation.shipmentInvoiceId,
+    shipmentDraftId: preflightCancellation.shipmentDraftId,
+    paymentStatus: { $ne: "VOID" }
+  }).exec();
+  if (!preflightInvoice) throw new ShipmentCancellationError(409, "The active shipment invoice could not be found.");
+  if (preflightInvoice.totalAmountMinor !== preflightCancellation.originalAmountMinor) {
+    throw new ShipmentCancellationError(409, "The shipment invoice changed after cancellation was requested. Reject this request and create a new one.");
+  }
+  const preflightTaxTreatment = preflightInvoice.taxTreatment ?? (preflightInvoice.gstRatePercent === 0 ? "NO_GST" : "GST_APPLICABLE");
+  const preflightAmounts = calculateCancellationAmounts(preflightInvoice.totalAmountMinor, input.feeBaseMinor, preflightTaxTreatment);
+  if (
+    preflightCancellation.gatewayRefundPlan
+    && preflightCancellation.gatewayRefundPlan.amountMinor !== preflightAmounts.refundableAmountMinor
+  ) {
+    throw new ShipmentCancellationError(
+      409,
+      "A Razorpay refund was already started for this cancellation. Retry with the original reviewed fee."
+    );
+  }
+  try {
+    const refundResult = await ensureCancellationGatewayRefund({
+      shipmentDraftId: preflightCancellation.shipmentDraftId,
+      cancellationId: preflightCancellation._id as mongoose.Types.ObjectId,
+      amountMinor: preflightAmounts.refundableAmountMinor
+    });
+    if (refundResult === "PENDING") {
+      throw new ShipmentCancellationError(202, "The Razorpay refund is still processing. Retry approval after the payment status updates.");
+    }
+  } catch (error) {
+    if (error instanceof ShipmentCancellationError) throw error;
+    throw new ShipmentCancellationError(502, error instanceof Error ? error.message : "The Razorpay refund could not be confirmed.");
+  }
+
   const session = await mongoose.startSession();
   try {
     return await session.withTransaction(async () => {
@@ -428,7 +573,7 @@ export async function approveShipmentCancellation(input: {
       if (!gate.allowed) throw new ShipmentCancellationError(409, gate.message);
       const pendingAmendment = await ShipmentAmendment.exists({
         shipmentDraftId: cancellation.shipmentDraftId,
-        status: "REQUESTED"
+        status: { $in: ["REQUESTED", "AWAITING_PAYMENT", "PAYMENT_SECURED"] }
       }).session(session);
       if (pendingAmendment) {
         throw new ShipmentCancellationError(409, "Approve or reject the pending amendment before completing cancellation.");
@@ -449,6 +594,10 @@ export async function approveShipmentCancellation(input: {
 
       const taxTreatment = invoice.taxTreatment ?? (invoice.gstRatePercent === 0 ? "NO_GST" : "GST_APPLICABLE");
       const amounts = calculateCancellationAmounts(invoice.totalAmountMinor, input.feeBaseMinor, taxTreatment);
+      const prepaidFunding = await ShipmentFunding.findOne({
+        shipmentDraftId: cancellation.shipmentDraftId,
+        status: "COMPLETED"
+      }).session(session).exec();
       const businessCharge = await ShipmentCharge.exists({
         shipmentDraftId: cancellation.shipmentDraftId,
         paymentSource: "BUSINESS_ACCOUNT"
@@ -463,36 +612,160 @@ export async function approveShipmentCancellation(input: {
         shipmentDraftId: cancellation.shipmentDraftId,
         paymentSource: "ADMIN_DIRECT"
       }).session(session).exec();
+      let cashReceipt: InstanceType<typeof CashReceipt> | null = null;
+      if (prepaidFunding?.source === "CASH_RECEIPT" && prepaidFunding.sourceReferenceId) {
+        cashReceipt = await CashReceipt.findOne({
+          _id: prepaidFunding.sourceReferenceId,
+          shipmentDraftId: cancellation.shipmentDraftId,
+          businessAccountId: cancellation.businessAccountId,
+          status: "FINALIZED"
+        }).session(session).exec();
+        if (!cashReceipt) throw new ShipmentCancellationError(409, "The original cash receipt could not be found for refund reconciliation.");
+      }
 
-      if (counterCharge && amounts.refundableAmountMinor > 0) {
+      if ((counterCharge || cashReceipt) && amounts.refundableAmountMinor > 0) {
         if (!input.refundPayout) {
           throw new ShipmentCancellationError(
             400,
             "Record how the refund was paid back to the customer before completing this cancellation."
           );
         }
-
-        const refundPayment = {
-          shipmentDraftId: cancellation.shipmentDraftId,
-          branchId: counterCharge.branchId,
-          direction: "REFUNDED",
-          amountMinor: amounts.refundableAmountMinor,
-          method: input.refundPayout.method,
-          reference: input.refundPayout.reference ?? "",
-          note: input.refundPayout.note ?? "",
-          recordedBy: input.reviewedBy,
-          recordedAt: new Date()
-        } as const;
-        if (tenantContext?.kind === "OPERATOR") {
-          await OperatorCounterPayment.create([{
-            ...refundPayment,
-            tenantId: tenantContext.tenantId,
-            sourceType: "CANCELLATION",
-            sourceId: cancellation._id
-          }], { session });
-        } else {
-          await CounterPayment.create([refundPayment], { session });
+        if (input.refundPayout.method !== "CASH" && !input.refundPayout.reference?.trim()) {
+          throw new ShipmentCancellationError(400, "Enter the bank, UPI, card, or cheque reference for this refund.");
         }
+
+        if (counterCharge) {
+          const refundPayment = {
+            shipmentDraftId: cancellation.shipmentDraftId,
+            branchId: counterCharge.branchId,
+            direction: "REFUNDED",
+            amountMinor: amounts.refundableAmountMinor,
+            method: input.refundPayout.method,
+            reference: input.refundPayout.reference ?? "",
+            note: input.refundPayout.note ?? "",
+            recordedBy: input.reviewedBy,
+            recordedAt: new Date()
+          } as const;
+          if (tenantContext?.kind === "OPERATOR") {
+            await OperatorCounterPayment.create([{
+              ...refundPayment,
+              tenantId: tenantContext.tenantId,
+              sourceType: "CANCELLATION",
+              sourceId: cancellation._id
+            }], { session });
+          } else {
+            await CounterPayment.create([refundPayment], { session });
+          }
+        } else {
+          await CashAllocationEvent.create([{
+            cashReceiptId: cashReceipt!._id as mongoose.Types.ObjectId,
+            businessAccountId: cancellation.businessAccountId,
+            branchId: cancellation.branchId,
+            eventType: "REFUNDED",
+            amountMinor: amounts.refundableAmountMinor,
+            shipmentDraftId: cancellation.shipmentDraftId,
+            idempotencyKey: `CASH_CANCEL_REFUND:${String(cancellation._id)}`,
+            reason: `Cancellation cash refund paid by ${input.refundPayout.method}. ${input.refundPayout.reference ? `Reference: ${input.refundPayout.reference}. ` : ""}${input.refundPayout.note ?? ""}`.trim().slice(0, 500),
+            createdBy: input.reviewedBy
+          }], { session });
+        }
+      }
+
+      let paymentRefundStatus: IShipmentCancellation["paymentRefundStatus"] = "NOT_REQUIRED";
+      let paymentRefundReference = "";
+      if (amounts.refundableAmountMinor > 0 && prepaidFunding?.source === "BUSINESS_WALLET") {
+        const wallet = await PrepaidAccount.findOne({ businessAccountId: cancellation.businessAccountId }).session(session).exec();
+        if (!wallet) throw new ShipmentCancellationError(409, "The prepaid wallet could not be found for cancellation refund.");
+        const updatedWallet = await PrepaidAccount.findOneAndUpdate(
+          { _id: wallet._id, version: wallet.version },
+          { $inc: { cashBalanceMinor: amounts.refundableAmountMinor, version: 1 } },
+          { returnDocument: "after", runValidators: true, session }
+        ).exec();
+        if (!updatedWallet) throw new ShipmentCancellationError(409, "Wallet balance changed during cancellation refund. Try again.");
+        await createLedgerEntry({
+          businessAccountId: cancellation.businessAccountId,
+          branchId: cancellation.branchId,
+          transactionType: "SHIPMENT_CANCELLATION_REFUND",
+          direction: "CREDIT",
+          amountMinor: amounts.refundableAmountMinor,
+          currency: "INR",
+          referenceType: "SHIPMENT_CANCELLATION",
+          referenceId: cancellation._id as mongoose.Types.ObjectId,
+          idempotencyKey: `SHIPMENT_CANCELLATION_REFUND:${String(cancellation._id)}`,
+          paymentSource: "BUSINESS_WALLET",
+          before: { cashBalanceMinor: updatedWallet.cashBalanceMinor - amounts.refundableAmountMinor, reservedBalanceMinor: updatedWallet.reservedBalanceMinor },
+          after: { cashBalanceMinor: updatedWallet.cashBalanceMinor, reservedBalanceMinor: updatedWallet.reservedBalanceMinor },
+          description: "Shipment cancellation refund credited to the prepaid wallet.",
+          createdBy: input.reviewedBy
+        }, session);
+        paymentRefundStatus = "CREDITED_TO_WALLET";
+        paymentRefundReference = `SHIPMENT_CANCELLATION_REFUND:${String(cancellation._id)}`;
+      } else if (amounts.refundableAmountMinor > 0 && prepaidFunding?.source === "DIRECT_RAZORPAY") {
+        const plan = cancellation.gatewayRefundPlan as {
+          amountMinor?: number;
+          allocations?: Array<{ source?: string; paymentId?: string; amountMinor?: number }>;
+        } | null;
+        if (plan?.amountMinor !== amounts.refundableAmountMinor || !plan.allocations?.length) {
+          throw new ShipmentCancellationError(409, "The reviewed Razorpay refund plan is missing or does not match this cancellation.");
+        }
+        const refunds: string[] = [];
+        let plannedAmount = 0;
+        for (const allocation of plan.allocations) {
+          const allocationAmount = allocation.amountMinor;
+          if (
+            allocation.source !== "DIRECT_RAZORPAY"
+            || !allocation.paymentId
+            || typeof allocationAmount !== "number"
+            || !Number.isInteger(allocationAmount)
+            || allocationAmount <= 0
+          ) {
+            throw new ShipmentCancellationError(409, "The reviewed Razorpay refund plan contains an invalid payment allocation.");
+          }
+          const payment = await ShipmentDirectPayment.findOne({
+            _id: allocation.paymentId,
+            shipmentDraftId: cancellation.shipmentDraftId,
+            status: "REFUNDED",
+            razorpayRefundAmountMinor: allocationAmount
+          }).session(session).exec();
+          if (!payment?.razorpayRefundId) throw new ShipmentCancellationError(409, "A Razorpay shipment refund has not completed yet.");
+          plannedAmount += allocationAmount;
+          refunds.push(payment.razorpayRefundId);
+        }
+        if (plannedAmount !== amounts.refundableAmountMinor) {
+          throw new ShipmentCancellationError(409, "The reviewed Razorpay refund allocations do not balance with this cancellation.");
+        }
+        paymentRefundStatus = "RAZORPAY_REFUNDED";
+        paymentRefundReference = refunds.join(", ").slice(0, 120);
+      } else if (amounts.refundableAmountMinor > 0 && prepaidFunding?.source === "PUBLIC_RAZORPAY") {
+        const plan = cancellation.gatewayRefundPlan as {
+          amountMinor?: number;
+          allocations?: Array<{ source?: string; paymentId?: string; amountMinor?: number }>;
+        } | null;
+        if (plan?.amountMinor !== amounts.refundableAmountMinor || !plan.allocations?.length) {
+          throw new ShipmentCancellationError(409, "The reviewed Razorpay refund plan is missing or does not match this cancellation.");
+        }
+        const allocation = plan.allocations[0];
+        if (
+          plan.allocations.length !== 1
+          || allocation?.source !== "PUBLIC_RAZORPAY"
+          || !allocation.paymentId
+          || allocation.amountMinor !== amounts.refundableAmountMinor
+        ) throw new ShipmentCancellationError(409, "The public Razorpay refund plan contains an invalid payment allocation.");
+        const payment = await PublicShipmentPayment.findOne({
+          _id: allocation.paymentId,
+          shipmentDraftId: cancellation.shipmentDraftId,
+          status: "REFUNDED",
+          razorpayRefundAmountMinor: allocation.amountMinor
+        }).session(session).exec();
+        if (!payment?.razorpayRefundId) throw new ShipmentCancellationError(409, "The public Razorpay refund has not completed yet.");
+        paymentRefundStatus = "RAZORPAY_REFUNDED";
+        paymentRefundReference = payment.razorpayRefundId;
+      } else if (amounts.refundableAmountMinor > 0 && cashReceipt) {
+        paymentRefundStatus = "CASH_REFUNDED";
+        paymentRefundReference = input.refundPayout?.reference?.trim() || cashReceipt.receiptNumber;
+      } else if (amounts.refundableAmountMinor > 0 && counterCharge) {
+        paymentRefundStatus = "CASH_REFUNDED";
+        paymentRefundReference = input.refundPayout?.reference?.trim() || "STAFF_RECORDED_REFUND";
       }
 
       const settlement = businessCharge
@@ -690,6 +963,10 @@ export async function approveShipmentCancellation(input: {
         : "";
       cancellation.carrierConfirmed = operatorCancellation ? false : true;
       cancellation.settlementConfirmed = true;
+      cancellation.paymentRefundStatus = paymentRefundStatus;
+      cancellation.paymentRefundAmountMinor = amounts.refundableAmountMinor;
+      cancellation.paymentRefundReference = paymentRefundReference;
+      cancellation.paymentRefundedAt = amounts.refundableAmountMinor > 0 ? issuedAt : null;
       cancellation.carrierReference = input.carrierReference;
       cancellation.reviewNote = input.reviewNote;
       cancellation.reviewedBy = input.reviewedBy;
@@ -717,7 +994,9 @@ export async function approveShipmentCancellation(input: {
           creditNoteNumber: creditNote.creditNoteNumber,
           cancellationFeeInvoiceNumber: feeInvoice?.invoiceNumber ?? null,
           feeTotalMinor: amounts.feeTotalMinor,
-          refundableAmountMinor: amounts.refundableAmountMinor
+          refundableAmountMinor: amounts.refundableAmountMinor,
+          paymentRefundStatus,
+          paymentRefundReference
         }
       }], { session });
       const clientHref = operatorCancellation && input.portalSlug
@@ -741,5 +1020,112 @@ export async function approveShipmentCancellation(input: {
     });
   } finally {
     await session.endSession();
+  }
+}
+
+export async function cancelShipmentDirectly(input: {
+  shipmentDraftId: mongoose.Types.ObjectId;
+  requestedBy: mongoose.Types.ObjectId;
+  reason: string;
+  feeBaseMinor: number;
+  feeReason: string;
+  carrierReference: string;
+  refundPayout?: {
+    method: CounterPaymentMethod;
+    reference?: string;
+    note?: string;
+  };
+}): Promise<{ cancellation: IShipmentCancellation; completed: boolean; message: string }> {
+  const completedCancellation = await ShipmentCancellation.findOne({
+    shipmentDraftId: input.shipmentDraftId,
+    status: "COMPLETED"
+  }).sort({ completedAt: -1 }).exec();
+  if (completedCancellation) {
+    return {
+      cancellation: completedCancellation,
+      completed: true,
+      message: "This shipment has already been cancelled."
+    };
+  }
+
+  if (!Number.isSafeInteger(input.feeBaseMinor) || input.feeBaseMinor < 0) {
+    throw new ShipmentCancellationError(400, "The cancellation fee must be a non-negative amount.");
+  }
+  if (
+    input.feeBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR
+    && input.feeReason.trim().length < 5
+  ) {
+    throw new ShipmentCancellationError(400, "Explain the additional carrier or handling fee.");
+  }
+
+  const preview = await getShipmentCancellationPreview(input.shipmentDraftId, input.feeBaseMinor);
+  if (preview.manualRefundRequired && !input.refundPayout) {
+    throw new ShipmentCancellationError(400, "Record the offline refund payout before completing this cancellation.");
+  }
+  if (preview.manualRefundRequired && input.refundPayout?.method !== "CASH" && !input.refundPayout?.reference?.trim()) {
+    throw new ShipmentCancellationError(400, "Enter the bank, UPI, card, or cheque reference for the offline refund.");
+  }
+
+  const cancellation = await requestShipmentCancellation({
+    shipmentDraftId: input.shipmentDraftId,
+    requestedBy: input.requestedBy,
+    requesterType: "ADMIN",
+    requesterRole: "admin",
+    reason: input.reason,
+    requestedFeeBaseMinor: input.feeBaseMinor,
+    feeReason: input.feeReason.trim(),
+    notifyReviewers: false
+  });
+  if (
+    cancellation.requesterType !== "ADMIN"
+    || String(cancellation.requestedBy) !== String(input.requestedBy)
+    || cancellation.reason !== input.reason
+    || cancellation.requestedFeeBaseMinor !== input.feeBaseMinor
+    || cancellation.feeReason !== input.feeReason.trim()
+  ) {
+    throw new ShipmentCancellationError(409, "A different cancellation request or fee is already active for this shipment.");
+  }
+
+  try {
+    const approvedCancellation = await approveShipmentCancellation({
+      cancellationId: cancellation._id as mongoose.Types.ObjectId,
+      reviewedBy: input.requestedBy,
+      feeBaseMinor: input.feeBaseMinor,
+      feeReason: input.feeReason.trim(),
+      carrierConfirmed: true,
+      settlementConfirmed: true,
+      carrierReference: input.carrierReference,
+      reviewNote: "Completed directly by an administrator from the shipment list.",
+      ...(preview.manualRefundRequired ? { refundPayout: input.refundPayout } : {})
+    });
+    return {
+      cancellation: approvedCancellation,
+      completed: approvedCancellation.status === "COMPLETED",
+      message: approvedCancellation.status === "COMPLETED"
+        ? "Shipment cancellation completed."
+        : "Cancellation is still pending review."
+    };
+  } catch (error) {
+    const pendingCancellation = await ShipmentCancellation.findById(cancellation._id).exec() ?? cancellation;
+    await notifyActiveAdmins({
+      type: "SHIPMENT_CANCELLATION_REQUESTED",
+      title: "Direct cancellation needs review",
+      message: "A direct cancellation could not finish automatically. Review its refund and settlement status.",
+      href: `/dashboard/cancellations#cancellation-${String(pendingCancellation._id)}`,
+      idempotencyKey: `SHIPMENT_CANCELLATION_DIRECT_REVIEW:${String(pendingCancellation._id)}`,
+      businessAccountId: pendingCancellation.businessAccountId,
+      metadata: {
+        cancellationId: String(pendingCancellation._id),
+        shipmentDraftId: String(pendingCancellation.shipmentDraftId)
+      }
+    });
+    if (error instanceof ShipmentCancellationError && error.statusCode === 202) {
+      return {
+        cancellation: pendingCancellation,
+        completed: false,
+        message: error.message
+      };
+    }
+    throw error;
   }
 }

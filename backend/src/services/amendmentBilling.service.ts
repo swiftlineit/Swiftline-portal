@@ -4,10 +4,14 @@ import { CreditBillingAdjustment } from "../models/creditBillingAdjustment.model
 import { CreditBillingStatement } from "../models/creditBillingStatement.model.js";
 import { CreditLedgerEntry } from "../models/creditLedgerEntry.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
+import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentCharge } from "../models/shipmentCharge.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
+import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import { getCreditBalances, isCreditWindowOpen } from "./creditAccount.service.js";
 import { getCreditRestrictionState } from "./creditOverdue.service.js";
+import { getTenantContext } from "./tenantScope.service.js";
+import { applyPrepaidAmendmentMovement } from "./prepaid/amendmentFunding.service.js";
 import type { ShipmentPricingEstimate } from "./shipmentPricing.service.js";
 
 export class AmendmentBillingError extends Error {
@@ -39,7 +43,7 @@ export type AmendmentBillingAdjustment = {
 };
 
 export type AmendmentFundingPreview = {
-  billingMode: "BUSINESS_ACCOUNT" | "DIRECT" | "TEST";
+  billingMode: "BUSINESS_ACCOUNT" | "PREPAID" | "DIRECT" | "TEST";
   previousAmountMinor: number;
   amendedAmountMinor: number;
   deltaAmountMinor: number;
@@ -51,6 +55,22 @@ export type AmendmentFundingPreview = {
 
 function toMinor(amount: number) {
   return Math.round(amount * 100);
+}
+
+const prepaidPaymentSources = new Set(["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"]);
+const rootDirectPaymentSources = new Set(["ADMIN_DIRECT", "DIRECT_RAZORPAY", "PUBLIC_RAZORPAY"]);
+
+function calculatePrepaidAdjustment(invoice: InstanceType<typeof ShipmentInvoice>, amendedAmountMinor: number) {
+  const deltaAmountMinor = amendedAmountMinor - invoice.totalAmountMinor;
+  return calculateAmendmentBillingAdjustment({
+    previousAmountMinor: invoice.totalAmountMinor,
+    amendedAmountMinor,
+    previousAdvanceAppliedMinor: invoice.advanceAppliedMinor,
+    previousCreditOutstandingMinor: invoice.creditOutstandingMinor,
+    availableAdvanceMinor: Math.max(deltaAmountMinor, 0),
+    availableCreditMinor: 0,
+    insufficientMessage: "Pay the additional amendment amount before approval."
+  });
 }
 
 export function calculateAmendmentBillingAdjustment(input: {
@@ -128,6 +148,7 @@ export async function previewAmendmentFunding(input: {
   shipmentDraftId: mongoose.Types.ObjectId;
   businessAccountId: mongoose.Types.ObjectId;
   pricing: ShipmentPricingEstimate;
+  customerType?: "BUSINESS" | "INDIVIDUAL";
   session?: mongoose.ClientSession;
   purpose?: "AMENDMENT" | "FINAL_VERIFICATION";
 }): Promise<AmendmentFundingPreview> {
@@ -140,6 +161,10 @@ export async function previewAmendmentFunding(input: {
   const invoice = await invoiceQuery.exec();
   const charge = await chargeQuery.exec();
   if (!invoice) throw new AmendmentBillingError(409, "Shipment billing information is incomplete.");
+
+  const draftQuery = ShipmentDraft.findById(input.shipmentDraftId).select("customerType");
+  if (input.session) draftQuery.session(input.session);
+  const customerType = input.customerType ?? (await draftQuery.lean().exec())?.customerType;
 
   if (!charge) {
     const dpdShipmentQuery = DpdShipment.findOne({ shipmentDraftId: input.shipmentDraftId });
@@ -171,6 +196,73 @@ export async function previewAmendmentFunding(input: {
   }
 
   const amendedAmountMinor = toMinor(input.pricing.totalAmount);
+  if (
+    getTenantContext()?.kind !== "OPERATOR"
+    && input.customerType !== "BUSINESS"
+    && rootDirectPaymentSources.has(charge.paymentSource)
+  ) {
+    const deltaAmountMinor = amendedAmountMinor - invoice.totalAmountMinor;
+    const adjustment = calculateAmendmentBillingAdjustment({
+      previousAmountMinor: invoice.totalAmountMinor,
+      amendedAmountMinor,
+      previousAdvanceAppliedMinor: invoice.advanceAppliedMinor,
+      previousCreditOutstandingMinor: invoice.creditOutstandingMinor,
+      availableAdvanceMinor: Math.max(deltaAmountMinor, 0),
+      availableCreditMinor: 0,
+      insufficientMessage: "Complete the additional Razorpay payment before approving this amendment."
+    });
+    return {
+      billingMode: "DIRECT",
+      previousAmountMinor: invoice.totalAmountMinor,
+      amendedAmountMinor,
+      deltaAmountMinor,
+      availableBookingCapacityMinor: 0,
+      canFund: true,
+      message: deltaAmountMinor > 0
+        ? "Complete the additional Razorpay payment before approval."
+        : deltaAmountMinor < 0
+          ? "Record the refund before approval."
+          : "No additional payment is required.",
+      adjustment
+    };
+  }
+
+  const rootDirectAmendmentPayment = getTenantContext()?.kind !== "OPERATOR"
+    && input.purpose === "AMENDMENT"
+    && charge.paymentSource === "ADMIN_DIRECT";
+  if (
+    getTenantContext()?.kind !== "OPERATOR"
+    && (
+      prepaidPaymentSources.has(charge.paymentSource)
+      || rootDirectAmendmentPayment
+      || (customerType === "BUSINESS" && input.purpose === "AMENDMENT")
+    )
+  ) {
+    const adjustment = calculatePrepaidAdjustment(invoice, amendedAmountMinor);
+    const accountQuery = PrepaidAccount.findOne({ businessAccountId: input.businessAccountId });
+    if (input.session) accountQuery.session(input.session);
+    const account = await accountQuery.lean().exec();
+    const availableMinor = account?.status === "ACTIVE"
+      ? Math.max(account.cashBalanceMinor - account.reservedBalanceMinor, 0)
+      : 0;
+    const canFund = adjustment.deltaAmountMinor <= 0 || availableMinor >= adjustment.deltaAmountMinor;
+    return {
+      billingMode: "PREPAID",
+      previousAmountMinor: invoice.totalAmountMinor,
+      amendedAmountMinor,
+      deltaAmountMinor: adjustment.deltaAmountMinor,
+      availableBookingCapacityMinor: availableMinor,
+      canFund,
+      message: adjustment.deltaAmountMinor > 0
+        ? canFund
+          ? "The additional amount will be reserved from the business wallet before staff approval."
+          : "Add money to the business wallet to cover this increase, then submit the amendment."
+        : adjustment.deltaAmountMinor < 0
+          ? "The approved reduction will be credited to the business wallet."
+          : "No additional payment is required.",
+      adjustment
+    };
+  }
   if (charge.paymentSource !== "BUSINESS_ACCOUNT") {
     const adjustment = calculateAmendmentBillingAdjustment({
       previousAmountMinor: invoice.totalAmountMinor,
@@ -295,6 +387,11 @@ async function applyShipmentBillingAdjustment(input: {
   const charge = await ShipmentCharge.findOne({ shipmentDraftId: input.shipmentDraftId })
     .session(input.session)
     .exec();
+  const draft = await ShipmentDraft.findById(input.shipmentDraftId)
+    .select("customerType")
+    .session(input.session)
+    .lean()
+    .exec();
   if (!invoice) throw new AmendmentBillingError(409, "Shipment billing information is incomplete.");
 
   if (!charge) {
@@ -317,6 +414,32 @@ async function applyShipmentBillingAdjustment(input: {
   }
 
   const amendedAmountMinor = toMinor(input.pricing.totalAmount);
+  const rootBusinessAmendment = getTenantContext()?.kind !== "OPERATOR"
+    && draft?.customerType === "BUSINESS"
+    && input.purpose === "AMENDMENT";
+  if (
+    getTenantContext()?.kind !== "OPERATOR"
+    && (prepaidPaymentSources.has(charge.paymentSource) || rootBusinessAmendment)
+  ) {
+    const adjustment = calculatePrepaidAdjustment(invoice, amendedAmountMinor);
+    if (input.purpose === "AMENDMENT") {
+      await applyPrepaidAmendmentMovement({
+        amendmentId: input.referenceId,
+        adjustment,
+        createdBy: input.createdBy,
+        session: input.session
+      });
+    } else if (adjustment.deltaAmountMinor > 0) {
+      throw new AmendmentBillingError(
+        402,
+        "The additional final verified charge must be paid before dispatch."
+      );
+    }
+    charge.customerChargeMinor = amendedAmountMinor;
+    charge.pricingSnapshot = input.pricing as unknown as Record<string, unknown>;
+    await charge.save({ session: input.session });
+    return adjustment;
+  }
   if (charge.paymentSource !== "BUSINESS_ACCOUNT") {
     const isCounterSale = charge.paymentSource === "ADMIN_DIRECT";
     const adjustment = calculateAmendmentBillingAdjustment({

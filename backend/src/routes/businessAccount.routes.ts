@@ -18,6 +18,7 @@ import {
   updateBusinessAccount,
   updateBusinessAccountGstBillingReview,
   updateBusinessAccountOperationalAction,
+  updateBusinessAccountVolumetricDiscount,
   updateBusinessAccountKycReview,
   updateBusinessAccountStatus,
   viewBusinessAccountDocument,
@@ -47,6 +48,12 @@ businessAccountRouter.get(
   requireRole("admin", "finance", "operations"),
   requireAssignedBusinessAccountBranch,
   listBusinessAccountRateCardHistory
+);
+businessAccountRouter.patch(
+  "/:accountId/volumetric-discount",
+  requireRole("admin", "operations"),
+  requireAssignedBusinessAccountBranch,
+  updateBusinessAccountVolumetricDiscount
 );
 businessAccountRouter.use(requireRole("admin", "operations"));
 

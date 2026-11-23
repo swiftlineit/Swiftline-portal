@@ -9,6 +9,7 @@ import type { IDpdShipment } from "../models/dpdShipment.model.js";
 import type { IShipmentDraft } from "../models/shipmentDraft.model.js";
 import type { IShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { notifyBranchOperationsStaff, notifyBusinessShipmentMembers, notifyOperationsStaff } from "./portalNotification.service.js";
+import { CashReceipt } from "../models/cashReceipt.model.js";
 
 type ShipmentBookedInput = {
   draft: IShipmentDraft;
@@ -69,7 +70,7 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
   const { draft, dpdShipment, shipmentInvoice } = input;
 
   try {
-    const [businessAccount, branch, bookedByUser, labels] = await Promise.all([
+    const [businessAccount, branch, bookedByUser, labels, cashReceipt] = await Promise.all([
       BusinessAccount.findById(draft.businessAccountId).select("company.companyName").lean().exec(),
       Branch.findById(draft.branchId).select("name").lean().exec(),
       User.findById(input.bookedBy).select("name firstName lastName").lean().exec(),
@@ -83,7 +84,8 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
         // attachments are wanted in - see the size-budget note below.
         .sort({ labelType: -1, parcelNumber: 1 })
         .lean()
-        .exec()
+        .exec(),
+      CashReceipt.findOne({ shipmentDraftId: draft._id, status: "FINALIZED" }).select("_id receiptNumber").lean().exec()
     ]);
 
     const payload = buildPayload(input, {
@@ -122,7 +124,13 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
     const printableLabels = visibleLabels.filter((label, index) => (
       visibleLabels.findIndex((candidate) => candidate.storageKey === label.storageKey) === index
     ));
-    const attachments = [invoiceAttachment, ...printableLabels.map(labelAttachment)];
+    const receiptAttachment: IEmailAttachmentRef[] = cashReceipt ? [{
+      kind: "CASH_RECEIPT_PDF",
+      refId: cashReceipt._id,
+      filename: `CASH-RECEIPT-${cashReceipt.receiptNumber}.pdf`
+    }] : [];
+    const clientAttachments = [invoiceAttachment, ...receiptAttachment, ...printableLabels.map(labelAttachment)];
+    const staffAttachments = [invoiceAttachment, ...receiptAttachment, ...printableLabels.map(labelAttachment)];
     // Drives the wording in the booked email: a UK shipment travels on the DPD
     // label, so the message must not tell the customer to affix only ours.
     const hasDpdLabel = printableLabels.some((label) => label.labelType === "DPD");
@@ -147,7 +155,7 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
       email: {
         templateKey: "SHIPMENT_BOOKED_CLIENT",
         payload: { ...payload, hasDpdLabel },
-        attachmentRefs: attachments
+        attachmentRefs: clientAttachments
       }
     });
 
@@ -171,7 +179,7 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
       email: {
         templateKey: "SHIPMENT_BOOKED_STAFF",
         payload: { ...payload, hasDpdLabel },
-        attachmentRefs: attachments
+        attachmentRefs: staffAttachments
       }
     });
 

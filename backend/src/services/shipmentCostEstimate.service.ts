@@ -5,6 +5,8 @@ import type { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { getCreditBalances } from "./creditAccount.service.js";
 import { allocateBookingAmount } from "./creditBooking.service.js";
 import { getCreditRestrictionState } from "./creditOverdue.service.js";
+import { PrepaidAccount } from "../models/prepaidAccount.model.js";
+import { getTenantContext } from "./tenantScope.service.js";
 import {
   buildPricingInputFromDraft,
   calculateShipmentPricingEstimate,
@@ -24,11 +26,10 @@ export const PRICE_LOCK_TTL_MS = 15 * 60 * 1000;
 /**
  * How the shipment will be paid for.
  *
- * BUSINESS_ACCOUNT draws on the Customer Advance balance first and the approved
- * credit facility for the rest. COUNTER is a walk-in customer who pays before the
- * shipment is booked, so there is no balance to preview.
+ * Swiftline bookings use wallet funds or an exact Razorpay payment. Operator
+ * workspaces keep their existing credit and counter policy.
  */
-export type ShipmentFundingMode = "BUSINESS_ACCOUNT" | "COUNTER";
+export type ShipmentFundingMode = "BUSINESS_ACCOUNT" | "BUSINESS_WALLET" | "PREPAID" | "COUNTER";
 
 export type ShipmentFundingPreview = {
   mode: ShipmentFundingMode;
@@ -86,6 +87,9 @@ export function buildPricingHash(pricing: ShipmentPricingEstimate): string {
       businessAccountId: pricing.pricingBasis.businessAccountId,
       privateRateCardVersion: pricing.pricingBasis.privateRateCardVersion
     } : {}),
+    ...(pricing.pricingBasis.volumetricDiscountPercent ? {
+      volumetricDiscountPercent: pricing.pricingBasis.volumetricDiscountPercent
+    } : {}),
     rateCardIds: [...pricing.pricingBasis.rateCardIds].sort(),
     routeChargesUpdatedAt: pricing.pricingBasis.routeChargesUpdatedAt?.toISOString() ?? null,
     gstBillingEffectiveFrom: pricing.pricingBasis.gstBillingEffectiveFrom?.toISOString() ?? null
@@ -113,6 +117,33 @@ async function previewBusinessAccountFunding(input: {
   totalMinor: number;
   session?: mongoose.ClientSession;
 }): Promise<ShipmentFundingPreview> {
+  if (getTenantContext()?.kind !== "OPERATOR") {
+    const empty = {
+      mode: "BUSINESS_WALLET" as const,
+      totalPayableMinor: input.totalMinor,
+      advanceDeductionMinor: 0,
+      creditUsageMinor: 0,
+      availableAdvanceMinor: 0,
+      availableCreditMinor: 0
+    };
+    const walletQuery = PrepaidAccount.findOne({ businessAccountId: input.businessAccountId });
+    if (input.session) walletQuery.session(input.session);
+    const wallet = await walletQuery.lean().exec();
+    const availableAdvanceMinor = wallet?.status === "ACTIVE"
+      ? Math.max(wallet.cashBalanceMinor - wallet.reservedBalanceMinor, 0)
+      : 0;
+    const walletCovers = availableAdvanceMinor >= input.totalMinor;
+    return {
+      ...empty,
+      advanceDeductionMinor: walletCovers ? input.totalMinor : 0,
+      availableAdvanceMinor,
+      canFund: true,
+      message: walletCovers
+        ? "Your business wallet covers this shipment. You can also pay the full amount securely now."
+        : `Your wallet is short by INR ${((input.totalMinor - availableAdvanceMinor) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. Add funds or pay the full amount securely now.`
+    };
+  }
+
   const empty = {
     mode: "BUSINESS_ACCOUNT" as const,
     totalPayableMinor: input.totalMinor,
@@ -216,9 +247,21 @@ export async function buildShipmentCostEstimate(input: {
   });
   const totalMinor = toMinor(pricing.totalAmount);
 
-  // A walk-in customer settles at the counter, so there is no stored balance to
-  // draw the shipment against and nothing to preview.
+  // An individual customer always pays before booking. The estimate does not
+  // reserve or collect money; it only tells the booking page what to charge.
   const funding: ShipmentFundingPreview = input.draft.customerType === "INDIVIDUAL"
+    && getTenantContext()?.kind !== "OPERATOR"
+    ? {
+      mode: "PREPAID",
+      totalPayableMinor: totalMinor,
+      advanceDeductionMinor: 0,
+      creditUsageMinor: 0,
+      availableAdvanceMinor: 0,
+      availableCreditMinor: 0,
+      canFund: true,
+      message: "Pay this amount securely before booking the shipment."
+    }
+    : input.draft.customerType === "INDIVIDUAL"
     ? {
       mode: "COUNTER",
       totalPayableMinor: totalMinor,

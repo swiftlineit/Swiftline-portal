@@ -21,6 +21,11 @@ import { sendPickupOtpEmail } from "./mail.service.js";
 import { markShipmentChargeFinalized } from "./shipmentInvoice.service.js";
 import { resolveOperationsScanParcelNumbers } from "./shipmentOperationsScan.service.js";
 import { findRecordedLaterMilestones } from "./shipmentStatusSequence.service.js";
+import {
+  assertShipmentsFundingCompleted,
+  completedShipmentDraftIds,
+  ShipmentPaymentRequiredError
+} from "./prepaid/shipmentFunding.service.js";
 import { notifyAssignedPickupBranchStaff, notifyPortalUsers } from "./portalNotification.service.js";
 import { deleteObject, pickupRequestDocumentKey, putObject } from "./storage/storage.service.js";
 import { matchesDeclaredType } from "./storage/fileSignature.js";
@@ -49,6 +54,26 @@ export class PickupServiceError extends Error {
 async function notifyPickupSafely(task: () => Promise<void>) {
   try { await task(); }
   catch (error) { console.error("Pickup notification failed.", { message: error instanceof Error ? error.message : "Unknown error" }); }
+}
+
+async function requirePaidShipmentIds(shipmentDraftIds: mongoose.Types.ObjectId[], session?: mongoose.ClientSession) {
+  try {
+    await assertShipmentsFundingCompleted(shipmentDraftIds, session);
+  } catch (error) {
+    if (error instanceof ShipmentPaymentRequiredError) {
+      throw new PickupServiceError("Shipment payment must be completed before pickup can be approved or moved.", 402);
+    }
+    throw error;
+  }
+}
+
+async function requirePaidPickupShipments(pickupRequestId: mongoose.Types.ObjectId, session?: mongoose.ClientSession) {
+  const links = await PickupRequestShipment.find({ pickupRequestId, active: true })
+    .select("shipmentDraftId")
+    .session(session ?? null)
+    .lean()
+    .exec();
+  await requirePaidShipmentIds(links.map((link) => link.shipmentDraftId), session);
 }
 
 function asObjectId(value: string, label: string) {
@@ -272,6 +297,7 @@ export async function listEligiblePickupShipments(userId: mongoose.Types.ObjectI
     .sort({ createdAt: -1 })
     .lean()
     .exec();
+  const paidShipmentIds = await completedShipmentDraftIds(drafts.map((draft) => draft._id as mongoose.Types.ObjectId));
   const [activeLinks, events, canAccess] = await Promise.all([
     PickupRequestShipment.find({ shipmentDraftId: { $in: drafts.map((draft) => draft._id) }, $or: [{ active: true }, { hubReceiptRecordedAt: { $ne: null } }] }).select("shipmentDraftId").lean().exec(),
     latestBlockingEvents(drafts.map((draft) => draft._id)),
@@ -281,6 +307,7 @@ export async function listEligiblePickupShipments(userId: mongoose.Types.ObjectI
   const bookingByDraft = new Map(bookings.map((booking) => [String(booking.shipmentDraftId), booking]));
   const result = [];
   for (const draft of drafts) {
+    if (!paidShipmentIds.has(String(draft._id))) continue;
     if (!canAccess(draft)) continue;
     const statuses = events.get(String(draft._id)) ?? [];
     if (activeIds.has(String(draft._id)) || statuses.some((status) => pickupBlockedStatuses.includes(status)) || statuses[0] === "ON_HOLD") continue;
@@ -378,6 +405,7 @@ export async function createClientPickup(input: {
     if (bookings.length !== ids.length || bookings.some((booking) => !booking.parcelNumbers.length)) {
       throw new PickupServiceError("Every selected shipment needs current parcel labels before pickup can be requested.", 409);
     }
+    await requirePaidShipmentIds(ids);
     const events = await latestBlockingEvents(ids);
     if (ids.some((id) => {
       const statuses = events.get(String(id)) ?? [];
@@ -830,6 +858,7 @@ export async function reschedulePickup(input: {
 export async function markPickupStarted(input: { pickupId: string; actorId: mongoose.Types.ObjectId; source: "ADMIN" | "DRIVER" }) {
   const request = await PickupRequest.findById(asObjectId(input.pickupId, "Pickup request")).exec();
   if (!request) throw new PickupServiceError("Pickup request was not found.", 404);
+  await requirePaidPickupShipments(request._id as mongoose.Types.ObjectId);
   if (request.pickupStartedAt) return getPickupDetail(input.pickupId);
   if (!["CONFIRMED", "DRIVER_ASSIGNED", "ACTION_REQUIRED"].includes(request.status)) {
     throw new PickupServiceError("Approve or schedule the pickup before marking it started.", 409);
@@ -895,6 +924,7 @@ export async function markPickupReceivedAtDelhiHub(input: {
       const request = await PickupRequest.findById(requestId).session(session).exec();
       if (!request) throw new PickupServiceError("Pickup request was not found.", 404);
       if (["RECEIVED_AT_DELHI_HUB", "COMPLETED_WITH_MISSING_PARCELS"].includes(request.status)) return;
+      await requirePaidPickupShipments(request._id as mongoose.Types.ObjectId, session);
       if (!["IN_PROGRESS", "COLLECTED", "PARTIALLY_COLLECTED"].includes(request.status)) {
         throw new PickupServiceError("Start the pickup before recording Delhi hub receipt.", 409);
       }
@@ -1163,6 +1193,7 @@ export async function confirmPickup(input: {
     await session.withTransaction(async () => {
       const request = await PickupRequest.findOne({ _id: asObjectId(input.pickupId, "Pickup request"), status: { $in: ["REQUESTED", "ACTION_REQUIRED", "PARTIALLY_COLLECTED"] } }).session(session).exec();
       if (!request) throw new PickupServiceError("This pickup cannot be scheduled in its current status.", 409);
+      await requirePaidPickupShipments(request._id as mongoose.Types.ObjectId, session);
       const scheduledStart = request.dispatchAt ?? request.requestedWindow.startAt;
       const scheduledWindow = {
         startAt: scheduledStart,
@@ -1257,6 +1288,7 @@ type PickupLocation = { latitude: number; longitude: number; accuracy?: number |
 export async function transitionDriverAttempt(input: { attemptId: string; driverUserId: mongoose.Types.ObjectId; status: string; location?: PickupLocation }) {
   const attempt = await PickupAttempt.findOne({ _id: asObjectId(input.attemptId, "Pickup attempt"), assignedDriverUserId: input.driverUserId }).exec();
   if (!attempt) throw new PickupServiceError("Assigned pickup attempt was not found.", 404);
+  await requirePaidPickupShipments(attempt.pickupRequestId as mongoose.Types.ObjectId);
   if (!(allowedAttemptTransitions[attempt.status] ?? []).includes(input.status)) throw new PickupServiceError(`Pickup cannot move from ${attempt.status} to ${input.status}.`, 409);
   const now = new Date();
   attempt.status = input.status as typeof attempt.status;
@@ -1476,6 +1508,7 @@ export async function recordPickupParcelException(input: { attemptId: string; dr
 export async function completePickupAttempt(input: { attemptId: string; driverUserId: mongoose.Types.ObjectId; location?: PickupLocation }) {
   const attempt = await PickupAttempt.findOne({ _id: asObjectId(input.attemptId, "Pickup attempt"), assignedDriverUserId: input.driverUserId, status: "COLLECTING" }).exec();
   if (!attempt) throw new PickupServiceError("Active pickup attempt was not found.", 409);
+  await requirePaidPickupShipments(attempt.pickupRequestId as mongoose.Types.ObjectId);
   if (!attempt.otpVerifiedAt && !attempt.otpExceptionApprovedBy) throw new PickupServiceError("Verify the pickup OTP before completing collection.", 409);
   const proofs = await PickupProof.find({ pickupAttemptId: attempt._id, source: { $ne: "STAFF" } }).select("type").lean().exec();
   const proofTypes = new Set(proofs.map((proof) => proof.type));
@@ -1488,12 +1521,13 @@ export async function completePickupAttempt(input: { attemptId: string; driverUs
   try {
     await session.withTransaction(async () => {
       const now = new Date();
+      const request = await PickupRequest.findById(attempt.pickupRequestId).session(session).exec();
+      if (!request) throw new PickupServiceError("Pickup request was not found.", 404);
+      await requirePaidPickupShipments(request._id as mongoose.Types.ObjectId, session);
       attempt.status = "COMPLETED";
       attempt.completedAt = now;
       if (input.location) attempt.completionLocation = { ...input.location, capturedAt: now };
       await attempt.save({ session });
-      const request = await PickupRequest.findById(attempt.pickupRequestId).session(session).exec();
-      if (!request) throw new PickupServiceError("Pickup request was not found.", 404);
       request.status = collectedLinks.length === links.length ? "COLLECTED" : "PARTIALLY_COLLECTED";
       request.version += 1;
       await request.save({ session });

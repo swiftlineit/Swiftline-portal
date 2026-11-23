@@ -32,6 +32,7 @@ import {
   loadShipmentParcelProgress
 } from "../services/shipmentParcelActivity.service.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
+import { ShipmentAmendment } from "../models/shipmentAmendment.model.js";
 import {
   createShipmentImportBatch,
   createShipmentImportDrafts,
@@ -50,7 +51,11 @@ import {
 } from "./shipmentDraft.controller.js";
 import {
   createShipmentAmendment,
-  previewShipmentAmendment
+  createClientAmendmentDirectPayment,
+  fundShipmentAmendmentFromWallet,
+  getPendingShipmentAmendment,
+  previewShipmentAmendment,
+  verifyClientAmendmentDirectPayment
 } from "./shipmentAmendment.controller.js";
 import {
   deleteShipmentKycDocument,
@@ -88,6 +93,7 @@ import { isDpdBookingEnabled } from "../services/bookingPause.service.js";
 import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 import { isDpdLabelDestination } from "../services/als/alsPayload.service.js";
 import { getTenantContext } from "../services/tenantScope.service.js";
+import { refundUnallocatedShipmentDirectPayment } from "../services/prepaid/shipmentDirectPayments.service.js";
 import {
   readShipmentBookingSnapshot,
   serializeShipmentBookingConfirmation,
@@ -1454,6 +1460,52 @@ export async function previewClientShipmentAmendment(request: Request, response:
   return previewShipmentAmendment(request, response);
 }
 
+export async function fundClientShipmentAmendmentFromWallet(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  const amendmentId = typeof request.params.id === "string" ? request.params.id : "";
+  if (!mongoose.Types.ObjectId.isValid(amendmentId)) {
+    return response.status(404).json({ success: false, message: "Amendment not found" });
+  }
+  const amendment = await ShipmentAmendment.findById(amendmentId).select("shipmentDraftId").lean().exec();
+  if (!amendment || !await clientCanAccessDraft(String(userId), String(amendment.shipmentDraftId))) {
+    return response.status(404).json({ success: false, message: "Amendment not found" });
+  }
+  return fundShipmentAmendmentFromWallet(request, response, "client");
+}
+
+export async function getClientPendingShipmentAmendment(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  const draftId = typeof request.params.draftId === "string" ? request.params.draftId : "";
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  if (!await clientCanAccessDraft(String(userId), draftId)) return response.status(404).json({ success: false, message: "Shipment not found" });
+  return getPendingShipmentAmendment(request, response, "client");
+}
+
+async function clientCanAccessAmendment(userId: string, amendmentId: string) {
+  if (!mongoose.Types.ObjectId.isValid(amendmentId)) return false;
+  const amendment = await ShipmentAmendment.findById(amendmentId).select("shipmentDraftId").lean().exec();
+  return Boolean(amendment && await clientCanAccessDraft(userId, String(amendment.shipmentDraftId)));
+}
+
+export async function createClientShipmentAmendmentDirectPayment(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  const amendmentId = typeof request.params.id === "string" ? request.params.id : "";
+  if (!userId || !await clientCanAccessAmendment(String(userId), amendmentId)) {
+    return response.status(404).json({ success: false, message: "Amendment not found" });
+  }
+  return createClientAmendmentDirectPayment(request, response);
+}
+
+export async function verifyClientShipmentAmendmentDirectPayment(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  const amendmentId = typeof request.params.id === "string" ? request.params.id : "";
+  if (!userId || !await clientCanAccessAmendment(String(userId), amendmentId)) {
+    return response.status(404).json({ success: false, message: "Amendment not found" });
+  }
+  return verifyClientAmendmentDirectPayment(request, response);
+}
+
 export async function getClientShipmentInvoice(request: Request, response: Response): Promise<Response> {
   const userId = getAuthenticatedUserId(request);
   const draftId = typeof request.params.draftId === "string" ? request.params.draftId : "";
@@ -1532,6 +1584,8 @@ export async function downloadClientCustomsInvoiceWorkbook(request: Request, res
 // The price the customer accepted, as returned by the cost estimate endpoint.
 const clientAcceptedPricingSchema = z.object({
   acceptedPricingHash: z.string().trim().min(1).max(128).optional(),
+  paymentSource: z.enum(["BUSINESS_WALLET", "DIRECT_RAZORPAY"]).optional().default("BUSINESS_WALLET"),
+  fundingReferenceId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid payment.").optional(),
   // Set only after the booker has been shown a DPD failure and chosen to go
   // ahead without the carrier label. Never defaulted true.
   skipDpdLabel: z.boolean().optional()
@@ -1552,6 +1606,17 @@ export async function createClientShipment(
   }
 
   const acceptedPricing = clientAcceptedPricingSchema.safeParse(request.body ?? {});
+  if (!acceptedPricing.success) {
+    return response.status(400).json({ success: false, message: "Select a valid prepaid payment option.", errors: acceptedPricing.error.format() });
+  }
+  const draftForPayment = await ShipmentDraft.findById(draftId).select("customerType").lean().exec();
+  if (!draftForPayment) return response.status(404).json({ success: false, message: "Shipment draft not found" });
+  if (draftForPayment.customerType === "INDIVIDUAL" && acceptedPricing.data.paymentSource !== "DIRECT_RAZORPAY") {
+    return response.status(402).json({ success: false, message: "Individual shipments must be paid securely before booking." });
+  }
+  if (acceptedPricing.data.paymentSource === "DIRECT_RAZORPAY" && !acceptedPricing.data.fundingReferenceId) {
+    return response.status(402).json({ success: false, message: "Payment verification is pending. Your wallet will be updated after confirmation." });
+  }
 
   const bookingDraft = await ShipmentDraft.findById(draftId)
     .select("consigneeEnteredAddress.countryCode")
@@ -1563,6 +1628,14 @@ export async function createClientShipment(
   const requestsDpdLabel = isDpdLabelDestination(bookingDraft.consigneeEnteredAddress?.countryCode)
     && !(acceptedPricing.success && acceptedPricing.data.skipDpdLabel === true);
   if (requestsDpdLabel && !await isDpdBookingEnabled()) {
+    if (acceptedPricing.data.paymentSource === "DIRECT_RAZORPAY" && acceptedPricing.data.fundingReferenceId) {
+      await refundUnallocatedShipmentDirectPayment({
+        paymentIntentId: new mongoose.Types.ObjectId(acceptedPricing.data.fundingReferenceId),
+        shipmentDraftId: new mongoose.Types.ObjectId(draftId),
+        clientUserId: new mongoose.Types.ObjectId(userId),
+        reason: "DPD label booking was unavailable before the shipment could be created."
+      });
+    }
     return response.status(423).json({
       success: false,
       code: "DPD_BOOKING_DISABLED",
@@ -1576,9 +1649,10 @@ export async function createClientShipment(
       new mongoose.Types.ObjectId(userId),
       {
         actor: "client",
-        paymentSource: "BUSINESS_ACCOUNT",
-        acceptedPricingHash: acceptedPricing.success ? acceptedPricing.data.acceptedPricingHash : undefined,
-        skipDpdLabel: acceptedPricing.success ? acceptedPricing.data.skipDpdLabel : undefined
+        paymentSource: acceptedPricing.data.paymentSource,
+        fundingReferenceId: acceptedPricing.data.fundingReferenceId,
+        acceptedPricingHash: acceptedPricing.data.acceptedPricingHash,
+        skipDpdLabel: acceptedPricing.data.skipDpdLabel
       }
     );
     await ensureClientShipmentBookedEvent({
@@ -1604,6 +1678,14 @@ export async function createClientShipment(
       }
     });
   } catch (error) {
+    if (acceptedPricing.data.paymentSource === "DIRECT_RAZORPAY" && acceptedPricing.data.fundingReferenceId) {
+      await refundUnallocatedShipmentDirectPayment({
+        paymentIntentId: new mongoose.Types.ObjectId(acceptedPricing.data.fundingReferenceId),
+        shipmentDraftId: new mongoose.Types.ObjectId(draftId),
+        clientUserId: new mongoose.Types.ObjectId(userId),
+        reason: error instanceof Error ? error.message : "Shipment booking failed before payment was allocated."
+      });
+    }
     if (error instanceof RateCardRequiredError) {
       return response.status(error.statusCode).json({ success: false, code: error.code, message: error.message });
     }

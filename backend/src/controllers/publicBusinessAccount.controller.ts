@@ -383,7 +383,7 @@ function buildAccountPayload(data: BusinessAccountBody, existingEncryptedRegistr
       website: data.company.website || null,
       industry: data.company.industry,
       monthlyShipmentVolume: data.company.monthlyShipmentVolume,
-      requestedCreditLimit: { currency: data.company.requestedCreditCurrency, amount: data.company.requestedCreditLimit ?? null }
+      requestedCreditLimit: { currency: "INR", amount: null }
     }
   };
 }

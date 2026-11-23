@@ -2,7 +2,7 @@ import type { Request } from "express";
 import mongoose from "mongoose";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
-import { canAccessCreditFinancials } from "../services/creditAccount.service.js";
+import { financialRoles } from "../models/businessAccountMember.model.js";
 import { suspensionMode, securityLockMessage } from "../services/businessAccountSuspension.service.js";
 
 /**
@@ -82,7 +82,7 @@ export async function resolveClientScope(request: Request): Promise<ClientScope>
     ok: true,
     businessAccountId: membership.businessAccount as mongoose.Types.ObjectId,
     branchIds,
-    canViewFinancials: canAccessCreditFinancials(membership.role)
+    canViewFinancials: financialRoles.includes(membership.role)
   };
 }
 

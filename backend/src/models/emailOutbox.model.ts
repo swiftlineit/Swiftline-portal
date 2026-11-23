@@ -31,7 +31,8 @@ export const emailAttachmentKindValues = [
   "CANCELLATION_DOCUMENT_PDF",
   "RATE_CARD_SHARE_PDF",
   "RATE_CARD_SHARE_XLSX",
-  "PICKUP_DOCUMENT"
+  "PICKUP_DOCUMENT",
+  "CASH_RECEIPT_PDF"
 ] as const;
 export type EmailAttachmentKind = (typeof emailAttachmentKindValues)[number];
 

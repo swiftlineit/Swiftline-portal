@@ -5,7 +5,6 @@ import { DpdShipment } from "../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import { openSupportTicketStatusValues, SupportTicket } from "../models/supportTicket.model.js";
-import { ensureCreditAccount, getCreditBalances } from "./creditAccount.service.js";
 import {
   collectClientAttention,
   type ClientAction,
@@ -85,8 +84,6 @@ export type ClientOverviewSummary = {
    * Null rather than zero when the member may not see money. Zero is a figure,
    * and showing one to someone without financial access states something false.
    */
-  outstandingBalanceMinor: number | null;
-  availableCreditMinor: number | null;
 };
 
 /** One line in "Needs Your Attention", from either side of the engine. */
@@ -145,8 +142,6 @@ function toAttentionItem(entry: ClientAction | ShipmentException): AttentionItem
 export async function buildClientOverview(input: {
   businessAccountId: mongoose.Types.ObjectId;
   branchIds?: mongoose.Types.ObjectId[];
-  /** Whether this member may see balances at all. */
-  canViewFinancials: boolean;
   now?: Date;
 }): Promise<ClientOverview> {
   const now = input.now ?? new Date();
@@ -178,7 +173,7 @@ export async function buildClientOverview(input: {
 
   const dayStart = istDayStart(now);
 
-  const [latestEvents, deliveredToday, openClaims, openTickets, attention, creditAccount] = await Promise.all([
+  const [latestEvents, deliveredToday, openClaims, openTickets, attention] = await Promise.all([
     // One pass over the events, reduced to the newest per shipment in the
     // database rather than in memory.
     draftIds.length
@@ -207,8 +202,7 @@ export async function buildClientOverview(input: {
     collectClientAttention({
       businessAccountId: input.businessAccountId,
       branchIds: input.branchIds
-    }),
-    input.canViewFinancials ? ensureCreditAccount(input.businessAccountId) : null
+    })
   ]);
 
   const statusCounts = new Map<string, number>();
@@ -226,8 +220,6 @@ export async function buildClientOverview(input: {
       .map((exception) => exception.shipmentDraftId)
   );
 
-  const balances = creditAccount ? getCreditBalances(creditAccount, now) : null;
-
   const summary: ClientOverviewSummary = {
     totalShipments: draftIds.length,
     inTransit: countOf(inTransitStatuses),
@@ -238,9 +230,7 @@ export async function buildClientOverview(input: {
     exceptions: attention.exceptions.length,
     actionRequired: attention.actions.length,
     openClaims,
-    openTickets,
-    outstandingBalanceMinor: creditAccount ? creditAccount.invoicedOutstandingMinor : null,
-    availableCreditMinor: balances ? balances.availableCreditMinor : null
+    openTickets
   };
 
   // Actions lead: the customer can clear those, and a control tower should put

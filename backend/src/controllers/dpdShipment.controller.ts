@@ -21,17 +21,9 @@ import {
 } from "../models/shipmentEvent.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
-import { counterPaymentMethodValues } from "../models/counterPayment.model.js";
-import { recordCounterCollection } from "../services/individualCustomer.service.js";
 import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
 import { formatSwiftlineParcelNumberForDisplay, swiftlineParcelNumberAliases } from "../services/swiftlineTracking.service.js";
 
-// Present only on walk-in bookings; business shipments ignore it entirely.
-const counterCollectionSchema = z.object({
-  method: z.enum(counterPaymentMethodValues),
-  reference: z.string().trim().max(80).optional(),
-  note: z.string().trim().max(300).optional()
-});
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { chargeFinalizingStatuses, markShipmentChargeFinalized } from "../services/shipmentInvoice.service.js";
 import { ShipmentCancellation } from "../models/shipmentCancellation.model.js";
@@ -81,6 +73,8 @@ import {
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
+import { isShipmentPaymentCompleted } from "../services/prepaid/shipmentFunding.service.js";
+import { refundUnallocatedShipmentDirectPayment } from "../services/prepaid/shipmentDirectPayments.service.js";
 import { loadShipmentHubReceipt } from "../services/shipmentHubReceipt.service.js";
 import { resolveTrackingGatewayCode } from "../services/shipmentGateway.service.js";
 import {
@@ -173,6 +167,8 @@ const operationsScanSchema = z.object({
 // accepted price to check against.
 const acceptedPricingSchema = z.object({
   acceptedPricingHash: z.string().trim().min(1).max(128).optional(),
+  paymentSource: z.enum(["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT"]).optional(),
+  fundingReferenceId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid payment.").optional(),
   // Set only after the booker has been shown a DPD failure and chosen to go
   // ahead without the carrier label. Never defaulted true.
   skipDpdLabel: z.boolean().optional()
@@ -678,6 +674,14 @@ async function sendStoredLabel(params: {
 }): Promise<Response | void> {
   const { label, userId, response, dpdShipmentId, accessMode } = params;
 
+  const shipment = await DpdShipment.findById(dpdShipmentId).select("shipmentDraftId").lean().exec();
+  if (!shipment || !await isShipmentPaymentCompleted(shipment.shipmentDraftId as mongoose.Types.ObjectId)) {
+    return response.status(402).json({
+      success: false,
+      message: "Shipment payment must be completed before its label can be accessed."
+    });
+  }
+
   if (!(await objectExists(label.storageKey))) {
     return response.status(404).json({
       success: false,
@@ -757,35 +761,32 @@ export async function createShipment(
   }
   const isIndividual = draft.customerType === "INDIVIDUAL";
 
-  const collection = counterCollectionSchema.safeParse(request.body ?? {});
-  if (isIndividual && !collection.success) {
-    return response.status(400).json({
+  const acceptedPricing = acceptedPricingSchema.safeParse(request.body ?? {});
+  if (!acceptedPricing.success) {
+    return response.status(400).json({ success: false, message: "Select a valid prepaid payment option.", errors: acceptedPricing.error.format() });
+  }
+  const paymentSource = acceptedPricing.data.paymentSource ?? (isIndividual ? "DIRECT_RAZORPAY" : "BUSINESS_WALLET");
+  if (isIndividual && paymentSource !== "DIRECT_RAZORPAY") {
+    return response.status(400).json({ success: false, message: "Individual shipments must be paid through Razorpay before booking." });
+  }
+  if (isIndividual && !acceptedPricing.data.fundingReferenceId) {
+    return response.status(402).json({
       success: false,
-      message: "Record how the customer paid before booking this shipment."
+      message: "Verified Razorpay payment is required before an individual shipment can be booked."
     });
   }
-
-  const acceptedPricing = acceptedPricingSchema.safeParse(request.body ?? {});
+  if (["DIRECT_RAZORPAY", "CASH_RECEIPT"].includes(paymentSource) && !acceptedPricing.data.fundingReferenceId) {
+    return response.status(402).json({ success: false, message: "A verified payment reference is required before booking this shipment." });
+  }
 
   try {
     const result = await createLabelForShipmentDraft(shipmentDraftId, userId, {
       actor: "admin",
-      paymentSource: isIndividual ? "ADMIN_DIRECT" : "BUSINESS_ACCOUNT",
-      acceptedPricingHash: acceptedPricing.success ? acceptedPricing.data.acceptedPricingHash : undefined,
-      skipDpdLabel: acceptedPricing.success ? acceptedPricing.data.skipDpdLabel : undefined
+      paymentSource,
+      fundingReferenceId: acceptedPricing.data.fundingReferenceId,
+      acceptedPricingHash: acceptedPricing.data.acceptedPricingHash,
+      skipDpdLabel: acceptedPricing.data.skipDpdLabel
     });
-
-    if (isIndividual && collection.success) {
-      // Written after the booking succeeds: a failed booking must not leave a
-      // record of money the branch never took.
-      await recordCounterCollection({
-        shipmentDraftId: new mongoose.Types.ObjectId(shipmentDraftId),
-        branchId: draft.branchId,
-        amountMinor: result.shipmentInvoice.totalAmountMinor,
-        payment: collection.data,
-        recordedBy: userId
-      });
-    }
     await ensureShipmentBookedEvent({
       shipmentDraftId: new mongoose.Types.ObjectId(shipmentDraftId),
       dpdShipmentId: result.dpdShipment._id as mongoose.Types.ObjectId,
@@ -809,6 +810,13 @@ export async function createShipment(
       }
     });
   } catch (error) {
+    if (paymentSource === "DIRECT_RAZORPAY" && acceptedPricing.data.fundingReferenceId) {
+      await refundUnallocatedShipmentDirectPayment({
+        paymentIntentId: new mongoose.Types.ObjectId(acceptedPricing.data.fundingReferenceId),
+        shipmentDraftId: new mongoose.Types.ObjectId(shipmentDraftId),
+        reason: error instanceof Error ? error.message : "Shipment booking failed before payment was allocated."
+      });
+    }
     if (error instanceof RateCardRequiredError) {
       return response.status(error.statusCode).json({ success: false, code: error.code, message: error.message });
     }

@@ -23,16 +23,16 @@ const roleCreditPermissions: Record<BusinessAccountMemberRole, CreditPermission[
 };
 
 export const fallbackPaymentTerms = {
-  version: "2026-07-v1",
-  title: "Swiftline Credit Account Payment Terms",
-  effectiveFrom: new Date("2026-07-01T00:00:00.000Z"),
+  version: "2026-11-prepaid-v1",
+  title: "Swiftline Prepaid Payment Terms",
+  effectiveFrom: new Date("2026-11-21T00:00:00.000Z"),
   sections: [
-    { heading: "Credit account payments", content: "Payments are allocated to the oldest unpaid Swiftline invoices first. Any remaining amount is held as Customer Advance for future eligible shipment charges." },
-    { heading: "Customer Advance", content: "Customer Advance is money received from the customer. It does not increase the approved credit limit and is used before approved credit for future bookings." },
-    { heading: "Shipment charges", content: "Shipment reservations use the server-calculated estimate, including GST only where applicable. The final charge may change after approved amendments or operational weight and dimension verification." },
-    { heading: "Invoices and statements", content: "Each finalized shipment receives its own invoice. Credit billing statements group unpaid shipment invoices and do not apply GST again." },
-    { heading: "Account restrictions", content: "New credit-funded bookings may be restricted when available credit is insufficient, invoices are overdue, or the credit facility is held, suspended, expired, or closed." },
-    { heading: "Assistance", content: "Contact your assigned Swiftline branch before paying if an account, invoice, or allocation detail appears incorrect." }
+    { heading: "Wallet top-ups", content: "Wallet funds are available after Razorpay confirms the payment. A checkout that is cancelled, failed, or still pending does not add spendable funds." },
+    { heading: "Shipment booking", content: "Every new shipment must be paid in full before it is booked. A business shipment can use available wallet funds, Razorpay payment at booking, or a staff-recorded cash receipt. A shipment is not created until the payment is verified or the receipt is finalized." },
+    { heading: "Wallet reservations", content: "When wallet funds are used for booking, the amount is held while the booking is being completed. A failed booking releases the hold. The wallet activity shows confirmed top-ups, charges, refunds, and holds." },
+    { heading: "Amendments", content: "A business account pays an increased shipment charge from its wallet. Add enough wallet funds before paying if the available balance is short. Individual and public shipment amendments are paid directly through Razorpay." },
+    { heading: "Cash receipts", content: "Only Swiftline staff can record offline cash received for a business shipment. The receipt is tied to that shipment and does not add money to the business wallet. Standalone cash receipts also do not change wallet funds." },
+    { heading: "Invoices and assistance", content: "Each booked shipment keeps its shipment invoice. Contact your assigned Swiftline branch if a payment, wallet entry, receipt, or invoice appears incorrect." }
   ]
 };
 
@@ -252,7 +252,11 @@ export async function getCurrentPaymentTerms() {
     effectiveFrom: { $lte: new Date() }
   }).sort({ effectiveFrom: -1 }).lean().exec();
 
-  return document ? {
+  const publishedText = document
+    ? `${document.title} ${document.sections.map((section) => `${section.heading} ${section.content}`).join(" ")}`
+    : "";
+  const containsRetiredCreditTerms = /credit account|credit facility|available credit|customer advance|credit billing statement/i.test(publishedText);
+  return document && !containsRetiredCreditTerms ? {
     version: document.version,
     title: document.title,
     effectiveFrom: document.effectiveFrom,

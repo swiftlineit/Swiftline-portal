@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
+import { env } from "../config/env.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
@@ -57,12 +58,11 @@ import {
 } from "./shipmentBookingSnapshot.service.js";
 import {
   completeShipmentBookingCharge,
-  recordCounterShipmentCharge,
-  recordPublicShipmentCharge,
   markShipmentBookingChargeConsuming,
   markShipmentBookingChargeReviewRequired,
   releaseShipmentBookingCharge,
-  reserveShipmentBookingCharge
+  reserveShipmentBookingCharge,
+  securePaidShipmentBookingCharge
 } from "./shipmentBookingBilling.service.js";
 import {
   beginShipmentDraftBooking,
@@ -72,6 +72,9 @@ import { isBookingPaused } from "./bookingPause.service.js";
 import { runWithConcurrency } from "../utils/runWithConcurrency.js";
 import { getTenantContext } from "./tenantScope.service.js";
 import { getOperatorShipmentEligibilityError } from "./operatorShipmentPolicy.service.js";
+import { InsufficientWalletBalanceError } from "./prepaid/shipmentFunding.service.js";
+import { refundCapturedShipmentDirectPayment } from "./prepaid/shipmentDirectPayments.service.js";
+import { finalizeCashReceiptForBooking } from "./prepaid/cashReceipts.service.js";
 import {
   allocateOperatorShipmentTrackingNumber,
   getOperatorCompanyTrackingPrefix
@@ -192,6 +195,7 @@ function createIdempotencyKey(shipmentDraftId: mongoose.Types.ObjectId, bookingA
  * that were never quoted, and there is no accepted price for those to differ from.
  */
 type AcceptedPricing = { acceptedPricingHash?: string };
+type FundingReference = { fundingReferenceId?: string };
 
 /**
  * Set when the booker has been shown a DPD failure and chosen to go ahead with
@@ -202,31 +206,30 @@ type DpdLabelChoice = { skipDpdLabel?: boolean };
 
 type LabelPaymentContext =
   | ({
-      // ADMIN_DIRECT is a walk-in booked at the counter: the customer has already
-      // paid into a company account, so there is no credit to reserve. Staying in
-      // the admin arm of this union keeps clients unable to book one.
+      // Staff booking requires secured wallet, gateway or receipted cash funds.
+      // TEST is an internal fixture source and cannot run in production.
       actor: "admin";
-      paymentSource?: Extract<PaymentSource, "BUSINESS_ACCOUNT" | "ADMIN_DIRECT" | "TEST">;
-    } & AcceptedPricing & DpdLabelChoice)
+      paymentSource?: Extract<PaymentSource, "BUSINESS_WALLET" | "DIRECT_RAZORPAY" | "CASH_RECEIPT" | "TEST">;
+    } & AcceptedPricing & DpdLabelChoice & FundingReference)
   | ({
       actor: "client";
-      paymentSource: Extract<PaymentSource, "BUSINESS_ACCOUNT">;
-    } & AcceptedPricing & DpdLabelChoice)
+      paymentSource: Extract<PaymentSource, "BUSINESS_WALLET" | "DIRECT_RAZORPAY">;
+    } & AcceptedPricing & DpdLabelChoice & FundingReference)
   | ({
       actor: "operator";
       paymentSource: Extract<PaymentSource, "BUSINESS_ACCOUNT" | "ADMIN_DIRECT">;
       acceptedPricingHash: string;
       skipDpdLabel: true;
-    } & AcceptedPricing & DpdLabelChoice)
+    } & AcceptedPricing & DpdLabelChoice & FundingReference)
   | ({
       actor: "public";
       paymentSource: Extract<PaymentSource, "PUBLIC_RAZORPAY">;
       acceptedPricingHash: string;
       skipDpdLabel: true;
-    } & AcceptedPricing & DpdLabelChoice);
+    } & AcceptedPricing & DpdLabelChoice & FundingReference);
 
 function normalizePaymentContext(context?: LabelPaymentContext): LabelPaymentContext {
-  return context ?? { actor: "admin", paymentSource: "BUSINESS_ACCOUNT" };
+  return context ?? { actor: "admin", paymentSource: "BUSINESS_WALLET" };
 }
 
 /** One label per parcel, always: they are rendered locally from the snapshot. */
@@ -257,6 +260,21 @@ export function hasCompleteInternalLabelSet(input: {
 
 function toPaymentError(error: unknown) {
   if (!(error instanceof Error)) return null;
+
+  if (error instanceof InsufficientWalletBalanceError) {
+    return new DpdShipmentServiceError(error.message, 402, {
+      code: error.code,
+      shortfallMinor: error.shortfallMinor
+    });
+  }
+
+  if (
+    error.message.startsWith("Payment verification is pending")
+    || error.message.includes("finalized cash receipt")
+    || error.message.includes("verified payment reference")
+  ) {
+    return new DpdShipmentServiceError(error.message, 402, { code: "PAYMENT_REQUIRED" });
+  }
 
   if (error.message === "BOOKING_RATE_NOT_FOUND") {
     return new DpdShipmentServiceError(
@@ -559,7 +577,7 @@ export async function createLabelForShipmentDraft(
       outcome,
       shipmentDraftId,
       actor: paymentContext.actor,
-      paymentSource: paymentContext.paymentSource ?? "BUSINESS_ACCOUNT",
+      paymentSource: paymentContext.paymentSource ?? "BUSINESS_WALLET",
       ...roundedTimings(timings),
       totalMs: roundedDuration(operationStartedAt)
     });
@@ -572,12 +590,13 @@ async function createLabelForShipmentDraftInternal(
   paymentContext: LabelPaymentContext,
   timings: ShipmentBookingTimings
 ) {
-  // Only account-backed bookings reserve capacity. TEST never did; ADMIN_DIRECT is
-  // a counter sale that was paid before the booking was made, so there is nothing
-  // to reserve, convert or release for it.
-  const usesBusinessAccountBilling = paymentContext.paymentSource === "BUSINESS_ACCOUNT";
+  if (paymentContext.paymentSource === "TEST" && env.NODE_ENV === "production") {
+    throw new DpdShipmentServiceError("Test funding cannot authorize a production shipment.", 403);
+  }
   const tenantContext = getTenantContext();
   const operatorBooking = paymentContext.actor === "operator";
+  const usesLegacyBusinessBilling = operatorBooking && paymentContext.paymentSource === "BUSINESS_ACCOUNT";
+  const usesManagedFunding = !operatorBooking && paymentContext.paymentSource !== "TEST";
   if (operatorBooking !== (tenantContext?.kind === "OPERATOR")) {
     throw new DpdShipmentServiceError("Shipment booking must use the authenticated tenant workflow.", 403);
   }
@@ -870,7 +889,7 @@ async function createLabelForShipmentDraftInternal(
     assertPriceLockUnchanged({
       acceptedPricingHash: paymentContext.acceptedPricingHash,
       currentPricing: pricing,
-      requireAcceptedPricing: operatorBooking || usesBusinessAccountBilling || paymentContext.paymentSource === "PUBLIC_RAZORPAY"
+       requireAcceptedPricing: operatorBooking || usesManagedFunding
     });
   } catch (error) {
     await transitionShipmentDraftBooking({
@@ -878,13 +897,23 @@ async function createLabelForShipmentDraftInternal(
       bookingAttemptId,
       bookingState: "EDITABLE"
     });
+    if (
+      paymentContext.paymentSource === "DIRECT_RAZORPAY"
+      && paymentContext.fundingReferenceId
+      && mongoose.Types.ObjectId.isValid(paymentContext.fundingReferenceId)
+    ) {
+      await refundCapturedShipmentDirectPayment({
+        paymentIntentId: new mongoose.Types.ObjectId(paymentContext.fundingReferenceId),
+        reason: "The shipment price changed after payment and before booking."
+      });
+    }
     throw error;
   }
 
   let advanceAmountMinor = 0;
   let creditAmountMinor = Math.round(pricing.totalAmount * 100);
   try {
-    if (usesBusinessAccountBilling) {
+    if (usesLegacyBusinessBilling || paymentContext.paymentSource === "BUSINESS_WALLET") {
       const reservationResult = await measureShipmentBookingStage(
         timings,
         "billingMs",
@@ -895,24 +924,38 @@ async function createLabelForShipmentDraftInternal(
           pricing
         })
       );
-      advanceAmountMinor = reservationResult.reservation?.advanceAmountMinor ?? 0;
-      creditAmountMinor = reservationResult.reservation?.creditAmountMinor ?? creditAmountMinor;
-    } else if (paymentContext.paymentSource === "ADMIN_DIRECT") {
-      // Already paid at the counter. Record the charge so the amendment and
-      // cancellation flows have one to read, and treat the whole amount as
-      // settled so the invoice is issued PAID rather than as credit owed.
+      if ("funding" in reservationResult) {
+        advanceAmountMinor = Math.round(pricing.totalAmount * 100);
+        creditAmountMinor = 0;
+      } else {
+        advanceAmountMinor = reservationResult.reservation?.advanceAmountMinor ?? 0;
+        creditAmountMinor = reservationResult.reservation?.creditAmountMinor ?? creditAmountMinor;
+      }
+    } else if (["DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(paymentContext.paymentSource ?? "")) {
+      if (!paymentContext.fundingReferenceId || !mongoose.Types.ObjectId.isValid(paymentContext.fundingReferenceId)) {
+        throw new DpdShipmentServiceError("A verified payment reference is required before booking this shipment.", 402);
+      }
+      const source = paymentContext.paymentSource as "DIRECT_RAZORPAY" | "CASH_RECEIPT" | "PUBLIC_RAZORPAY";
+      if (source === "CASH_RECEIPT") {
+        await finalizeCashReceiptForBooking({
+          cashReceiptId: new mongoose.Types.ObjectId(paymentContext.fundingReferenceId),
+          shipmentDraftId: lockedDraft._id as mongoose.Types.ObjectId,
+          staffUserId: userId,
+          acceptedPricingHash: paymentContext.acceptedPricingHash ?? ""
+        });
+      }
       await measureShipmentBookingStage(
         timings,
         "billingMs",
-        () => recordCounterShipmentCharge({ draft: lockedDraft, pricing })
-      );
-      advanceAmountMinor = Math.round(pricing.totalAmount * 100);
-      creditAmountMinor = 0;
-    } else if (paymentContext.paymentSource === "PUBLIC_RAZORPAY") {
-      await measureShipmentBookingStage(
-        timings,
-        "billingMs",
-        () => recordPublicShipmentCharge({ draft: lockedDraft, pricing })
+        () => securePaidShipmentBookingCharge({
+          draft: lockedDraft,
+          createdBy: userId,
+          bookingAttemptId,
+          pricing,
+          pricingHash: paymentContext.acceptedPricingHash ?? "",
+          source,
+          sourceReferenceId: new mongoose.Types.ObjectId(paymentContext.fundingReferenceId)
+        })
       );
       advanceAmountMinor = Math.round(pricing.totalAmount * 100);
       creditAmountMinor = 0;
@@ -993,7 +1036,7 @@ async function createLabelForShipmentDraftInternal(
       lockedDraft.allocatedTrackingNumber = trackingNumber;
       await lockedDraft.save();
     } catch (error) {
-      if (usesBusinessAccountBilling) {
+      if (usesLegacyBusinessBilling || usesManagedFunding) {
         await releaseShipmentBookingCharge({
           shipmentDraftId: lockedDraft._id as mongoose.Types.ObjectId,
           createdBy: userId
@@ -1031,6 +1074,14 @@ async function createLabelForShipmentDraftInternal(
     // invoice once, then hold only the DPD side for manual reconciliation.
     let dpdDocket: Awaited<ReturnType<typeof createAlsDocket>> | null = null;
     let carrierUncertainError: AlsUncertainError | null = null;
+    if (usesLegacyBusinessBilling || usesManagedFunding) {
+      await measureShipmentBookingStage(
+        timings,
+        "billingMs",
+        () => markShipmentBookingChargeConsuming(lockedDraft._id as mongoose.Types.ObjectId, bookingAttemptId)
+      );
+    }
+
     if (wantsDpdLabel) {
       try {
         dpdDocket = await measureShipmentBookingStage(
@@ -1064,7 +1115,7 @@ async function createLabelForShipmentDraftInternal(
             }
           );
 
-          if (usesBusinessAccountBilling) {
+          if (usesLegacyBusinessBilling || usesManagedFunding) {
             await releaseShipmentBookingCharge({
               shipmentDraftId: lockedDraft._id as mongoose.Types.ObjectId,
               createdBy: userId
@@ -1079,14 +1130,6 @@ async function createLabelForShipmentDraftInternal(
           throw new DpdLabelUnavailableError(error.message, error.statusCode, error.carrierErrors);
         }
       }
-    }
-
-    if (usesBusinessAccountBilling) {
-      await measureShipmentBookingStage(
-        timings,
-        "billingMs",
-        () => markShipmentBookingChargeConsuming(lockedDraft._id as mongoose.Types.ObjectId)
-      );
     }
 
     // The booking becomes durable here, before any of the work below can fail,
@@ -1236,7 +1279,7 @@ async function createLabelForShipmentDraftInternal(
       );
     }
 
-    if (usesBusinessAccountBilling) {
+    if (usesLegacyBusinessBilling || usesManagedFunding) {
       await measureShipmentBookingStage(
         timings,
         "billingMs",
@@ -1312,7 +1355,7 @@ async function createLabelForShipmentDraftInternal(
         { status: "DPD_STATUS_UNKNOWN", stage: "DPD_LABEL", message: error.message }
       );
 
-      if (usesBusinessAccountBilling) {
+      if (usesLegacyBusinessBilling || usesManagedFunding) {
         await markShipmentBookingChargeReviewRequired({
           shipmentDraftId: lockedDraft._id as mongoose.Types.ObjectId,
           dpdShipmentId: booking._id as mongoose.Types.ObjectId,
@@ -1361,7 +1404,7 @@ async function createLabelForShipmentDraftInternal(
         );
       }
 
-      if (usesBusinessAccountBilling) {
+      if (usesLegacyBusinessBilling || usesManagedFunding) {
         await markShipmentBookingChargeReviewRequired({
           shipmentDraftId: lockedDraft._id as mongoose.Types.ObjectId,
           dpdShipmentId: booking._id as mongoose.Types.ObjectId,
@@ -1406,7 +1449,7 @@ async function createLabelForShipmentDraftInternal(
       );
     }
 
-    if (usesBusinessAccountBilling) {
+    if (usesLegacyBusinessBilling || usesManagedFunding) {
       await releaseShipmentBookingCharge({
         shipmentDraftId: lockedDraft._id as mongoose.Types.ObjectId,
         createdBy: userId

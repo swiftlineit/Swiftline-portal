@@ -24,6 +24,8 @@ export interface IPublicShipmentPayment extends mongoose.Document {
   razorpayOrderId: string;
   razorpayPaymentId: string;
   razorpayRefundId: string;
+  razorpayRefundAmountMinor: number;
+  razorpayRefundedAt?: Date | null;
   amountMinor: number;
   currency: "INR";
   status: PublicShipmentPaymentStatus;
@@ -46,6 +48,8 @@ const publicShipmentPaymentSchema = new mongoose.Schema<IPublicShipmentPayment>(
   razorpayOrderId: { type: String, required: true, unique: true, trim: true, maxlength: 100 },
   razorpayPaymentId: { type: String, trim: true, maxlength: 100, default: "" },
   razorpayRefundId: { type: String, trim: true, maxlength: 100, default: "" },
+  razorpayRefundAmountMinor: { type: Number, min: 0, default: 0 },
+  razorpayRefundedAt: { type: Date, default: null },
   amountMinor: { type: Number, required: true, min: 1 },
   currency: { type: String, enum: ["INR"], default: "INR", required: true },
   status: { type: String, enum: publicShipmentPaymentStatusValues, required: true, index: true },

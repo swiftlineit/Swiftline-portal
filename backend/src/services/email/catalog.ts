@@ -60,6 +60,8 @@ const catalog: Record<string, CatalogEntry> = {
   PAYMENT_CONFIRMED: { category: "TRANSACTIONAL", priority: 80 },
   OFFLINE_PAYMENT_SUBMITTED: { category: "TRANSACTIONAL", priority: 70 },
   CUSTOMER_ADVANCE_CREDITED: { category: "TRANSACTIONAL", priority: 70 },
+  CASH_RECEIPT_AVAILABLE: { category: "TRANSACTIONAL", priority: 90 },
+  WALLET_LOW_BALANCE: { category: "TRANSACTIONAL", priority: 80 },
   SECURITY_DEPOSIT_RECEIVED: { category: "TRANSACTIONAL", priority: 70 },
 
   // Credit account

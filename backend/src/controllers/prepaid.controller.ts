@@ -1,9 +1,11 @@
 import type { Request, Response } from "express";
+import { attachLedgerShipments } from "../services/prepaid/ledgerReferences.service.js";
+import { listAccountLedger } from "../services/prepaid/accountLedger.service.js";
+import { getTenantIdForWrite } from "../services/tenantScope.service.js";
 import mongoose from "mongoose";
 import { z } from "zod";
 import { env } from "../config/env.js";
-import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
-import { BusinessCreditAccount } from "../models/businessCreditAccount.model.js";
+import { BusinessAccountMember, financialRoles } from "../models/businessAccountMember.model.js";
 import { PaymentTopUp, type IPaymentTopUp, type PaymentTopUpStatus } from "../models/paymentTopUp.model.js";
 import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import { PrepaidTransaction } from "../models/prepaidTransaction.model.js";
@@ -16,6 +18,7 @@ import {
 import { verifyRazorpayCheckoutSignature } from "../services/razorpay/signatures.js";
 import {
   cancelPaymentTopUp,
+  attachRazorpayOrderToTopUp,
   createPaymentTopUp,
   ensurePrepaidAccount,
   findPaymentTopUpByIdempotencyKey,
@@ -24,12 +27,11 @@ import {
   creditCapturedTopUp
 } from "../services/prepaid/topups.service.js";
 import { dailyLimitMessage, getDailyTopUpUsage } from "../services/prepaid/dailyTopUpLimit.service.js";
-import { canAccessCreditFinancials } from "../services/creditAccount.service.js";
 
 const createTopUpSchema = z.object({
   businessAccountId: z.string().trim().optional(),
   amountMinor: z.number().int().positive(),
-  purpose: z.enum(["CUSTOMER_ADVANCE", "SECURITY_DEPOSIT"]).optional().default("CUSTOMER_ADVANCE")
+  purpose: z.literal("CUSTOMER_ADVANCE").optional().default("CUSTOMER_ADVANCE")
 });
 
 const verifyTopUpSchema = z.object({
@@ -62,7 +64,7 @@ async function getClientBusinessAccount(userId: mongoose.Types.ObjectId, busines
     .exec();
 
   if (!membership?.businessAccount) return null;
-  if (!canAccessCreditFinancials(membership.role)) return null;
+  if (!financialRoles.includes(membership.role)) return null;
 
   const account = membership.businessAccount as unknown as {
     _id?: mongoose.Types.ObjectId;
@@ -188,13 +190,27 @@ export async function listClientPrepaidTransactions(request: Request, response: 
   const clientAccount = await getClientBusinessAccount(userId, businessAccountId);
   if (!clientAccount) return response.status(404).json({ success: false, message: "Business account not found" });
 
-  const transactions = await PrepaidTransaction.find({ businessAccountId: clientAccount.businessAccountId })
-    .sort({ createdAt: -1 })
-    .limit(100)
+  const limit = 50;
+  const page = Math.max(1, Math.trunc(Number(request.query.page)) || 1);
+  const filters = { businessAccountId: clientAccount.businessAccountId };
+  const total = await PrepaidTransaction.countDocuments(filters);
+  const transactions = await PrepaidTransaction.find(filters)
+    .sort({ createdAt: -1, _id: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
     .lean()
     .exec();
 
-  return response.status(200).json({ success: true, transactions });
+  return response.status(200).json({ success: true, transactions: await attachLedgerShipments(transactions, clientAccount.businessAccountId), pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) } });
+}
+
+export async function getClientAccountLedger(request: Request, response: Response): Promise<Response> {
+  const userId = getAuthenticatedUserId(request);
+  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
+  const clientAccount = await getClientBusinessAccount(userId, typeof request.query.businessAccountId === "string" ? request.query.businessAccountId : undefined);
+  if (!clientAccount) return response.status(404).json({ success: false, message: "Business account not found" });
+  const ledger = await listAccountLedger({ tenantId: await getTenantIdForWrite(), businessAccountId: clientAccount.businessAccountId, page: Math.max(1, Math.trunc(Number(request.query.page)) || 1) });
+  return response.status(200).json({ success: true, ...ledger });
 }
 
 export async function createClientPrepaidTopUp(request: Request, response: Response): Promise<Response> {
@@ -203,11 +219,7 @@ export async function createClientPrepaidTopUp(request: Request, response: Respo
 
   const parsed = createTopUpSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ success: false, errors: parsed.error.format() });
-
-  if (
-    parsed.data.purpose !== "SECURITY_DEPOSIT"
-    && (parsed.data.amountMinor < env.RAZORPAY_MIN_TOPUP_MINOR || parsed.data.amountMinor > env.RAZORPAY_MAX_TOPUP_MINOR)
-  ) {
+  if (parsed.data.amountMinor < env.RAZORPAY_MIN_TOPUP_MINOR || parsed.data.amountMinor > env.RAZORPAY_MAX_TOPUP_MINOR) {
     return response.status(400).json({
       success: false,
       message: `Top-up amount must be between ${env.RAZORPAY_MIN_TOPUP_MINOR} and ${env.RAZORPAY_MAX_TOPUP_MINOR} paise.`
@@ -217,8 +229,22 @@ export async function createClientPrepaidTopUp(request: Request, response: Respo
   const idempotencyKey = request.header("Idempotency-Key") || "";
   if (!idempotencyKey) return response.status(400).json({ success: false, message: "Idempotency-Key header is required." });
 
+  const clientAccount = await getClientBusinessAccount(userId, parsed.data.businessAccountId);
+  if (!clientAccount) return response.status(404).json({ success: false, message: "Business account not found" });
+  if (clientAccount.account.status === "suspended") {
+    return response.status(423).json({ success: false, message: "Prepaid top-ups are paused while this account is suspended." });
+  }
+
   const existing = await findPaymentTopUpByIdempotencyKey(idempotencyKey);
   if (existing) {
+    if (
+      String(existing.businessAccountId) !== String(clientAccount.businessAccountId)
+      || existing.amountMinor !== parsed.data.amountMinor
+      || existing.purpose !== parsed.data.purpose
+      || String(existing.clientUserId) !== String(userId)
+    ) {
+      return response.status(409).json({ success: false, message: "Idempotency-Key was already used for a different top-up request." });
+    }
     return response.status(200).json({
       success: true,
       duplicate: true,
@@ -227,49 +253,18 @@ export async function createClientPrepaidTopUp(request: Request, response: Respo
     });
   }
 
-  const clientAccount = await getClientBusinessAccount(userId, parsed.data.businessAccountId);
-  if (!clientAccount) return response.status(404).json({ success: false, message: "Business account not found" });
-  if (clientAccount.account.status === "suspended") {
-    return response.status(423).json({ success: false, message: "Prepaid top-ups are paused while this account is suspended." });
-  }
-
-  const creditAccount = await BusinessCreditAccount.findOne({ businessAccountId: clientAccount.businessAccountId }).lean().exec();
-  if (parsed.data.purpose === "SECURITY_DEPOSIT") {
-    if (clientAccount.account.depositStatus === "received") {
-      return response.status(409).json({ success: false, message: "The required security deposit has already been received." });
-    }
-    if (!creditAccount || creditAccount.securityDepositRequiredMinor <= 0) {
-      return response.status(409).json({ success: false, message: "A security deposit is not required for this account." });
-    }
-    if (creditAccount.securityDepositRequiredMinor !== parsed.data.amountMinor) {
-      return response.status(400).json({ success: false, message: "Enter the exact required security deposit amount." });
-    }
-  }
-
   // Fail before an order exists at Razorpay when the account is already at its
   // daily ceiling. The authoritative check runs again once the row exists.
-  if (parsed.data.purpose === "CUSTOMER_ADVANCE") {
-    const usage = await getDailyTopUpUsage({ businessAccountId: clientAccount.businessAccountId });
-    if (parsed.data.amountMinor > usage.remainingMinor) {
-      return response.status(409).json({
-        success: false,
-        message: dailyLimitMessage(usage.remainingMinor),
-        dailyTopUp: usage
-      });
-    }
+  const usage = await getDailyTopUpUsage({ businessAccountId: clientAccount.businessAccountId });
+  if (parsed.data.amountMinor > usage.remainingMinor) {
+    return response.status(409).json({
+      success: false,
+      message: dailyLimitMessage(usage.remainingMinor),
+      dailyTopUp: usage
+    });
   }
 
-  const internalReference = `${parsed.data.purpose === "SECURITY_DEPOSIT" ? "DEPOSIT" : "TOPUP"}-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-  const razorpayOrder = await createRazorpayOrder({
-    amountMinor: parsed.data.amountMinor,
-    currency: "INR",
-    receipt: internalReference,
-    notes: {
-      businessAccountId: String(clientAccount.businessAccountId),
-      clientUserId: String(userId)
-    }
-  });
-
+  const internalReference = `TOPUP-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
   const topUpResult = await createPaymentTopUp({
     businessAccountId: clientAccount.businessAccountId,
     clientUserId: userId,
@@ -277,14 +272,13 @@ export async function createClientPrepaidTopUp(request: Request, response: Respo
     currency: "INR",
     purpose: parsed.data.purpose,
     internalReference,
-    idempotencyKey,
-    razorpayOrderId: razorpayOrder.id
+    idempotencyKey
   });
 
   // Two requests can pass the pre-check at once, so the row is created first and
   // then confirmed against everything created at or before it. The earlier row
   // wins; the later one is cancelled before its order is ever handed back.
-  if (parsed.data.purpose === "CUSTOMER_ADVANCE" && topUpResult.created) {
+  if (topUpResult.created) {
     const confirmed = await getDailyTopUpUsage({
       businessAccountId: clientAccount.businessAccountId,
       upTo: { createdAt: topUpResult.topUp.createdAt, id: topUpResult.topUp._id as mongoose.Types.ObjectId }
@@ -300,11 +294,37 @@ export async function createClientPrepaidTopUp(request: Request, response: Respo
     }
   }
 
+  let checkoutTopUp = topUpResult.topUp;
+  if (topUpResult.created) {
+    try {
+      const razorpayOrder = await createRazorpayOrder({
+        amountMinor: parsed.data.amountMinor,
+        currency: "INR",
+        receipt: internalReference,
+        notes: {
+          businessAccountId: String(clientAccount.businessAccountId),
+          clientUserId: String(userId),
+          purpose: parsed.data.purpose
+        }
+      });
+      checkoutTopUp = await attachRazorpayOrderToTopUp({
+        paymentTopUpId: topUpResult.topUp._id as mongoose.Types.ObjectId,
+        razorpayOrderId: razorpayOrder.id
+      });
+    } catch (error) {
+      await cancelPaymentTopUp(
+        topUpResult.topUp._id as mongoose.Types.ObjectId,
+        error instanceof Error ? error.message : "Razorpay order creation failed."
+      );
+      throw error;
+    }
+  }
+
   return response.status(201).json({
     success: true,
     duplicate: !topUpResult.created,
     razorpay: getRazorpayPublicConfig(),
-    topUp: serializeTopUp(topUpResult.topUp)
+    topUp: serializeTopUp(checkoutTopUp)
   });
 }
 
@@ -347,7 +367,7 @@ export async function verifyClientPrepaidTopUp(request: Request, response: Respo
         success: true,
         message: topUp.purpose === "SECURITY_DEPOSIT"
           ? "Security deposit received successfully."
-          : "Payment received and Customer Advance updated.",
+          : "Payment received and prepaid wallet updated.",
         topUp: serializeTopUp(reconciliation.topUp)
       });
     }
@@ -421,9 +441,13 @@ export async function listClientPrepaidTopUps(request: Request, response: Respon
       { status: { $in: abandonedStatuses }, createdAt: { $gte: abandonedBefore } }
     ]
   };
+  const page = Math.max(1, Math.trunc(Number(request.query.page)) || 1);
+  const limit = 5;
+  const total = await PaymentTopUp.countDocuments(visibleTopUps);
   const topUps = await PaymentTopUp.find(visibleTopUps)
-    .sort({ createdAt: -1 })
-    .limit(100)
+    .sort({ createdAt: -1, _id: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
     .exec();
 
   // Reconcile only recent pending payments to keep history loading predictable.
@@ -436,9 +460,10 @@ export async function listClientPrepaidTopUps(request: Request, response: Respon
   }
 
   const refreshedTopUps = await PaymentTopUp.find(visibleTopUps)
-    .sort({ createdAt: -1 })
-    .limit(100)
+    .sort({ createdAt: -1, _id: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
     .exec();
 
-  return response.status(200).json({ success: true, topUps: refreshedTopUps.map(serializeTopUp) });
+  return response.status(200).json({ success: true, topUps: refreshedTopUps.map(serializeTopUp), pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) } });
 }

@@ -22,6 +22,7 @@ import {
 import { resolveBulkTrackingGatewayCode } from "./shipmentGateway.service.js";
 import { formatShipmentStatusLabel } from "./shipmentListing.service.js";
 import { loadShipmentHubReceiptsByDraftIds } from "./shipmentHubReceipt.service.js";
+import { completedShipmentDraftIds } from "./prepaid/shipmentFunding.service.js";
 
 export type BulkStatusSkip = {
   shipmentDraftId: string;
@@ -280,6 +281,7 @@ export async function bulkRecordOperationalStatus(input: {
     timings.readMs = roundedDuration(readStartedAt);
 
     const validationStartedAt = performance.now();
+    const paidShipmentDraftIds = await completedShipmentDraftIds(draftObjectIds);
     const hubReceipts = input.status === "WAREHOUSE_SCAN_IN"
       ? await loadShipmentHubReceiptsByDraftIds(draftObjectIds)
       : new Map();
@@ -358,6 +360,14 @@ export async function bulkRecordOperationalStatus(input: {
       const shipment = shipmentByDraft.get(draftId);
       if (!shipment) {
         skipped.push({ shipmentDraftId: draftId, reason: "Shipment is not booked." });
+        continue;
+      }
+      if (!paidShipmentDraftIds.has(draftId)) {
+        skipped.push({
+          shipmentDraftId: draftId,
+          swiftlineTrackingNumber: shipment.swiftlineTrackingNumber,
+          reason: "Shipment payment must be completed before operations can move it."
+        });
         continue;
       }
       const hubReceipt = hubReceipts.get(draftId);

@@ -37,6 +37,18 @@ import {
   releaseShipmentManifestAssignments,
   shipmentManifestAssignmentAvailability
 } from "../services/shipmentManifestMembership.service.js";
+import { assertShipmentsFundingCompleted, ShipmentPaymentRequiredError } from "../services/prepaid/shipmentFunding.service.js";
+
+async function assertManifestShipmentsPaid(shipmentDraftIds: mongoose.Types.ObjectId[]) {
+  try {
+    await assertShipmentsFundingCompleted(shipmentDraftIds);
+  } catch (error) {
+    if (error instanceof ShipmentPaymentRequiredError) {
+      throw new ShipmentManifestServiceError("Every selected shipment must be fully paid before it can be manifested.", 402);
+    }
+    throw error;
+  }
+}
 
 const manifestLineInputSchema = z.object({
   shipmentDraftId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid shipment."),
@@ -408,6 +420,7 @@ async function createManifest(request: Request, response: Response, actorRole: "
     if (drafts.length !== selectedIds.length || bookings.length !== selectedIds.length) {
       throw new ShipmentManifestServiceError("Every selected shipment must be booked before it can be manifested.", 409);
     }
+    await assertManifestShipmentsPaid(selectedObjectIds);
     if (existingAssignment) throw new ShipmentManifestServiceError("One of the selected shipments already belongs to a manifest.", 409);
     if (cancelledEvent) throw new ShipmentManifestServiceError("Cancelled shipments cannot be added to a manifest.", 409);
     if (!assignedBranch) throw new ShipmentManifestServiceError("The assigned branch details are unavailable. Contact Swiftline support.", 409);
@@ -811,6 +824,7 @@ async function createBulkManifest(request: Request, response: Response, actorRol
     if (bookings.length !== selectedIds.length) {
       throw new ShipmentManifestServiceError("Every selected shipment must be booked before it can be manifested.", 409);
     }
+    await assertManifestShipmentsPaid(selectedObjectIds);
     if (existingAssignment) {
       throw new ShipmentManifestServiceError("One of the selected shipments already belongs to a manifest.", 409);
     }
@@ -994,6 +1008,7 @@ export async function createAdminCombinedShipmentManifest(request: Request, resp
     if (bookings.length !== selectedIds.length) {
       throw new ShipmentManifestServiceError("Every selected shipment must be booked before it can be manifested.", 409);
     }
+    await assertManifestShipmentsPaid(selectedObjectIds);
     if (cancelledEvent) throw new ShipmentManifestServiceError("Cancelled shipments cannot be added to a manifest.", 409);
     if (!assignedBranch) {
       throw new ShipmentManifestServiceError("The assigned branch details are unavailable. Contact Swiftline support.", 409);

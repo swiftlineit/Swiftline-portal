@@ -6,6 +6,7 @@ import {
   type PaymentSource,
   type PrepaidCurrency
 } from "./financialTypes.js";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const prepaidTransactionTypeValues = [
   "TOP_UP_SUCCESS",
@@ -15,6 +16,15 @@ export const prepaidTransactionTypeValues = [
   "LABEL_RESERVATION_EXPIRED",
   "LABEL_CHARGE_COMPLETED",
   "LABEL_CHARGE_REVERSED",
+  "SHIPMENT_PAYMENT_RESERVED",
+  "SHIPMENT_PAYMENT_RELEASED",
+  "SHIPMENT_PAYMENT_COMPLETED",
+  "AMENDMENT_PAYMENT_RESERVED",
+  "AMENDMENT_PAYMENT_RELEASED",
+  "AMENDMENT_PAYMENT_COMPLETED",
+  "AMENDMENT_ADJUSTMENT_CREDITED",
+  "OPENING_BALANCE_TRANSFER",
+  "SHIPMENT_CANCELLATION_REFUND",
   "ADMIN_CREDIT",
   "ADMIN_DEBIT",
   "PAYMENT_REFUND_PENDING",
@@ -32,11 +42,14 @@ export const prepaidTransactionReferenceTypeValues = [
   "SHIPMENT_CHARGE",
   "DPD_SHIPMENT",
   "ADMIN_ADJUSTMENT",
-  "WEBHOOK_EVENT"
+  "WEBHOOK_EVENT",
+  "SHIPMENT_FUNDING",
+  "SHIPMENT_AMENDMENT",
+  "SHIPMENT_CANCELLATION"
 ] as const;
 export type PrepaidTransactionReferenceType = (typeof prepaidTransactionReferenceTypeValues)[number];
 
-export interface IPrepaidTransaction extends mongoose.Document {
+export interface IPrepaidTransaction extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   branchId?: mongoose.Types.ObjectId | null;
   transactionType: PrepaidTransactionType;
@@ -78,7 +91,7 @@ const prepaidTransactionSchema = new mongoose.Schema<IPrepaidTransaction>(
     currency: { type: String, enum: prepaidCurrencyValues, default: "INR", required: true },
     referenceType: { type: String, enum: prepaidTransactionReferenceTypeValues, required: true, index: true },
     referenceId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
-    idempotencyKey: { type: String, required: true, unique: true, trim: true, maxlength: 256 },
+    idempotencyKey: { type: String, required: true, trim: true, maxlength: 256 },
     paymentSource: { type: String, enum: paymentSourceValues, default: "CLIENT_PREPAID", required: true },
     cashBalanceBeforeMinor: minorUnitField,
     cashBalanceAfterMinor: minorUnitField,
@@ -91,6 +104,19 @@ const prepaidTransactionSchema = new mongoose.Schema<IPrepaidTransaction>(
 );
 
 prepaidTransactionSchema.index({ businessAccountId: 1, createdAt: -1 });
+prepaidTransactionSchema.index({ tenantId: 1, idempotencyKey: 1 }, { unique: true, name: "tenant_wallet_transaction_idempotency" });
+
+const rejectLedgerMutation = () => {
+  throw new Error("Prepaid ledger entries are append-only.");
+};
+for (const operation of ["updateOne", "updateMany", "findOneAndUpdate", "replaceOne", "findOneAndReplace", "deleteOne", "deleteMany", "findOneAndDelete"] as const) {
+  prepaidTransactionSchema.pre(operation as mongoose.MongooseQueryMiddleware, { document: false, query: true }, rejectLedgerMutation);
+}
+prepaidTransactionSchema.pre("save", function rejectExistingLedgerSave() {
+  if (!this.isNew) rejectLedgerMutation();
+});
+
+addTenantOwnership(prepaidTransactionSchema, { allowReadOnlyAuditAppend: true });
 
 export const PrepaidTransaction = mongoose.model<IPrepaidTransaction>(
   "PrepaidTransaction",

@@ -31,6 +31,11 @@ import { attachUser, requireRole } from "../middleware/auth.middleware.js";
 import { aadhaarOcrUpload } from "../middleware/aadhaarOcrUpload.middleware.js";
 import { requireAadhaarOcrFeatureEnabled } from "../middleware/aadhaarOcrFeature.middleware.js";
 import { shipmentKycUpload } from "../middleware/shipmentKycUpload.middleware.js";
+import {
+  createStaffShipmentDirectPayment,
+  verifyStaffShipmentDirectPayment
+} from "../controllers/shipmentDirectPayment.controller.js";
+import { downloadStaffCashReceiptPdf, getStaffCashReceipt, saveStaffCashReceiptDraft } from "../controllers/cashReceipt.controller.js";
 
 export const shipmentDraftRouter = Router();
 
@@ -59,6 +64,11 @@ shipmentDraftRouter.get("/:id/rate-card-context", requireOperations, getShipment
 // POST because the booking form prices the values it currently holds, which are
 // sent in the body. Nothing is written.
 shipmentDraftRouter.post("/:id/cost-estimate", requireOperations, getShipmentDraftCostEstimate);
+shipmentDraftRouter.post("/:id/direct-payment", requireOperations, createStaffShipmentDirectPayment);
+shipmentDraftRouter.post("/:id/direct-payment/verify", requireOperations, verifyStaffShipmentDirectPayment);
+shipmentDraftRouter.get("/:id/cash-receipt", requireOperations, getStaffCashReceipt);
+shipmentDraftRouter.put("/:id/cash-receipt", requireOperations, saveStaffCashReceiptDraft);
+shipmentDraftRouter.get("/:id/cash-receipt/pdf", requireOperations, downloadStaffCashReceiptPdf);
 shipmentDraftRouter.patch("/:id", requireOperations, updateShipmentDraft);
 shipmentDraftRouter.post("/:id/amendments/preview", requireOperations, previewShipmentAmendment);
 shipmentDraftRouter.post("/:id/amendments", requireOperations, createAdminShipmentAmendment);

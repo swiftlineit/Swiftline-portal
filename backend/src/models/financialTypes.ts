@@ -1,7 +1,16 @@
 export const prepaidCurrencyValues = ["INR"] as const;
 export type PrepaidCurrency = (typeof prepaidCurrencyValues)[number];
 
-export const paymentSourceValues = ["BUSINESS_ACCOUNT", "CLIENT_PREPAID", "ADMIN_DIRECT", "PUBLIC_RAZORPAY", "TEST"] as const;
+export const paymentSourceValues = [
+  "BUSINESS_ACCOUNT",
+  "BUSINESS_WALLET",
+  "DIRECT_RAZORPAY",
+  "CASH_RECEIPT",
+  "CLIENT_PREPAID",
+  "ADMIN_DIRECT",
+  "PUBLIC_RAZORPAY",
+  "TEST"
+] as const;
 export type PaymentSource = (typeof paymentSourceValues)[number];
 
 export const shippingEnvironmentValues = ["MOCK", "PREPRODUCTION", "PRODUCTION"] as const;

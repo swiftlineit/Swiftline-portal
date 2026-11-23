@@ -8,6 +8,16 @@ import {
   releaseBookingReservation,
   reserveBookingCapacity
 } from "./creditBooking.service.js";
+import { getTenantContext } from "./tenantScope.service.js";
+import {
+  completeShipmentFunding,
+  markShipmentFundingConsuming,
+  markShipmentFundingReviewRequired,
+  releaseShipmentFunding,
+  securePaidShipmentFunding,
+  secureWalletShipmentFunding
+} from "./prepaid/shipmentFunding.service.js";
+import type { ShipmentFundingSource } from "../models/shipmentFunding.model.js";
 import {
   buildPricingInputFromDraft,
   calculateShipmentPricingEstimate,
@@ -47,6 +57,15 @@ export async function reserveShipmentBookingCharge(input: {
   const amountMinor = toMinor(pricing.totalAmount);
   if (amountMinor <= 0) throw new Error("BOOKING_AMOUNT_INVALID");
 
+  if (getTenantContext()?.kind !== "OPERATOR") {
+    return secureWalletShipmentFunding({
+      draft: input.draft,
+      pricing,
+      bookingAttemptId: input.bookingAttemptId,
+      createdBy: input.createdBy
+    });
+  }
+
   return reserveBookingCapacity({
     businessAccountId: input.draft.businessAccountId,
     branchId: input.draft.branchId,
@@ -58,6 +77,18 @@ export async function reserveShipmentBookingCharge(input: {
     parcelCount: Math.max(input.draft.parcelList.length || input.draft.parcelCount || 1, 1),
     pricingSnapshot: pricing
   });
+}
+
+export async function securePaidShipmentBookingCharge(input: {
+  draft: ShipmentDraftDocument;
+  createdBy: mongoose.Types.ObjectId;
+  bookingAttemptId: string;
+  pricing: ShipmentPricingEstimate;
+  pricingHash: string;
+  source: Extract<ShipmentFundingSource, "DIRECT_RAZORPAY" | "CASH_RECEIPT" | "PUBLIC_RAZORPAY">;
+  sourceReferenceId: mongoose.Types.ObjectId;
+}) {
+  return securePaidShipmentFunding(input);
 }
 
 /**
@@ -142,8 +173,15 @@ async function getReservedCharge(shipmentDraftId: mongoose.Types.ObjectId) {
   return ShipmentCharge.findOne({ shipmentDraftId }).exec();
 }
 
-export async function markShipmentBookingChargeConsuming(shipmentDraftId: mongoose.Types.ObjectId) {
+export async function markShipmentBookingChargeConsuming(
+  shipmentDraftId: mongoose.Types.ObjectId,
+  bookingAttemptId = ""
+) {
   const charge = await getReservedCharge(shipmentDraftId);
+  if (charge && ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(charge.paymentSource)) {
+    await markShipmentFundingConsuming({ shipmentDraftId, bookingAttemptId });
+    return charge;
+  }
   if (!charge?.balanceReservationId || charge.customerChargeStatus !== "RESERVED") return charge;
   await markBookingReservationConsuming(charge.balanceReservationId);
   return charge;
@@ -155,6 +193,10 @@ export async function completeShipmentBookingCharge(input: {
   createdBy: mongoose.Types.ObjectId;
 }) {
   const charge = await getReservedCharge(input.shipmentDraftId);
+  if (charge && ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(charge.paymentSource)) {
+    await completeShipmentFunding(input);
+    return getReservedCharge(input.shipmentDraftId);
+  }
   if (!charge?.balanceReservationId) return null;
   if (charge.customerChargeStatus === "COMPLETED") return charge;
 
@@ -173,6 +215,14 @@ export async function releaseShipmentBookingCharge(input: {
   createdBy: mongoose.Types.ObjectId;
 }) {
   const charge = await getReservedCharge(input.shipmentDraftId);
+  if (charge && ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(charge.paymentSource)) {
+    await releaseShipmentFunding({
+      shipmentDraftId: input.shipmentDraftId,
+      createdBy: input.createdBy,
+      reason: "Shipment booking failed before a durable carrier booking was created."
+    });
+    return getReservedCharge(input.shipmentDraftId);
+  }
   if (!charge?.balanceReservationId) return null;
   if (charge.customerChargeStatus === "REVERSED") return charge;
 
@@ -191,6 +241,14 @@ export async function markShipmentBookingChargeReviewRequired(input: {
   createdBy: mongoose.Types.ObjectId;
 }) {
   const charge = await getReservedCharge(input.shipmentDraftId);
+  if (charge && ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(charge.paymentSource)) {
+    await markShipmentFundingReviewRequired({
+      shipmentDraftId: input.shipmentDraftId,
+      dpdShipmentId: input.dpdShipmentId,
+      reason: "Carrier or local booking result requires reconciliation."
+    });
+    return getReservedCharge(input.shipmentDraftId);
+  }
   if (!charge?.balanceReservationId) return null;
   // Invoice/document recovery can run after the credit reservation has already
   // been converted. Preserve that completed charge; only a still-held charge

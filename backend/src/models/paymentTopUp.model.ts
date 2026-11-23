@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { isMinorUnitInteger, prepaidCurrencyValues, type PrepaidCurrency } from "./financialTypes.js";
+import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export const paymentTopUpStatusValues = [
   "CREATED",
@@ -20,7 +21,7 @@ export const paymentTopUpPurposeValues = [
 ] as const;
 export type PaymentTopUpPurpose = (typeof paymentTopUpPurposeValues)[number];
 
-export interface IPaymentTopUp extends mongoose.Document {
+export interface IPaymentTopUp extends mongoose.Document, TenantOwnedFields {
   businessAccountId: mongoose.Types.ObjectId;
   clientUserId: mongoose.Types.ObjectId;
   amountMinor: number;
@@ -56,8 +57,8 @@ const paymentTopUpSchema = new mongoose.Schema<IPaymentTopUp>(
     currency: { type: String, enum: prepaidCurrencyValues, default: "INR", required: true },
     purpose: { type: String, enum: paymentTopUpPurposeValues, default: "CUSTOMER_ADVANCE", required: true },
     internalReference: { type: String, required: true, trim: true, maxlength: 120, index: true },
-    idempotencyKey: { type: String, required: true, unique: true, trim: true, maxlength: 256 },
-    razorpayOrderId: { type: String, required: true, unique: true, trim: true, maxlength: 120 },
+    idempotencyKey: { type: String, required: true, trim: true, maxlength: 256 },
+    razorpayOrderId: { type: String, trim: true, maxlength: 120, default: "" },
     razorpayPaymentId: { type: String, trim: true, maxlength: 120, default: "" },
     razorpaySignature: { type: String, trim: true, maxlength: 256, default: "" },
     status: { type: String, enum: paymentTopUpStatusValues, default: "CREATED", index: true },
@@ -68,12 +69,28 @@ const paymentTopUpSchema = new mongoose.Schema<IPaymentTopUp>(
 );
 
 paymentTopUpSchema.index(
+  { tenantId: 1, idempotencyKey: 1 },
+  { unique: true, name: "tenant_wallet_topup_idempotency" }
+);
+
+paymentTopUpSchema.index(
+  { razorpayOrderId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { razorpayOrderId: { $type: "string", $gt: "" } }
+  }
+);
+
+paymentTopUpSchema.index(
   { razorpayPaymentId: 1 },
   {
     unique: true,
     partialFilterExpression: { razorpayPaymentId: { $type: "string", $gt: "" } }
   }
 );
+
+paymentTopUpSchema.index({ tenantId: 1, businessAccountId: 1, createdAt: -1 }, { name: "tenant_wallet_topups" });
+addTenantOwnership(paymentTopUpSchema);
 
 export const PaymentTopUp = mongoose.model<IPaymentTopUp>(
   "PaymentTopUp",

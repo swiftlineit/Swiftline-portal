@@ -30,6 +30,16 @@ function creditAgreementErrorResponse(error: CreditAgreementServiceError, respon
   return response.status(notFound ? 404 : 409).json({ success: false, message: error.message, code: error.code });
 }
 
+function blockRetiredSwiftlineCreditFacility(request: Request, response: Response) {
+  if (getOperatorContext(request)?.accessMode === "MEMBER") return false;
+  response.status(410).json({
+    success: false,
+    code: "CREDIT_FACILITY_RETIRED",
+    message: "Swiftline credit facilities are retired. Historical balances remain available for collection; new shipments require prepaid funding."
+  });
+  return true;
+}
+
 const approvalSchema = z.object({
   approvedCreditLimitMinor: z.number().int()
     .positive("Approved credit limit must be greater than zero.")
@@ -218,6 +228,13 @@ export async function getAdminCreditAccount(request: Request, response: Response
 export async function approveAdminCreditAccount(request: Request, response: Response): Promise<Response> {
   const operator = getOperatorContext(request);
   const operatorApproval = operator?.accessMode === "MEMBER";
+  if (!operatorApproval) {
+    return response.status(410).json({
+      success: false,
+      code: "CREDIT_FACILITY_RETIRED",
+      message: "New Swiftline credit facilities are no longer available. Business accounts use prepaid funding."
+    });
+  }
   const currentUserId = userId(request);
   const businessAccountId = accountId(request);
   if (!currentUserId) return response.status(401).json({ success: false, message: "Please sign in again." });
@@ -380,6 +397,13 @@ export async function approveAdminCreditAccount(request: Request, response: Resp
 }
 
 export async function activateAdminCreditAccount(request: Request, response: Response): Promise<Response> {
+  if (getOperatorContext(request)?.accessMode !== "MEMBER") {
+    return response.status(410).json({
+      success: false,
+      code: "CREDIT_FACILITY_RETIRED",
+      message: "New Swiftline credit facilities are no longer available. Business accounts use prepaid funding."
+    });
+  }
   const currentUser = (request as Request & { user?: { _id?: unknown; role?: string; name?: string; email?: string } }).user;
   const currentUserId = userId(request);
   const businessAccountId = accountId(request);
@@ -543,6 +567,7 @@ async function runCreditStatusTransition(input: {
 }
 
 export async function suspendAdminCreditAccount(request: Request, response: Response): Promise<Response> {
+  if (blockRetiredSwiftlineCreditFacility(request, response)) return response;
   const currentUserId = userId(request);
   const businessAccountId = accountId(request);
   if (!currentUserId) return response.status(401).json({ success: false, message: "Please sign in again." });
@@ -566,6 +591,13 @@ export async function suspendAdminCreditAccount(request: Request, response: Resp
 }
 
 export async function reactivateAdminCreditAccount(request: Request, response: Response): Promise<Response> {
+  if (getOperatorContext(request)?.accessMode !== "MEMBER") {
+    return response.status(410).json({
+      success: false,
+      code: "CREDIT_FACILITY_RETIRED",
+      message: "Swiftline business accounts use prepaid funding. Historical credit balances remain available for collection."
+    });
+  }
   const currentUserId = userId(request);
   const businessAccountId = accountId(request);
   if (!currentUserId) return response.status(401).json({ success: false, message: "Please sign in again." });
@@ -596,6 +628,7 @@ export async function reactivateAdminCreditAccount(request: Request, response: R
 }
 
 export async function closeAdminCreditAccount(request: Request, response: Response): Promise<Response> {
+  if (blockRetiredSwiftlineCreditFacility(request, response)) return response;
   const currentUserId = userId(request);
   const businessAccountId = accountId(request);
   if (!currentUserId) return response.status(401).json({ success: false, message: "Please sign in again." });
@@ -624,6 +657,7 @@ export async function closeAdminCreditAccount(request: Request, response: Respon
 }
 
 export async function rejectAdminCreditAccount(request: Request, response: Response): Promise<Response> {
+  if (blockRetiredSwiftlineCreditFacility(request, response)) return response;
   const currentUserId = userId(request);
   const businessAccountId = accountId(request);
   const parsed = reasonSchema.safeParse(request.body);

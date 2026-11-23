@@ -202,6 +202,11 @@ export interface IBusinessAccount extends mongoose.Document {
   /** Null/missing with a band means a legacy account awaiting the audited copy. */
   privateRateCardVersion?: number | null;
   privateRateCardReady?: boolean;
+  /** Percentage discount applied only to volumetric weight above actual weight. */
+  volumetricDiscountPercent?: number;
+  volumetricDiscountVersion?: number;
+  volumetricDiscountUpdatedAt?: Date | null;
+  volumetricDiscountUpdatedBy?: mongoose.Types.ObjectId | null;
   origin?: "STAFF" | "PUBLIC";
   createdBy: mongoose.Types.ObjectId | null;
   updatedBy?: mongoose.Types.ObjectId;
@@ -463,6 +468,10 @@ const businessAccountSchema = new mongoose.Schema<IBusinessAccount>(
     rateCardBand: { type: String, enum: [...rateCardBandValues, null], default: null, index: true },
     privateRateCardVersion: { type: Number, min: 0 },
     privateRateCardReady: { type: Boolean },
+    volumetricDiscountPercent: { type: Number, min: 0, max: 100, default: 0 },
+    volumetricDiscountVersion: { type: Number, min: 0, default: 0 },
+    volumetricDiscountUpdatedAt: { type: Date, default: null },
+    volumetricDiscountUpdatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     // Public self-serve accounts have no internal creator; admin creates with a user.
     origin: { type: String, enum: ["STAFF", "PUBLIC"], default: "STAFF", index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: false, default: null, index: true },
