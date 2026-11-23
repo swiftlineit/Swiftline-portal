@@ -12,6 +12,7 @@ import { ShipmentCancellation } from "../models/shipmentCancellation.model.js";
 import { PublicShipmentPayment } from "../models/publicShipmentPayment.model.js";
 import { WebhookEvent } from "../models/webhookEvent.model.js";
 import { indexKeyEquals, indexSatisfiesPlan, type ExistingIndexShape, type PlannedIndexShape } from "./tenantMigrationIndexHelpers.js";
+import { applyZeroOpening, inspectZeroOpening, type ZeroOpeningReport } from "./prepaidZeroOpening.js";
 
 // These models are registered for schema inspection only. The caller uses a
 // native MongoClient; importing this module never connects Mongoose.
@@ -40,8 +41,11 @@ export type PrepaidReleaseReport = {
   missingIndexes: Array<typeof prepaidReleaseIndexPlans[number]>;
   replaceIndexes: Array<{ collection: string; name: string }>;
   walletsMissingCycleMetadata: number;
+  zeroOpening?: ZeroOpeningReport;
   blockers: string[];
 };
+
+type ReleaseOptions = { zeroOpeningBalances?: boolean };
 
 function duplicatePipeline(plan: PlannedIndexShape, rootTenantId: ObjectId): Document[] {
   const key = Object.fromEntries(Object.keys(plan.key).map((field) => [
@@ -56,7 +60,7 @@ function duplicatePipeline(plan: PlannedIndexShape, rootTenantId: ObjectId): Doc
   ];
 }
 
-export async function inspectPrepaidRelease(db: Db): Promise<PrepaidReleaseReport> {
+export async function inspectPrepaidRelease(db: Db, options: ReleaseOptions = {}): Promise<PrepaidReleaseReport> {
   const roots = await db.collection("tenants").find({ kind: "SWIFTLINE", status: "ACTIVE" }, queryOptions).limit(2).toArray();
   if (roots.length !== 1) throw new Error("Expected exactly one active Swiftline tenant.");
   const rootTenantId = roots[0]!._id;
@@ -120,15 +124,20 @@ export async function inspectPrepaidRelease(db: Db): Promise<PrepaidReleaseRepor
     const count = await db.collection(collection).countDocuments({ tenantId: rootTenantId, status: { $in: statuses } }, queryOptions);
     if (count) report.blockers.push(`${collection}: ${count} active Swiftline request(s)/reservation(s) must be resolved before cutover.`);
   }
+  if (options.zeroOpeningBalances) {
+    report.zeroOpening = await inspectZeroOpening(db, rootTenantId);
+    report.blockers.push(...report.zeroOpening.blockers);
+  }
   return report;
 }
 
-/** Apply only while every application and scheduled writer is paused. No balance transfers or deletes. */
-export async function applyPrepaidRelease(db: Db) {
-  const before = await inspectPrepaidRelease(db);
+/** Apply only while every application and scheduled writer is paused. No transfers or deletes. */
+export async function applyPrepaidRelease(db: Db, options: ReleaseOptions = {}) {
+  const before = await inspectPrepaidRelease(db, options);
   if (before.blockers.length) throw new Error(`Release migration blocked: ${before.blockers.join(" ")}`);
-  // One transaction assigns the proven legacy ownership without touching money,
-  // provider statuses, payment IDs, receipts, or other tenants' existing records.
+  // Ownership and the explicitly selected one-time reset commit together.
+  // Provider/payment history and other tenants' records are never rewritten.
+  let adjustmentsWritten = 0;
   const session = db.client.startSession();
   try {
     await session.withTransaction(async () => {
@@ -149,19 +158,22 @@ export async function applyPrepaidRelease(db: Db) {
         fundingCycleStartedAt: { $ifNull: ["$fundingCycleStartedAt", null] },
         lowBalanceAlertedCycle: { $ifNull: ["$lowBalanceAlertedCycle", null] }
       } }], { session });
-    });
+      if (options.zeroOpeningBalances) adjustmentsWritten = await applyZeroOpening(db, before.rootTenantId, session);
+    }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" }, readPreference: "primary" });
   } finally { await session.endSession(); }
 
   for (const plan of before.replaceIndexes) await db.collection(plan.collection).dropIndex(plan.name);
   for (const plan of before.missingIndexes) {
     await db.collection(plan.collection).createIndex(plan.key, plan.options);
   }
-  const after = await inspectPrepaidRelease(db);
-  if (after.blockers.length || after.missingIndexes.length || after.replaceIndexes.length || after.ownership.length || after.walletsMissingCycleMetadata) {
+  const after = await inspectPrepaidRelease(db, options);
+  if (after.blockers.length || after.missingIndexes.length || after.replaceIndexes.length || after.ownership.length
+    || after.walletsMissingCycleMetadata || (options.zeroOpeningBalances && !after.zeroOpening?.alreadyApplied)) {
     throw new Error("Release postflight failed; keep the portal in maintenance mode and inspect the audit.");
   }
   for (const [collection, count] of Object.entries(before.records)) {
-    if (after.records[collection] !== count) throw new Error(`${collection}: record counts changed during migration.`);
+    const expected = count + (collection === "prepaidtransactions" ? adjustmentsWritten : 0);
+    if (after.records[collection] !== expected) throw new Error(`${collection}: unexpected record count change during migration.`);
   }
   return after;
 }

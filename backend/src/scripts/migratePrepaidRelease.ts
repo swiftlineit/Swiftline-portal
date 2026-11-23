@@ -14,10 +14,12 @@ export async function runPrepaidRelease(args = process.argv.slice(2)) {
   const values = new Map<string, string>();
   let apply = false;
   let writersPaused = false;
+  let zeroOpeningBalances = false;
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index]!;
     if (flag === "--apply" && !apply) { apply = true; continue; }
     if (flag === "--writers-paused" && !writersPaused) { writersPaused = true; continue; }
+    if (flag === "--zero-opening-balances" && !zeroOpeningBalances) { zeroOpeningBalances = true; continue; }
     if (!["--database", "--cluster-host", "--change-id", "--backup-ref", "--run-id", "--artifact-sha", "--confirm", "--log-file"].includes(flag)) {
       throw new Error(`Unknown release migration option: ${flag}`);
     }
@@ -64,7 +66,7 @@ export async function runPrepaidRelease(args = process.argv.slice(2)) {
       const relative = path.relative(repository, path.resolve(log));
       if (!path.isAbsolute(log) || !(relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))) throw new Error("Use an absolute audit log path outside the repository.");
       auditLog = await fs.open(log, "wx", 0o600);
-      await auditLog.appendFile(`${JSON.stringify({ event: "prepaid-release-started", sha, database, host, at: new Date().toISOString(), changeId: values.get("--change-id"), backup: values.get("--backup-ref"), runId: values.get("--run-id") })}\n`);
+      await auditLog.appendFile(`${JSON.stringify({ event: "prepaid-release-started", sha, database, host, zeroOpeningBalances, at: new Date().toISOString(), changeId: values.get("--change-id"), backup: values.get("--backup-ref"), runId: values.get("--run-id") })}\n`);
       await auditLog.sync();
     }
   }
@@ -72,7 +74,7 @@ export async function runPrepaidRelease(args = process.argv.slice(2)) {
     client = new MongoClient(auditUri, { serverSelectionTimeoutMS: 15_000, maxPoolSize: 2 });
     await client.connect();
     assertExpectedDatabaseName(database, client.db(database).databaseName);
-    const before = await inspectPrepaidRelease(client.db(database));
+    const before = await inspectPrepaidRelease(client.db(database), { zeroOpeningBalances });
     console.log(JSON.stringify({ mode: "READ_ONLY_PREFLIGHT", database, ...before }, null, 2));
     if (before.blockers.length) throw new Error("Prepaid release is blocked. Resolve the listed findings before applying.");
     if (!apply) return before;
@@ -82,10 +84,10 @@ export async function runPrepaidRelease(args = process.argv.slice(2)) {
     client = new MongoClient(writeUri, { serverSelectionTimeoutMS: 15_000, maxPoolSize: 2 });
     await client.connect();
     // applyPrepaidRelease runs the complete preflight again using the writer.
-    const after = await applyPrepaidRelease(client.db(database));
+    const after = await applyPrepaidRelease(client.db(database), { zeroOpeningBalances });
     console.log(JSON.stringify({ mode: "APPLIED_AND_VERIFIED", database, ...after }, null, 2));
     if (auditLog) {
-      await auditLog.appendFile(`${JSON.stringify({ event: "prepaid-release-completed", at: new Date().toISOString(), records: after.records, ownershipAssigned: before.ownership, indexesCreated: before.missingIndexes.map((plan) => `${plan.collection}.${plan.options.name}`) })}\n`);
+      await auditLog.appendFile(`${JSON.stringify({ event: "prepaid-release-completed", at: new Date().toISOString(), records: after.records, zeroOpeningBefore: before.zeroOpening, zeroOpeningAfter: after.zeroOpening, ownershipAssigned: before.ownership, indexesCreated: before.missingIndexes.map((plan) => `${plan.collection}.${plan.options.name}`) })}\n`);
       await auditLog.sync();
     }
     return after;

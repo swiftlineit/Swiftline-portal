@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { addTenantOwnership, type TenantOwnedFields } from "./plugins/tenantOwnedSchema.plugin.js";
 
 export type AuditAction =
+  | "PREPAID_ZERO_OPENING_APPLIED"
   | "OPERATOR_DRAFT_CREATED"
   | "OPERATOR_DRAFT_DELETED"
   | "OPERATOR_SLUG_CHANGED"
