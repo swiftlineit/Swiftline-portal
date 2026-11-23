@@ -3,7 +3,6 @@
 import Link from "next/link";
 import {
   type DashboardOverview,
-  formatCompactMoney,
   formatCount,
 } from "@/lib/dashboardOverview";
 import { toRangeDay } from "@/lib/dateRange";
@@ -118,7 +117,6 @@ export default function AdminKpiGrid({
   const shipments = overview?.shipments ?? null;
   const manifests = overview?.manifests ?? null;
   const accounts = overview?.accounts ?? null;
-  const finance = overview?.finance ?? null;
   const today = toRangeDay(new Date());
 
   return (
@@ -246,19 +244,6 @@ export default function AdminKpiGrid({
         />
       ) : null}
 
-      {!operationsOnly && !dataLoading && finance ? (
-        <KpiCard
-          label="Receivables"
-          value={formatCompactMoney(
-            finance.invoicedOutstandingMinor,
-            finance.currency,
-          )}
-          description={`Unpaid across ${finance.activeFacilities} active credit facilities`}
-          href="/dashboard/credit-accounts"
-          tone="primary"
-          aside={`${finance.activeFacilities} facilities`}
-        />
-      ) : null}
     </div>
   );
 }

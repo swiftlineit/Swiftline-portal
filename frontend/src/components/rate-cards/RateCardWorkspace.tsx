@@ -97,7 +97,9 @@ function toPayload(form: FormState, countryCode: string, target: RateCardTarget,
   };
 }
 
-export default function RateCardWorkspace({ businessAccountId, cardName, accountSelector, operatorSlug }: { businessAccountId?: string; cardName: string; accountSelector?: ReactNode; operatorSlug?: string }) {
+type RateCardSection = "rates" | "charges" | "volumetric";
+
+export default function RateCardWorkspace({ businessAccountId, cardName, accountSelector, operatorSlug, volumetricDiscountPanel }: { businessAccountId?: string; cardName: string; accountSelector?: ReactNode; operatorSlug?: string; volumetricDiscountPanel?: ReactNode }) {
   const supportReadOnly = useOperatorSupportReadOnly();
   const target = useMemo<RateCardTarget>(() => businessAccountId ? { businessAccountId } : { band: "BAND_D" }, [businessAccountId]);
   const { user, loading } = useAdminUser(operatorSlug ? ["client"] : RATE_CARD_AREA);
@@ -105,7 +107,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
   const [routeCharges, setRouteCharges] = useState<CountryRouteCharge[]>([]);
   const [version, setVersion] = useState(0);
   const [migrationRequired, setMigrationRequired] = useState(false);
-  const [section, setSection] = useState<"rates" | "charges">("rates");
+  const [section, setSection] = useState<RateCardSection>("rates");
   const [showForm, setShowForm] = useState(false);
   const [chargeCountryQuery, setChargeCountryQuery] = useState("");
   const [chargeCountryCode, setChargeCountryCode] = useState("");
@@ -329,7 +331,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
     else setImporting(true);
   }
 
-  async function switchSection(next: "rates" | "charges") {
+  async function switchSection(next: RateCardSection) {
     if (next === section || busy || !await requestLeave()) return;
     resetForm();
     setSection(next);
@@ -426,6 +428,12 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
 
   if (loading || !user) return <DashboardLoading />;
 
+  const visibleSections: { key: RateCardSection; label: string }[] = [
+    { key: "rates", label: "Rates" },
+    { key: "charges", label: "Route Charges" },
+    ...(businessAccountId && volumetricDiscountPanel ? [{ key: "volumetric" as const, label: "Volumetric Discount" }] : [])
+  ];
+
   return (
     <>
       <section aria-label={`${cardName} rate card`} className="mb-6">
@@ -439,7 +447,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
         </div>
         <div className="mt-5 flex flex-col gap-3 border-b border-slate-200 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex gap-5" role="tablist" aria-label="Rate card sections">
-            {(["rates", "charges"] as const).map((key) => <button key={key} type="button" role="tab" aria-selected={section === key} aria-controls={`card-${businessAccountId || "individual"}-${key}`} onClick={() => void switchSection(key)} disabled={busy} className={`border-b-2 px-1 pb-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#0D1282] ${section === key ? "border-[#0D1282] text-[#0D1282]" : "border-transparent text-slate-600 hover:text-slate-900"}`}>{key === "rates" ? "Rates" : "Route Charges"}</button>)}
+            {visibleSections.map(({ key, label }) => <button key={key} id={key === "volumetric" ? "business-volumetric-discount-tab" : undefined} type="button" role="tab" aria-selected={section === key} aria-controls={key === "volumetric" ? "business-volumetric-discount-panel" : `card-${businessAccountId || "individual"}-${key}`} onClick={() => void switchSection(key)} disabled={busy} className={`border-b-2 px-1 pb-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#0D1282] ${section === key ? "border-[#0D1282] text-[#0D1282]" : "border-transparent text-slate-600 hover:text-slate-900"}`}>{label}</button>)}
           </div>
           {section === "rates" && !showForm && !supportReadOnly ? <button type="button" disabled={migrationRequired || dataLoading || busy} onClick={() => void startNewRate()} className="mb-2 ml-auto inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0D1282] px-4 text-sm font-semibold text-white hover:bg-[#0a0e66] disabled:opacity-50"><FiPlus aria-hidden="true" />Add rate</button> : null}
         </div>
@@ -646,6 +654,7 @@ export default function RateCardWorkspace({ businessAccountId, cardName, account
           </div>
         ) : null}
       </div> : null}
+      {section === "volumetric" && volumetricDiscountPanel ? volumetricDiscountPanel : null}
       <div hidden={section !== "rates"} id={`card-${businessAccountId || "individual"}-rates`} role="tabpanel">
 
       <div className="mb-4 flex flex-wrap items-center gap-3">

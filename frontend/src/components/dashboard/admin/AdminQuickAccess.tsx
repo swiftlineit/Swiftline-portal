@@ -38,9 +38,9 @@ export default function AdminQuickAccess({
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {links.map((link) => (
+          {links.map((link, index) => (
             <Link
-              key={link.href}
+              key={`${link.href}:${index}`}
               href={link.href}
               className="group flex min-h-33 flex-col justify-between rounded-xl border border-slate-200 bg-slate-50/40 p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-[#0D1282]/25 hover:bg-white hover:shadow-[0_10px_26px_-18px_rgba(13,18,130,0.4)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/20 focus-visible:ring-offset-2"
             >

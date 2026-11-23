@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { toast } from "react-toastify";
 import {
   FiCheck,
   FiChevronDown,
@@ -11,10 +12,14 @@ import {
 } from "react-icons/fi";
 import {
   approveShipmentCancellation,
+  cancellationRefundLabel,
+  calculateCancellationFeeAmounts,
+  DEFAULT_CANCELLATION_FEE_BASE_MINOR,
   downloadCancellationPdf,
   openCancellationPdf,
   printCancellationPdf,
   rejectShipmentCancellation,
+  ShipmentCancellationRequestError,
   type ShipmentCancellation,
 } from "@/lib/shipmentCancellations";
 
@@ -22,7 +27,6 @@ const money = new Intl.NumberFormat("en-IN", {
   style: "currency",
   currency: "INR",
 });
-const DEFAULT_FEE_RUPEES = "700.00";
 
 export default function CancellationReview({
   cancellation,
@@ -32,8 +36,10 @@ export default function CancellationReview({
   onChanged: () => Promise<void>;
 }) {
   const [mode, setMode] = useState<"approve" | "reject">("approve");
-  const [feeRupees, setFeeRupees] = useState(DEFAULT_FEE_RUPEES);
-  const [feeReason, setFeeReason] = useState("");
+  const [feeRupees, setFeeRupees] = useState(
+    () => ((cancellation.requestedFeeBaseMinor ?? DEFAULT_CANCELLATION_FEE_BASE_MINOR) / 100).toFixed(2)
+  );
+  const [feeReason, setFeeReason] = useState(() => cancellation.feeReason ?? "");
   const [carrierReference, setCarrierReference] = useState("");
   const [reviewNote, setReviewNote] = useState("");
   const [carrierConfirmed, setCarrierConfirmed] = useState(false);
@@ -46,46 +52,25 @@ export default function CancellationReview({
     "CASH" | "UPI" | "BANK_TRANSFER" | "CARD" | "CHEQUE"
   >("UPI");
   const [refundReference, setRefundReference] = useState("");
+  const [refundPending, setRefundPending] = useState(Boolean(cancellation.gatewayRefundStarted && cancellation.status === "REQUESTED"));
 
-  const isIndividual = cancellation.customerType === "INDIVIDUAL";
+  const requiresManualRefund = ["CASH_RECEIPT", "ADMIN_DIRECT"].includes(cancellation.paymentSource ?? "");
 
-  const amounts = useMemo(() => {
-    if (!feeRupees.trim()) return null;
-    const requestedBaseMinor = Math.round(Number(feeRupees) * 100);
-    if (!Number.isInteger(requestedBaseMinor) || requestedBaseMinor < 0)
-      return null;
-    const noGst = cancellation.taxTreatment === "NO_GST";
-    const requestedGstMinor = noGst ? 0 : Math.round(requestedBaseMinor * 0.18);
-    const requestedTotalMinor = requestedBaseMinor + requestedGstMinor;
-    if (requestedTotalMinor <= cancellation.originalAmountMinor) {
-      return {
-        requestedBaseMinor,
-        feeBaseMinor: requestedBaseMinor,
-        feeGstMinor: requestedGstMinor,
-        feeTotalMinor: requestedTotalMinor,
-        refundMinor: cancellation.originalAmountMinor - requestedTotalMinor,
-        capped: false,
-      };
-    }
-    const feeBaseMinor = noGst
-      ? cancellation.originalAmountMinor
-      : Math.round((cancellation.originalAmountMinor * 100) / 118);
-    return {
-      requestedBaseMinor,
-      feeBaseMinor,
-      feeGstMinor: cancellation.originalAmountMinor - feeBaseMinor,
-      feeTotalMinor: cancellation.originalAmountMinor,
-      refundMinor: 0,
-      capped: true,
-    };
-  }, [cancellation.originalAmountMinor, cancellation.taxTreatment, feeRupees]);
+  const amounts = useMemo(
+    () => calculateCancellationFeeAmounts(
+      cancellation.originalAmountMinor,
+      cancellation.taxTreatment,
+      feeRupees
+    ),
+    [cancellation.originalAmountMinor, cancellation.taxTreatment, feeRupees]
+  );
 
   async function approve() {
     if (!amounts)
       return setError(
         "Enter a valid cancellation fee of INR 0.00 or more before any applicable GST.",
       );
-    if (amounts.requestedBaseMinor > 70000 && feeReason.trim().length < 5) {
+    if (amounts.requestedBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR && feeReason.trim().length < 5) {
       return setError("Explain the additional carrier or handling fee.");
     }
     if (!carrierConfirmed || !settlementConfirmed) {
@@ -95,7 +80,7 @@ export default function CancellationReview({
     }
     // The server rejects the approval without this, so catch it here rather than
     // letting the reviewer lose the form to a failed request.
-    const refundRequired = isIndividual && amounts.refundMinor > 0;
+    const refundRequired = requiresManualRefund && amounts.refundMinor > 0;
     if (refundRequired && !refundReference.trim() && refundMethod !== "CASH") {
       return setError(
         "Enter the reference for the refund payment, or select cash.",
@@ -122,6 +107,11 @@ export default function CancellationReview({
       });
       await onChanged();
     } catch (caughtError) {
+      if (caughtError instanceof ShipmentCancellationRequestError && caughtError.status === 202) {
+        setRefundPending(true);
+        toast.info("The refund has started. Check its status again shortly to complete the cancellation.");
+        return;
+      }
       setError(
         caughtError instanceof Error
           ? caughtError.message
@@ -250,7 +240,7 @@ export default function CancellationReview({
                 </Field>
               </div>
               {amounts?.requestedBaseMinor &&
-              amounts.requestedBaseMinor > 70000 ? (
+              amounts.requestedBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR ? (
                 <Field label="Reason For Additional Fee">
                   <textarea
                     value={feeReason}
@@ -275,16 +265,16 @@ export default function CancellationReview({
                   emphasis
                 />
               </div>
-              {isIndividual && (amounts?.refundMinor ?? 0) > 0 ? (
+              {requiresManualRefund && (amounts?.refundMinor ?? 0) > 0 ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
                   <p className="text-sm font-semibold text-amber-900">
-                    Refund Payment-{" "}
+                    Record refund payout —{" "}
                     {money.format((amounts?.refundMinor ?? 0) / 100)}
                   </p>
                   <p className="mt-1 text-sm text-amber-800">
-                    This customer paid at the counter, so the refund leaves a
-                    company account rather than the portal. Record how it was
-                    paid back before completing the cancellation.
+                    {cancellation.paymentSource === "CASH_RECEIPT"
+                      ? "This shipment was paid through an offline cash receipt. Record how staff returned the refundable amount before completing the cancellation."
+                      : "This legacy shipment was paid directly by staff. Record how the refundable amount was returned before completing the cancellation."}
                   </p>
                   <div className="mt-3 grid gap-4 md:grid-cols-2">
                     <Field label="Refund Method">
@@ -325,6 +315,16 @@ export default function CancellationReview({
                   </div>
                 </div>
               ) : null}
+              {(amounts?.refundMinor ?? 0) > 0 && cancellation.paymentSource === "BUSINESS_WALLET" ? (
+                <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                  The refundable amount will be returned to the business prepaid wallet as part of approval.
+                </p>
+              ) : null}
+              {(amounts?.refundMinor ?? 0) > 0 && ["DIRECT_RAZORPAY", "PUBLIC_RAZORPAY"].includes(cancellation.paymentSource ?? "") ? (
+                <p className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950">
+                  The refund will go to the original Razorpay payment method. Approval completes after Razorpay confirms the refund.
+                </p>
+              ) : null}
               {amounts?.capped ? (
                 <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                   The shipment charge is below the requested cancellation fee.
@@ -353,6 +353,7 @@ export default function CancellationReview({
                 text={`I confirm the fee of ${money.format((amounts?.feeTotalMinor ?? 0) / 100)} and refund of ${money.format((amounts?.refundMinor ?? 0) / 100)}.`}
               />
               {error ? <ErrorMessage message={error} /> : null}
+              {refundPending ? <p role="status" className="text-sm text-blue-900">The refund is processing. Check its status shortly to finish the cancellation.</p> : null}
               <button
                 type="button"
                 onClick={() => void approve()}
@@ -360,7 +361,7 @@ export default function CancellationReview({
                 className="inline-flex h-10 items-center gap-2 rounded-lg bg-emerald-700 px-4 text-sm font-semibold text-white disabled:opacity-50"
               >
                 <FiCheck aria-hidden="true" />{" "}
-                {busy === "approve" ? "Completing..." : "Approve And Complete"}
+                {busy === "approve" ? "Checking…" : refundPending ? "Check refund status" : "Approve And Complete"}
               </button>
             </div>
           ) : (
@@ -432,10 +433,27 @@ function CompletedReview({
           value={cancellation.reviewNote || "No review note"}
         />
       </div>
+      {cancellation.paymentRefundStatus !== "NOT_REQUIRED" ? (
+        <div className="grid gap-4 border-t border-slate-200 pt-4 sm:grid-cols-3">
+          <Value
+            label="Refund Status"
+            value={cancellationRefundLabel(cancellation.paymentRefundStatus) || "Not recorded"}
+          />
+          <Value
+            label="Refund Amount"
+            value={money.format(cancellation.paymentRefundAmountMinor / 100)}
+          />
+          <Value
+            label="Refund Reference"
+            value={cancellation.paymentRefundReference || "Not recorded"}
+          />
+        </div>
+      ) : null}
       {cancellation.status === "COMPLETED" ? (
         <div className="grid gap-4 sm:grid-cols-2">
           <Document
-            title="GST Credit Note"
+            title="Invoice cancellation adjustment"
+            description="Reverses the original shipment invoice and applicable GST; it does not add wallet funds."
             type="credit-note"
             busy={busy}
             onDocument={onDocument}
@@ -455,11 +473,13 @@ function CompletedReview({
 
 function Document({
   title,
+  description,
   type,
   busy,
   onDocument,
 }: {
   title: string;
+  description?: string;
   type: "credit-note" | "fee-invoice";
   busy: string;
   onDocument: (
@@ -470,6 +490,7 @@ function Document({
   return (
     <div className="rounded-xl border border-slate-200 p-4">
       <p className="font-semibold text-slate-950">{title}</p>
+      {description ? <p className="mt-1 text-sm leading-5 text-slate-600">{description}</p> : null}
       <div className="mt-3 flex flex-wrap gap-2">
         {(
           [

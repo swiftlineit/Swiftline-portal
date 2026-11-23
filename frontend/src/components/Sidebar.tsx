@@ -14,7 +14,6 @@ import {
   FiChevronLeft,
   FiChevronRight,
   FiClipboard,
-  FiCreditCard,
   FiEdit3,
   FiFileText,
   FiGlobe,
@@ -36,7 +35,6 @@ import {
   BRANCH_VIEW_AREA,
   BUSINESS_ACCOUNT_AREA,
   COUNTER_SALES_AREA,
-  CREDIT_VIEW_AREA,
   FINANCE_AREA,
   RATE_CARD_AREA,
   CLAIMS_AREA,
@@ -173,6 +171,12 @@ const staffNavigation: Array<
         roles: withAdmin(OPERATIONS_AREA),
       },
       {
+        label: "Cash Receipts",
+        href: "/dashboard/cash-receipts",
+        icon: FiFileText,
+        roles: withAdmin(OPERATIONS_AREA),
+      },
+      {
         label: "Pickup Requests",
         href: "/dashboard/pickups",
         icon: FiTruck,
@@ -256,12 +260,6 @@ const staffNavigation: Array<
         icon: FiBriefcase,
         roles: withAdmin(BUSINESS_ACCOUNT_AREA),
       },
-      {
-        label: "Credit Accounts",
-        href: "/dashboard/credit-accounts",
-        icon: FiCreditCard,
-        roles: withAdmin(CREDIT_VIEW_AREA),
-      },
     ],
   },
   {
@@ -337,12 +335,14 @@ export default function Sidebar({
   mobileOpen,
   onMobileClose,
   badgeHrefs = [],
+  numericBadges = {},
 }: {
   userRole?: string;
   items?: SidebarNavEntry[];
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   badgeHrefs?: string[];
+  numericBadges?: Record<string, number>;
 }) {
   const pathname = usePathname();
   const guardNavigate = useGuardedNavigate();
@@ -366,6 +366,8 @@ export default function Sidebar({
 
   const navigation = items ?? staffNavigationFor(userRole ?? "");
   const badges = new Set(badgeHrefs);
+  const badgeCount = (href: string) => Math.max(0, Math.trunc(numericBadges[href] ?? 0));
+  const badgeText = (count: number) => count > 99 ? "99+" : String(count);
   const isDrawer = typeof onMobileClose === "function";
   const expanded = isDrawer && mobileOpen ? true : sidebarOpen;
 
@@ -508,7 +510,7 @@ export default function Sidebar({
                       : "text-[#CDD1F2] hover:bg-white/[0.07] hover:text-white"
                   }`}
                   title={expanded ? undefined : entry.label}
-                  aria-label={!expanded && badges.has(entry.href) ? `${entry.label}, new` : undefined}
+                  aria-label={!expanded && (badges.has(entry.href) || badgeCount(entry.href)) ? `${entry.label}, ${badgeCount(entry.href) || "new"}` : undefined}
                 >
                   <Icon
                     aria-hidden="true"
@@ -520,7 +522,7 @@ export default function Sidebar({
                       {entry.label}
                     </span>
                   ) : null}
-                  {badges.has(entry.href) ? expanded ? <span className="rounded bg-[#F0DE36] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#12185A]">New</span> : <span aria-hidden="true" className="absolute ml-8 mt-[-25px] h-2 w-2 rounded-full bg-[#F0DE36]" /> : null}
+                  {badgeCount(entry.href) > 0 ? expanded ? <span className="min-w-5 rounded-md bg-[#F0DE36] px-1.5 py-0.5 text-center text-[10px] font-bold tabular-nums text-[#12185A]">{badgeText(badgeCount(entry.href))}</span> : <span aria-hidden="true" className="absolute ml-8 mt-[-25px] flex h-4 min-w-4 items-center justify-center rounded-full bg-[#F0DE36] px-1 text-[9px] font-bold tabular-nums text-[#12185A]">{badgeText(badgeCount(entry.href))}</span> : badges.has(entry.href) ? expanded ? <span className="rounded bg-[#F0DE36] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#12185A]">New</span> : <span aria-hidden="true" className="absolute ml-8 mt-[-25px] h-2 w-2 rounded-full bg-[#F0DE36]" /> : null}
                 </Link>
               );
             }
@@ -528,7 +530,8 @@ export default function Sidebar({
             const holdsCurrentPage = entry.items.some((item) =>
               matchesRoute(pathname, item.href),
             );
-            const groupHasBadge = entry.items.some((item) => badges.has(item.href));
+            const groupCount = entry.items.reduce((sum, item) => sum + badgeCount(item.href), 0);
+            const groupHasBadge = groupCount > 0 || entry.items.some((item) => badges.has(item.href));
 
             const isOpen =
               openGroups[entry.label] ?? holdsCurrentPage;
@@ -559,7 +562,7 @@ export default function Sidebar({
                       <span className="flex-1 truncate text-left">
                         {entry.label}
                       </span>
-                      {groupHasBadge ? <span className="rounded bg-[#F0DE36] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#12185A]">New</span> : null}
+                      {groupCount > 0 ? <span className="min-w-5 rounded-md bg-[#F0DE36] px-1.5 py-0.5 text-center text-[10px] font-bold tabular-nums text-[#12185A]">{badgeText(groupCount)}</span> : groupHasBadge ? <span className="rounded bg-[#F0DE36] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#12185A]">New</span> : null}
 
                       <FiChevronDown
                         aria-hidden="true"
@@ -569,7 +572,7 @@ export default function Sidebar({
                       />
                     </>
                   ) : null}
-                  {!expanded && groupHasBadge ? <span aria-hidden="true" className="absolute ml-8 mt-[-25px] h-2 w-2 rounded-full bg-[#F0DE36]" /> : null}
+                  {!expanded && groupHasBadge ? groupCount > 0 ? <span aria-hidden="true" className="absolute ml-8 mt-[-25px] flex h-4 min-w-4 items-center justify-center rounded-full bg-[#F0DE36] px-1 text-[9px] font-bold tabular-nums text-[#12185A]">{badgeText(groupCount)}</span> : <span aria-hidden="true" className="absolute ml-8 mt-[-25px] h-2 w-2 rounded-full bg-[#F0DE36]" /> : null}
                 </button>
 
                 {expanded && isOpen ? (
@@ -595,7 +598,7 @@ export default function Sidebar({
                           <span className="min-w-0 flex-1 truncate">
                             {item.label}
                           </span>
-                          {badges.has(item.href) ? <span className="rounded bg-[#F0DE36] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#12185A]">New</span> : null}
+                          {badgeCount(item.href) > 0 ? <span className="min-w-5 rounded-md bg-[#F0DE36] px-1.5 py-0.5 text-center text-[10px] font-bold tabular-nums text-[#12185A]">{badgeText(badgeCount(item.href))}</span> : badges.has(item.href) ? <span className="rounded bg-[#F0DE36] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#12185A]">New</span> : null}
                         </Link>
                       );
                     })}

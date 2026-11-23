@@ -91,15 +91,14 @@ export default function ShipmentCancellationPanel({
         ) : null}
         {cancellation.status === "COMPLETED" ? (
           <div className="border-t border-slate-200 p-5">
-            {cancellation.settlement ? (
-              <div className="mb-5 grid gap-4 border-b border-slate-200 pb-5 md:grid-cols-3">
-                <Value label="Credit Released" value={currency.format(cancellation.settlement.netCreditReleasedMinor / 100)} />
-                <Value label="Customer Advance Credited" value={currency.format(cancellation.settlement.customerAdvanceCreditedMinor / 100)} />
-                <Value label="Fee Awaiting Credit Billing" value={currency.format(cancellation.settlement.cancellationFeeCreditMinor / 100)} />
-              </div>
-            ) : null}
             <div className="grid gap-4 lg:grid-cols-2">
-              <DocumentActions title="GST Credit Note" type="credit-note" busy={documentBusy} onAction={openDocument} />
+              <DocumentActions
+                title="Invoice cancellation adjustment"
+                description="This document reverses the original shipment invoice and applicable GST. It does not add wallet funds."
+                type="credit-note"
+                busy={documentBusy}
+                onAction={openDocument}
+              />
               <DocumentActions title="Cancellation Fee Invoice" type="fee-invoice" busy={documentBusy} onAction={openDocument} />
             </div>
             {documentError ? <p className="mt-3 text-sm font-semibold text-red-700">{documentError}</p> : null}
@@ -144,8 +143,7 @@ export default function ShipmentCancellationPanel({
               ? "Cancellation is available before parcel collection."
               : "An admin exception is available until Warehouse Scan In."}
             {" An INR 700 fee plus 18% GST applies."}
-            {" After Swiftline approval and carrier confirmation, approved credit is released and customer-funded "}
-            amounts are returned to Customer Advance.
+            {" After approval and carrier confirmation, prepaid refunds return to the original payment method or, for business-wallet bookings, to the wallet. Staff records refunds for cash bookings."}
           </p>
           {!canRequest ? (
             <p className="mt-3 flex items-start gap-2 text-sm font-medium text-amber-800">
@@ -238,11 +236,13 @@ function Value({ label, value }: { label: string; value: string }) {
 
 function DocumentActions({
   title,
+  description,
   type,
   busy,
   onAction
 }: {
   title: string;
+  description?: string;
   type: "credit-note" | "fee-invoice";
   busy: string;
   onAction: (type: "credit-note" | "fee-invoice", action: "view" | "download" | "print") => Promise<void>;
@@ -250,6 +250,7 @@ function DocumentActions({
   return (
     <div className="border border-slate-200 p-4">
       <p className="font-semibold text-slate-950">{title}</p>
+      {description ? <p className="mt-1 text-sm leading-5 text-slate-600">{description}</p> : null}
       <div className="mt-3 flex flex-wrap gap-2">
         {([
           ["view", FiEye, "View"],

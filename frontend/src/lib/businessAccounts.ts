@@ -181,6 +181,11 @@ export type BusinessAccount = {
   rateCardBand?: RateCardBand | null;
   privateRateCardVersion?: number;
   privateRateCardReady?: boolean;
+  walletAvailableBalanceMinor?: number;
+  volumetricDiscountPercent?: number;
+  volumetricDiscountVersion?: number;
+  volumetricDiscountUpdatedAt?: string | null;
+  volumetricDiscountUpdatedBy?: string | null;
   origin?: "STAFF" | "PUBLIC";
   createdBy?: { email?: string; name?: string } | null;
   createdAt: string;
@@ -468,6 +473,18 @@ export async function updateBusinessAccountGstBillingReview(
     body: JSON.stringify(input)
   });
   return parseApiResponse<{ success: true; account: BusinessAccount }>(response);
+}
+
+export async function updateBusinessAccountVolumetricDiscount(
+  accountId: string,
+  input: { volumetricDiscountPercent: number; expectedVersion: number }
+) {
+  const response = await fetchWithAuth(apiUrl(`/api/v1/business-accounts/${encodeURIComponent(accountId)}/volumetric-discount`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  return parseApiResponse<{ success: true; account: BusinessAccount; message: string }>(response);
 }
 
 /** Draft accounts only; anything under review is rejected or suspended instead. */

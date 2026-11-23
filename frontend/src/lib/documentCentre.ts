@@ -9,8 +9,8 @@ export const documentTypeOptions = [
   { value: "MANIFEST", label: "Manifests" },
   { value: "POD", label: "POD" },
   { value: "BILLING_INVOICE", label: "Billing Invoices" },
+  { value: "CASH_RECEIPT", label: "Cash Receipts" },
   { value: "CREDIT_NOTE", label: "Credit Notes" },
-  { value: "STATEMENT", label: "Statements" },
   { value: "CLAIM_DOCUMENT", label: "Claim Documents" },
   { value: "CUSTOMS_DOCUMENT", label: "Customs Documents" }
 ] as const;
@@ -30,6 +30,7 @@ export type ClientDocumentCentreItem = {
   format: string;
   fileName: string;
   status: string;
+  isNew: boolean;
   downloadPath: string;
   downloadMode: "BLOB" | "LABEL_ACCESS";
 };
@@ -40,6 +41,17 @@ type DocumentListResponse = {
   documentTypes: Array<{ value: ClientDocumentType; label: string }>;
   pagination: { page: number; limit: number; total: number; totalPages: number };
 };
+
+export const cashReceiptReadEvent = "cash-receipt-read";
+
+export async function getCashReceiptUnreadCount() {
+  const response = await authenticatedFetch("/api/v1/client/documents/cash-receipts/unread-count");
+  const payload = await readJsonSafely(response) as { success?: boolean; message?: string; unreadCount?: number };
+  if (!response.ok || !payload.success) {
+    throw new Error(payload.message || "Cash receipt notifications could not be loaded.");
+  }
+  return Math.max(0, Math.trunc(payload.unreadCount ?? 0));
+}
 
 async function authenticatedFetch(path: string, init: RequestInit = {}) {
   let token = getAccessToken() ?? await refreshAccessToken();
@@ -140,6 +152,9 @@ export async function accessClientDocument(item: ClientDocumentCentreItem, view:
       throw new Error(payload.message || "The document could not be opened.");
     }
     saveBlob(await response.blob(), item.fileName, view, openedWindow);
+    if (item.documentType === "CASH_RECEIPT") {
+      window.dispatchEvent(new CustomEvent(cashReceiptReadEvent));
+    }
   } catch (error) {
     openedWindow?.close();
     throw error;

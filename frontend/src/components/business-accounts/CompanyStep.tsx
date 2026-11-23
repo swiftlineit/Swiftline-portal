@@ -71,7 +71,7 @@ import {
 } from "@/lib/businessAccountRegistrationRules";
 import { BUSINESS_ACCOUNT_CREDIT_LIMIT_MAX } from "@/lib/businessAccountContactRules";
 
-// Company step UI for registration, address, and credit details.
+// Company step UI for registration and address details.
 export function CompanyStep({
   formData,
   validationErrors,
@@ -85,6 +85,7 @@ export function CompanyStep({
   onFieldBlur,
   hideGstTreatmentSection = false,
   operatorBillingAddressForNoCompany = false,
+  allowCreditRequest = false,
 }: {
   formData: BusinessAccountFormData;
   validationErrors: Record<string, string>;
@@ -101,6 +102,7 @@ export function CompanyStep({
   onFieldBlur: (...keys: string[]) => void;
   hideGstTreatmentSection?: boolean;
   operatorBillingAddressForNoCompany?: boolean;
+  allowCreditRequest?: boolean;
 }) {
   const selectedRegistrationCountry = formData.company.registrationCountry;
   const selectedRegistrationConfig =
@@ -1053,7 +1055,7 @@ export function CompanyStep({
             disabled={noCompanyChecked}
             required={!noCompanyChecked}
           />
-          <div className="grid grid-cols-[200px_1fr] gap-3">
+          {allowCreditRequest ? <div className="grid grid-cols-[200px_1fr] gap-3">
             <SearchableSelect
               label="Currency"
               info={companyTooltips.requestedCreditCurrency}
@@ -1086,7 +1088,7 @@ export function CompanyStep({
               disabled={noCompanyChecked}
               max={BUSINESS_ACCOUNT_CREDIT_LIMIT_MAX}
             />
-          </div>
+          </div> : null}
         </div>
       </section>
     </div>

@@ -28,7 +28,8 @@ function formatStatus(status: ShipmentAmendment["status"]) {
 }
 
 function statusTone(status: ShipmentAmendment["status"]) {
-  if (status === "REQUESTED") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (["REQUESTED", "AWAITING_PAYMENT"].includes(status)) return "border-amber-200 bg-amber-50 text-amber-700";
+  if (status === "PAYMENT_SECURED") return "border-blue-200 bg-blue-50 text-blue-700";
   if (status === "APPROVED" || status === "APPLIED") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   return "border-red-200 bg-red-50 text-red-700";
 }
@@ -131,14 +132,16 @@ function AmendmentReviewModal({
   const pricingImpact = amendment.pricingImpact;
   const currentPricing = pricingImpact?.current;
   const requestedPricing = pricingImpact?.requested;
-  const isRequested = amendment.status === "REQUESTED";
-  const requestFundingAdjustment = amendment.fundingPreview?.adjustment;
+  const isRequested = ["REQUESTED", "AWAITING_PAYMENT", "PAYMENT_SECURED"].includes(amendment.status);
   const requestReducesCharge = (amendment.fundingPreview?.deltaAmountMinor ?? 0) < 0;
+  const requestIncreasesCharge = (amendment.fundingPreview?.deltaAmountMinor ?? 0) > 0;
+  const paymentNotSecured = (amendment.paymentAmountMinor ?? 0) > 0
+    && !["SECURED", "COMPLETED"].includes(amendment.paymentStatus ?? "NOT_REQUIRED");
 
-  // A walk-in settles any price difference at the counter, so it is recorded with
-  // the approval. DIRECT is the billing mode a counter sale books under.
-  const counterDeltaMinor = amendment.fundingPreview?.billingMode === "DIRECT"
-    ? amendment.fundingPreview.deltaAmountMinor ?? 0
+  // The root staff queue records payouts for individual price reductions. Positive
+  // differences must already be secured through Razorpay or the business wallet.
+  const counterDeltaMinor = amendment.customerType === "INDIVIDUAL" && requestReducesCharge
+    ? amendment.fundingPreview?.deltaAmountMinor ?? 0
     : 0;
   const [counterMethod, setCounterMethod] = useState<CounterPaymentInput["method"]>("UPI");
   const [counterReference, setCounterReference] = useState("");
@@ -241,21 +244,53 @@ function AmendmentReviewModal({
               <h3 className="text-sm font-semibold text-slate-950">Funding at Request</h3>
               {amendment.fundingPreview.billingMode === "TEST" ? (
                 <p className="mt-3 border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-                  Test billing only. Approval does not update Customer Advance or Credit balances.
+                  This is a test shipment. Approval does not change wallet balances or payment records.
                 </p>
               ) : (
-                <div className="mt-3 grid gap-3 border border-slate-200 bg-slate-50 rounded-2xl p-4 sm:grid-cols-3">
-                  <FundingMetric label="Available Capacity at Request" value={formatMinorAmount(amendment.fundingPreview.availableBookingCapacityMinor)} />
-                  <FundingMetric
-                    label={requestReducesCharge ? "Credit Reduced" : "Customer Advance Used"}
-                    value={formatMinorAmount(requestReducesCharge ? requestFundingAdjustment?.creditReducedMinor ?? 0 : requestFundingAdjustment?.advanceUsedMinor ?? 0)}
-                  />
-                  <FundingMetric
-                    label={requestReducesCharge ? "Customer Advance Refunded" : "Credit Used"}
-                    value={formatMinorAmount(requestReducesCharge ? requestFundingAdjustment?.advanceRefundedMinor ?? 0 : requestFundingAdjustment?.creditUsedMinor ?? 0)}
-                  />
-                </div>
+                amendment.fundingPreview.billingMode === "PREPAID" || amendment.fundingPreview.billingMode === "DIRECT" ? (
+                  <div className="mt-3 grid gap-3 border border-slate-200 bg-slate-50 rounded-2xl p-4 sm:grid-cols-3">
+                    <FundingMetric
+                      label={amendment.fundingPreview.billingMode === "PREPAID" ? "Wallet Available at Request" : "Payment Source"}
+                      value={amendment.fundingPreview.billingMode === "PREPAID"
+                        ? formatMinorAmount(amendment.fundingPreview.availableBookingCapacityMinor)
+                        : "Razorpay"}
+                    />
+                    <FundingMetric
+                      label={requestIncreasesCharge ? "Additional Payment" : requestReducesCharge ? "Charge Reduction" : "Charge Difference"}
+                      value={formatMinorAmount(Math.abs(amendment.fundingPreview.deltaAmountMinor))}
+                    />
+                    <FundingMetric
+                      label="Payment Status"
+                      value={amendment.paymentStatus === "SECURED" || amendment.paymentStatus === "COMPLETED"
+                        ? "Verified"
+                        : requestIncreasesCharge ? "Awaiting payment" : "No payment due"}
+                    />
+                  </div>
+                ) : (
+                  <div className="mt-3 grid gap-3 border border-slate-200 bg-slate-50 rounded-2xl p-4 sm:grid-cols-3">
+                    <FundingMetric label="Available Capacity at Request" value={formatMinorAmount(amendment.fundingPreview.availableBookingCapacityMinor)} />
+                    <FundingMetric
+                      label={requestReducesCharge ? "Wallet credit after approval" : "Wallet charge"}
+                      value={formatMinorAmount(requestReducesCharge
+                        ? Math.abs(amendment.fundingPreview.deltaAmountMinor)
+                        : amendment.fundingPreview.deltaAmountMinor)}
+                    />
+                    <FundingMetric
+                      label="Payment status"
+                      value={amendment.paymentStatus === "SECURED" || amendment.paymentStatus === "COMPLETED"
+                        ? "Verified"
+                        : requestIncreasesCharge ? "Awaiting wallet payment" : "No payment due"}
+                    />
+                  </div>
+                )
               )}
+              {requestIncreasesCharge && paymentNotSecured ? (
+                <p className="mt-3 border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                  {amendment.customerType === "BUSINESS"
+                    ? "For a business price increase, confirm the wallet payment is secured before approval. Rejecting releases the held wallet funds."
+                    : "For an individual price increase, confirm the Razorpay payment is verified before approval. Rejecting starts its refund. For a price decrease, record the customer refund before approving."}
+                </p>
+              ) : null}
               {!amendment.fundingPreview.canFund ? (
                 <p className="border border-t-0 border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
                   {amendment.fundingPreview.message}
@@ -268,10 +303,15 @@ function AmendmentReviewModal({
             <div>
               <h3 className="text-sm font-semibold text-slate-950">Applied Billing Adjustment</h3>
               <div className="mt-3 grid gap-3 border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2  rounded-2xl lg:grid-cols-4">
-                <FundingMetric label="Advance Used" value={formatMinorAmount(amendment.billingAdjustment.advanceUsedMinor)} />
-                <FundingMetric label="Credit Used" value={formatMinorAmount(amendment.billingAdjustment.creditUsedMinor)} />
-                <FundingMetric label="Credit Reduced" value={formatMinorAmount(amendment.billingAdjustment.creditReducedMinor)} />
-                <FundingMetric label="Advance Refunded" value={formatMinorAmount(amendment.billingAdjustment.advanceRefundedMinor)} />
+                <FundingMetric
+                  label={amendment.fundingPreview?.billingMode === "PREPAID"
+                    ? amendment.billingAdjustment.deltaAmountMinor < 0 ? "Wallet credit" : "Wallet charge"
+                    : "Amount paid or returned"}
+                  value={formatMinorAmount(amendment.billingAdjustment.deltaAmountMinor < 0
+                    ? Math.abs(amendment.billingAdjustment.deltaAmountMinor)
+                    : amendment.billingAdjustment.deltaAmountMinor)}
+                />
+                <FundingMetric label="Revised charge" value={formatMinorAmount(amendment.billingAdjustment.amendedAmountMinor)} />
               </div>
             </div>
           ) : null}
@@ -292,8 +332,7 @@ function AmendmentReviewModal({
                     {formatMinorAmount(Math.abs(counterDeltaMinor))}
                   </p>
                   <p className="mt-1 text-sm text-amber-800">
-                    This is an individual customer, so the difference is settled at the
-                    counter. Record how it moved before approving.
+                    Record the completed payout to the individual customer before approving this reduction.
                   </p>
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
                     <label className="block">
@@ -336,7 +375,7 @@ function AmendmentReviewModal({
                       ? { method: counterMethod, reference: counterReference.trim() }
                       : undefined
                   )}
-                  disabled={busy || requestedPricing?.missingRate || amendment.fundingPreview?.canFund === false}
+                  disabled={busy || requestedPricing?.missingRate || amendment.fundingPreview?.canFund === false || paymentNotSecured}
                   className="h-10 bg-emerald-700 px-4 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
                   {busy ? "Processing..." : "Approve Amendment"}
@@ -402,12 +441,16 @@ export default function AmendmentsPage() {
   const [reviewError, setReviewError] = useState("");
   const [selectedAmendment, setSelectedAmendment] = useState<ShipmentAmendment | null>(null);
 
+  const fetchAmendments = useCallback(() => {
+    return listShipmentAmendments({ status, dateRange, page });
+  }, [status, dateRange, page]);
+
   const loadAmendments = useCallback(async () => {
     setDataLoading(true);
     setError("");
 
     try {
-      const result = await listShipmentAmendments({ status, dateRange, page });
+      const result = await fetchAmendments();
       setAmendments(result.amendments);
       setPagination(result.pagination);
     } catch (caughtError) {
@@ -415,12 +458,29 @@ export default function AmendmentsPage() {
     } finally {
       setDataLoading(false);
     }
-  }, [status, dateRange, page]);
+  }, [fetchAmendments]);
 
   useEffect(() => {
     if (!user) return;
-    void loadAmendments();
-  }, [loadAmendments, user]);
+    let active = true;
+    void fetchAmendments()
+      .then((result) => {
+        if (!active) return;
+        setAmendments(result.amendments);
+        setPagination(result.pagination);
+        setError("");
+      })
+      .catch((caughtError) => {
+        if (!active) return;
+        setError(caughtError instanceof Error ? caughtError.message : "Unable to load amendments.");
+      })
+      .finally(() => {
+        if (active) setDataLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [fetchAmendments, user]);
 
   async function reviewAmendment(
     amendmentId: string,
@@ -460,6 +520,7 @@ export default function AmendmentsPage() {
           <DateRangeFilter
             value={dateRange}
             onChange={(value) => {
+              setDataLoading(true);
               setDateRange(value);
               setPage(1);
             }}
@@ -468,6 +529,7 @@ export default function AmendmentsPage() {
             <select
               value={status}
               onChange={(event) => {
+                setDataLoading(true);
                 setStatus(event.target.value);
                 setPage(1);
               }}
@@ -475,6 +537,8 @@ export default function AmendmentsPage() {
             >
               <option value="">All Status</option>
               <option value="REQUESTED">Requested</option>
+              <option value="AWAITING_PAYMENT">Awaiting Payment</option>
+              <option value="PAYMENT_SECURED">Payment Secured</option>
               <option value="APPROVED">Approved</option>
               <option value="REJECTED">Rejected</option>
               <option value="APPLIED">Applied</option>
@@ -573,7 +637,7 @@ export default function AmendmentsPage() {
                       }}
                       className="font-semibold text-blue-900 hover:text-blue-700"
                     >
-                      {amendment.status === "REQUESTED" ? "Review" : "View"}
+                      {["REQUESTED", "AWAITING_PAYMENT", "PAYMENT_SECURED"].includes(amendment.status) ? "Review" : "View"}
                     </button>
                   </td>
                 </tr>

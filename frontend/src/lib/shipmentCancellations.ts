@@ -23,6 +23,11 @@ export type ShipmentCancellation = {
   feeReason: string;
   carrierConfirmed: boolean;
   settlementConfirmed: boolean;
+  paymentRefundStatus: "NOT_REQUIRED" | "CREDITED_TO_WALLET" | "RAZORPAY_REFUNDED" | "CASH_REFUNDED";
+  paymentRefundAmountMinor: number;
+  paymentRefundReference: string;
+  paymentRefundedAt: string | null;
+  gatewayRefundStarted?: boolean;
   carrierReference: string;
   reviewNote: string;
   settlement: {
@@ -39,13 +44,102 @@ export type ShipmentCancellation = {
   completedAt: string | null;
   shipmentReference?: string;
   consignee?: string;
-  /**
-   * INDIVIDUAL means the shipment was paid at the counter, so any refund leaves
-   * the company outside the portal and has to be recorded on approval.
-   */
   customerType?: "BUSINESS" | "INDIVIDUAL";
+  paymentSource?: "BUSINESS_ACCOUNT" | "BUSINESS_WALLET" | "DIRECT_RAZORPAY" | "CASH_RECEIPT" | "CLIENT_PREPAID" | "ADMIN_DIRECT" | "PUBLIC_RAZORPAY" | "TEST" | "";
   branch?: { id: string; name: string; code: string } | null;
   businessAccount?: { id: string; accountId: string; companyName: string } | null;
+};
+
+export function cancellationRefundLabel(status: ShipmentCancellation["paymentRefundStatus"]): string | null {
+  switch (status) {
+    case "CREDITED_TO_WALLET":
+      return "Returned to business wallet";
+    case "RAZORPAY_REFUNDED":
+      return "Refunded to original payment method";
+    case "CASH_REFUNDED":
+      return "Cash refund recorded";
+    case "NOT_REQUIRED":
+      return null;
+  }
+}
+
+export type AdminShipmentCancellationPreview = {
+  originalAmountMinor: number;
+  taxTreatment: "GST_APPLICABLE" | "NO_GST";
+  feeBaseMinor: number;
+  feeGstMinor: number;
+  feeTotalMinor: number;
+  refundableAmountMinor: number;
+  feeWasCapped: boolean;
+  manualRefundRequired: boolean;
+  manualRefundSource: boolean;
+};
+
+export const DEFAULT_CANCELLATION_FEE_BASE_MINOR = 70_000;
+export const DEFAULT_CANCELLATION_FEE_BASE_RUPEES = "700.00";
+export const CANCELLATION_GST_RATE_PERCENT = 18;
+
+export type CancellationFeeAmounts = {
+  requestedBaseMinor: number;
+  feeBaseMinor: number;
+  feeGstMinor: number;
+  feeTotalMinor: number;
+  refundMinor: number;
+  capped: boolean;
+};
+
+/** Client-side estimate for the fee review UI; the server recalculates before settlement. */
+export function calculateCancellationFeeAmounts(
+  originalAmountMinor: number,
+  taxTreatment: "GST_APPLICABLE" | "NO_GST",
+  feeRupees: string
+): CancellationFeeAmounts | null {
+  const normalizedFee = feeRupees.trim();
+  if (!normalizedFee || !/^\d*(?:\.\d{0,2})?$/.test(normalizedFee)) return null;
+
+  const requestedBaseMinor = Math.round(Number(normalizedFee) * 100);
+  if (
+    !Number.isSafeInteger(originalAmountMinor)
+    || originalAmountMinor < 0
+    || !Number.isSafeInteger(requestedBaseMinor)
+    || requestedBaseMinor < 0
+  ) return null;
+
+  const noGst = taxTreatment === "NO_GST";
+  const requestedGstMinor = noGst
+    ? 0
+    : Math.round(requestedBaseMinor * CANCELLATION_GST_RATE_PERCENT / 100);
+  const requestedTotalMinor = requestedBaseMinor + requestedGstMinor;
+  if (!Number.isSafeInteger(requestedTotalMinor)) return null;
+
+  if (requestedTotalMinor <= originalAmountMinor) {
+    return {
+      requestedBaseMinor,
+      feeBaseMinor: requestedBaseMinor,
+      feeGstMinor: requestedGstMinor,
+      feeTotalMinor: requestedTotalMinor,
+      refundMinor: originalAmountMinor - requestedTotalMinor,
+      capped: false
+    };
+  }
+
+  const feeBaseMinor = noGst
+    ? originalAmountMinor
+    : Math.round((originalAmountMinor * 100) / (100 + CANCELLATION_GST_RATE_PERCENT));
+  return {
+    requestedBaseMinor,
+    feeBaseMinor,
+    feeGstMinor: originalAmountMinor - feeBaseMinor,
+    feeTotalMinor: originalAmountMinor,
+    refundMinor: 0,
+    capped: true
+  };
+}
+
+export type CancellationRefundPayout = {
+  method: "CASH" | "UPI" | "BANK_TRANSFER" | "CARD" | "CHEQUE";
+  reference?: string;
+  note?: string;
 };
 
 export class ShipmentCancellationRequestError extends Error {
@@ -107,6 +201,36 @@ export async function requestAdminShipmentCancellation(draftId: string, reason: 
   return parse<{ success: true; cancellation: ShipmentCancellation }>(response);
 }
 
+export async function getAdminShipmentCancellationPreview(draftId: string) {
+  const response = await fetchWithAuth(apiUrl(`/api/v1/shipment-cancellations/drafts/${draftId}/direct-preview`));
+  return parse<{ success: true; preview: AdminShipmentCancellationPreview }>(response);
+}
+
+export async function cancelAdminShipmentDirectly(
+  draftId: string,
+  input: {
+    reason: string;
+    feeBaseMinor: number;
+    feeReason: string;
+    carrierConfirmed: true;
+    settlementConfirmed: true;
+    carrierReference?: string;
+    refundPayout?: CancellationRefundPayout;
+  }
+) {
+  const response = await fetchWithAuth(apiUrl(`/api/v1/shipment-cancellations/drafts/${draftId}/direct`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  return parse<{
+    success: true;
+    completed: boolean;
+    message: string;
+    cancellation: ShipmentCancellation;
+  }>(response);
+}
+
 export async function listShipmentCancellations(input: { status?: string; dateRange?: DateRange; page?: number } = {}) {
   const url = new URL(apiUrl("/api/v1/shipment-cancellations"));
   if (input.status) url.searchParams.set("status", input.status);
@@ -129,11 +253,7 @@ export async function approveShipmentCancellation(
     settlementConfirmed: true;
     carrierReference: string;
     reviewNote: string;
-    /**
-     * How the refund was paid back to a walk-in customer. Required only when the
-     * shipment was a counter sale with something to refund- account-backed
-     * cancellations settle through the credit ledger instead.
-     */
+    /** Staff recorded payout for a legacy admin-direct or offline cash receipt. */
     refundPayout?: {
       method: "CASH" | "UPI" | "BANK_TRANSFER" | "CARD" | "CHEQUE";
       reference?: string;

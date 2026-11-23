@@ -1,7 +1,5 @@
 import { listBranches } from "@/lib/branches";
 import { listBusinessAccounts, type BusinessAccount } from "@/lib/businessAccounts";
-import { listAdminCreditAccounts } from "@/lib/creditAccounts";
-import { countCreditAccountsAtRisk } from "@/lib/creditPaymentStatus";
 import { listDpdShipments, listShipmentAmendments, type DpdShipmentHistoryItem } from "@/lib/dpdLabels";
 import { getShipmentDashboardSummary, type ShipmentDashboardSummary } from "@/lib/shipmentsList";
 import { listOperationsManifests, type ManifestStatus, type OperationsManifest } from "@/lib/operationsManifests";
@@ -9,7 +7,6 @@ import { listShipmentCancellations } from "@/lib/shipmentCancellations";
 import { listShipmentQuotes } from "@/lib/shipmentQuotes";
 import { listSupportTickets, type SupportTicket } from "@/lib/supportTickets";
 import {
-  FINANCE_AREA,
   OPERATIONS_AREA,
   RATE_CARD_AREA,
   SHIPMENT_VIEW_AREA,
@@ -29,15 +26,15 @@ export type DashboardRole = AuthenticatedUser["role"];
 // What each internal role is allowed to read. Every admin data route is gated to
 // `admin`, manifests additionally admit `operations`, and notifications are open
 // to every signed-in role- so asking for anything else would only collect 403s.
-export type DashboardCapability = "shipments" | "accounts" | "finance" | "approvals" | "manifests";
+export type DashboardCapability = "shipments" | "accounts" | "approvals" | "manifests";
 
 // Operations receives shipment data for the four operational KPI cards and the
 // full manifest lifecycle breakdown. The KPI component keeps its view limited
 // to those four cards; HR has no reporting scope, so it sees the scope card.
 const roleCapabilities: Record<string, DashboardCapability[]> = {
-  admin: ["shipments", "accounts", "finance", "approvals", "manifests"],
+  admin: ["shipments", "accounts", "approvals", "manifests"],
   operations: ["shipments", "manifests"],
-  finance: ["finance"],
+  finance: [],
   delivery: ["shipments"]
 };
 
@@ -125,17 +122,6 @@ export type AccountOverview = {
   activeBranches: number;
 };
 
-export type FinanceOverview = {
-  currency: string;
-  invoicedOutstandingMinor: number;
-  unbilledMinor: number;
-  approvedLimitMinor: number;
-  activeFacilities: number;
-  restrictedFacilities: number;
-  /** Heading for a block but not there yet - a customer to chase, not one already stopped. */
-  atRiskFacilities: number;
-};
-
 export type ApprovalOverview = {
   amendments: number;
   cancellations: number;
@@ -149,7 +135,6 @@ export type DashboardOverview = {
   shipments: ShipmentOverview | null;
   manifests: ManifestOverview | null;
   accounts: AccountOverview | null;
-  finance: FinanceOverview | null;
   approvals: ApprovalOverview | null;
   activity: ActivityItem[];
   tasks: TaskItem[];
@@ -181,8 +166,7 @@ export function formatCount(value: number) {
   return `${(value / 10_000_000).toFixed(2)}Cr`;
 }
 
-// Stat tiles get a compact reading so a large figure stays on one line; the
-// finance panel below them carries the exact amount.
+// Stat tiles get a compact reading so a large figure stays on one line.
 export function formatCompactMoney(amountMinor: number, currency = "INR") {
   const amount = amountMinor / 100;
   const symbol = currency === "INR" ? "₹" : `${currency} `;
@@ -484,7 +468,6 @@ export const quickLinks: QuickLink[] = [
   { label: "Tracking", description: "Look up any Swiftline, carrier, or parcel number", href: "/dashboard/tracking", roles: withAdmin(SHIPMENT_VIEW_AREA) },
   { label: "Manifests", description: "Pack bags, scan parcels, seal, and dispatch", href: "/dashboard/operations-manifests", roles: withAdmin(OPERATIONS_AREA) },
   { label: "Business Accounts", description: "Onboard clients and review KYC", href: "/dashboard/business-accounts", roles: ["admin"] },
-  { label: "Credit Accounts", description: "Limits, statements, and payments", href: "/dashboard/credit-accounts", roles: withAdmin(FINANCE_AREA) },
   { label: "Country Rate Card", description: "Lane pricing and weight slabs", href: "/dashboard/country-rate-card", roles: withAdmin(RATE_CARD_AREA) },
   { label: "Branches", description: "Locations, codes, and assignments", href: "/dashboard/branches", roles: ["admin"] },
   { label: "Staff", description: "Add internal staff and review the directory", href: "/dashboard/users", roles: withAdmin(STAFF_DIRECTORY_AREA) },
@@ -492,7 +475,12 @@ export const quickLinks: QuickLink[] = [
 ];
 
 export function quickLinksForRole(role?: string) {
-  return quickLinks.filter((link) => link.roles.includes(role ?? ""));
+  const seenHrefs = new Set<string>();
+  return quickLinks.filter((link) => {
+    if (!link.roles.includes(role ?? "") || seenHrefs.has(link.href)) return false;
+    seenHrefs.add(link.href);
+    return true;
+  });
 }
 
 // ── the loader ────────────────────────────────────────────────────────────────
@@ -512,8 +500,7 @@ export async function loadDashboardOverview(role?: string): Promise<DashboardOve
     amendments,
     cancellations,
     quotes,
-    tickets,
-    creditAccounts
+    tickets
   ] = await Promise.all([
     can("shipments") ? load("Shipments", () => listDpdShipments(SHIPMENT_WINDOW, "", false, false, true)) : null,
     can("shipments") ? load("Shipment totals", getShipmentDashboardSummary) : null,
@@ -525,13 +512,12 @@ export async function loadDashboardOverview(role?: string): Promise<DashboardOve
     can("approvals") ? load("Amendments", () => listShipmentAmendments({ status: "REQUESTED" })) : null,
     can("approvals") ? load("Cancellations", () => listShipmentCancellations({ status: "REQUESTED" })) : null,
     can("approvals") ? load("Quote requests", () => listShipmentQuotes("admin", { status: "REQUESTED" })) : null,
-    can("approvals") ? load("Support tickets", () => listSupportTickets("admin", { status: "OPEN", limit: 5 })) : null,
-    can("finance") ? load("Credit accounts", () => listAdminCreditAccounts()) : null
+    can("approvals") ? load("Support tickets", () => listSupportTickets("admin", { status: "OPEN", limit: 5 })) : null
   ]);
 
   const unavailable = [
     shipmentHistory, shipmentSummary, accountsPage, activeAccounts, pendingAccounts, activeBranches,
-    manifests, amendments, cancellations, quotes, tickets, creditAccounts
+    manifests, amendments, cancellations, quotes, tickets
   ]
     .map((result) => result?.failed)
     .filter((label): label is string => Boolean(label));
@@ -547,19 +533,6 @@ export async function loadDashboardOverview(role?: string): Promise<DashboardOve
       pendingReview: pendingAccounts?.value?.total ?? 0,
       recent: accountsPage.value.accounts,
       activeBranches: activeBranches?.value?.total ?? activeBranches?.value?.branches.length ?? 0
-    }
-    : null;
-
-  const credit = creditAccounts?.value?.creditAccounts ?? [];
-  const finance: FinanceOverview | null = creditAccounts?.value
-    ? {
-      currency: "INR",
-      invoicedOutstandingMinor: credit.reduce((sum, account) => sum + (account.invoicedOutstandingMinor ?? 0), 0),
-      unbilledMinor: credit.reduce((sum, account) => sum + (account.unbilledCreditMinor ?? 0), 0),
-      approvedLimitMinor: credit.reduce((sum, account) => sum + (account.approvedCreditLimitMinor ?? 0), 0),
-      activeFacilities: credit.filter((account) => account.status === "ACTIVE").length,
-      restrictedFacilities: credit.filter((account) => account.restriction && account.restriction.level !== "NONE").length,
-      atRiskFacilities: countCreditAccountsAtRisk(credit)
     }
     : null;
 
@@ -594,10 +567,9 @@ export async function loadDashboardOverview(role?: string): Promise<DashboardOve
     shipments,
     manifests: manifests?.value ?? null,
     accounts,
-    finance,
     approvals,
     activity,
-    tasks: buildTasks({ shipments, manifests: manifests?.value ?? null, approvals, finance }),
+    tasks: buildTasks({ shipments, manifests: manifests?.value ?? null, approvals }),
     unavailable: [...new Set(unavailable)]
   };
 }
@@ -606,10 +578,9 @@ function buildTasks(input: {
   shipments: ShipmentOverview | null;
   manifests: ManifestOverview | null;
   approvals: ApprovalOverview | null;
-  finance: FinanceOverview | null;
 }): TaskItem[] {
   const tasks: TaskItem[] = [];
-  const { shipments, manifests, approvals, finance } = input;
+  const { shipments, manifests, approvals } = input;
 
   if (approvals?.accounts) {
     tasks.push({
@@ -699,26 +670,6 @@ function buildTasks(input: {
     });
   }
 
-  if (finance?.restrictedFacilities || finance?.atRiskFacilities) {
-    const restricted = finance.restrictedFacilities;
-    const atRisk = finance.atRiskFacilities;
-    tasks.push({
-      id: "credit",
-      label: restricted
-        ? "Credit facilities restricted"
-        : "Credit facilities at risk",
-      // Both halves are named when both exist, so the count and the sentence
-      // never disagree about what the number refers to.
-      detail: restricted && atRisk
-        ? `${restricted} blocked by overdue balances, ${atRisk} due soon`
-        : restricted
-          ? "Overdue balances are blocking new bookings"
-          : "Payment due soon - chase before bookings stop",
-      count: restricted + atRisk,
-      href: "/dashboard/credit-accounts",
-      tone: restricted ? "critical" : "warning"
-    });
-  }
 
   const order = { critical: 0, warning: 1, info: 2 };
   return tasks.sort((left, right) => order[left.tone] - order[right.tone]);

@@ -18,6 +18,7 @@
 # next.js
 /.next/
 /.next-validation/
+/.next-prepaid-release/
 /.next-playwright/
 /.next-playwright-*/
 /out/

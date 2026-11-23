@@ -3,31 +3,22 @@
 import Link from "next/link";
 import { FiArrowRight } from "react-icons/fi";
 import type { ClientDashboardAccount } from "@/lib/clientDashboard";
-import {
-  canCreateShipment,
-  canMakePayment,
-  canRequestQuote,
-  hasQuoteAccess,
-} from "@/components/client/dashboard/clientDashboardPermissions";
+import { canCreateShipment, canMakePayment, canRequestQuote, hasQuoteAccess } from "@/components/client/dashboard/clientDashboardPermissions";
 
 export default function ClientQuickAccess({
-  account,
+  account
 }: {
   account: ClientDashboardAccount;
 }) {
   const financialAccess = canMakePayment(account);
 
   const quickAccess = [
- 
-   
     {
       label: "Create Shipment",
       description: "Book a shipment and get a tracking number",
       href: "/client/dpd-labels",
-      show:true,
+      show: canCreateShipment(account)
     },
- 
-  
     {
       label: "Support Tickets",
       description: "Message our team about a shipment",
@@ -35,24 +26,27 @@ export default function ClientQuickAccess({
       show: true,
     },
     {
-      label: "Credit Account",
-      description: "View your facility and request a limit",
-      href: "/client/credit",
-      show: true,
-    },
-    {
-      label: "invite Team Members",
-      description: "invite your colleagues to manage shipments",
-      href: "/client/team",
+      label: "Wallet & Payments",
+      description: "View your wallet, add funds and payment history",
+      href: "/client/payments",
       show: financialAccess,
     },
-    
+    {
+      label: "Get a Quote",
+      description: "Check a rate before creating a shipment",
+      href: "/client/get-quote",
+      show: canRequestQuote(account) && hasQuoteAccess(account),
+    },
+    {
+      label: "Invite Team Members",
+      description: "Invite colleagues to manage shipments",
+      href: "/client/team",
+      show: financialAccess,
+    }
   ].filter((item) => item.show);
 
   return (
-    <section data-portal-theme-scope data-portal-theme-client-quick-access className=" rounded-lg bg-white p-4 shadow-sm sm:px-5">
-     
-
+    <section data-portal-theme-scope data-portal-theme-client-quick-access className="rounded-lg bg-white p-4 shadow-sm sm:px-5">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         {quickAccess.map((item) => (
           <Link

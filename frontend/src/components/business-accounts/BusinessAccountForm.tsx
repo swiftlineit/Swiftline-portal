@@ -770,6 +770,7 @@ export default function BusinessAccountForm({
             onValidateUniqueField={validateUniqueField}
             onFieldBlur={markTouched}
             operatorBillingAddressForNoCompany={Boolean(operatorSlug)}
+            allowCreditRequest={Boolean(operatorSlug)}
           />
         ) : null}
 
@@ -794,6 +795,7 @@ export default function BusinessAccountForm({
             onConfirmationChange={setConfirmation}
             onEditStep={setStep}
             operatorName={operatorName}
+            allowCreditRequest={Boolean(operatorSlug)}
           />
         ) : null}
 

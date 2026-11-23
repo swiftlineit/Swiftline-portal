@@ -144,12 +144,12 @@ export async function requestCreditLimitIncrease(input: {
 }
 
 export async function getPaymentTerms() {
-  const response = await fetchWithAuth(apiUrl("/api/v1/client/credit/payment-terms"));
+  const response = await fetchWithAuth(apiUrl("/api/v1/client/payment-terms"));
   return parse<{ success: true; terms: PaymentTerms }>(response);
 }
 
 export async function acceptPaymentTerms(input: { businessAccountId: string; termsVersion: string; paymentReference?: string }) {
-  const response = await fetchWithAuth(apiUrl("/api/v1/client/credit/payment-terms/accept"), json("POST", input));
+  const response = await fetchWithAuth(apiUrl("/api/v1/client/payment-terms/accept"), json("POST", input));
   return parse<{ success: true; message: string }>(response);
 }
 

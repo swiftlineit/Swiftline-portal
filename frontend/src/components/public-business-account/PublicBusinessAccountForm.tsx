@@ -1607,10 +1607,6 @@ export default function PublicBusinessAccountPage() {
                               "Monthly volume",
                               formData.company.monthlyShipmentVolume || "-",
                             ],
-                            [
-                              "Credit",
-                              `${formData.company.requestedCreditCurrency} ${formData.company.requestedCreditLimit || "-"}`,
-                            ],
                           ]}
                         />
 

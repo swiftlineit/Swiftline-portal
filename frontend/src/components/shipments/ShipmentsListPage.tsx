@@ -3,10 +3,14 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FiArchive, FiArrowDown, FiExternalLink, FiFileText, FiPlus, FiSearch, FiTrash2, FiX } from "react-icons/fi";
-import { BsArrowCounterclockwise } from "react-icons/bs";
+import { FiArchive, FiArrowDown, FiExternalLink, FiFileText, FiPlus, FiSearch, FiX } from "react-icons/fi";
 import { toast } from "react-toastify";
 import CreateManifestDialog, { type ManifestDialogValues } from "@/components/shipments/CreateManifestDialog";
+import AdminShipmentCancellationDialog from "@/components/shipments/AdminShipmentCancellationDialog";
+import ShipmentRowActions, {
+  getShipmentRowActionOptions,
+  type ShipmentRowAction
+} from "@/components/shipments/ShipmentRowActions";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import ParcelManifestCell from "@/components/shipments/ParcelManifestCell";
 import DateRangeFilter from "@/components/ui/DateRangeFilter";
@@ -18,6 +22,11 @@ import { currentDateTimeLocal, dateTimeLocalToIso, formatDashboardDate, formatDa
 import { formatCsbType } from "@/lib/csbType";
 import { createBulkShipmentManifest, createCombinedShipmentManifest, manifestsHref } from "@/lib/shipmentManifests";
 import { shipmentInvoicePageUrl } from "@/lib/shipmentInvoices";
+import {
+  cancelAdminShipmentDirectly,
+  getAdminShipmentCancellationPreview,
+  type AdminShipmentCancellationPreview
+} from "@/lib/shipmentCancellations";
 import {
   bulkUpdateDpdShipmentOperationalStatus,
   getAdminShipmentDetails,
@@ -188,21 +197,9 @@ const dpdLabelPresentation: Record<DpdLabelStatus, { label: string; className: s
   NOT_APPLICABLE: { label: "DPD label not applicable", className: "text-slate-500" }
 };
 
-function DpdLabelAvailability({ status, onOpen, opening }: { status: DpdLabelStatus; onOpen?: () => void; opening?: boolean }) {
+function DpdLabelAvailability({ status }: { status: DpdLabelStatus }) {
   const presentation = dpdLabelPresentation[status];
   const label = presentation.label;
-  if (onOpen) {
-    return (
-      <button
-        type="button"
-        onClick={onOpen}
-        disabled={opening}
-        className={`mt-1 block w-max whitespace-nowrap text-left text-[10px] font-semibold leading-4 underline underline-offset-2 transition-colors hover:text-[#0D1282] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D1282]/30 focus-visible:ring-offset-1 disabled:cursor-wait ${presentation.className}`}
-      >
-        {label}
-      </button>
-    );
-  }
   return (
     <p className={`mt-1 w-max whitespace-nowrap text-left text-[10px] font-semibold leading-4 ${presentation.className}`}>
       {label}
@@ -474,9 +471,16 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   // prompt can name the shipment the operator is about to remove.
   const [pendingDelete, setPendingDelete] = useState<ShipmentListItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [pendingCancellation, setPendingCancellation] = useState<{
+    shipment: ShipmentListItem;
+    preview: AdminShipmentCancellationPreview;
+  } | null>(null);
+  const [cancellationBusy, setCancellationBusy] = useState(false);
+  const [cancellationError, setCancellationError] = useState("");
+  const [openingCancellationId, setOpeningCancellationId] = useState<string | null>(null);
   // Single rebook in flight - tracks which booked shipment is being cloned.
   const [rebookingId, setRebookingId] = useState<string | null>(null);
-  const [openingDpdLabelId, setOpeningDpdLabelId] = useState<string | null>(null);
+  const [openingShipmentLabelId, setOpeningShipmentLabelId] = useState<string | null>(null);
   const [restoringView, setRestoringView] = useState(true);
   const restoredView = useRef(false);
   // List requests can overlap when a user pages, filters, or finishes a bulk
@@ -540,6 +544,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
   // Staff table only, and only for an administrator. Operations and delivery
   // work this list daily but do not remove rows from it.
   const canDelete = audience === "admin" && role === "admin";
+  const canCancel = audience === "admin" && role === "admin";
   // Rebook is staff-only: admin and operations may rebook any booked shipment
   // into a new EDITABLE draft preserving its businessAccountId + branchId
   // (individual shipments keep their original branch). Delivery/finance see no button.
@@ -1148,27 +1153,103 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
     }
   }
 
-  async function handleOpenDpdLabel(shipmentId: string) {
-    if (openingDpdLabelId) return;
+  async function handleOpenShipmentLabel(shipmentId: string, labelType: "SWIFTLINE" | "DPD") {
+    if (openingShipmentLabelId) return;
     const openedWindow = window.open("about:blank", "_blank");
     if (!openedWindow) {
-      toast.error("Allow pop-ups to open the DPD label.");
+      toast.error("Allow pop-ups to open the shipment label.");
       return;
     }
     openedWindow.opener = null;
-    setOpeningDpdLabelId(shipmentId);
+    setOpeningShipmentLabelId(shipmentId);
 
     try {
       const { shipment } = await getAdminShipmentDetails(shipmentId);
-      const label = shipment.labels.find((item) => item.labelType === "DPD" && item.format === "HTML");
-      if (!label) throw new Error("The DPD label is no longer available for this shipment.");
+      const label = shipment.labels.find((item) => (
+        item.labelType === labelType && (labelType !== "DPD" || item.format === "HTML")
+      ));
+      if (!label) {
+        throw new Error(labelType === "SWIFTLINE"
+          ? "The Swiftline internal label is not available for this shipment."
+          : "The DPD label is no longer available for this shipment.");
+      }
       const access = await getDpdLabelAccessUrl(shipment.dpdShipment.id, label.id, "inline");
       openedWindow.location.href = access.url;
     } catch (caught) {
       openedWindow.close();
-      toast.error(caught instanceof Error ? caught.message : "The DPD label could not be opened.");
+      toast.error(caught instanceof Error ? caught.message : "The shipment label could not be opened.");
     } finally {
-      setOpeningDpdLabelId(null);
+      setOpeningShipmentLabelId(null);
+    }
+  }
+
+  async function handleOpenCancellationDialog(shipment: ShipmentListItem) {
+    if (openingCancellationId || cancellationBusy) return;
+    setOpeningCancellationId(shipment.id);
+    setCancellationError("");
+    try {
+      const { preview } = await getAdminShipmentCancellationPreview(shipment.id);
+      setPendingCancellation({ shipment, preview });
+    } catch (caught) {
+      toast.error(caught instanceof Error ? caught.message : "Cancellation eligibility could not be checked.");
+    } finally {
+      setOpeningCancellationId(null);
+    }
+  }
+
+  async function handleDirectCancellation(input: {
+    reason: string;
+    feeBaseMinor: number;
+    feeReason: string;
+    carrierConfirmed: true;
+    settlementConfirmed: true;
+    carrierReference: string;
+    refundPayout?: { method: "CASH" | "UPI" | "BANK_TRANSFER" | "CARD" | "CHEQUE"; reference?: string; note?: string };
+  }) {
+    if (!pendingCancellation) return;
+    setCancellationBusy(true);
+    setCancellationError("");
+    try {
+      const result = await cancelAdminShipmentDirectly(pendingCancellation.shipment.id, input);
+      if (result.completed) {
+        toast.success(result.message);
+      } else {
+        toast.info(`${result.message} The shipment remains pending in Cancellations until the refund is confirmed.`);
+      }
+      setPendingCancellation(null);
+      await load();
+    } catch (caught) {
+      setCancellationError(caught instanceof Error ? caught.message : "Shipment cancellation could not be completed.");
+    } finally {
+      setCancellationBusy(false);
+    }
+  }
+
+  function handleShipmentAction(shipment: ShipmentListItem, action: ShipmentRowAction) {
+    switch (action) {
+      case "view":
+        rememberScrollPosition(shipment.id);
+        router.push(shipmentDetailsHref(audience, shipment.id));
+        return;
+      case "invoice":
+        rememberScrollPosition(shipment.id);
+        router.push(shipmentInvoicePageUrl(shipment.id, audience));
+        return;
+      case "rebook":
+        void handleRebook(shipment.id);
+        return;
+      case "dpd-label":
+        void handleOpenShipmentLabel(shipment.id, "DPD");
+        return;
+      case "swiftline-label":
+        void handleOpenShipmentLabel(shipment.id, "SWIFTLINE");
+        return;
+      case "delete":
+        setPendingDelete(shipment);
+        return;
+      case "cancel":
+        void handleOpenCancellationDialog(shipment);
+        return;
     }
   }
 
@@ -2051,11 +2132,7 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                       {shipment.statusLabel}
                     </span>
                     {audience === "admin" && shipment.dpdLabelStatus ? (
-                      <DpdLabelAvailability
-                        status={shipment.dpdLabelStatus}
-                        onOpen={shipment.dpdLabelStatus === "AVAILABLE" ? () => void handleOpenDpdLabel(shipment.id) : undefined}
-                        opening={openingDpdLabelId === shipment.id}
-                      />
+                      <DpdLabelAvailability status={shipment.dpdLabelStatus} />
                     ) : null}
                     {/* A booking that reached the carrier but has not completed is
                         shown here rather than being hidden from this table. */}
@@ -2100,44 +2177,38 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                     </td>
                   ) : null}
                   <td className="px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <Link
-                        href={shipmentDetailsHref(audience, shipment.id)}
-                        onClick={() => rememberScrollPosition(shipment.id)}
-                        className="inline-flex items-center gap-1 font-semibold text-blue-900 hover:text-blue-700"
-                      >
-                        <FiExternalLink aria-hidden="true" className="h-4 w-4" />View Details
-                      </Link>
-                      <Link
-                        href={shipmentInvoicePageUrl(shipment.id, audience)}
-                        onClick={() => rememberScrollPosition(shipment.id)}
-                        className="inline-flex items-center gap-1 font-semibold text-blue-900 hover:text-blue-700"
-                      >
-                        <FiFileText aria-hidden="true" className="h-4 w-4" />Invoice
-                      </Link>
-                      {canRebook ? (
-                        <button
-                          type="button"
-                          onClick={() => void handleRebook(shipment.id)}
-                          disabled={rebookingId === shipment.id}
-                          aria-label={`Rebook shipment ${shipment.swiftlineTrackingNumber || shipment.id}`}
-                          className="inline-flex items-center gap-1 font-semibold text-[#0D1282] hover:text-[#0D1282]/80 disabled:cursor-not-allowed disabled:opacity-50"
+                    {audience === "admin" ? (
+                      <ShipmentRowActions
+                        shipmentLabel={shipment.swiftlineTrackingNumber || shipment.shipmentReference || shipment.id}
+                        options={getShipmentRowActionOptions({
+                          canRebook,
+                          canDelete,
+                          canCancel: canCancel && shipment.status !== "SHIPMENT_CANCELLED",
+                          hasDpdLabel: shipment.dpdLabelStatus === "AVAILABLE"
+                        })}
+                        disabled={rebookingId === shipment.id
+                          || openingShipmentLabelId === shipment.id
+                          || openingCancellationId === shipment.id}
+                        onAction={(action) => handleShipmentAction(shipment, action)}
+                      />
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Link
+                          href={shipmentDetailsHref(audience, shipment.id)}
+                          onClick={() => rememberScrollPosition(shipment.id)}
+                          className="inline-flex items-center gap-1 font-semibold text-blue-900 hover:text-blue-700"
                         >
-                          <BsArrowCounterclockwise aria-hidden="true" className="h-4 w-4" />
-                          {rebookingId === shipment.id ? "Rebooking..." : "Rebook"}
-                        </button>
-                      ) : null}
-                      {canDelete ? (
-                        <button
-                          type="button"
-                          onClick={() => setPendingDelete(shipment)}
-                          aria-label={`Delete shipment ${shipment.swiftlineTrackingNumber || shipment.id}`}
-                          className="inline-flex items-center gap-1 font-semibold text-[#D71313] hover:text-[#b30f0f]"
+                          <FiExternalLink aria-hidden="true" className="h-4 w-4" />View Details
+                        </Link>
+                        <Link
+                          href={shipmentInvoicePageUrl(shipment.id, audience)}
+                          onClick={() => rememberScrollPosition(shipment.id)}
+                          className="inline-flex items-center gap-1 font-semibold text-blue-900 hover:text-blue-700"
                         >
-                          <FiTrash2 aria-hidden="true" className="h-4 w-4" />Delete
-                        </button>
-                      ) : null}
-                    </div>
+                          <FiFileText aria-hidden="true" className="h-4 w-4" />Invoice
+                        </Link>
+                      </div>
+                    )}
                   </td>
                 </tr>
                 );
@@ -2227,6 +2298,22 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
           busyLabel="Deleting..."
           onConfirm={handleDelete}
           onCancel={() => setPendingDelete(null)}
+        />
+      ) : null}
+
+      {pendingCancellation ? (
+        <AdminShipmentCancellationDialog
+          shipment={pendingCancellation.shipment}
+          preview={pendingCancellation.preview}
+          busy={cancellationBusy}
+          error={cancellationError}
+          onClose={() => {
+            if (!cancellationBusy) {
+              setPendingCancellation(null);
+              setCancellationError("");
+            }
+          }}
+          onSubmit={handleDirectCancellation}
         />
       ) : null}
     </div>

@@ -1,25 +1,16 @@
 "use client";
 
-import Link from "next/link";
 import { FiChevronDown } from "react-icons/fi";
+import { formatPaymentMoney } from "@/lib/paymentPresentation";
 import {
   BusinessAccount,
   BusinessAccountOperationalAction,
   BusinessAccountStatus,
   businessAccountStatusTransitions
 } from "@/lib/businessAccounts";
-import type { CreditAccount } from "@/lib/creditAccounts";
 
 // Shared business-account table used by the accounts list and the branch detail
 // page, so both stay in step instead of drifting as two hand-maintained copies.
-
-function formatMinorMoney(amountMinor: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0
-  }).format(amountMinor / 100);
-}
 
 const lifecycleActions: { label: string; status: BusinessAccountStatus }[] = [
   { label: "Approve", status: "approved" },
@@ -29,9 +20,7 @@ const lifecycleActions: { label: string; status: BusinessAccountStatus }[] = [
 ];
 
 const operationalActions: { label: string; action: BusinessAccountOperationalAction }[] = [
-  { label: "Deposit Required", action: "deposit_required" },
-  { label: "Deposit Received", action: "deposit_received" },
-  { label: "View Ledger", action: "ledger_viewed" }
+  { label: "Account Ledger", action: "ledger_viewed" }
 ];
 
 export function formatAccountStatus(status: string) {
@@ -61,21 +50,8 @@ function getKycBadgeClasses(status?: string) {
   return "bg-slate-100 text-slate-600 ring-1 ring-slate-200";
 }
 
-function formatDeposit(account: BusinessAccount) {
-  if (account.depositStatus === "required") return "Required";
-  if (account.depositStatus === "received") return "Received";
-  if (account.depositStatus === "not_required") return "Not required";
-  return "-";
-}
-
 function formatKycStatus(account: BusinessAccount) {
   return account.kycReview?.overallStatus ? formatAccountStatus(account.kycReview.overallStatus) : "-";
-}
-
-// Only checks flagged as information_required carry a reason worth surfacing.
-function getKycReason(account: BusinessAccount) {
-  return Object.values(account.kycReview?.checks ?? {})
-    .find((check) => check?.status === "information_required" && check?.note)?.note ?? "";
 }
 
 export function getAssignedBranch(account: BusinessAccount) {
@@ -87,16 +63,12 @@ export function BusinessAccountsTable({
   loading = false,
   updatingAccountId,
   emptyMessage = "No business accounts found.",
-  creditByBusinessId,
   onAccountMenuChange
 }: {
   accounts: BusinessAccount[];
   loading?: boolean;
   updatingAccountId: string | null;
   emptyMessage?: string;
-  // Credit facilities keyed by business account _id. Only approved and active
-  // accounts can hold one, so a missing entry is normal rather than an error.
-  creditByBusinessId?: Map<string, CreditAccount>;
   onAccountMenuChange: (account: BusinessAccount, value: string) => void | Promise<void>;
 }) {
   return (
@@ -105,10 +77,8 @@ export function BusinessAccountsTable({
         <thead className="bg-slate-200 text-xs uppercase tracking-wide text-slate-600">
           <tr>
             <th className="px-4 py-3.5 font-semibold">Company</th>
-            <th className="px-4 py-3.5 font-semibold">Available Credit</th>
-            <th className="px-4 py-3.5 font-semibold">Outstanding</th>
             <th className="px-4 py-3.5 font-semibold">Status</th>
-            <th className="px-4 py-3.5 font-semibold">Deposit</th>
+            <th className="px-4 py-3.5 font-semibold">Available wallet</th>
             <th className="px-4 py-3.5 font-semibold">Branch</th>
             <th className="px-4 py-3.5 font-semibold">KYC</th>
             <th className="px-4 py-3.5 font-semibold">Actions</th>
@@ -116,14 +86,12 @@ export function BusinessAccountsTable({
         </thead>
         <tbody className="divide-y divide-slate-100">
           {loading ? (
-            <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-500">Loading accounts...</td></tr>
+            <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">Loading accounts...</td></tr>
           ) : accounts.length === 0 ? (
-            <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-500">{emptyMessage}</td></tr>
+            <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">{emptyMessage}</td></tr>
           ) : accounts.map((account) => {
             const assignedBranch = getAssignedBranch(account);
             const isUpdating = updatingAccountId === account.accountId;
-            const credit = creditByBusinessId?.get(account._id);
-
             return (
               <tr key={account.accountId} className="transition-colors hover:bg-[#EEEDED]/40">
                 <td className="px-4 py-3.5">
@@ -135,36 +103,13 @@ export function BusinessAccountsTable({
                   ) : null}
                 </td>
                 <td className="px-4 py-3.5">
-                  {!creditByBusinessId ? (
-                    // Caller did not load credit, so claiming "No credit" would lie.
-                    <span className="text-slate-400">-</span>
-                  ) : credit?.approvedCreditLimitMinor ? (
-                    // What is left to spend, not the approved limit: an exhausted
-                    // facility should read zero rather than look fully available.
-                    <span className="font-semibold text-slate-900">{formatMinorMoney(credit.availableCreditMinor ?? 0)}</span>
-                  ) : (
-                    <span className="text-slate-400">No credit</span>
-                  )}
-                </td>
-                <td className="px-4 py-3.5">
-                  {creditByBusinessId && credit?.approvedCreditLimitMinor ? (
-                    <Link
-                      href={`/dashboard/credit-accounts/${account._id}#billing-statements`}
-                      className="font-semibold text-red-600 hover:text-red-700 hover:underline focus:outline-none focus:ring-2 focus:ring-red-200 focus:ring-offset-1 rounded-sm"
-                      title="View statements for this credit account"
-                    >
-                      {formatMinorMoney(credit.invoicedOutstandingMinor ?? 0)}
-                    </Link>
-                  ) : (
-                    <span className="text-slate-400">-</span>
-                  )}
-                </td>
-                <td className="px-4 py-3.5">
                   <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getStatusBadgeClasses(account.status)}`}>
                     {formatAccountStatus(account.status)}
                   </span>
                 </td>
-                <td className="px-4 py-3.5 text-slate-700">{formatDeposit(account)}</td>
+                <td className="whitespace-nowrap px-4 py-3.5 font-semibold tabular-nums text-slate-900">
+                  {formatPaymentMoney(account.walletAvailableBalanceMinor ?? 0, "INR")}
+                </td>
                 <td className="px-4 py-3.5">
                   {assignedBranch ? (
                     <>
@@ -219,7 +164,6 @@ export function BusinessAccountsTable({
                           {account.status === "suspended" ? <option value="status:suspended">Change suspension mode</option> : null}
                           {["approved", "active"].includes(account.status)
                             ? operationalActions
-                              .filter((action) => action.action !== "ledger_viewed" || Boolean(credit))
                               .map((action) => (
                                 <option key={action.action} value={`operation:${action.action}`}>
                                   {action.label}

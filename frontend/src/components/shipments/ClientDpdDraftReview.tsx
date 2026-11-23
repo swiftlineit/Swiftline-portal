@@ -135,10 +135,18 @@ import AddressBookPicker from "@/components/address-book/AddressBookPicker";
 import { getAddressBookEntry, prepareAddressBookEntryForShipment, type AddressBookEntryType, type AddressBookSelection } from "@/lib/addressBook";
 import BookingPausedNotice from "@/components/booking/BookingPausedNotice";
 import { isCountryPaused, listClientBookingPauses, type BookingPause } from "@/lib/bookingPause";
+import {
+  clearShipmentPaymentIdempotencyKey,
+  createDirectShipmentPayment,
+  openShipmentRazorpayCheckout,
+  verifyDirectShipmentPayment,
+  type ShipmentPaymentIntent
+} from "@/lib/shipmentPayments";
+import type { RazorpayPublicConfig } from "@/lib/clientDashboard";
 
 /** The booking-panel action currently running; the two booking values are the
  *  provider each button books with. Null when the page is idle. */
-type PendingAction = "BOOKING" | "BOOKING_NO_DPD" | "DRAFT" | "ADDRESS" | null;
+type PendingAction = "BOOKING" | "BOOKING_NO_DPD" | "DRAFT" | "ADDRESS" | "PAYMENT" | null;
 const parcelRenderStyle = { contentVisibility: "auto", containIntrinsicSize: "auto 360px" } as const;
 type AddressForm = {
   countryCode: string;
@@ -467,6 +475,8 @@ export default function ClientDpdDraftReview({
   const [counterMethod, setCounterMethod] = useState<CounterPaymentInput["method"]>("CASH");
   const [counterReference, setCounterReference] = useState("");
   const [counterNote, setCounterNote] = useState("");
+  const [businessPaymentSource, setBusinessPaymentSource] = useState<"BUSINESS_WALLET" | "DIRECT_RAZORPAY">("BUSINESS_WALLET");
+  const [capturedDirectPayment, setCapturedDirectPayment] = useState<ShipmentPaymentIntent | null>(null);
 
   // Customs route for the shipment. Drafts saved before CSB selection existed
   // read as CSB-IV, matching how the backend prices them.
@@ -801,7 +811,7 @@ export default function ClientDpdDraftReview({
     }
   });
 
-  function syncDraft(nextDraft: ShipmentDraft, preserveLocalItemRows = false) {
+  const syncDraft = useCallback((nextDraft: ShipmentDraft, preserveLocalItemRows = false) => {
     const address = nextDraft.consigneeEnteredAddress;
     setDraft(nextDraft);
     if (!operatorSlug) {
@@ -852,7 +862,7 @@ export default function ClientDpdDraftReview({
         }))
       : nextParcels);
     setParcelCountInput(String(nextParcels.length));
-  }
+  }, [operatorSlug]);
 
   useEffect(() => {
     let mounted = true;
@@ -929,7 +939,7 @@ export default function ClientDpdDraftReview({
     return () => {
       mounted = false;
     };
-  }, [operatorSlug, draftId, router]);
+  }, [operatorSlug, draftId, router, syncDraft]);
 
   useEffect(() => {
     if (operatorSlug) return;
@@ -1317,9 +1327,67 @@ export default function ClientDpdDraftReview({
       const counterPayment = currentDraft.customerType === "INDIVIDUAL"
         ? { method: counterMethod, reference: counterReference.trim(), note: counterNote.trim() }
         : undefined;
-      const result = operatorSlug
-        ? await createOperatorShipment(operatorSlug, currentDraft._id, acceptedPricingHash ?? costEstimate.pricingHash, counterPayment)
-        : await createClientShipment(currentDraft._id, acceptedPricingHash, skipDpdLabel);
+      let result;
+      if (operatorSlug) {
+        result = await createOperatorShipment(operatorSlug, currentDraft._id, acceptedPricingHash ?? costEstimate.pricingHash, counterPayment);
+      } else {
+        const pricingHash = acceptedPricingHash ?? costEstimate.pricingHash;
+        const customerIsIndividual = currentDraft.customerType === "INDIVIDUAL";
+        const capturedForCurrentPrice = capturedDirectPayment?.pricingHash === pricingHash
+          && ["CAPTURED", "ALLOCATED"].includes(capturedDirectPayment.status);
+        const selectedSource = customerIsIndividual || capturedForCurrentPrice ? "DIRECT_RAZORPAY" : businessPaymentSource;
+        let fundingReferenceId: string | undefined;
+        if (selectedSource === "BUSINESS_WALLET") {
+          if (costEstimate.funding.availableAdvanceMinor < costEstimate.funding.totalPayableMinor) {
+            throw new Error("Your wallet does not cover this shipment. Add funds or choose Pay with Razorpay.");
+          }
+        } else {
+          let intent: { payment: ShipmentPaymentIntent; razorpay: RazorpayPublicConfig | null } | null = capturedDirectPayment?.pricingHash === pricingHash
+            && ["CAPTURED", "ALLOCATED"].includes(capturedDirectPayment.status)
+            ? { payment: capturedDirectPayment, razorpay: null }
+            : null;
+          if (!intent) {
+            setPendingAction("PAYMENT");
+            const order = await createDirectShipmentPayment({
+              audience: "client",
+              shipmentDraftId: currentDraft._id,
+              acceptedPricingHash: pricingHash
+            });
+            if (!order.payment.razorpayOrderId) {
+              throw new Error("Payment order creation is still processing. Try again shortly.");
+            }
+            if (!["CAPTURED", "ALLOCATED"].includes(order.payment.status)) {
+              const checkoutResponse = await openShipmentRazorpayCheckout({
+                razorpay: order.razorpay,
+                payment: order.payment,
+                prefill: { name: user?.name, email: user?.email, contact: contactForm.mobileNumber }
+              });
+              const verified = await verifyDirectShipmentPayment({
+                audience: "client",
+                shipmentDraftId: currentDraft._id,
+                ...checkoutResponse
+              });
+              intent = { payment: verified.payment, razorpay: order.razorpay };
+              setPendingAction(skipDpdLabel ? "BOOKING_NO_DPD" : "BOOKING");
+            } else {
+              intent = { payment: order.payment, razorpay: order.razorpay };
+            }
+          }
+          if (!intent || !["CAPTURED", "ALLOCATED"].includes(intent.payment.status)) {
+            throw new Error("Payment is not confirmed yet. Booking can continue after payment confirmation.");
+          }
+          setCapturedDirectPayment(intent.payment);
+          fundingReferenceId = intent.payment.id;
+        }
+        result = await createClientShipment(currentDraft._id, pricingHash, skipDpdLabel, {
+          paymentSource: selectedSource,
+          ...(fundingReferenceId ? { fundingReferenceId } : {})
+        });
+        if (selectedSource === "DIRECT_RAZORPAY") {
+          clearShipmentPaymentIdempotencyKey(currentDraft._id, pricingHash);
+          setCapturedDirectPayment(null);
+        }
+      }
       setPriceChange(null);
       setNotice(result.reused ? "Existing shipment label found for this draft." : "Shipment request created.");
       toast.success(result.reused ? "Existing booked shipment opened." : "Shipment booked successfully.");
@@ -1834,6 +1902,30 @@ export default function ClientDpdDraftReview({
                     </div>
                   </div>
                 ) : null}
+                {!operatorSlug && draft?.customerType === "INDIVIDUAL" ? (
+                  <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3">
+                    <p className="text-sm font-semibold text-blue-950">Prepayment required</p>
+                    <p className="mt-1 text-xs leading-5 text-blue-900">Pay the full shipment amount securely through Razorpay before the booking is sent.</p>
+                    {capturedDirectPayment && capturedDirectPayment.pricingHash === costEstimate?.pricingHash && capturedDirectPayment.status === "CAPTURED" ? (
+                      <p className="mt-2 text-xs font-semibold text-emerald-800">Payment confirmed. Complete the booking below.</p>
+                    ) : null}
+                  </div>
+                ) : !operatorSlug && draft?.customerType !== "INDIVIDUAL" ? (
+                  <fieldset className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
+                    <legend className="px-1 text-sm font-semibold text-slate-900">Payment method</legend>
+                    <label className="flex cursor-pointer items-start gap-2.5 py-1.5 text-sm">
+                      <input type="radio" name="client-shipment-payment" value="BUSINESS_WALLET" checked={businessPaymentSource === "BUSINESS_WALLET" && capturedDirectPayment?.pricingHash !== costEstimate?.pricingHash} onChange={() => setBusinessPaymentSource("BUSINESS_WALLET")} disabled={busy || Boolean(capturedDirectPayment && capturedDirectPayment.pricingHash === costEstimate?.pricingHash && ["CAPTURED", "ALLOCATED"].includes(capturedDirectPayment.status))} className="mt-0.5 accent-[#0D1282]" />
+                      <span className="min-w-0 flex-1"><span className="block font-semibold text-slate-900">Use business wallet</span><span className="mt-0.5 block text-xs text-slate-600">Available: {new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format((costEstimate?.funding.availableAdvanceMinor ?? 0) / 100)}</span></span>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-2.5 py-1.5 text-sm">
+                      <input type="radio" name="client-shipment-payment" value="DIRECT_RAZORPAY" checked={businessPaymentSource === "DIRECT_RAZORPAY" || Boolean(capturedDirectPayment && capturedDirectPayment.pricingHash === costEstimate?.pricingHash && ["CAPTURED", "ALLOCATED"].includes(capturedDirectPayment.status))} onChange={() => setBusinessPaymentSource("DIRECT_RAZORPAY")} disabled={busy} className="mt-0.5 accent-[#0D1282]" />
+                      <span><span className="block font-semibold text-slate-900">Pay full amount with Razorpay</span><span className="mt-0.5 block text-xs text-slate-600">Payment is verified before the booking is submitted.</span></span>
+                    </label>
+                    {capturedDirectPayment && capturedDirectPayment.pricingHash === costEstimate?.pricingHash && capturedDirectPayment.status === "CAPTURED" ? (
+                      <p className="mt-2 text-xs font-semibold text-emerald-800">Payment confirmed. Complete the booking below.</p>
+                    ) : null}
+                  </fieldset>
+                ) : null}
                 {isCurrentCountryPaused ? (
                   <div className="mb-3 rounded-xl border border-[#D71313]/20 bg-[#FFF1F1] px-3 py-2 text-xs font-semibold text-[#991B1B]">
                     Bookings for this destination are paused - booking is disabled.
@@ -1855,7 +1947,7 @@ export default function ClientDpdDraftReview({
                       : "inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"}
                   >
                     {!operatorSlug ? <FiTruck aria-hidden="true" className="h-4 w-4" /> : null}
-                    {pendingAction === "BOOKING" ? "Processing..." : operatorSlug ? "Book Shipment" : "Create Shipment"}
+                    {pendingAction === "BOOKING" ? "Processing..." : pendingAction === "PAYMENT" ? "Confirming payment..." : operatorSlug ? "Book Shipment" : !operatorSlug && (draft?.customerType === "INDIVIDUAL" || businessPaymentSource === "DIRECT_RAZORPAY") ? "Pay and Create Shipment" : "Create Shipment"}
                   </button>
                 ) : null}
                 {/* Available as an explicit alternative for destinations where DPD labels apply. */}

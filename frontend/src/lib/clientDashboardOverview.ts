@@ -1,5 +1,3 @@
-import { getClientCreditAccount, type CreditAccount, type CreditPermission } from "@/lib/creditAccounts";
-import { listClientStatements, type CreditStatement } from "@/lib/creditBilling";
 import { type ClientShipmentSummary } from "@/lib/clientDashboard";
 import { listShipmentQuotes } from "@/lib/shipmentQuotes";
 import { listSupportTickets } from "@/lib/supportTickets";
@@ -31,19 +29,9 @@ export type ClientTaskItem = {
   tone: "info" | "warning" | "critical";
 };
 
-export type StatementRollup = {
-  overdue: number;
-  unpaid: number;
-  outstandingMinor: number;
-  currency: string;
-};
-
 export type ClientExtras = {
   quotesToConvert: number;
   ticketsAwaitingReply: number;
-  credit: CreditAccount | null;
-  creditPermissions: CreditPermission[];
-  statements: StatementRollup | null;
   unavailable: string[];
 };
 
@@ -96,37 +84,21 @@ async function safe<T>(label: string, task: () => Promise<T>): Promise<{ value: 
   }
 }
 
-function rollupStatements(statements: CreditStatement[]): StatementRollup {
-  const unpaid = statements.filter((statement) => statement.status !== "PAID" && statement.status !== "VOID");
-  return {
-    overdue: statements.filter((statement) => statement.status === "OVERDUE").length,
-    unpaid: unpaid.length,
-    outstandingMinor: unpaid.reduce((sum, statement) => sum + statement.outstandingAmountMinor, 0),
-    currency: statements[0]?.currency ?? "INR"
-  };
-}
-
 export async function loadClientExtras(input: {
-  businessAccountId: string;
   canViewQuotes: boolean;
 }): Promise<ClientExtras> {
-  const [quotes, tickets, credit, statements] = await Promise.all([
+  const [quotes, tickets] = await Promise.all([
     input.canViewQuotes ? safe("Quotes", () => listShipmentQuotes("client", { status: "QUOTED" })) : null,
-    safe("Support tickets", () => listSupportTickets("client", { status: "WAITING_FOR_CUSTOMER", limit: 1 })),
-    safe("Credit account", () => getClientCreditAccount(input.businessAccountId)),
-    safe("Credit statements", () => listClientStatements(input.businessAccountId))
+    safe("Support tickets", () => listSupportTickets("client", { status: "WAITING_FOR_CUSTOMER", limit: 1 }))
   ]);
 
-  const unavailable = [quotes, tickets, credit, statements]
+  const unavailable = [quotes, tickets]
     .map((result) => result?.failed)
     .filter((label): label is string => Boolean(label));
 
   return {
     quotesToConvert: quotes?.value?.pagination.total ?? 0,
     ticketsAwaitingReply: tickets?.value?.pagination.total ?? 0,
-    credit: credit?.value?.creditAccount ?? null,
-    creditPermissions: credit?.value?.permissions ?? [],
-    statements: statements?.value ? rollupStatements(statements.value.statements) : null,
     unavailable: [...new Set(unavailable)]
   };
 }
@@ -145,28 +117,6 @@ export function buildClientTasks(input: {
       detail: "Fix the flagged details to continue booking",
       count: summary.validationFailed,
       href: "/client/dpd-labels",
-      tone: "critical"
-    });
-  }
-
-  if (extras.credit?.restriction && extras.credit.restriction.level !== "NONE") {
-    tasks.push({
-      id: "credit-restricted",
-      label: "Credit facility restricted",
-      detail: extras.credit.restriction.message || "An overdue balance is limiting new bookings",
-      count: extras.credit.restriction.overdueDays,
-      href: "/client/credit",
-      tone: "critical"
-    });
-  }
-
-  if (extras.statements?.overdue) {
-    tasks.push({
-      id: "statements-overdue",
-      label: "Statements overdue",
-      detail: "Settle the outstanding balance to avoid restrictions",
-      count: extras.statements.overdue,
-      href: "/client/credit/statements",
       tone: "critical"
     });
   }
@@ -190,17 +140,6 @@ export function buildClientTasks(input: {
       count: extras.ticketsAwaitingReply,
       href: "/client/tickets",
       tone: "warning"
-    });
-  }
-
-  if (extras.statements && extras.statements.unpaid - extras.statements.overdue > 0) {
-    tasks.push({
-      id: "statements-unpaid",
-      label: "Statements awaiting payment",
-      detail: "Not yet overdue, but due for settlement",
-      count: extras.statements.unpaid - extras.statements.overdue,
-      href: "/client/credit/statements",
-      tone: "info"
     });
   }
 

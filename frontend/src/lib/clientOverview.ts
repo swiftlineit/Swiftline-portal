@@ -60,9 +60,6 @@ export type ClientOverviewSummary = {
   actionRequired: number;
   openClaims: number;
   openTickets: number;
-  /** Null when this member may not see balances- never a misleading zero. */
-  outstandingBalanceMinor: number | null;
-  availableCreditMinor: number | null;
 };
 
 export type ClientOverview = {
@@ -117,16 +114,6 @@ export async function listClientExceptions(input: { businessAccountId: string; b
 export async function listClientActions(input: { businessAccountId: string; branchId?: string }) {
   const response = await fetchWithAuth(apiUrl(`/api/v1/client/actions?${scopeQuery(input)}`));
   return parseApiResponse<{ success: true; actions: ClientAction[] }>(response);
-}
-
-/** Paise to rupees, the way every other money figure in the portal is shown. */
-export function formatMinor(amountMinor: number | null) {
-  if (amountMinor === null) return "-";
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0
-  }).format(amountMinor / 100);
 }
 
 export const severityStyles: Record<AttentionSeverity, { chip: string; bar: string }> = {

@@ -7,7 +7,6 @@ import {
   FiDownload,
   FiEye,
   FiFileText,
-  FiFilter,
   FiFolder,
   FiSearch,
   FiX
@@ -66,6 +65,10 @@ function readableStatus(value: string) {
 function awbLabel(item: ClientDocumentCentreItem) {
   if (!item.awb) return "-";
   return item.awbCount > 1 ? `${item.awb} +${item.awbCount - 1}` : item.awb;
+}
+
+function isNewCashReceipt(item: ClientDocumentCentreItem) {
+  return item.documentType === "CASH_RECEIPT" && item.isNew;
 }
 
 export default function ClientDocumentsPage() {
@@ -159,6 +162,11 @@ export default function ClientDocumentsPage() {
     setBusyId(key);
     try {
       await accessClientDocument(item, view);
+      if (isNewCashReceipt(item)) {
+        setItems((current) => current.map((currentItem) => currentItem.id === item.id
+          ? { ...currentItem, isNew: false }
+          : currentItem));
+      }
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : "The document could not be opened.");
     } finally {
@@ -394,13 +402,18 @@ export default function ClientDocumentsPage() {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {items.map((item) => (
-                        <tr key={item.id} className="hover:bg-slate-50/70">
+                        <tr key={item.id} data-document-id={item.id} className={isNewCashReceipt(item)
+                          ? "bg-amber-50/70 hover:bg-amber-100/70"
+                          : "hover:bg-slate-50/70"}>
                           <td className="px-5 py-4">
                             <div className="flex min-w-0 items-start gap-3">
                               <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-[#0D1282]"><FiFileText /></span>
                               <div className="min-w-0">
                                 <p className="truncate font-semibold text-slate-950">{item.title}</p>
-                                <p className="mt-1 truncate text-xs text-slate-500">{item.documentTypeLabel} · {item.reference}</p>
+                                <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-slate-500">
+                                  <span className="min-w-0 truncate">{item.documentTypeLabel} · {item.reference}</span>
+                                  {isNewCashReceipt(item) ? <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">New</span> : null}
+                                </p>
                               </div>
                             </div>
                           </td>
@@ -419,12 +432,17 @@ export default function ClientDocumentsPage() {
 
                 <div className="divide-y divide-slate-100 lg:hidden">
                   {items.map((item) => (
-                    <article key={item.id} className="p-4 sm:p-5">
+                    <article key={item.id} data-document-id={item.id} className={isNewCashReceipt(item)
+                      ? "border-l-4 border-amber-400 bg-amber-50/70 p-4 sm:p-5"
+                      : "p-4 sm:p-5"}>
                       <div className="flex items-start gap-3">
                         <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-[#0D1282]"><FiFileText /></span>
                         <div className="min-w-0 flex-1">
                           <h3 className="truncate font-semibold text-slate-950">{item.title}</h3>
-                          <p className="mt-1 text-xs text-slate-500">{item.documentTypeLabel} · {item.reference}</p>
+                          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-slate-500">
+                            <span className="min-w-0 truncate">{item.documentTypeLabel} · {item.reference}</span>
+                            {isNewCashReceipt(item) ? <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">New cash receipt</span> : null}
+                          </p>
                         </div>
                         <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{item.format}</span>
                       </div>

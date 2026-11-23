@@ -21,7 +21,8 @@ export function ReviewStep({
   validationErrors,
   onConfirmationChange,
   onEditStep,
-  operatorName
+  operatorName,
+  allowCreditRequest = false
 }: {
   formData: BusinessAccountFormData;
   documentFields: { type: DocumentType; required: boolean; helper: string }[];
@@ -32,6 +33,7 @@ export function ReviewStep({
   onConfirmationChange: (checked: boolean) => void;
   onEditStep: (step: number) => void;
   operatorName?: string;
+  allowCreditRequest?: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -77,7 +79,7 @@ export function ReviewStep({
               formData.company.billingAddress?.country
             ].filter(Boolean).join(", ")],
           ["Industry", formData.company.industry],
-          ["Credit Requested", formData.company.requestedCreditLimit ? `${formData.company.requestedCreditCurrency} ${formData.company.requestedCreditLimit}` : "Not requested"]
+          ...(allowCreditRequest ? [["Credit Requested", formData.company.requestedCreditLimit ? `${formData.company.requestedCreditCurrency} ${formData.company.requestedCreditLimit}` : "Not requested"]] : [])
         ]}
         onEdit={() => onEditStep(1)}
       />

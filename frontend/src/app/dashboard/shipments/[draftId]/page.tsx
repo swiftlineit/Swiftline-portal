@@ -8,6 +8,7 @@ import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
 import ShipmentAmendmentPanel from "@/components/shipments/ShipmentAmendmentPanel";
 import ShipmentCancellationPanel from "@/components/shipments/ShipmentCancellationPanel";
+import CashReceiptCard from "@/components/shipments/CashReceiptCard";
 import ShipmentChargeVerificationPanel from "@/components/shipments/ShipmentChargeVerificationPanel";
 import ShipmentInvoiceHistory from "@/components/shipments/ShipmentInvoiceHistory";
 import CustomsInvoiceCard from "@/components/shipments/CustomsInvoiceCard";
@@ -20,6 +21,8 @@ import { ShipmentLabelsPanel } from "@/components/shipments/ShipmentLabelsPanel"
 import GatewayIataInput, { isValidGatewayIata } from "@/components/shipments/GatewayIataInput";
 import {
   DpdShipmentHistoryItem,
+  ShipmentAmendment,
+  ShipmentAmendmentPreview,
   rebookShipmentDraft,
   ShipmentAmendmentInput,
   ShipmentHoldReason,
@@ -56,6 +59,16 @@ import {
 } from "@/lib/shipmentCancellations";
 import { SHIPMENT_VIEW_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
+import {
+  downloadStaffCashReceiptDraft,
+  createDirectShipmentAmendmentPayment,
+  fundShipmentAmendmentFromWallet,
+  getStaffCashReceiptDraft,
+  getPendingShipmentAmendment,
+  openShipmentRazorpayCheckout,
+  verifyDirectShipmentAmendmentPayment,
+  type CashReceiptDraft
+} from "@/lib/shipmentPayments";
 
 function formatDateTime(value?: string | null) {
   return formatDashboardDateTime(value);
@@ -214,10 +227,16 @@ function hasReachedWarehouse(history: DpdShipmentHistoryItem | null) {
 
 export default function AdminShipmentDetailsPage() {
   const params = useParams<{ draftId: string }>();
+  const loadPendingAmendment = useCallback(
+    () => getPendingShipmentAmendment({ audience: "staff", shipmentDraftId: params.draftId }),
+    [params.draftId]
+  );
   const router = useRouter();
   const { user, loading } = useAdminUser(SHIPMENT_VIEW_AREA);
   const [draft, setDraft] = useState<ShipmentDraft | null>(null);
   const [history, setHistory] = useState<DpdShipmentHistoryItem | null>(null);
+  const [cashReceipt, setCashReceipt] = useState<CashReceiptDraft | null>(null);
+  const [cashReceiptDownloading, setCashReceiptDownloading] = useState(false);
   const [cancellation, setCancellation] = useState<ShipmentCancellation | null>(null);
   const [loadError, setLoadError] = useState("");
   const [shipmentLoading, setShipmentLoading] = useState(true);
@@ -311,21 +330,35 @@ export default function AdminShipmentDetailsPage() {
     setLoadError("");
 
     try {
-      const [draftData, shipmentData, cancellationData] = await Promise.all([
+      const [draftData, shipmentData, cancellationData, cashReceiptData] = await Promise.all([
         getShipmentDraft(params.draftId),
         getAdminShipmentDetails(params.draftId),
-        getAdminShipmentCancellation(params.draftId)
+        getAdminShipmentCancellation(params.draftId),
+        getStaffCashReceiptDraft(params.draftId).catch(() => ({ receipt: null, defaults: { customerName: "", receiptDate: "" } }))
       ]);
 
       setDraft(draftData.shipmentDraft);
       setHistory(shipmentData.shipment);
       setCancellation(cancellationData.cancellation);
+      setCashReceipt(cashReceiptData.receipt);
     } catch (caughtError) {
       setLoadError(caughtError instanceof Error ? caughtError.message : "Unable to load shipment.");
     } finally {
       setShipmentLoading(false);
     }
   }, [params.draftId]);
+
+  async function handleCashReceiptDownload() {
+    if (!draft || !cashReceipt) return;
+    setCashReceiptDownloading(true);
+    try {
+      await downloadStaffCashReceiptDraft(draft._id);
+    } catch (caughtError) {
+      toast.error(caughtError instanceof Error ? caughtError.message : "Cash receipt could not be downloaded.");
+    } finally {
+      setCashReceiptDownloading(false);
+    }
+  }
 
   useEffect(() => {
     if (!user || !params.draftId) return;
@@ -485,15 +518,15 @@ export default function AdminShipmentDetailsPage() {
     }
   }
 
-  async function handleAmendment(input: ShipmentAmendmentInput) {
+  async function handleAmendment(input: ShipmentAmendmentInput): Promise<ShipmentAmendment | void> {
     if (!draft) return;
 
     setAmendmentBusy(true);
     setActionFeedback(null);
 
     try {
-      await createShipmentAmendment(draft._id, input);
-      await loadShipment();
+      const result = await createShipmentAmendment(draft._id, input);
+      return result.amendment;
     } catch (caughtError) {
       setActionFeedback({
         message: caughtError instanceof Error ? caughtError.message : "Unable to apply amendment.",
@@ -513,6 +546,44 @@ export default function AdminShipmentDetailsPage() {
       pricingImpact: result.pricingImpact,
       fundingPreview: result.fundingPreview
     };
+  }
+
+  async function handleSecureAmendmentPayment(amendment: ShipmentAmendment, preview: ShipmentAmendmentPreview) {
+    if (!draft) throw new Error("Shipment is not available.");
+    setAmendmentBusy(true);
+    setActionFeedback(null);
+    try {
+      if (preview.fundingPreview.billingMode === "PREPAID") {
+        await fundShipmentAmendmentFromWallet({ audience: "staff", amendmentId: amendment.id });
+      } else {
+        const order = await createDirectShipmentAmendmentPayment({ audience: "staff", amendmentId: amendment.id });
+        let payment = order.payment;
+        if (!["CAPTURED", "ALLOCATED"].includes(payment.status)) {
+          if (!payment.razorpayOrderId) throw new Error("The amendment payment order is still processing. Retry in a moment.");
+          const checkout = await openShipmentRazorpayCheckout({
+            razorpay: order.razorpay,
+            payment,
+            prefill: {
+              name: draft.consigneeEnteredAddress.contactName,
+              email: draft.consigneeEnteredAddress.email,
+              contact: draft.consigneeEnteredAddress.mobileNumber
+            }
+          });
+          const verified = await verifyDirectShipmentAmendmentPayment({
+            audience: "staff",
+            amendmentId: amendment.id,
+            ...checkout
+          });
+          payment = verified.payment;
+        }
+        if (!["CAPTURED", "ALLOCATED"].includes(payment.status)) {
+          throw new Error("Payment confirmation is pending. Retry after Razorpay confirms the amendment payment.");
+        }
+      }
+      await loadShipment();
+    } finally {
+      setAmendmentBusy(false);
+    }
   }
 
   async function handleCancellation(reason: string) {
@@ -1043,7 +1114,9 @@ export default function AdminShipmentDetailsPage() {
                   <ConfirmationValue label="Base Charge" value={formatMoneyMinor(history.bookingConfirmation.baseAmountMinor)} />
                   <ConfirmationValue label="GST" value={history.bookingConfirmation.gstAmountMinor === 0 ? "-" : formatMoneyMinor(history.bookingConfirmation.gstAmountMinor)} />
                   <ConfirmationValue label="Total" value={formatMoneyMinor(history.bookingConfirmation.totalAmountMinor)} />
-                  <ConfirmationValue label="Advance / Credit" value={`${formatMoneyMinor(history.bookingConfirmation.advanceAmountMinor)} / ${formatMoneyMinor(history.bookingConfirmation.creditAmountMinor)}`} />
+                  {history.bookingConfirmation.creditAmountMinor === 0 ? (
+                    <ConfirmationValue label="Paid before booking" value={formatMoneyMinor(history.bookingConfirmation.totalAmountMinor)} />
+                  ) : null}
                 </dl>
               </section>
             ) : null}
@@ -1062,6 +1135,10 @@ export default function AdminShipmentDetailsPage() {
                 <div className="mt-4"><CustomsInvoiceCard draftId={draft._id} audience="admin" /></div>
                 <ShipmentManifestPanel draftId={draft._id} audience="admin" />
               </>
+            ) : null}
+
+            {cashReceipt ? (
+              <CashReceiptCard receipt={cashReceipt} downloading={cashReceiptDownloading} onDownload={() => void handleCashReceiptDownload()} />
             ) : null}
 
             <ShipmentCancellationPanel
@@ -1104,8 +1181,11 @@ export default function AdminShipmentDetailsPage() {
                   : "Shipment must be booked before amendments can be applied."
               }
               busy={amendmentBusy}
+                  prepaidPaymentRequired
               onPreview={handleAmendmentPreview}
               onSubmit={handleAmendment}
+                  onSecurePayment={handleSecureAmendmentPayment}
+              onLoadPendingAmendment={loadPendingAmendment}
             />
 
           {history?.carrierTrackingReviews?.length ? (

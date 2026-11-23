@@ -9,7 +9,6 @@ import {
 } from "@/components/client/ClientDashboardShell";
 import ClientAccessBlocked from "@/components/client/dashboard/ClientAccessBlocked";
 import ClientBookingCapacityNotice from "@/components/client/dashboard/ClientBookingCapacityNotice";
-import CreditPaymentStatusBanner from "@/components/credit/CreditPaymentStatusBanner";
 import ClientDashboardHeader from "@/components/client/dashboard/ClientDashboardHeader";
 import ClientQuickAccess from "@/components/client/dashboard/ClientQuickAccess";
 import ClientRateCardNotice from "@/components/client/dashboard/ClientRateCardNotice";
@@ -65,9 +64,6 @@ function getShipmentDashboard(account: ClientDashboardAccount | null) {
 const emptyExtras: ClientExtras = {
   quotesToConvert: 0,
   ticketsAwaitingReply: 0,
-  credit: null,
-  creditPermissions: [],
-  statements: null,
   unavailable: []
 };
 
@@ -177,7 +173,6 @@ export default function ClientDashboardPage() {
         ?? null;
       const nextExtras = nextSelectedAccount && nextSelectedAccount.dashboardAccess.state === "READY"
         ? await loadClientExtras({
-          businessAccountId: nextSelectedAccount.account.id,
           canViewQuotes: hasQuoteAccess(nextSelectedAccount)
         })
         : emptyExtras;
@@ -244,7 +239,6 @@ export default function ClientDashboardPage() {
     try {
       if (nextAccount && nextAccount.dashboardAccess.state === "READY") {
         setExtras(await loadClientExtras({
-          businessAccountId: accountId,
           canViewQuotes: hasQuoteAccess(nextAccount)
         }));
       } else {
@@ -316,13 +310,7 @@ export default function ClientDashboardPage() {
           <>
             <ClientRateCardNotice account={selectedAccount} />
 
-            <CreditPaymentStatusBanner
-              account={extras.credit}
-              businessAccountId={selectedAccountId}
-            />
             <ClientBookingCapacityNotice
-              credit={extras.credit}
-              permissions={extras.creditPermissions}
               wallet={selectedWallet}
             />
 
@@ -344,7 +332,6 @@ export default function ClientDashboardPage() {
               <>
                 <ClientSummaryCards
                   summary={overview.summary}
-                  canViewFinancials={overview.summary.availableCreditMinor !== null}
                 />
                 <NeedsAttention items={overview.needsAttention} />
               </>

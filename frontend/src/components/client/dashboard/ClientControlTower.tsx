@@ -10,7 +10,6 @@ import {
   FiTruck
 } from "react-icons/fi";
 import {
-  formatMinor,
   severityStyles,
   type AttentionItem,
   type ClientOverviewSummary
@@ -67,12 +66,8 @@ function StatCard({
   );
 }
 
-export function ClientSummaryCards({
-  summary,
-  canViewFinancials
-}: {
+export function ClientSummaryCards({ summary }: {
   summary: ClientOverviewSummary;
-  canViewFinancials: boolean;
 }) {
   return (
     <section aria-label="Shipment summary" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
@@ -111,21 +106,6 @@ export function ClientSummaryCards({
       />
       <StatCard label="Open Claims" value={summary.openClaims} href="/client/claims" />
       <StatCard label="Open Tickets" value={summary.openTickets} href="/client/tickets" />
-      {canViewFinancials ? (
-        <>
-          <StatCard
-            label="Outstanding"
-            value={formatMinor(summary.outstandingBalanceMinor)}
-            tone={summary.outstandingBalanceMinor ? "warn" : "neutral"}
-            href="/client/credit"
-          />
-          <StatCard
-            label="Available Credit"
-            value={formatMinor(summary.availableCreditMinor)}
-            href="/client/credit"
-          />
-        </>
-      ) : null}
     </section>
   );
 }
@@ -195,7 +175,7 @@ export function ControlTowerSkeleton() {
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-        {Array.from({ length: 12 }, (_, index) => (
+        {Array.from({ length: 10 }, (_, index) => (
           <div key={index} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
             <div className="h-7 w-14 animate-pulse rounded bg-slate-100" />
             <div className="mt-2 h-3 w-20 animate-pulse rounded bg-slate-100" />

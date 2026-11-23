@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { FiChevronDown, FiRefreshCw, FiX } from "react-icons/fi";
+import { FiChevronDown, FiX } from "react-icons/fi";
 import { DashboardLoading } from "@/components/DashboardShell";
 import CancellationReview from "@/components/shipments/CancellationReview";
 import DateRangeFilter from "@/components/ui/DateRangeFilter";
@@ -162,7 +162,7 @@ function CancellationModal({ cancellation, onClose, onChanged }: {
         <div><p className="text-xs font-semibold uppercase text-slate-500">Shipment Cancellation</p><h2 className="mt-1 text-xl font-semibold text-slate-950">{cancellation.shipmentReference || "AWB Pending"}</h2><p className="mt-1 text-sm text-slate-500">{cancellation.consignee}</p></div>
         <button type="button" onClick={onClose} aria-label="Close" className="flex h-9 w-9 items-center justify-center border border-slate-300 text-slate-600"><FiX /></button>
       </div>
-      <CancellationReview cancellation={cancellation} onChanged={onChanged} />
+      <CancellationReview key={cancellation.id} cancellation={cancellation} onChanged={onChanged} />
     </div>
   </div>;
 }

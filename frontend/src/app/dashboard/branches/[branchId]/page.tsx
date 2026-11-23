@@ -46,10 +46,6 @@ import {
   updateBusinessAccountOperationalAction,
   updateBusinessAccountStatus,
 } from "@/lib/businessAccounts";
-import {
-  CreditAccount,
-  listAdminCreditAccounts,
-} from "@/lib/creditAccounts";
 import { formatDashboardDateTime } from "@/lib/dateFormat";
 import { listShipments, type ShipmentListItem } from "@/lib/shipmentsList";
 import {
@@ -166,12 +162,6 @@ export default function BranchDetailPage() {
   const [assigningAccount, setAssigningAccount] =
     useState<BusinessAccount | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
-  // Credit facilities keyed by business account _id, so the linked-accounts table
-  // can show available credit and outstanding alongside each account.
-  const [creditByBusinessId, setCreditByBusinessId] = useState<
-    Map<string, CreditAccount>
-  >(new Map());
-
   useEffect(() => {
     if (!user || !params.branchId) return;
 
@@ -210,27 +200,6 @@ export default function BranchDetailPage() {
     }
 
     void loadBranchForRoute();
-    // Supporting detail for the table, so a failure leaves the credit columns
-    // blank rather than breaking the branch page.
-    if (role === "admin" || role === "operations") {
-      void listAdminCreditAccounts()
-        .then((data) => {
-          if (active) {
-            setCreditByBusinessId(
-              new Map(
-                data.creditAccounts.map((account) => [
-                  account.businessAccountId,
-                  account,
-                ]),
-              ),
-            );
-          }
-        })
-        .catch(() => {
-          if (active) setCreditByBusinessId(new Map());
-        });
-    }
-
     return () => {
       active = false;
     };
@@ -367,7 +336,7 @@ export default function BranchDetailPage() {
       await refreshAccount(account.accountId, () =>
         updateBusinessAccountOperationalAction(account.accountId, "ledger_viewed"),
       );
-      router.push(`/dashboard/credit-accounts/${account._id}#credit-ledger`);
+      router.push(`/dashboard/business-accounts/${account.accountId}#ledger`);
       return;
     }
 
@@ -526,7 +495,6 @@ export default function BranchDetailPage() {
                   <BusinessAccountsTable
                     accounts={linkedAccounts}
                     updatingAccountId={updatingAction}
-                    creditByBusinessId={creditByBusinessId}
                     onAccountMenuChange={handleAccountMenuChange}
                   />
                 </section>

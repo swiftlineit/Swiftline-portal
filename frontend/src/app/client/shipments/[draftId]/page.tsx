@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { FiCheckCircle, FiClock, FiFileText, FiMapPin, FiPackage, FiTruck } from "react-icons/fi";
 import { toast } from "react-toastify";
 import {
@@ -20,6 +20,7 @@ import ShipmentKycDocumentsPanel, { collectShipmentKycDocuments } from "@/compon
 import ShipmentSupportingDocuments from "@/components/shipments/ShipmentSupportingDocuments";
 import RaiseClaimButton from "@/components/claims/RaiseClaimButton";
 import ClientPodPanel from "@/components/pods/ClientPodPanel";
+import CashReceiptCard from "@/components/shipments/CashReceiptCard";
 import { ScheduleChip } from "@/components/shipments/ShipmentJourney";
 import { apiUrl } from "@/lib/api";
 import { getAccessToken, logout, refreshAccessToken } from "@/lib/auth";
@@ -34,7 +35,18 @@ import {
 } from "@/lib/clientDashboard";
 import { formatDashboardDate, formatDashboardDateTime } from "@/lib/dateFormat";
 import { formatCsbType } from "@/lib/csbType";
-import { ShipmentAmendmentInput } from "@/lib/dpdLabels";
+import { ShipmentAmendment, ShipmentAmendmentInput, ShipmentAmendmentPreview } from "@/lib/dpdLabels";
+import {
+  createDirectShipmentAmendmentPayment,
+  downloadClientCashReceipt,
+  getClientShipmentCashReceipt,
+  fundShipmentAmendmentFromWallet,
+  getPendingShipmentAmendment,
+  openShipmentRazorpayCheckout,
+  verifyDirectShipmentAmendmentPayment,
+  type CashReceiptDraft
+} from "@/lib/shipmentPayments";
+import { cashReceiptReadEvent } from "@/lib/documentCentre";
 import {
   getClientShipmentCancellation,
   requestClientShipmentCancellation,
@@ -203,9 +215,15 @@ function hasBeenCollected(shipment: ClientShipmentDetails | null) {
 
 export default function ClientShipmentDetailsPage() {
   const params = useParams<{ draftId: string }>();
+  const loadPendingAmendment = useCallback(
+    () => getPendingShipmentAmendment({ audience: "client", shipmentDraftId: params.draftId }),
+    [params.draftId]
+  );
   const router = useRouter();
   const [user, setUser] = useState<ClientShellUser | null>(null);
   const [shipment, setShipment] = useState<ClientShipmentDetails | null>(null);
+  const [cashReceipt, setCashReceipt] = useState<CashReceiptDraft | null>(null);
+  const [cashReceiptDownloading, setCashReceiptDownloading] = useState(false);
   const [cancellation, setCancellation] = useState<ShipmentCancellation | null>(null);
   const [cancellationCanRequest, setCancellationCanRequest] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -246,14 +264,16 @@ export default function ClientShipmentDetailsPage() {
           return;
         }
 
-        const [data, cancellationData] = await Promise.all([
+        const [data, cancellationData, cashReceiptData] = await Promise.all([
           getClientShipmentDetails(params.draftId),
-          getClientShipmentCancellation(params.draftId)
+          getClientShipmentCancellation(params.draftId),
+          getClientShipmentCashReceipt(params.draftId).catch(() => ({ receipt: null }))
         ]);
         if (!mounted) return;
 
         setUser(currentUser);
         setShipment(data.shipment);
+        setCashReceipt(cashReceiptData.receipt);
         setCancellation(cancellationData.cancellation);
         setCancellationCanRequest(cancellationData.canRequest);
       } catch (caughtError) {
@@ -276,9 +296,8 @@ export default function ClientShipmentDetailsPage() {
     setError("");
 
     try {
-      await createClientShipmentAmendment(params.draftId, input);
-      const data = await getClientShipmentDetails(params.draftId);
-      setShipment(data.shipment);
+      const result = await createClientShipmentAmendment(params.draftId, input);
+      return result.amendment;
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to apply amendment.");
       throw caughtError;
@@ -293,6 +312,62 @@ export default function ClientShipmentDetailsPage() {
       pricingImpact: result.pricingImpact,
       fundingPreview: result.fundingPreview
     };
+  }
+
+  async function handleCashReceiptDownload() {
+    if (!cashReceipt) return;
+    setCashReceiptDownloading(true);
+    try {
+      await downloadClientCashReceipt({
+        receiptId: cashReceipt.id,
+        businessAccountId: cashReceipt.businessAccountId,
+        receiptNumber: cashReceipt.receiptNumber
+      });
+      window.dispatchEvent(new Event(cashReceiptReadEvent));
+    } catch (caughtError) {
+      toast.error(caughtError instanceof Error ? caughtError.message : "Cash receipt could not be downloaded.");
+    } finally {
+      setCashReceiptDownloading(false);
+    }
+  }
+
+  async function handleSecureAmendmentPayment(amendment: ShipmentAmendment, preview: ShipmentAmendmentPreview) {
+    setAmendmentBusy(true);
+    setError("");
+    try {
+      if (preview.fundingPreview.billingMode === "PREPAID") {
+        await fundShipmentAmendmentFromWallet({ audience: "client", amendmentId: amendment.id });
+      } else {
+        const order = await createDirectShipmentAmendmentPayment({ audience: "client", amendmentId: amendment.id });
+        let payment = order.payment;
+        if (!["CAPTURED", "ALLOCATED"].includes(payment.status)) {
+          if (!payment.razorpayOrderId) throw new Error("The amendment payment order is still processing. Retry in a moment.");
+          const checkout = await openShipmentRazorpayCheckout({
+            razorpay: order.razorpay,
+            payment,
+            prefill: {
+              name: user?.name,
+              email: user?.email,
+              contact: shipment?.shipmentDraft.consignee.mobileNumber
+            }
+          });
+          const verified = await verifyDirectShipmentAmendmentPayment({
+            audience: "client",
+            amendmentId: amendment.id,
+            ...checkout
+          });
+          payment = verified.payment;
+        }
+        if (!["CAPTURED", "ALLOCATED"].includes(payment.status)) {
+          throw new Error("Payment confirmation is pending. Retry after Razorpay confirms the amendment payment.");
+        }
+      }
+
+      const data = await getClientShipmentDetails(params.draftId);
+      setShipment(data.shipment);
+    } finally {
+      setAmendmentBusy(false);
+    }
   }
 
   async function handleCancellation(reason: string) {
@@ -422,7 +497,9 @@ export default function ClientShipmentDetailsPage() {
                   <ConfirmationValue label="Base Charge" value={formatMoneyMinor(shipment.bookingConfirmation.baseAmountMinor)} />
                   <ConfirmationValue label="GST" value={shipment.bookingConfirmation.gstAmountMinor === 0 ? "-" : formatMoneyMinor(shipment.bookingConfirmation.gstAmountMinor)} />
                   <ConfirmationValue label="Total" value={formatMoneyMinor(shipment.bookingConfirmation.totalAmountMinor)} emphasis />
-                  <ConfirmationValue label="Advance / Credit" value={`${formatMoneyMinor(shipment.bookingConfirmation.advanceAmountMinor)} / ${formatMoneyMinor(shipment.bookingConfirmation.creditAmountMinor)}`} />
+                  {shipment.bookingConfirmation.creditAmountMinor === 0 ? (
+                    <ConfirmationValue label="Paid before booking" value={formatMoneyMinor(shipment.bookingConfirmation.totalAmountMinor)} />
+                  ) : null}
                 </dl>
               </section>
             ) : null}
@@ -441,6 +518,10 @@ export default function ClientShipmentDetailsPage() {
                 <div className="mt-4"><CustomsInvoiceCard draftId={params.draftId} audience="client" /></div>
                 <ShipmentManifestPanel draftId={params.draftId} audience="client" />
               </>
+            ) : null}
+
+            {cashReceipt ? (
+              <CashReceiptCard receipt={cashReceipt} downloading={cashReceiptDownloading} onDownload={() => void handleCashReceiptDownload()} />
             ) : null}
 
             <div id="shipment-cancellation">
@@ -484,8 +565,12 @@ export default function ClientShipmentDetailsPage() {
                   : "Shipment must be booked before amendments can be applied."
               }
               busy={amendmentBusy}
+              prepaidPaymentRequired
+              walletTopUpHref="/client/payments#add-money"
               onPreview={handleAmendmentPreview}
               onSubmit={handleAmendment}
+              onSecurePayment={handleSecureAmendmentPayment}
+              onLoadPendingAmendment={loadPendingAmendment}
             />
             </div>
 

@@ -77,6 +77,9 @@ export const RATE_CARD_AREA: readonly PortalRole[] = ["finance", "operations"];
  */
 export const CREDIT_VIEW_AREA: readonly PortalRole[] = ["finance", "operations"];
 
+/** Read-only business wallet balances and ledger activity. */
+export const PREPAID_LEDGER_AREA: readonly PortalRole[] = ["finance", "operations"];
+
 /**
  * Counter sales: what individual (walk-in) customers paid and were refunded.
  * Operations books and settles them; finance reconciles them, since they never

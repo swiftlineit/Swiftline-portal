@@ -11,6 +11,8 @@ import {
 import { BiEdit } from "react-icons/bi";
 import { DashboardLoading } from "@/components/DashboardShell";
 import { BusinessAccountAccessPanel } from "@/components/business-accounts/BusinessAccountAccessPanel";
+import BusinessAccountLedgerPanel from "@/components/business-accounts/BusinessAccountLedgerPanel";
+import BusinessAccountVolumetricDiscountPanel from "@/components/business-accounts/BusinessAccountVolumetricDiscountPanel";
 import RateCardWorkspace from "@/components/rate-cards/RateCardWorkspace";
 import { requestLeave } from "@/lib/useUnsavedChanges";
 import {
@@ -193,9 +195,9 @@ function normalizeKycCheckStatus(status?: string): BusinessKycCheckStatus {
   return "not_started";
 }
 
-type DetailTab = "overview" | "documents" | "kyc" | "access" | "rate-card";
+type DetailTab = "overview" | "documents" | "kyc" | "access" | "rate-card" | "ledger";
 
-const detailTabs: DetailTab[] = ["overview", "documents", "kyc", "access", "rate-card"];
+const detailTabs: DetailTab[] = ["overview", "documents", "kyc", "access", "rate-card", "ledger"];
 
 // Notification links address a tab directly (…/business-accounts/SL-1#kyc), so
 // the fragment picks the starting tab instead of always opening on Overview.
@@ -386,6 +388,7 @@ export default function BusinessAccountDetailsPage() {
     { key: "kyc", label: "KYC Review" },
     { key: "access", label: "Users & Access" },
     { key: "rate-card", label: "Rate Card" },
+    { key: "ledger", label: "Ledger" },
   ];
 
   const companyName = account.company?.companyName?.trim();
@@ -436,7 +439,7 @@ export default function BusinessAccountDetailsPage() {
               <button
                 key={tab.key}
                 type="button"
-                onClick={() => { void requestLeave().then((canLeave) => { if (canLeave) setActiveTab(tab.key); }); }}
+                onClick={() => { void requestLeave().then((canLeave) => { if (canLeave) { setActiveTab(tab.key); window.history.replaceState(null, "", `#${tab.key}`); } }); }}
                 className={`relative inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
                   isActive
                     ? "bg-[#0D1282]/80 text-white shadow-sm shadow-[#0D1282]/25"
@@ -563,12 +566,6 @@ export default function BusinessAccountDetailsPage() {
                 ["Industry", account.company.industry],
                 ["Website", account.company.website || "Not provided"],
                 ["Monthly Volume", account.company.monthlyShipmentVolume],
-                [
-                  "Requested Credit",
-                  account.company.requestedCreditLimit.amount === null
-                    ? "Not requested"
-                    : `${account.company.requestedCreditLimit.currency} ${account.company.requestedCreditLimit.amount}`,
-                ],
               ]}
             />
 
@@ -650,9 +647,21 @@ export default function BusinessAccountDetailsPage() {
 
         {activeTab === "rate-card" ? (
           <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
-            <RateCardWorkspace businessAccountId={account._id} cardName={companyName || account.accountId} />
+            <RateCardWorkspace
+              businessAccountId={account._id}
+              cardName={companyName || account.accountId}
+              volumetricDiscountPanel={(
+                <BusinessAccountVolumetricDiscountPanel
+                  account={account}
+                  canEdit={user.role === "admin" || user.role === "operations"}
+                  onUpdated={setAccount}
+                />
+              )}
+            />
           </div>
         ) : null}
+
+        {activeTab === "ledger" ? <BusinessAccountLedgerPanel businessAccountId={account._id} /> : null}
 
         {activeTab === "access" ? (
           <div className="grid gap-5 lg:grid-cols-2">

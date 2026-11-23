@@ -38,6 +38,7 @@ export type ShipmentEstimateParcel = {
   sequence: number;
   actualWeightKg: number;
   volumetricWeightKg: number;
+  volumetricDiscountKg?: number;
   chargeableWeightKg: number;
   rateCardId: string | null;
   rateFromKg: number | null;
@@ -105,6 +106,7 @@ export type ShipmentPricing = {
    * is uncapped until then because there is no ceiling to enforce yet.
    */
   routeMaxBoxKg?: number | null;
+  volumetricDiscountPercent?: number;
   gstRate: number;
   taxTreatment?: "GST_APPLICABLE" | "NO_GST";
   noGstEligible?: boolean;
@@ -124,7 +126,7 @@ export type ShipmentPricing = {
 };
 
 export type ShipmentFundingPreview = {
-  mode: "BUSINESS_ACCOUNT" | "COUNTER";
+  mode: "BUSINESS_ACCOUNT" | "BUSINESS_WALLET" | "PREPAID" | "COUNTER";
   totalPayableMinor: number;
   advanceDeductionMinor: number;
   creditUsageMinor: number;

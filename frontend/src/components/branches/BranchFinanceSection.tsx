@@ -7,7 +7,6 @@ import {
   getBranchFinanceSummary,
   type BranchFinanceSummary
 } from "@/lib/branchReporting";
-import { formatCreditMoney } from "@/lib/creditAccounts";
 import { formatCompactMoney, titleCase } from "@/lib/dashboardOverview";
 import { formatDashboardDateTime } from "@/lib/dateFormat";
 
@@ -59,7 +58,7 @@ function FinanceTile({
   const display = amountMinor === undefined
     ? value ?? "-"
     : formatCompactMoney(amountMinor, currency);
-  const exact = amountMinor === undefined ? undefined : formatCreditMoney(amountMinor, currency);
+  const exact = amountMinor === undefined ? undefined : formatMoneyMinor(amountMinor, currency);
 
   return (
     <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -67,6 +66,15 @@ function FinanceTile({
       <p className={`mt-2 truncate text-lg font-bold ${tone}`} title={exact}>{display}</p>
     </div>
   );
+}
+
+function formatMoneyMinor(amountMinor: number, currency = "INR") {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amountMinor / 100);
 }
 
 export default function BranchFinanceSection({ branchId }: { branchId: string }) {
@@ -178,16 +186,18 @@ export default function BranchFinanceSection({ branchId }: { branchId: string })
           <section className="space-y-3">
             <div>
               <h2 className="text-base font-bold text-[#0D1282]">Business Accounts</h2>
-              <p className="mt-1 text-sm text-slate-500">Period billing and the branch’s current credit exposure.</p>
+              <p className="mt-1 text-sm text-slate-500">Invoices are historical shipment documents. New bookings use prepaid wallet funds.</p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               <FinanceTile label="Business Shipments" value={summary.business.shipments.toLocaleString("en-IN")} />
               <FinanceTile label="Amount Invoiced" amountMinor={summary.business.invoicedMinor} currency={currency} />
-              <FinanceTile label="Current Outstanding" amountMinor={summary.business.outstandingMinor} currency={currency} />
-              <FinanceTile label="Credit Used" amountMinor={summary.business.usedCreditMinor} currency={currency} />
-              <FinanceTile label="Customer Advances" amountMinor={summary.business.advancesMinor} currency={currency} />
-              <FinanceTile label="Credit Utilization" value={`${summary.business.utilizationPercent}%`} />
+              <FinanceTile label="Wallet Balance" amountMinor={summary.business.walletBalanceMinor} currency={currency} />
+              <FinanceTile label="Reserved for Bookings" amountMinor={summary.business.reservedBalanceMinor} currency={currency} />
+              <FinanceTile label="Available Wallet Funds" amountMinor={summary.business.availableBalanceMinor} currency={currency} />
             </div>
+            <p className="text-xs text-slate-500">
+              Available wallet funds equal wallet balance minus money temporarily held for pending bookings. A hold returns if its booking is cancelled.
+            </p>
           </section>
 
           <section className="space-y-3">
@@ -220,9 +230,9 @@ export default function BranchFinanceSection({ branchId }: { branchId: string })
                     {summary.individual.methods.map((method) => (
                       <tr key={method.method} className="border-b border-slate-100 last:border-0">
                         <td className="px-4 py-3 font-semibold text-slate-900">{paymentMethodLabels[method.method]}</td>
-                        <td className="px-4 py-3 text-right text-emerald-700">{formatCreditMoney(method.collectedMinor, currency)}</td>
-                        <td className="px-4 py-3 text-right text-red-700">{formatCreditMoney(method.refundedMinor, currency)}</td>
-                        <td className="px-4 py-3 text-right font-semibold text-slate-900">{formatCreditMoney(method.netMinor, currency)}</td>
+                        <td className="px-4 py-3 text-right text-emerald-700">{formatMoneyMinor(method.collectedMinor, currency)}</td>
+                        <td className="px-4 py-3 text-right text-red-700">{formatMoneyMinor(method.refundedMinor, currency)}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-slate-900">{formatMoneyMinor(method.netMinor, currency)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -268,7 +278,7 @@ export default function BranchFinanceSection({ branchId }: { branchId: string })
                           </span>
                         </td>
                         <td className={`whitespace-nowrap px-4 py-3 text-right font-semibold ${payment.direction === "COLLECTED" ? "text-emerald-700" : "text-red-700"}`}>
-                          {payment.direction === "COLLECTED" ? "+" : "−"}{formatCreditMoney(payment.amountMinor, currency)}
+                          {payment.direction === "COLLECTED" ? "+" : "−"}{formatMoneyMinor(payment.amountMinor, currency)}
                         </td>
                       </tr>
                     )) : (
@@ -282,8 +292,8 @@ export default function BranchFinanceSection({ branchId }: { branchId: string })
 
           <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-100 px-5 py-4">
-              <h2 className="text-base font-bold text-[#0D1282]">Credit Accounts</h2>
-              <p className="mt-1 text-sm text-slate-500">Current balances for business accounts linked to this branch.</p>
+              <h2 className="text-base font-bold text-[#0D1282]">Business Wallets</h2>
+              <p className="mt-1 text-sm text-slate-500">Current wallet balance, active booking holds, and funds available to use.</p>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full text-left text-sm">
@@ -292,25 +302,23 @@ export default function BranchFinanceSection({ branchId }: { branchId: string })
                     <th className="px-4 py-3">Account</th>
                     <th className="px-4 py-3">Company</th>
                     <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3 text-right">Credit Limit</th>
-                    <th className="px-4 py-3 text-right">Used</th>
-                    <th className="px-4 py-3 text-right">Outstanding</th>
+                    <th className="px-4 py-3 text-right">Wallet Balance</th>
+                    <th className="px-4 py-3 text-right">Reserved</th>
                     <th className="px-4 py-3 text-right">Available</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.business.creditAccounts.length ? summary.business.creditAccounts.map((credit) => (
-                    <tr key={credit.id} className="border-b border-slate-100 last:border-0">
-                      <td className="px-4 py-3 font-semibold text-slate-950">{credit.accountId || "-"}</td>
-                      <td className="px-4 py-3 text-slate-800">{credit.companyName || "-"}</td>
-                      <td className="px-4 py-3"><span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{titleCase(credit.status)}</span></td>
-                      <td className="px-4 py-3 text-right font-semibold text-slate-950">{formatCreditMoney(credit.approvedCreditLimitMinor, currency)}</td>
-                      <td className="px-4 py-3 text-right text-slate-700">{formatCreditMoney(credit.usedCreditMinor, currency)}</td>
-                      <td className="px-4 py-3 text-right text-slate-700">{formatCreditMoney(credit.invoicedOutstandingMinor, currency)}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-[#0D1282]">{formatCreditMoney(credit.availableCreditMinor, currency)}</td>
+                  {summary.business.wallets.length ? summary.business.wallets.map((wallet) => (
+                    <tr key={wallet.id} className="border-b border-slate-100 last:border-0">
+                      <td className="px-4 py-3 font-semibold text-slate-950">{wallet.accountId || "-"}</td>
+                      <td className="px-4 py-3 text-slate-800">{wallet.companyName || "-"}</td>
+                      <td className="px-4 py-3"><span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{titleCase(wallet.status)}</span></td>
+                      <td className="px-4 py-3 text-right font-semibold text-slate-950">{formatMoneyMinor(wallet.walletBalanceMinor, currency)}</td>
+                      <td className="px-4 py-3 text-right text-slate-700">{formatMoneyMinor(wallet.reservedBalanceMinor, currency)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-[#0D1282]">{formatMoneyMinor(wallet.availableBalanceMinor, currency)}</td>
                     </tr>
                   )) : (
-                    <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-500">No credit facilities are linked to this branch.</td></tr>
+                    <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-500">No prepaid wallets are linked to this branch.</td></tr>
                   )}
                 </tbody>
               </table>

@@ -338,7 +338,7 @@ export type ShipmentAmendmentBillingAdjustment = {
 };
 
 export type ShipmentAmendmentFundingPreview = {
-  billingMode: "BUSINESS_ACCOUNT" | "DIRECT" | "TEST";
+  billingMode: "BUSINESS_ACCOUNT" | "PREPAID" | "DIRECT" | "TEST";
   previousAmountMinor: number;
   amendedAmountMinor: number;
   deltaAmountMinor: number;
@@ -405,6 +405,7 @@ export type ShipmentAmendment = {
   shipmentDraftId: string;
   dpdShipmentId: string;
   shipmentId: string;
+  customerType?: "BUSINESS" | "INDIVIDUAL";
   consignee: string;
   branch: {
     id: string;
@@ -412,7 +413,11 @@ export type ShipmentAmendment = {
     code: string;
     city: string;
   } | null;
-  status: "REQUESTED" | "APPROVED" | "REJECTED" | "APPLIED";
+  status: "AWAITING_PAYMENT" | "PAYMENT_SECURED" | "REQUESTED" | "APPROVED" | "REJECTED" | "APPLIED";
+  paymentStatus?: "NOT_REQUIRED" | "AWAITING_PAYMENT" | "SECURED" | "COMPLETED" | "RELEASED";
+  paymentSource?: "" | "BUSINESS_WALLET" | "CASH_RECEIPT" | "DIRECT_RAZORPAY";
+  paymentAmountMinor?: number;
+  refundStatus?: "NOT_REQUIRED" | "CREDITED_TO_WALLET" | "CASH_REFUND_RECORDED";
   actorRole: "admin" | "client";
   reason: string;
   reviewNote: string;
@@ -929,7 +934,7 @@ export async function rejectShipmentAmendment(amendmentId: string, note = "") {
   }>(response);
 }
 
-/** How a walk-in paid. Required when booking an individual shipment. */
+/** Payment details retained for operator walk-in bookings and amendments. */
 export type CounterPaymentInput = {
   method: "CASH" | "UPI" | "BANK_TRANSFER" | "CARD" | "CHEQUE";
   reference?: string;
@@ -938,11 +943,18 @@ export type CounterPaymentInput = {
 
 export async function createShipment(
   shipmentDraftId: string,
-  counterPayment?: CounterPaymentInput,
   acceptedPricingHash?: string,
-  skipDpdLabel?: boolean
+  skipDpdLabel?: boolean,
+  payment?: {
+    paymentSource: "BUSINESS_WALLET" | "DIRECT_RAZORPAY" | "CASH_RECEIPT";
+    fundingReferenceId?: string;
+  }
 ) {
-  const body = { ...(counterPayment ?? {}), ...(acceptedPricingHash ? { acceptedPricingHash } : {}), ...(skipDpdLabel ? { skipDpdLabel } : {}) };
+  const body = {
+    ...(payment ?? {}),
+    ...(acceptedPricingHash ? { acceptedPricingHash } : {}),
+    ...(skipDpdLabel ? { skipDpdLabel } : {})
+  };
   const response = await fetchWithAuth(apiUrl(`/api/v1/shipment-drafts/${shipmentDraftId}/create-shipment`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },

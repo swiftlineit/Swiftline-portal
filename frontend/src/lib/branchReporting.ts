@@ -1,16 +1,14 @@
 import { requestJson } from "@/lib/shipmentsList";
 
-export type BranchCreditRow = {
+export type BranchWalletRow = {
   id: string;
   businessAccountId: string;
   accountId: string;
   companyName: string;
   status: string;
-  approvedCreditLimitMinor: number;
-  usedCreditMinor: number;
-  invoicedOutstandingMinor: number;
-  customerAdvanceBalanceMinor: number;
-  availableCreditMinor: number;
+  walletBalanceMinor: number;
+  reservedBalanceMinor: number;
+  availableBalanceMinor: number;
 };
 
 export type BranchFinanceSummary = {
@@ -20,13 +18,11 @@ export type BranchFinanceSummary = {
     shipments: number;
     invoicedMinor: number;
     linkedAccounts: number;
-    withCreditAccount: number;
-    creditLimitMinor: number;
-    usedCreditMinor: number;
-    outstandingMinor: number;
-    advancesMinor: number;
-    utilizationPercent: number;
-    creditAccounts: BranchCreditRow[];
+    walletCount: number;
+    walletBalanceMinor: number;
+    reservedBalanceMinor: number;
+    availableBalanceMinor: number;
+    wallets: BranchWalletRow[];
   };
   individual: {
     shipments: number;

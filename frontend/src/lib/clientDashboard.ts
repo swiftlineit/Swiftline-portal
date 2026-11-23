@@ -292,6 +292,8 @@ export type ClientPrepaidAccount = {
 };
 
 export type ClientPrepaidTransaction = {
+  shipmentDraftId?: string | null;
+  shipmentNumber?: string | null;
   _id: string;
   transactionType: string;
   direction: string;
@@ -389,20 +391,24 @@ export async function getClientPrepaidAccount(businessAccountId?: string) {
   return parseApiResponse<{ success: true; prepaidAccount: ClientPrepaidAccount }>(response);
 }
 
-export async function getClientPrepaidTransactions(businessAccountId?: string) {
+export type PaymentPagination = { page: number; limit: number; total: number; totalPages: number };
+
+export async function getClientPrepaidTransactions(businessAccountId?: string, page = 1) {
   const url = new URL(apiUrl("/api/v1/client/prepaid-transactions"));
   if (businessAccountId) url.searchParams.set("businessAccountId", businessAccountId);
+  url.searchParams.set("page", String(page));
   const response = await fetchWithAuth(url.toString());
 
-  return parseApiResponse<{ success: true; transactions: ClientPrepaidTransaction[] }>(response);
+  return parseApiResponse<{ success: true; transactions: ClientPrepaidTransaction[]; pagination: PaymentPagination }>(response);
 }
 
-export async function getClientPrepaidTopUps(businessAccountId?: string) {
+export async function getClientPrepaidTopUps(businessAccountId?: string, page = 1) {
   const url = new URL(apiUrl("/api/v1/client/prepaid-topups"));
   if (businessAccountId) url.searchParams.set("businessAccountId", businessAccountId);
+  url.searchParams.set("page", String(page));
   const response = await fetchWithAuth(url.toString());
 
-  return parseApiResponse<{ success: true; topUps: ClientPrepaidTopUp[] }>(response);
+  return parseApiResponse<{ success: true; topUps: ClientPrepaidTopUp[]; pagination: PaymentPagination }>(response);
 }
 
 export async function createClientPrepaidTopUp(input: {
@@ -535,12 +541,17 @@ export async function updateClientShipmentDraft(shipmentDraftId: string, patch: 
 export async function createClientShipment(
   shipmentDraftId: string,
   acceptedPricingHash?: string,
-  skipDpdLabel?: boolean
+  skipDpdLabel?: boolean,
+  payment?: { paymentSource: "BUSINESS_WALLET" | "DIRECT_RAZORPAY"; fundingReferenceId?: string }
 ) {
   const response = await fetchWithAuth(apiUrl(`/api/v1/client/dpd-labels/drafts/${shipmentDraftId}/create-shipment`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...(acceptedPricingHash ? { acceptedPricingHash } : {}), ...(skipDpdLabel ? { skipDpdLabel } : {}) })
+    body: JSON.stringify({
+      ...(acceptedPricingHash ? { acceptedPricingHash } : {}),
+      ...(skipDpdLabel ? { skipDpdLabel } : {}),
+      ...(payment ? { paymentSource: payment.paymentSource, ...(payment.fundingReferenceId ? { fundingReferenceId: payment.fundingReferenceId } : {}) } : {})
+    })
   });
 
   // A refusal because the price moved carries the new breakdown, so it is raised

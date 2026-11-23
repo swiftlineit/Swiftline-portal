@@ -25,7 +25,6 @@ import {
   updateBusinessAccountStatus,
 } from "@/lib/businessAccounts";
 import { Branch, listBranches } from "@/lib/branches";
-import { CreditAccount, listAdminCreditAccounts } from "@/lib/creditAccounts";
 import { BUSINESS_ACCOUNT_AREA } from "@/lib/roles";
 import { useAdminUser } from "@/lib/useAdminUser";
 import { FiSearch } from "react-icons/fi";
@@ -50,11 +49,6 @@ export default function BusinessAccountsPage() {
   const [deleting, setDeleting] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  // Credit facilities keyed by business account _id, loaded once: the endpoint
-  // returns every account with credit, so it needs no search or page argument.
-  const [creditByBusinessId, setCreditByBusinessId] = useState<
-    Map<string, CreditAccount>
-  >(new Map());
   const pageSize = 10;
 
   useEffect(() => {
@@ -89,24 +83,6 @@ export default function BusinessAccountsPage() {
 
     return () => window.clearTimeout(timeout);
   }, [search, statusFilter, user, page]);
-
-  useEffect(() => {
-    if (!user) return;
-    // The credit columns are supporting detail, so a failure here leaves them
-    // blank rather than blocking the accounts list.
-    void listAdminCreditAccounts()
-      .then((data) =>
-        setCreditByBusinessId(
-          new Map(
-            data.creditAccounts.map((account) => [
-              account.businessAccountId,
-              account,
-            ]),
-          ),
-        ),
-      )
-      .catch(() => setCreditByBusinessId(new Map()));
-  }, [user]);
 
   async function refreshAccount(
     accountId: string,
@@ -263,7 +239,7 @@ export default function BusinessAccountsPage() {
 
     if (value === "operation:ledger_viewed") {
       await handleOperationalAction(account, "ledger_viewed");
-      router.push(`/dashboard/credit-accounts/${account._id}#credit-ledger`);
+      router.push(`/dashboard/business-accounts/${account.accountId}#ledger`);
       return;
     }
 
@@ -389,7 +365,6 @@ export default function BusinessAccountsPage() {
             accounts={visibleAccounts}
             loading={accountsLoading}
             updatingAccountId={updatingAction}
-            creditByBusinessId={creditByBusinessId}
             onAccountMenuChange={handleAccountMenuChange}
           />
         </div>

@@ -54,6 +54,7 @@ import { BsWhatsapp, BsCurrencyRupee } from "react-icons/bs";
 import OperationsCalendarIcon from "@/components/OperationsCalendarIcon";
 import { loadProfileImageUrl } from "@/lib/profile";
 import { ShellPortalBackButton } from "@/components/PortalBackButton";
+import { cashReceiptReadEvent, getCashReceiptUnreadCount } from "@/lib/documentCentre";
 
 export type ClientShellUser = {
   name?: string;
@@ -208,22 +209,11 @@ const clientNavigation: Array<
     ],
   },
   {
-    label: "Billing",
+    label: "Payments",
     icon: BsCurrencyRupee,
     items: [
       {
-        label: "Credit Account",
-        href: "/client/credit",
-        icon: BsCurrencyRupee,
-      },
-      {
-        label: "Credit Reports",
-        href: "/client/credit/statements",
-        icon: FiFileText,
-        access: "financial",
-      },
-      {
-        label: "Top-up & Payments",
+        label: "Wallet & Payments",
         href: "/client/payments",
         icon: FiCreditCard,
         access: "financial",
@@ -328,6 +318,26 @@ export function ClientDashboardShell({
   // empty until it settles and every link then appears in one paint.
   const [navigation, setNavigation] =
     useState<SidebarNavEntry[] | null>(null);
+  const [cashReceiptUnreadCount, setCashReceiptUnreadCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void getCashReceiptUnreadCount()
+        .then((count) => {
+          if (active) setCashReceiptUnreadCount(count);
+        })
+        .catch(() => {
+          if (active) setCashReceiptUnreadCount(0);
+        });
+    };
+    refresh();
+    window.addEventListener(cashReceiptReadEvent, refresh);
+    return () => {
+      active = false;
+      window.removeEventListener(cashReceiptReadEvent, refresh);
+    };
+  }, []);
 
   // Below `lg` the sidebar is an off-canvas drawer; this is what opens it.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -687,6 +697,7 @@ export function ClientDashboardShell({
         <Sidebar
           items={navigation ?? []}
           badgeHrefs={whatsNew.badgeHrefs}
+          numericBadges={{ "/client/documents": cashReceiptUnreadCount }}
           mobileOpen={mobileNavOpen}
           onMobileClose={closeMobileNav}
         />
