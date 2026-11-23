@@ -37,6 +37,9 @@ const GRID_COL_MID = CONTENT_LEFT + CONTENT_WIDTH * 0.50;
 const DETAILS_COL = GRID_COL_MID;
 const INK = "#000000";
 const DIVIDER_INK = "#6B7280";
+const CHECK_SIZE = 14;
+const CHECK_GAP = 3;
+const CHECK_FILL = "#00E676";
 
 /** Printed on every label regardless of the booked service. */
 const SERVICE_NAME = "EXPRESS WORLDWIDE";
@@ -152,6 +155,23 @@ function caption(document: PDFKit.PDFDocument, value: string, x: number, y: numb
 
 function rule(document: PDFKit.PDFDocument, y: number, lineWidth = 0.7, right = CONTENT_RIGHT) {
   document.moveTo(CONTENT_LEFT, y).lineTo(right, y).lineWidth(lineWidth).stroke(DIVIDER_INK);
+}
+
+function drawInternalLabelCheck(document: PDFKit.PDFDocument) {
+  const left = CONTENT_RIGHT - CELL_PADDING - CHECK_SIZE;
+  const top = LABEL_BOTTOM - CELL_PADDING - CHECK_SIZE;
+
+  document.save();
+  document.rect(left, top, CHECK_SIZE, CHECK_SIZE).fill(CHECK_FILL);
+  document
+    .moveTo(left + 3, top + 7.2)
+    .lineTo(left + 5.8, top + 10)
+    .lineTo(left + 11, top + 4.5)
+    .lineWidth(2.1)
+    .lineCap("round")
+    .lineJoin("round")
+    .stroke(INK);
+  document.restore();
 }
 
 function fitBlock(
@@ -330,9 +350,10 @@ function drawSwiftlineLabel(
 
   const serviceLeft = DETAILS_COL + CELL_PADDING;
   const serviceWidth = CONTENT_RIGHT - CELL_PADDING - serviceLeft;
+  const serviceTextWidth = serviceWidth - CHECK_SIZE - CHECK_GAP;
   const serviceWords = (text(data.serviceName) || SERVICE_NAME).split(" ");
   const serviceSize = Math.min(
-    ...serviceWords.map((word) => fitOneLine(document.font("Helvetica-Bold"), word, serviceWidth, 11, 6))
+    ...serviceWords.map((word) => fitOneLine(document.font("Helvetica-Bold"), word, serviceTextWidth, 11, 6))
   );
   const serviceTop = (ROW_CONSIGNEE + LABEL_BOTTOM) / 2
     - (8 + serviceWords.length * (serviceSize + 1)) / 2;
@@ -343,10 +364,12 @@ function drawSwiftlineLabel(
       .font("Helvetica-Bold")
       .fontSize(serviceSize)
       .text(word, serviceLeft, serviceTop + 10 + index * (serviceSize + 1), {
-        width: serviceWidth,
+        width: serviceTextWidth,
         lineBreak: false
       });
   });
+
+  drawInternalLabelCheck(document);
 
   document.restore();
 }
