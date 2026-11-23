@@ -1,6 +1,9 @@
 import mongoose from "mongoose";
 import { tenantMigrationEnv } from "./tenantMigrationEnv.js";
 import { AuditLog } from "../models/auditLog.model.js";
+import { CashAllocationEvent } from "../models/cashAllocationEvent.model.js";
+import { CashReceipt } from "../models/cashReceipt.model.js";
+import { CashReceiptRead } from "../models/cashReceiptRead.model.js";
 import { CancellationDocumentCounter } from "../models/cancellationDocumentCounter.model.js";
 import { CancellationFeeInvoice } from "../models/cancellationFeeInvoice.model.js";
 import { CountryRateCard } from "../models/countryRateCard.model.js";
@@ -13,6 +16,8 @@ import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentInvoiceCounter } from "../models/shipmentInvoiceCounter.model.js";
 import { ShipmentManifest } from "../models/shipmentManifest.model.js";
 import { ShipmentManifestCounter } from "../models/shipmentManifestCounter.model.js";
+import { ShipmentDirectPayment } from "../models/shipmentDirectPayment.model.js";
+import { ShipmentFunding } from "../models/shipmentFunding.model.js";
 import { Tenant } from "../models/tenant.model.js";
 import {
   assertExpectedDatabaseName,
@@ -69,6 +74,11 @@ const modelPlans: ModelPlan[] = [
   { model: ShipmentInvoiceCounter, legacyIndexes: [{ key: { financialYear: 1 }, unique: true }] },
   { model: CancellationDocumentCounter, legacyIndexes: [{ key: { financialYear: 1, documentType: 1 }, unique: true }] },
   { model: ShipmentManifestCounter, legacyIndexes: [] },
+  { model: CashReceipt, legacyIndexes: [] },
+  { model: CashAllocationEvent, legacyIndexes: [] },
+  { model: CashReceiptRead, legacyIndexes: [] },
+  { model: ShipmentDirectPayment, legacyIndexes: [] },
+  { model: ShipmentFunding, legacyIndexes: [] },
   {
     model: ShipmentInvoice,
     legacyIndexes: [

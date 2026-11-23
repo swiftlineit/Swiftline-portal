@@ -196,7 +196,6 @@ export default function StandaloneCashReceiptsPage() {
     <div className="mx-auto max-w-8xl space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          
           <h1 className="mt-1 text-2xl font-semibold text-slate-950">Cash receipts</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-600">Record cash received outside a shipment booking. These standalone receipts are visible to Swiftline staff only.</p>
         </div>

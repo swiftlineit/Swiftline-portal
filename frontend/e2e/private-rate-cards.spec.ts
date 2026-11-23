@@ -149,6 +149,90 @@ test("the account's Rate Card tab follows Users & Access and shares the editor",
   await expect(page.getByText("Rate Card Assignment", { exact: false })).toHaveCount(0);
 });
 
+test("business account volumetric discount previews the rule and saves through the scoped endpoint", async ({ page }) => {
+  await mockPortal(page, "operations");
+  let submitted: Record<string, unknown> | undefined;
+  await page.route("**/api/v1/business-accounts/BA-2026-757526/volumetric-discount", async (route) => {
+    submitted = route.request().postDataJSON() as Record<string, unknown>;
+    return route.fulfill({ json: {
+      success: true,
+      message: "Volumetric discount saved.",
+      account: { ...account, volumetricDiscountPercent: 50, volumetricDiscountVersion: 1 }
+    } });
+  });
+
+  await page.goto("/dashboard/business-accounts/BA-2026-757526#rate-card");
+  await page.getByRole("tab", { name: "Volumetric Discount", exact: true }).click();
+
+  await page.getByRole("spinbutton", { name: "Volumetric excess discount percentage" }).fill("50");
+  await expect(page.getByText("22.5 kg", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Save discount", exact: true }).click();
+
+  await expect.poll(() => submitted).toMatchObject({ volumetricDiscountPercent: 50, expectedVersion: 0 });
+  await expect(page.getByText("Volumetric discount saved.")).toBeVisible();
+  await expect(page.getByRole("spinbutton", { name: "Volumetric excess discount percentage" })).toHaveValue("50");
+});
+
+test("business account ledger switches between all payments and wallet movements", async ({ page }) => {
+  await mockPortal(page, "operations");
+  const views: string[] = [];
+  await page.route(`**/api/v1/prepaid-accounts/${alphaId}/ledger**`, async (route) => {
+    const url = new URL(route.request().url());
+    const view = url.searchParams.get("view") || "all";
+    views.push(view);
+    const walletView = view === "wallet";
+    return route.fulfill({ json: {
+      success: true,
+      account: { id: alphaId, accountId: account.accountId, companyName: "Alpha Logistics", branchId: "branch-alpha" },
+      wallet: { status: "ACTIVE", currency: "INR", cashBalanceMinor: 5_000_000, reservedBalanceMinor: 1_000_000, availableBalanceMinor: 4_000_000 },
+      transactions: [{
+        _id: walletView ? "wallet-entry" : "gateway-entry",
+        createdAt: "2026-11-23T08:00:00.000Z",
+        transactionType: walletView ? "SHIPMENT_PAYMENT_COMPLETED" : "RAZORPAY_BOOKING_PAYMENT",
+        direction: walletView ? "DEBIT" : "CREDIT",
+        amountMinor: 10_000,
+        currency: "INR",
+        description: walletView ? "Wallet-funded shipment booking" : "Razorpay booking payment",
+        paymentSource: walletView ? "WALLET" : "RAZORPAY",
+        status: "ALLOCATED",
+        reference: walletView ? "wallet_tx_booking" : "pay_razorpay_booking",
+        shipmentDraftId: "ledger-shipment",
+        shipmentNumber: "SLC-LEDGER-001"
+      }],
+      pagination: { page: 1, limit: 50, total: 1, totalPages: 1 }
+    } });
+  });
+
+  await page.goto("/dashboard/business-accounts/BA-2026-757526#ledger");
+  await expect(page.getByText("pay_razorpay_booking", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open shipment SLC-LEDGER-001" })).toBeVisible();
+  await expect(page.getByText("Available to book", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Wallet ledger", exact: true }).click();
+  await expect(page.getByText("wallet_tx_booking", { exact: true })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Method / status" })).toHaveCount(0);
+  expect(views).toContain("all");
+  expect(views).toContain("wallet");
+});
+
+test("business account list shows the available wallet balance", async ({ page }) => {
+  await mockPortal(page, "operations");
+  await page.route("**/api/v1/business-accounts**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/v1/business-accounts" || route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({ json: {
+      success: true,
+      accounts: [{ ...account, walletAvailableBalanceMinor: 1_234_500 }],
+      total: 1,
+      page: 1,
+      pageSize: 10
+    } });
+  });
+
+  await page.goto("/dashboard/business-accounts");
+  await expect(page.getByRole("columnheader", { name: "Available wallet" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "₹12,345.00" })).toBeVisible();
+});
+
 test("sharing a rate card is one step and includes every rate and route charge", async ({ page }, info) => {
   await mockPortal(page);
   const submitted: { payload?: ShareRequestPayload } = {};

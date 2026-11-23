@@ -1,154 +1,60 @@
 # Payment Flow Reference
 
-This document records the payment and billing behavior currently built in the portal. Keep it updated whenever prepaid balance, Razorpay, DPD label billing, or shipment finance behavior changes.
+This document describes the portal's prepaid booking, wallet, cash receipt, amendment, and refund paths. Money is stored in integer INR paise. Provider confirmation and balance changes are idempotent and auditable.
 
-## Current Billing Model
+## Booking payment rules
 
-There are two separate label payment paths:
+| Booking type | Accepted funding | Shipment creation gate |
+| --- | --- | --- |
+| Individual or public booking | Full Razorpay payment | Razorpay capture must be confirmed before booking |
+| Business account | Full available wallet balance or full Razorpay payment | Wallet funds are reserved or Razorpay capture is confirmed before booking |
+| Business cash exception | Staff finalized cash receipt | An admin or operations user records offline cash already received; the full receipt must be allocated before booking |
+| Operator workspace | Existing operator billing and counter flow | Kept separate from Swiftline prepaid rules |
 
-1. Admin label creation uses `ADMIN_DIRECT`.
-2. Client self-serve label creation uses `CLIENT_PREPAID`.
+Client and staff requests cannot supply a trusted amount, funding source, or payment status. The server recalculates the current charge and checks the payment intent, account, branch, price, and shipment before creating the carrier booking. A cash receipt cannot be created by a business client or used for an individual shipment.
 
-These paths are intentionally separate. Admins can keep creating operational labels through the DPD account while the client prepaid flow is developed and tested.
+If the carrier response is uncertain after funds are secured, booking stays in review and the funds are not silently released or charged again. Reconciliation must resolve the original attempt first.
 
-## Admin DPD Label Flow
+## Razorpay booking and wallet flow
 
-Flow:
+Shipment payments, public bookings, and wallet top-ups use the existing Razorpay integration. Checkout signature verification is followed by server-side payment reconciliation; the Razorpay webhook also processes capture, failure, and refund events. Replayed provider events and client retries use stable idempotency keys.
 
-1. Admin reviews or updates a shipment draft.
-2. Admin clicks create DPD label.
-3. The portal validates the draft and DPD payload.
-4. The portal calls the configured DPD API.
-5. DPD bills the main Swiftline DPD account directly.
-6. The saved DPD shipment is marked with `paymentSource: ADMIN_DIRECT`.
+For direct shipment payments, the captured intent is allocated to one shipment and cannot be reused. Business wallet top-ups are credited only after provider capture is confirmed. Wallet balances, reservations, ledger entries, and shipment funding records are updated together in MongoDB transactions. External Razorpay calls are made outside database transactions and have stable refund idempotency keys for reconciliation.
 
-No client wallet top-up, reservation, or ledger debit is required for admin labels.
+## Business cash receipts
 
-## Client Prepaid Label Flow
+1. A business shipment is priced and its full amount is checked against the staff-recorded receipt.
+2. Admin or operations records the offline payment and confirms the cash custody reference.
+3. Swiftline issues the compact receipt with receipt number, date, amount, booking details, and staff creator identity.
+4. The receipt is attached to shipment funding and the full amount is allocated before booking.
+5. The business client receives the receipt in Document Centre and by email. Admin and operations receive the operational email copy. The Document Centre sidebar shows unread receipt count.
 
-Client-created labels are designed to use wallet balance before the portal calls DPD.
+Receipt allocations and reversals are recorded as append-only cash allocation events. Draft receipts do not authorize booking.
 
-Flow:
+## Amendments
 
-1. Client uploads or edits a shipment draft from the client dashboard.
-2. Client submits create DPD label.
-3. The server confirms the draft belongs to the client's active business account and allowed branch.
-4. The server calculates the label charge. The browser is not trusted to send the amount.
-5. The server reserves prepaid balance using `CLIENT_PREPAID`.
-6. The portal calls DPD.
-7. If DPD creates the label, the reservation is converted and the wallet cash balance is debited.
-8. If DPD rejects the request, the reservation is released.
-9. If DPD times out or returns an uncertain result, the reservation is marked review-required so admin can reconcile it.
+An amendment that increases a root Swiftline shipment's charge must secure the difference before approval. A business amendment uses wallet funds only; when the wallet is short, the client must top it up before paying the saved amendment. Individual and public amendments continue to use Razorpay. The payment intent is tied to the amendment and shipment, and approval atomically settles the secured funds with the revised invoice. Operator amendments retain their existing counter settlement.
 
-The client cannot set `paymentSource`, charge amount, reservation status, or shipment charge status directly.
+An individual amendment reduction requires staff to record the refund before approval. A business prepaid reduction is credited to the business wallet. Rejected wallet-funded amendments release their reservation. Rejected Razorpay-funded amendments are not finalized until the matching full provider refund is confirmed. Pending amendments block cancellation settlement.
 
-## Razorpay Top-Up Flow
+## Cancellations and refunds
 
-Client top-ups use Razorpay order and webhook confirmation.
+Cancellation approval checks the active invoice, shipment status, carrier confirmation, pending amendments, and refund amount before making financial changes. Wallet-funded shipments are refunded to the business wallet. Cash receipts and legacy counter sales require a recorded staff payout. Razorpay-funded shipments are refunded to their captured payment sources. If an approved amendment added a separate Razorpay capture, cancellation stores an immutable allocation plan and refunds the approved captures in sequence. Approval completes only when every planned provider refund is confirmed. A changed fee cannot alter a refund after that plan has started.
 
-Flow:
+## Legacy Swiftline credit
 
-1. Client requests a top-up with an amount in minor units.
-2. The server validates the amount and requires an `Idempotency-Key`.
-3. The server creates a Razorpay order and stores a `PaymentTopUp`.
-4. The checkout signature endpoint only verifies the checkout response.
-5. Wallet credit happens only after trusted Razorpay webhook confirmation.
-6. `payment.captured` and `order.paid` are idempotent by Razorpay payment id.
-7. Replayed webhooks do not double-credit the wallet.
+The Swiftline prepaid booking path does not consult old credit balances or statements: historical credit does not block a new booking or fund one. Retired Swiftline credit pages and booking-waiver code are removed; the client-facing ledger is wallet activity in Payments, and staff use the prepaid wallet ledger. Existing shipment invoices and prepaid payment history are preserved. Scheduled credit billing, overdue and reconciliation jobs skip Swiftline and continue for operator tenants.
 
-## Local Razorpay Webhook Testing
+For the release into an already active tenant installation, use `audit:prepaid-release` and `migrate:prepaid-release`. This narrow migration assigns verified legacy wallet/top-up ownership, initializes wallet alert metadata, and creates required indexes. It preserves balances, captured payments, receipts, shipments, invoices, and legacy credit records. It never transfers legacy customer advances into wallets. Historical captured payments and genuine unused advances require finance reconciliation before any separately approved adjustment. The older tenant-initialization runner and its automatic advance-transfer step are not the release procedure for an installation with active operator tenants. See `docs/prepaid-production-deployment-guide.md`.
 
-When testing Razorpay locally, Razorpay cannot call `localhost:5000` directly. Use ngrok only as a temporary local-development bridge.
+## Low wallet balance alerts
 
-Local command:
+Each successful funding cycle records its own baseline amount. When that cycle's remaining wallet cash reaches 20% of the baseline, the portal sends an alert to business account financial members and staff. A cycle is alerted once; a later top-up starts a new baseline and alert cycle.
 
-```bash
-ngrok http 5000
-```
+## Verification and release limits
 
-Add this webhook URL in the Razorpay Test Mode dashboard:
-
-```text
-https://your-ngrok-url.ngrok-free.app/api/v1/webhooks/razorpay
-```
-
-Enable these test webhook events:
-
-- `payment.captured`
-- `payment.failed`
-- `order.paid`
-
-Keep using the same `RAZORPAY_WEBHOOK_SECRET` in the backend `.env` and in the Razorpay webhook setup.
-
-Remove or replace the ngrok URL when:
-
-- testing is done for the day and the ngrok URL expires,
-- the backend is deployed to a real staging or production domain,
-- switching from Razorpay Test Mode to Live Mode.
-
-Production must use the deployed backend URL instead:
-
-```text
-https://your-production-api-domain.com/api/v1/webhooks/razorpay
-```
-
-Do not hardcode the ngrok URL in the codebase. It belongs only in the Razorpay dashboard for local testing.
-
-## Money Rules
-
-All money values are stored and calculated as integer minor units, currently paise for INR.
-
-Examples:
-
-- Rs. 100.00 is stored as `10000`.
-- Rs. 25.00 is stored as `2500`.
-
-Do not use decimal floats for balances, charges, top-ups, reservations, or ledger entries.
-
-Every money movement must produce exactly one append-only ledger entry. Balance field updates must happen inside the same MongoDB transaction as the ledger write.
-
-## Built So Far
-
-Implemented:
-
-- Prepaid account, top-up, reservation, ledger, shipment charge, and webhook models.
-- Atomic prepaid balance reservation and conversion services.
-- Razorpay order helper, signature verification, webhook handler, and idempotency tests.
-- Client prepaid account/top-up API endpoints.
-- Client label billing service that reserves, completes, releases, or marks review-required.
-- Admin label creation defaults to `ADMIN_DIRECT`.
-- Client label creation route calls the prepaid billing path.
-
-## Configuration
-
-`CLIENT_DPD_LABEL_CHARGE_MINOR` controls the temporary server-derived client label charge.
-
-Current default:
-
-```env
-CLIENT_DPD_LABEL_CHARGE_MINOR=0
-```
-
-When the value is `0`, client prepaid label creation is disabled with a clear server error. This avoids fake pricing before the real rate/tariff module is ready.
-
-Set it to a positive integer minor-unit amount only when testing prepaid label creation.
-
-Example:
-
-```env
-CLIENT_DPD_LABEL_CHARGE_MINOR=2500
-```
-
-That means Rs. 25.00 per label attempt.
-
-## Still To Do
-
-Before final production launch:
-
-- Replace the temporary fixed `CLIENT_DPD_LABEL_CHARGE_MINOR` with real server-side rate calculation.
-- Add admin finance screens for prepaid balances, top-ups, reservations, and shipment charges.
-- Add client UI for wallet balance, top-up, top-up history, and prepaid label errors.
-- Add reconciliation tooling for `REVIEW_REQUIRED` reservations.
-- Decide whether admin-created labels can optionally charge a client wallet later. By default, they should remain `ADMIN_DIRECT`.
-- Add production Razorpay keys, webhook secret, and webhook URL in Razorpay dashboard.
-- Add final end-to-end tests once real DPD credentials are available.
+- Use integer paise for payment, invoice, refund, wallet, and ledger amounts.
+- Do not test against production MongoDB, live Razorpay, or live carrier credentials.
+- Integration tests must use an explicitly configured test database. Never infer a test URI from application or migration environment variables.
+- Indexes for tenant-owned prepaid collections are handled by the reviewed tenant migration sequence because production disables automatic index creation.
+- A successful local build or unit suite does not prove Razorpay dashboard configuration, email delivery, carrier behavior, or deployment readiness.

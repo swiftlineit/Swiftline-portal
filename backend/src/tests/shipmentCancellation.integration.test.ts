@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import { env } from "../config/env.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { BusinessCreditAccount } from "../models/businessCreditAccount.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
 import { CancellationDocumentCounter } from "../models/cancellationDocumentCounter.model.js";
 import { CancellationFeeInvoice } from "../models/cancellationFeeInvoice.model.js";
 import { CreditBillingAdjustment } from "../models/creditBillingAdjustment.model.js";
@@ -18,7 +19,7 @@ import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { closeCreditBillingCycle } from "../services/creditBillingCycle.service.js";
-import { approveShipmentCancellation } from "../services/shipmentCancellation.service.js";
+import { approveShipmentCancellation, cancelShipmentDirectly } from "../services/shipmentCancellation.service.js";
 
 const databaseName = `sl_shipment_cancellation_${Date.now()}`;
 
@@ -26,7 +27,7 @@ before(async () => {
   await mongoose.connect(env.MONGODB_URI, { dbName: databaseName, family: 4, retryWrites: false });
   assert.equal(mongoose.connection.name, databaseName);
   await Promise.all([
-    AuditLog.init(), BusinessCreditAccount.init(), CancellationDocumentCounter.init(),
+    AuditLog.init(), BusinessAccount.init(), BusinessCreditAccount.init(), CancellationDocumentCounter.init(),
     CancellationFeeInvoice.init(), CreditBillingAdjustment.init(), CreditBillingStatement.init(),
     CreditLedgerEntry.init(), DpdShipment.init(), PortalNotification.init(), ShipmentCancellation.init(),
     ShipmentCharge.init(), ShipmentCreditNote.init(), ShipmentDraft.init(), ShipmentEvent.init(), ShipmentInvoice.init()
@@ -189,6 +190,86 @@ async function createCancellationFixture(input: {
 }
 
 describe("shipment cancellation financial transaction", () => {
+  test("rejects an above-standard direct fee without a reason before creating a request", async () => {
+    const fixture = await createCancellationFixture({
+      originalAmountMinor: 200_000,
+      invoiceCreditOutstandingMinor: 200_000,
+      accountUnbilledMinor: 200_000,
+      accountInvoicedMinor: 0,
+      billed: false
+    });
+    await ShipmentCancellation.deleteOne({ _id: fixture.cancellation._id }).exec();
+
+    await assert.rejects(
+      cancelShipmentDirectly({
+        shipmentDraftId: fixture.draft._id as mongoose.Types.ObjectId,
+        requestedBy: fixture.createdBy,
+        reason: "Customer cancelled the shipment before warehouse intake.",
+        feeBaseMinor: 80_000,
+        feeReason: "",
+        carrierReference: ""
+      }),
+      /Explain the additional carrier or handling fee/
+    );
+    assert.equal(await ShipmentCancellation.countDocuments({ shipmentDraftId: fixture.draft._id }), 0);
+  });
+
+  test("completes an admin direct cancellation once using the existing settlement flow", async () => {
+    const fixture = await createCancellationFixture({
+      originalAmountMinor: 200_000,
+      invoiceCreditOutstandingMinor: 200_000,
+      accountUnbilledMinor: 200_000,
+      accountInvoicedMinor: 0,
+      billed: false
+    });
+    await ShipmentCancellation.deleteOne({ _id: fixture.cancellation._id }).exec();
+    await BusinessAccount.create({
+      _id: fixture.account.businessAccountId,
+      accountId: `BA-CANCEL-${String(fixture.account.businessAccountId)}`,
+      status: "active",
+      contact: {
+        firstName: "Direct",
+        lastName: "Cancellation",
+        email: `direct-cancel-${String(fixture.account.businessAccountId)}@example.com`,
+        mobileType: "mobile",
+        countryCode: "+91",
+        mobileNumber: `91${String(fixture.account.businessAccountId).slice(-8)}`
+      },
+      company: {
+        registrationCountry: "India",
+        companyName: "Direct Cancellation Test Ltd",
+        operatingCountries: ["India"]
+      },
+      createdBy: fixture.createdBy
+    });
+
+    const input = {
+      shipmentDraftId: fixture.draft._id as mongoose.Types.ObjectId,
+      requestedBy: fixture.createdBy,
+      reason: "Customer cancelled the shipment before warehouse intake.",
+      feeBaseMinor: 80_000,
+      feeReason: "Carrier cancellation and additional handling charge",
+      carrierReference: "CARRIER-CANCEL-DIRECT-1"
+    };
+    const first = await cancelShipmentDirectly(input);
+    const repeated = await cancelShipmentDirectly(input);
+
+    assert.equal(first.completed, true);
+    assert.equal(first.cancellation.status, "COMPLETED");
+    assert.equal(first.cancellation.approvedFeeBaseMinor, 80_000);
+    assert.equal(first.cancellation.feeTotalMinor, 94_400);
+    assert.equal(first.cancellation.refundableAmountMinor, 105_600);
+    assert.equal(repeated.completed, true);
+    assert.equal(String(repeated.cancellation._id), String(first.cancellation._id));
+    assert.equal(await ShipmentCancellation.countDocuments({ shipmentDraftId: fixture.draft._id }), 1);
+    assert.equal(await ShipmentEvent.countDocuments({ shipmentDraftId: fixture.draft._id, status: "SHIPMENT_CANCELLED" }), 1);
+    assert.equal(await ShipmentCreditNote.countDocuments({ cancellationId: first.cancellation._id }), 1);
+    assert.equal(await AuditLog.countDocuments({
+      action: "SHIPMENT_CANCELLATION_COMPLETED",
+      entityId: first.cancellation._id
+    }), 1);
+  });
+
   test("replaces an unbilled shipment charge with the cancellation fee", async () => {
     const fixture = await createCancellationFixture({
       originalAmountMinor: 200_000,

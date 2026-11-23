@@ -14,6 +14,9 @@ import { CreditLimitHistory } from "../models/creditLimitHistory.model.js";
 import { CreditLimitIncreaseRequest } from "../models/creditLimitIncreaseRequest.model.js";
 import { CreditPayment } from "../models/creditPayment.model.js";
 import { PaymentTermsAcceptance, PaymentTermsDocument } from "../models/paymentTerms.model.js";
+import { PaymentTopUp } from "../models/paymentTopUp.model.js";
+import { PrepaidAccount } from "../models/prepaidAccount.model.js";
+import { PrepaidTransaction } from "../models/prepaidTransaction.model.js";
 import { Tenant } from "../models/tenant.model.js";
 import {
   assertExpectedDatabaseName,
@@ -53,6 +56,9 @@ const modelPlans: ModelPlan[] = [
   { model: BusinessAccountInvitation, legacyUniqueKeys: [] },
   { model: AddressBookEntry, legacyUniqueKeys: [] },
   { model: BusinessCreditAccount, legacyUniqueKeys: [{ businessAccountId: 1 }] },
+  { model: PrepaidAccount, legacyUniqueKeys: [{ businessAccountId: 1 }] },
+  { model: PrepaidTransaction, legacyUniqueKeys: [{ idempotencyKey: 1 }] },
+  { model: PaymentTopUp, legacyUniqueKeys: [{ idempotencyKey: 1 }] },
   { model: CreditLedgerEntry, legacyUniqueKeys: [{ idempotencyKey: 1 }] },
   {
     model: CreditPayment,

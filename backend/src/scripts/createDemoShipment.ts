@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { assertNonProductionEnvironment } from "./migrationSafety.js";
 import { env } from "../config/env.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount, type IBusinessAccount } from "../models/businessAccount.model.js";
@@ -114,6 +115,7 @@ async function resolveActor(accountId: mongoose.Types.ObjectId, fallbackUserId: 
 }
 
 async function main() {
+  assertNonProductionEnvironment(env.NODE_ENV, "Demo shipment creation");
   if (billingClosingDate && Number.isNaN(billingClosingDate.getTime())) {
     throw new Error("DEMO_BILLING_CLOSING_DATE must be a valid ISO date.");
   }
@@ -380,6 +382,9 @@ async function main() {
     throw new Error(`No rate card covers ${destinationAddress.countryCode} / ${shipmentDraft.serviceType}.`);
   }
 
+  const legacyReservation = reservationResult && "reservation" in reservationResult
+    ? reservationResult.reservation
+    : null;
   const demoSnapshot = buildShipmentBookingSnapshot({
     draft: shipmentDraft,
     account,
@@ -391,9 +396,10 @@ async function main() {
     carrierShipmentId: dpdShipment.dpdShipmentId ?? "",
     carrierTransactionId: dpdShipment.dpdTransactionId ?? "",
     carrierParcelNumbers: [],
-    advanceAmountMinor: reservationResult?.reservation?.advanceAmountMinor ?? 0,
-    creditAmountMinor: reservationResult?.reservation?.creditAmountMinor
-      ?? Math.round(demoPricing.totalAmount * 100)
+    advanceAmountMinor: legacyReservation?.advanceAmountMinor
+      ?? (reservationResult && "funding" in reservationResult ? Math.round(demoPricing.totalAmount * 100) : 0),
+    creditAmountMinor: legacyReservation?.creditAmountMinor
+      ?? (reservationResult && "funding" in reservationResult ? 0 : Math.round(demoPricing.totalAmount * 100))
   });
   dpdShipment.bookingSnapshot = demoSnapshot as never;
   dpdShipment.currentShipmentSnapshot = demoSnapshot as never;

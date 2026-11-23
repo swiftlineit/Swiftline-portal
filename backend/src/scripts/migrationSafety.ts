@@ -8,14 +8,17 @@ export const productionTenantMigrationSteps = [
   "shipment-tenant-ownership",
   "business-account-tenant-indexes",
   "tenant-registry-indexes",
-  "operator-support-indexes"
+  "operator-support-indexes",
+  "prepaid-wallet-cutover"
 ] as const;
 
 /** Narrow post-activation migrations that must never join the ownership cutover sequence. */
 export const standaloneProductionTenantMigrationSteps = [
   "operator-counter-payment-indexes",
   "feature-announcement-indexes",
-  "shipment-manifest-reuse-indexes"
+  "shipment-manifest-reuse-indexes",
+  "cash-receipt-active-indexes",
+  "prepaid-release-indexes"
 ] as const;
 
 export type ProductionTenantMigrationStep =

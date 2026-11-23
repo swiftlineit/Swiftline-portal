@@ -13,6 +13,7 @@ async function run() {
   try {
     const runKey = new Date().toISOString().slice(0, 16);
     const summary = await runOperationalTenantJob("Credit reconciliation", async (tenant) => {
+      if (tenant.kind === "SWIFTLINE") return;
       const { scanned, drifted } = await reconcileAllCreditAccounts();
 
       if (!drifted.length) {

@@ -532,6 +532,7 @@ describe("tenant-owned model scope", () => {
 
   test("document-centre invoice aggregation returns only the active tenant's client documents", async () => {
     const filters = { documentType: "BILLING_INVOICE" as const, page: 1, limit: 20 };
+    const userId = new mongoose.Types.ObjectId();
     const operatorScope = {
       ok: true as const,
       businessAccountId: operatorAccountId,
@@ -547,21 +548,21 @@ describe("tenant-owned model scope", () => {
 
     const operatorDocuments = await runWithTenantContext(
       { tenantId: operatorTenantId, kind: "OPERATOR" },
-      () => listClientDocumentCentre(operatorScope, filters)
+      () => listClientDocumentCentre(operatorScope, filters, userId)
     );
     assert.equal(operatorDocuments.pagination.total, 1);
     assert.deepEqual(operatorDocuments.items.map((item) => item.reference), ["OP-INV-1"]);
 
     const crossTenantAccountDocuments = await runWithTenantContext(
       { tenantId: operatorTenantId, kind: "OPERATOR" },
-      () => listClientDocumentCentre(secondOperatorScope, filters)
+      () => listClientDocumentCentre(secondOperatorScope, filters, userId)
     );
     assert.equal(crossTenantAccountDocuments.pagination.total, 0);
     assert.deepEqual(crossTenantAccountDocuments.items, []);
 
     const secondOperatorDocuments = await runWithTenantContext(
       { tenantId: secondOperatorTenantId, kind: "OPERATOR" },
-      () => listClientDocumentCentre(secondOperatorScope, filters)
+      () => listClientDocumentCentre(secondOperatorScope, filters, userId)
     );
     assert.equal(secondOperatorDocuments.pagination.total, 1);
     assert.deepEqual(secondOperatorDocuments.items.map((item) => item.reference), ["OP2-INV-1"]);

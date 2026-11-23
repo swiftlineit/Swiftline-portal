@@ -13,6 +13,7 @@ async function run() {
   try {
     const now = new Date();
     const summary = await runOperationalTenantJob("Credit overdue and expiry", async (tenant) => {
+      if (tenant.kind === "SWIFTLINE") return;
       const overdue = await markOverdueCreditStatements(now);
       const expired = await expireLapsedCreditAccounts(now);
       const warnings = await notifyCreditUtilizationWarnings(now);

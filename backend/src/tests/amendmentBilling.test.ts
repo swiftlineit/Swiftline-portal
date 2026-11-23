@@ -94,6 +94,24 @@ describe("amendment billing allocation policy", () => {
     assert.equal(result.settledAmountMinor, 50_000);
   });
 
+  test("funds a prepaid amendment increase without using credit", () => {
+    const result = calculateAmendmentBillingAdjustment({
+      previousAmountMinor: 50_000,
+      amendedAmountMinor: 62_500,
+      previousAdvanceAppliedMinor: 50_000,
+      previousCreditOutstandingMinor: 0,
+      availableAdvanceMinor: 12_500,
+      availableCreditMinor: 0,
+      insufficientMessage: "Pay the additional amendment amount before approval."
+    });
+
+    assert.equal(result.advanceUsedMinor, 12_500);
+    assert.equal(result.creditUsedMinor, 0);
+    assert.equal(result.advanceAppliedMinor, 62_500);
+    assert.equal(result.creditOutstandingMinor, 0);
+    assert.equal(result.settledAmountMinor, 0);
+  });
+
   test("leaves an unpaid reduction entirely on credit and applied advance", () => {
     const result = calculateAmendmentBillingAdjustment({
       previousAmountMinor: 50_000,

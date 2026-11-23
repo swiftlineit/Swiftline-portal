@@ -149,3 +149,47 @@ test("operator counter-payment indexes are separately authorized after tenant ac
     mongoUri: "mongodb+srv://migration:secret@cluster.example.mongodb.net/swiftline"
   }), /not authorized/);
 });
+
+test("cash receipt active shipment indexes are separately authorized after tenant activation", () => {
+  const step = "cash-receipt-active-indexes";
+  assert.equal(standaloneProductionTenantMigrationSteps.includes(step), true);
+  assert.equal((productionTenantMigrationSteps as readonly string[]).includes(step), false);
+});
+
+test("prepaid release indexes are separately authorized after tenant activation", () => {
+  assert.equal(standaloneProductionTenantMigrationSteps.includes("prepaid-release-indexes"), true);
+  assert.equal((productionTenantMigrationSteps as readonly string[]).includes("prepaid-release-indexes"), false);
+  assert.throws(() => assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: "production", step: "prepaid-release-indexes", expectedDatabase: "swiftline",
+    mongoUri: "mongodb+srv://migration:secret@cluster.example.mongodb.net/swiftline"
+  }), /not authorized/);
+});
+
+test("prepaid wallet cutover is part of the explicitly approved tenant migration sequence", () => {
+  const authorization = createProductionTenantMigrationAuthorization({
+    nodeEnvironment: "production",
+    ci: undefined,
+    expectedDatabase: "swiftline",
+    expectedClusterHost: "cluster.example.mongodb.net",
+    mongoUri: "mongodb+srv://migration:secret@cluster.example.mongodb.net/swiftline",
+    allowedClusterHost: "cluster.example.mongodb.net",
+    apply: true,
+    confirmation: "APPLY SWIFTLINE TENANT MIGRATION swiftline",
+    changeId: "CHG-2026-1234",
+    backupReference: "backup-2026-11-04-001",
+    runId: "prepaid-cutover-2026-11-04"
+  });
+  assert.doesNotThrow(() => assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: "production",
+    step: "prepaid-wallet-cutover",
+    expectedDatabase: "swiftline",
+    mongoUri: "mongodb+srv://migration:secret@cluster.example.mongodb.net/swiftline",
+    authorization
+  }));
+  assert.throws(() => assertTenantMigrationExecutionAllowed({
+    nodeEnvironment: "production",
+    step: "prepaid-wallet-cutover",
+    expectedDatabase: "swiftline",
+    mongoUri: "mongodb+srv://migration:secret@cluster.example.mongodb.net/swiftline"
+  }), /not authorized/);
+});

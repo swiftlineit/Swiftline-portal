@@ -13,6 +13,7 @@ async function run() {
   await connectDatabase();
   try {
     const summary = await runOperationalTenantJob("Credit billing close", async (tenant) => {
+      if (tenant.kind === "SWIFTLINE") return;
       const accounts = await BusinessCreditAccount.find({
         status: { $in: ["ACTIVE", "SUSPENDED", "EXPIRED", "CLOSED"] }
       }).select("businessAccountId").lean().exec();

@@ -9,6 +9,7 @@ import { runAuthorizedProductionMigration as runOperational } from "./migrateOpe
 import { runAuthorizedProductionMigration as runSupportIndexes } from "./migrateOperatorSupportSessionIndexes.js";
 import { runAuthorizedProductionMigration as runRegistryIndexes } from "./migrateTenantRegistryIndexes.js";
 import { runAuthorizedProductionMigration as runShipmentOwnership } from "./migrateShipmentTenantOwnership.js";
+import { runAuthorizedProductionMigration as runPrepaidWalletCutover } from "./migratePrepaidWalletCutover.js";
 import { runAuthorizedProductionMigration as runRootOwnership } from "./migrateSwiftlineRootOwnership.js";
 import {
   assertProductionTenantAuditTarget,
@@ -139,7 +140,8 @@ const stepRunners: Record<CoordinatedProductionTenantMigrationStep, (authorizati
   "shipment-tenant-ownership": runShipmentOwnership,
   "business-account-tenant-indexes": runBusinessAccountIndexes,
   "tenant-registry-indexes": runRegistryIndexes,
-  "operator-support-indexes": runSupportIndexes
+  "operator-support-indexes": runSupportIndexes,
+  "prepaid-wallet-cutover": runPrepaidWalletCutover
 };
 
 async function audit(

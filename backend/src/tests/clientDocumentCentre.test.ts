@@ -20,6 +20,7 @@ const accountId = new mongoose.Types.ObjectId();
 const branchId = new mongoose.Types.ObjectId();
 const draftId = new mongoose.Types.ObjectId();
 const bookingId = new mongoose.Types.ObjectId();
+const userId = new mongoose.Types.ObjectId();
 const now = new Date("2026-08-13T08:30:00.000Z");
 
 before(async () => {
@@ -121,7 +122,8 @@ describe("client document centre", () => {
   test("combines operational records and filters them by AWB", async () => {
     const result = await listClientDocumentCentre(
       { ok: true, businessAccountId: accountId, branchIds: [branchId], canViewFinancials: false },
-      { awb: "130826001", page: 1, limit: 20 }
+      { awb: "130826001", page: 1, limit: 20 },
+      userId
     );
 
     assert.deepEqual(
@@ -135,7 +137,8 @@ describe("client document centre", () => {
   test("adds financial documents only for a financial membership", async () => {
     const result = await listClientDocumentCentre(
       { ok: true, businessAccountId: accountId, branchIds: [branchId], canViewFinancials: true },
-      { documentType: "BILLING_INVOICE", page: 1, limit: 20 }
+      { documentType: "BILLING_INVOICE", page: 1, limit: 20 },
+      userId
     );
 
     assert.equal(result.pagination.total, 1);
@@ -151,7 +154,8 @@ describe("client document centre", () => {
         branchIds: [new mongoose.Types.ObjectId()],
         canViewFinancials: true
       },
-      { page: 1, limit: 20 }
+      { page: 1, limit: 20 },
+      userId
     );
 
     assert.equal(result.pagination.total, 0);
