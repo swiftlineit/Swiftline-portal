@@ -3,7 +3,6 @@ import mongoose from "mongoose";
 import crypto from "node:crypto";
 import { env } from "../config/env.js";
 import { WebhookEvent } from "../models/webhookEvent.model.js";
-import { findPaymentTopUpByRazorpayOrderId, markPaymentTopUpFailed, creditCapturedTopUp } from "../services/prepaid/topups.service.js";
 import { hashWebhookPayload, verifyRazorpayWebhookSignature } from "../services/razorpay/signatures.js";
 import { parseRazorpayWebhookPayload } from "../services/razorpay/webhook.js";
 import {
@@ -19,7 +18,6 @@ import {
 } from "../services/prepaid/shipmentDirectPayments.service.js";
 import { ShipmentDirectPayment } from "../models/shipmentDirectPayment.model.js";
 import { PublicShipmentPayment } from "../models/publicShipmentPayment.model.js";
-import { PaymentTopUp } from "../models/paymentTopUp.model.js";
 import { secureAmendmentDirectPayment } from "../services/prepaid/amendmentFunding.service.js";
 
 function getHeaderValue(value: string | string[] | undefined) {
@@ -162,24 +160,6 @@ export async function handleRazorpayWebhook(request: Request, response: Response
         return response.status(200).json({ success: true, ignored: true });
       }
 
-      const topUp = await findPaymentTopUpByRazorpayOrderId(orderId);
-      if (topUp) {
-        if (payment.amount !== topUp.amountMinor || payment.currency !== topUp.currency) {
-          await markWebhookProcessed(providerEventId, "FAILED", "Payment amount or currency mismatch.");
-          return response.status(400).json({ success: false, message: "Payment amount or currency mismatch." });
-        }
-
-        await creditCapturedTopUp({
-          paymentTopUpId: topUp._id as mongoose.Types.ObjectId,
-          razorpayPaymentId: payment.id,
-          idempotencyKey: `RAZORPAY_TOPUP:${payment.id}`,
-          expectedAmountMinor: payment.amount,
-          expectedCurrency: topUp.currency
-        });
-        await markWebhookProcessed(providerEventId, "PROCESSED");
-        return response.status(200).json({ success: true });
-      }
-
       const handledPublicBooking = await applyCapturedPublicPaymentWebhook({
         orderId,
         paymentId: payment.id,
@@ -235,15 +215,7 @@ export async function handleRazorpayWebhook(request: Request, response: Response
     }
 
     if (payload.event === "payment.failed") {
-      const topUp = await findPaymentTopUpByRazorpayOrderId(orderId);
-      if (topUp) {
-        await markPaymentTopUpFailed({
-          razorpayOrderId: orderId,
-          razorpayPaymentId: payment?.id,
-          failureCode: payment?.error_code,
-          failureDescription: payment?.error_description
-        });
-      } else if (await markShipmentDirectPaymentFailed(
+      if (await markShipmentDirectPaymentFailed(
         orderId,
         payment?.id ?? "",
         payment?.error_code,
@@ -263,25 +235,60 @@ export async function handleRazorpayWebhook(request: Request, response: Response
         await markWebhookProcessed(providerEventId, "IGNORED", "Refund event did not include a payment id.");
         return response.status(200).json({ success: true, ignored: true });
       }
-      const status = payload.event === "refund.processed" ? "REFUNDED" : "REFUND_PENDING";
+      const processed = payload.event === "refund.processed";
+      const status = processed ? "REFUNDED" : "REFUND_PENDING";
       const now = new Date();
-      const refundState = {
+      const publicRefundState = {
         status,
         razorpayRefundId: refund.id,
         razorpayRefundAmountMinor: refund.amount,
-        ...(status === "REFUNDED"
-          ? { razorpayRefundedAt: now, failureDescription: "Razorpay refund processed." }
-          : { razorpayRefundedAt: null, failureDescription: "Razorpay refund failed and requires reconciliation." })
+        refundedAt: processed ? now : null,
+        razorpayRefundedAt: processed ? now : null,
+        failureMessage: processed
+          ? "Razorpay refund processed."
+          : "Razorpay refund failed and requires reconciliation."
       };
-      const [directResult, publicResult, topUpResult] = await Promise.all([
+      const processedRefundStatuses = ["REFUND_PENDING", "SETTLED", "ALLOCATED", "REFUNDED"] as const;
+      const directRefundFilter = {
+        razorpayPaymentId: refund.payment_id,
+        status: {
+          $in: processed
+            ? [...processedRefundStatuses]
+            : ["REFUND_PENDING" as const]
+        },
+        $or: [{ razorpayRefundId: "" }, { razorpayRefundId: refund.id }],
+        ...(processed ? { $expr: { $gte: ["$razorpayRefundAmountMinor", refund.amount] } } : {})
+      };
+      // Refunds can be partial. The cumulative amount is already on the payment,
+      // so the webhook only confirms the gateway event and downgrades the status
+      // back to SETTLED/ALLOCATED until the full captured amount is returned.
+      const directRefundUpdate = processed
+        ? [{
+            $set: {
+              status: {
+                $cond: [
+                  { $gte: ["$razorpayRefundAmountMinor", "$amountMinor"] },
+                  "REFUNDED",
+                  { $cond: [{ $eq: ["$paymentPurpose", "SHIPMENT_AMENDMENT"] }, "ALLOCATED", "SETTLED"] }
+                ]
+              },
+              razorpayRefundId: refund.id,
+              razorpayRefundedAt: {
+                $cond: [{ $gte: ["$razorpayRefundAmountMinor", "$amountMinor"] }, now, null]
+              },
+              failureDescription: "Razorpay refund processed."
+            }
+          }]
+        : {
+            $set: {
+              razorpayRefundId: refund.id,
+              failureDescription: "Razorpay refund failed and requires reconciliation."
+            }
+          };
+      const [directResult, publicResult] = await Promise.all([
         ShipmentDirectPayment.updateOne(
-          {
-            razorpayPaymentId: refund.payment_id,
-            status: { $in: status === "REFUNDED" ? ["REFUND_PENDING", "REFUNDED"] : ["REFUND_PENDING"] },
-            razorpayRefundAmountMinor: refund.amount,
-            $or: [{ razorpayRefundId: "" }, { razorpayRefundId: refund.id }]
-          },
-          { $set: refundState },
+          directRefundFilter,
+          directRefundUpdate,
           { runValidators: true }
         ).exec(),
         PublicShipmentPayment.updateOne(
@@ -291,36 +298,14 @@ export async function handleRazorpayWebhook(request: Request, response: Response
             razorpayRefundAmountMinor: refund.amount,
             $or: [{ razorpayRefundId: "" }, { razorpayRefundId: refund.id }]
           },
-          {
-            $set: {
-              status,
-              razorpayRefundId: refund.id,
-              razorpayRefundAmountMinor: refund.amount,
-              refundedAt: status === "REFUNDED" ? now : null,
-              razorpayRefundedAt: status === "REFUNDED" ? now : null,
-              failureMessage: status === "REFUNDED"
-                ? "Razorpay refund processed."
-                : "Razorpay refund failed and requires reconciliation."
-            }
-          },
-          { runValidators: true }
-        ).exec(),
-        PaymentTopUp.updateOne(
-          { razorpayPaymentId: refund.payment_id, status: { $in: status === "REFUNDED" ? ["REFUND_PENDING", "REFUNDED"] : ["REFUND_PENDING"] } },
-          {
-            $set: {
-              status,
-              failureDescription: status === "REFUNDED" ? "Razorpay refund processed." : "Razorpay refund failed and requires reconciliation."
-            }
-          },
+          { $set: publicRefundState },
           { runValidators: true }
         ).exec()
       ]);
-      const matched = Boolean(directResult.matchedCount || publicResult.matchedCount || topUpResult.matchedCount);
+      const matched = Boolean(directResult.matchedCount || publicResult.matchedCount);
       const knownPayment = matched || await Promise.all([
         ShipmentDirectPayment.exists({ razorpayPaymentId: refund.payment_id }),
-        PublicShipmentPayment.exists({ razorpayPaymentId: refund.payment_id }),
-        PaymentTopUp.exists({ razorpayPaymentId: refund.payment_id })
+        PublicShipmentPayment.exists({ razorpayPaymentId: refund.payment_id })
       ]).then((results) => results.some(Boolean));
       await markWebhookProcessed(
         providerEventId,

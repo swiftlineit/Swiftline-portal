@@ -14,8 +14,7 @@ import {
   markShipmentFundingConsuming,
   markShipmentFundingReviewRequired,
   releaseShipmentFunding,
-  securePaidShipmentFunding,
-  secureWalletShipmentFunding
+  securePaidShipmentFunding
 } from "./prepaid/shipmentFunding.service.js";
 import type { ShipmentFundingSource } from "../models/shipmentFunding.model.js";
 import {
@@ -25,6 +24,9 @@ import {
 } from "./shipmentPricing.service.js";
 
 const RESERVATION_TTL_MS = 15 * 60 * 1000;
+// BUSINESS_WALLET is retained only so in-flight legacy rows can still complete
+// their existing lifecycle transitions. No new booking can create one.
+const PREPAID_PAYMENT_SOURCES = ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"];
 type ShipmentDraftDocument = InstanceType<typeof ShipmentDraft>;
 
 function bookingReservationKey(shipmentDraftId: mongoose.Types.ObjectId, bookingAttemptId: string) {
@@ -57,13 +59,10 @@ export async function reserveShipmentBookingCharge(input: {
   const amountMinor = toMinor(pricing.totalAmount);
   if (amountMinor <= 0) throw new Error("BOOKING_AMOUNT_INVALID");
 
+  // Wallet reservations are retained only for legacy rows. New bookings must
+  // arrive here with a verified Razorpay payment or finalized cash receipt.
   if (getTenantContext()?.kind !== "OPERATOR") {
-    return secureWalletShipmentFunding({
-      draft: input.draft,
-      pricing,
-      bookingAttemptId: input.bookingAttemptId,
-      createdBy: input.createdBy
-    });
+    throw new Error("Wallet funding is no longer available. Pay online or record a cash receipt before booking.");
   }
 
   return reserveBookingCapacity({
@@ -178,7 +177,7 @@ export async function markShipmentBookingChargeConsuming(
   bookingAttemptId = ""
 ) {
   const charge = await getReservedCharge(shipmentDraftId);
-  if (charge && ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(charge.paymentSource)) {
+  if (charge && PREPAID_PAYMENT_SOURCES.includes(charge.paymentSource)) {
     await markShipmentFundingConsuming({ shipmentDraftId, bookingAttemptId });
     return charge;
   }
@@ -193,7 +192,7 @@ export async function completeShipmentBookingCharge(input: {
   createdBy: mongoose.Types.ObjectId;
 }) {
   const charge = await getReservedCharge(input.shipmentDraftId);
-  if (charge && ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(charge.paymentSource)) {
+  if (charge && PREPAID_PAYMENT_SOURCES.includes(charge.paymentSource)) {
     await completeShipmentFunding(input);
     return getReservedCharge(input.shipmentDraftId);
   }
@@ -215,7 +214,7 @@ export async function releaseShipmentBookingCharge(input: {
   createdBy: mongoose.Types.ObjectId;
 }) {
   const charge = await getReservedCharge(input.shipmentDraftId);
-  if (charge && ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(charge.paymentSource)) {
+  if (charge && PREPAID_PAYMENT_SOURCES.includes(charge.paymentSource)) {
     await releaseShipmentFunding({
       shipmentDraftId: input.shipmentDraftId,
       createdBy: input.createdBy,
@@ -241,7 +240,7 @@ export async function markShipmentBookingChargeReviewRequired(input: {
   createdBy: mongoose.Types.ObjectId;
 }) {
   const charge = await getReservedCharge(input.shipmentDraftId);
-  if (charge && ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(charge.paymentSource)) {
+  if (charge && PREPAID_PAYMENT_SOURCES.includes(charge.paymentSource)) {
     await markShipmentFundingReviewRequired({
       shipmentDraftId: input.shipmentDraftId,
       dpdShipmentId: input.dpdShipmentId,

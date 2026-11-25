@@ -335,58 +335,78 @@ export async function markShipmentDirectPaymentFailed(orderId: string, paymentId
   ).exec();
 }
 
-/** Refund an unallocated booking payment or a secured amendment before rejection. */
+/**
+ * Refund all or part of a captured gateway payment.
+ *
+ * Booking payments are usually settled when an amendment reduces the charge, so
+ * this accepts SETTLED as well as CAPTURED. The cumulative refund amount is kept
+ * on the payment, which lets repeated reductions stay idempotent.
+ */
 export async function refundCapturedShipmentDirectPayment(input: {
   paymentIntentId: mongoose.Types.ObjectId;
   reason: string;
+  amountMinor?: number;
 }) {
   const intent = await ShipmentDirectPayment.findById(input.paymentIntentId).exec();
   if (!intent) throw new Error("Shipment payment intent was not found.");
-  if (intent.status === "REFUNDED") return intent;
-  const amendmentRefund = intent.paymentPurpose === "SHIPMENT_AMENDMENT" && intent.status === "ALLOCATED";
-  if (!amendmentRefund && !["CAPTURED", "REFUND_PENDING"].includes(intent.status)) {
-    throw new Error("Only an unallocated captured payment can be refunded.");
+  const amountMinor = input.amountMinor ?? intent.amountMinor;
+  assertPositiveMinor(amountMinor);
+
+  const alreadyRefundedMinor = intent.razorpayRefundAmountMinor ?? 0;
+  if (alreadyRefundedMinor >= intent.amountMinor) {
+    if (intent.status === "REFUNDED") return intent;
+    throw new Error("This shipment payment has already been fully refunded.");
+  }
+  if (alreadyRefundedMinor + amountMinor > intent.amountMinor) {
+    throw new Error("The requested refund is larger than the remaining captured amount.");
+  }
+  if (!["CAPTURED", "SETTLED", "ALLOCATED", "REFUND_PENDING"].includes(intent.status)) {
+    throw new Error("Only a captured or settled payment can be refunded.");
   }
   if (!intent.razorpayPaymentId) throw new Error("Captured Razorpay payment ID is missing.");
-  if (intent.status === "REFUND_PENDING" && intent.razorpayRefundAmountMinor !== 0
-    && intent.razorpayRefundAmountMinor !== intent.amountMinor) {
-    throw new Error("A different Razorpay refund amount is already pending for this payment.");
-  }
 
-  const claim = await ShipmentDirectPayment.updateOne(
+  const targetRefundMinor = alreadyRefundedMinor + amountMinor;
+  const idempotencyKey = `SHIPMENT_REFUND_${String(intent._id)}_${targetRefundMinor}`;
+  const claim = await ShipmentDirectPayment.findOneAndUpdate(
     {
       _id: intent._id,
-      status: amendmentRefund ? { $in: ["ALLOCATED", "REFUND_PENDING"] } : { $in: ["CAPTURED", "REFUND_PENDING"] },
-      ...(intent.status === "REFUND_PENDING" ? { razorpayRefundAmountMinor: { $in: [0, intent.amountMinor] } } : {})
+      razorpayRefundAmountMinor: alreadyRefundedMinor,
+      status: { $in: ["CAPTURED", "SETTLED", "ALLOCATED", "REFUND_PENDING"] }
     },
-    { $set: { status: "REFUND_PENDING", razorpayRefundAmountMinor: intent.amountMinor, failureDescription: input.reason } },
-    { runValidators: true }
+    {
+      $set: {
+        status: "REFUND_PENDING",
+        razorpayRefundAmountMinor: targetRefundMinor,
+        failureDescription: input.reason
+      }
+    },
+    { returnDocument: "after", runValidators: true }
   ).exec();
-  if (!claim.matchedCount) {
+  if (!claim) {
     const current = await ShipmentDirectPayment.findById(intent._id).exec();
-    if (current?.status === "REFUNDED" && current.razorpayRefundAmountMinor === intent.amountMinor) return current;
-    if (current?.status !== "REFUND_PENDING" || current.razorpayRefundAmountMinor !== intent.amountMinor) {
-      throw new Error("The shipment payment changed and can no longer be refunded.");
-    }
+    if (current?.razorpayRefundAmountMinor === targetRefundMinor) return current;
+    throw new Error("The shipment payment changed and can no longer be refunded.");
   }
 
   try {
     const refund = await createRazorpayRefund({
       paymentId: intent.razorpayPaymentId,
-      amountMinor: intent.amountMinor,
-      idempotencyKey: `SHIPMENT_REFUND_${String(intent._id)}`
+      amountMinor,
+      idempotencyKey
     });
-    if (refund.payment_id !== intent.razorpayPaymentId || refund.amount !== intent.amountMinor || refund.currency !== "INR") {
-      throw new Error("Razorpay refund details did not match this amendment payment.");
+    if (refund.payment_id !== intent.razorpayPaymentId || refund.amount !== amountMinor || refund.currency !== "INR") {
+      throw new Error("Razorpay refund details did not match this shipment payment.");
     }
+    const settledStatus = intent.paymentPurpose === "SHIPMENT_AMENDMENT" ? "ALLOCATED" : "SETTLED";
     await ShipmentDirectPayment.updateOne(
-      { _id: intent._id, status: "REFUND_PENDING" },
+      { _id: intent._id, status: "REFUND_PENDING", razorpayRefundAmountMinor: targetRefundMinor },
       {
         $set: {
           razorpayRefundId: refund.id,
-          razorpayRefundAmountMinor: intent.amountMinor,
-          status: refund.status === "processed" ? "REFUNDED" : "REFUND_PENDING",
-          razorpayRefundedAt: refund.status === "processed" ? new Date() : null,
+          status: refund.status === "processed"
+            ? targetRefundMinor >= intent.amountMinor ? "REFUNDED" : settledStatus
+            : "REFUND_PENDING",
+          razorpayRefundedAt: refund.status === "processed" && targetRefundMinor >= intent.amountMinor ? new Date() : null,
           failureDescription: refund.status === "processed" ? input.reason : "Razorpay refund is processing."
         }
       },
@@ -394,7 +414,7 @@ export async function refundCapturedShipmentDirectPayment(input: {
     ).exec();
   } catch (error) {
     await ShipmentDirectPayment.updateOne(
-      { _id: intent._id, status: "REFUND_PENDING" },
+      { _id: intent._id, status: "REFUND_PENDING", razorpayRefundAmountMinor: targetRefundMinor },
       { $set: { failureDescription: `${input.reason} Refund requires reconciliation: ${error instanceof Error ? error.message : "Unknown provider error."}`.slice(0, 500) } },
       { runValidators: true }
     ).exec();

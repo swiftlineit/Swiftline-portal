@@ -1,16 +1,5 @@
 import { requestJson } from "@/lib/shipmentsList";
 
-export type BranchWalletRow = {
-  id: string;
-  businessAccountId: string;
-  accountId: string;
-  companyName: string;
-  status: string;
-  walletBalanceMinor: number;
-  reservedBalanceMinor: number;
-  availableBalanceMinor: number;
-};
-
 export type BranchFinanceSummary = {
   period: { from: string; to: string };
   currency: string;
@@ -18,11 +7,6 @@ export type BranchFinanceSummary = {
     shipments: number;
     invoicedMinor: number;
     linkedAccounts: number;
-    walletCount: number;
-    walletBalanceMinor: number;
-    reservedBalanceMinor: number;
-    availableBalanceMinor: number;
-    wallets: BranchWalletRow[];
   };
   individual: {
     shipments: number;

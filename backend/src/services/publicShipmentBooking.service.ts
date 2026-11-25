@@ -9,6 +9,7 @@ import { PublicShipmentBooking } from "../models/publicShipmentBooking.model.js"
 import { PublicShipmentPayment } from "../models/publicShipmentPayment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
+import { CashReceipt } from "../models/cashReceipt.model.js";
 import { SYSTEM_ACTOR_ID } from "../utils/systemActor.js";
 import { maskAadhaarNumber } from "./aadhaarValidation.service.js";
 import { createLabelForShipmentDraft } from "./dpdShipment.service.js";
@@ -34,6 +35,7 @@ import {
   publicBookingRateCardBand,
 } from "./shipmentPricing.service.js";
 import { validateShipmentDraftFields } from "./shipmentValidation.service.js";
+import { buildShipmentBookedAttachmentRefs } from "./shipmentBookedAttachments.service.js";
 
 export const PUBLIC_BOOKING_COOKIE = "slc_public_booking";
 export const PUBLIC_QUOTE_TTL_MS = 30 * 60 * 1000;
@@ -345,25 +347,23 @@ async function sendPublicBookingEmail(input: {
   payment: InstanceType<typeof PublicShipmentPayment>;
   rawStatusToken: string;
 }) {
-  const [invoice, labels] = await Promise.all([
+  const [invoice, labels, cashReceipt] = await Promise.all([
     ShipmentInvoice.findOne({ shipmentDraftId: input.payment.shipmentDraftId }).lean().exec(),
     input.booking.dpdShipmentId
-      ? LabelDocument.find({ dpdShipmentId: input.booking.dpdShipmentId, labelType: "SWIFTLINE", voidedAt: null }).sort({ parcelNumber: 1 }).lean().exec()
+      ? LabelDocument.find({ dpdShipmentId: input.booking.dpdShipmentId, voidedAt: null })
+        .select("_id labelType parcelNumber format storageKey").sort({ labelType: -1, parcelNumber: 1 }).lean().exec()
       : [],
+    CashReceipt.findOne({ shipmentDraftId: input.payment.shipmentDraftId, status: "FINALIZED" })
+      .select("_id receiptNumber").lean().exec()
   ]);
   if (!invoice) return;
-  const printableLabels = labels.filter((label, index) => (
-    labels.findIndex((candidate) => candidate.storageKey === label.storageKey) === index
-  ));
-  const attachments = [
-    { kind: "SHIPMENT_INVOICE_PDF" as const, refId: invoice._id, revision: invoice.revision, filename: `${invoice.invoiceNumber.replaceAll("/", "-")}-Invoice.pdf` },
-    ...printableLabels.map((label) => ({
-      kind: "LABEL_DOCUMENT" as const,
-      refId: label._id,
-      revision: null,
-      filename: `Swiftline-Labels-${input.booking.swiftlineTrackingNumber}.${label.format.toLowerCase()}`
-    })),
-  ];
+  const attachments = buildShipmentBookedAttachmentRefs({
+    shipmentDraftId: input.payment.shipmentDraftId,
+    trackingNumber: input.booking.swiftlineTrackingNumber,
+    shipmentInvoice: invoice,
+    labels,
+    cashReceipt
+  });
   await enqueueEmails({
     notificationType: "SHIPMENT_BOOKED",
     idempotencyKey: `PUBLIC_SHIPMENT_BOOKED:${String(input.booking._id)}`,

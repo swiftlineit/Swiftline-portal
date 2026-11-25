@@ -1,10 +1,11 @@
 import { apiUrl } from "@/lib/api";
 import { getAccessToken, refreshAccessToken } from "@/lib/auth";
 
-export type AdminPrepaidTransaction = {
+export type PaymentsLedgerRow = {
   paymentSource?: string;
   status?: string;
   reference?: string;
+  description?: string;
   shipmentDraftId?: string | null;
   shipmentNumber?: string | null;
   _id: string;
@@ -12,30 +13,26 @@ export type AdminPrepaidTransaction = {
   direction: "CREDIT" | "DEBIT" | "NONE";
   amountMinor: number;
   currency: string;
-  cashBalanceBeforeMinor?: number;
-  cashBalanceAfterMinor?: number;
-  reservedBalanceBeforeMinor?: number;
-  reservedBalanceAfterMinor?: number;
-  description: string;
-  idempotencyKey: string;
+  idempotencyKey?: string;
   createdAt: string;
 };
 
-export type AdminPrepaidLedger = {
+export type PaymentsLedgerPagination = { page: number; limit: number; total: number; totalPages: number };
+
+export type PaymentsLedger = {
   success: true;
   account: { id: string; accountId: string; companyName: string; branchId: string };
-  wallet: {
-    status: string;
-    currency: string;
-    cashBalanceMinor: number;
-    reservedBalanceMinor: number;
-    availableBalanceMinor: number;
-  };
-  transactions: AdminPrepaidTransaction[];
-  pagination: { page: number; limit: number; total: number; totalPages: number };
+  transactions: PaymentsLedgerRow[];
+  pagination: PaymentsLedgerPagination;
 };
 
-type LedgerRange = { from?: string; to?: string; page?: number; limit?: number; view?: "all" | "wallet" };
+export type ClientAccountLedger = {
+  success: true;
+  transactions: PaymentsLedgerRow[];
+  pagination: PaymentsLedgerPagination;
+};
+
+export type LedgerRange = { from?: string; to?: string; page?: number; limit?: number };
 
 function query(input: LedgerRange) {
   const params = new URLSearchParams();
@@ -43,7 +40,6 @@ function query(input: LedgerRange) {
   if (input.to) params.set("to", input.to);
   if (input.page) params.set("page", String(input.page));
   if (input.limit) params.set("limit", String(input.limit));
-  if (input.view) params.set("view", input.view);
   const value = params.toString();
   return value ? `?${value}` : "";
 }
@@ -61,31 +57,31 @@ async function authenticatedFetch(path: string) {
   return response;
 }
 
-export async function getClientAccountLedger(businessAccountId: string, page = 1) {
-  const params = new URLSearchParams({ businessAccountId, page: String(page) });
+export async function getClientAccountLedger(businessAccountId: string, range: LedgerRange = {}) {
+  const params = new URLSearchParams({ businessAccountId, ...Object.fromEntries(new URLSearchParams(query(range)).entries()) });
   const response = await authenticatedFetch(`/api/v1/client/account-ledger?${params}`);
-  const result = await response.json() as { success?: boolean; message?: string; transactions: AdminPrepaidTransaction[]; pagination: AdminPrepaidLedger["pagination"] };
-  if (!response.ok || !result.success) throw new Error(result.message || "Account ledger could not be loaded.");
-  return result;
+  const result = await response.json().catch(() => ({})) as Partial<ClientAccountLedger> & { message?: string };
+  if (!response.ok || !result.success) throw new Error(result.message || "Payments ledger could not be loaded.");
+  return result as ClientAccountLedger;
 }
 
-export async function getAdminPrepaidLedger(businessAccountId: string, range: LedgerRange = {}) {
-  const response = await authenticatedFetch(`/api/v1/prepaid-accounts/${encodeURIComponent(businessAccountId)}/ledger${query(range)}`);
-  const payload = await response.json().catch(() => ({})) as Partial<AdminPrepaidLedger> & { message?: string };
-  if (!response.ok || !payload.success) throw new Error(payload.message || "Wallet ledger could not be loaded.");
-  return payload as AdminPrepaidLedger;
+export async function getAdminPaymentsLedger(businessAccountId: string, range: LedgerRange = {}) {
+  const response = await authenticatedFetch(`/api/v1/business-accounts/${encodeURIComponent(businessAccountId)}/payments-ledger${query(range)}`);
+  const payload = await response.json().catch(() => ({})) as Partial<PaymentsLedger> & { message?: string };
+  if (!response.ok || !payload.success) throw new Error(payload.message || "Payments ledger could not be loaded.");
+  return payload as PaymentsLedger;
 }
 
-export async function exportAdminPrepaidLedger(businessAccountId: string, range: Omit<LedgerRange, "page" | "limit"> = {}) {
-  const response = await authenticatedFetch(`/api/v1/prepaid-accounts/${encodeURIComponent(businessAccountId)}/ledger/export${query(range)}`);
+export async function exportAdminPaymentsLedger(businessAccountId: string, range: Omit<LedgerRange, "page" | "limit"> = {}) {
+  const response = await authenticatedFetch(`/api/v1/business-accounts/${encodeURIComponent(businessAccountId)}/payments-ledger/export${query(range)}`);
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { message?: string };
-    throw new Error(payload.message || "Wallet ledger export could not be downloaded.");
+    throw new Error(payload.message || "Payments ledger export could not be downloaded.");
   }
   const url = URL.createObjectURL(await response.blob());
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `wallet-ledger-${businessAccountId}.csv`;
+  anchor.download = `payments-ledger-${businessAccountId}.csv`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();

@@ -20,7 +20,6 @@ import {
 } from "../models/businessAccount.model.js";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
-import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { AuditLog } from "../models/auditLog.model.js";
 import { businessAccountBranchFilter } from "../middleware/businessAccountBranchAccess.middleware.js";
@@ -1224,8 +1223,7 @@ async function getPopulatedBusinessAccount(accountId: string) {
     .exec();
 
   if (!account) return null;
-  const [accountWithWallet] = await includeAvailableWalletBalances([account]);
-  return normalizeBusinessAccountSnapshot(accountWithWallet!);
+  return normalizeBusinessAccountSnapshot(account);
 }
 
 // Store newly uploaded documents and return the storage keys of any they
@@ -1341,11 +1339,10 @@ export async function listBusinessAccounts(request: Request, response: Response)
     const pageSize = Number.isInteger(requestedSize) ? Math.min(Math.max(requestedSize, 1), 100) : 10;
     const total = await BusinessAccount.countDocuments(scopedFilters);
     const accounts = await query.skip((requestedPage - 1) * pageSize).limit(pageSize).lean().exec();
-    const accountsWithWallets = await includeAvailableWalletBalances(accounts);
 
     return response.status(200).json({
       success: true,
-      accounts: accountsWithWallets.map(normalizeBusinessAccountSnapshot),
+      accounts: accounts.map(normalizeBusinessAccountSnapshot),
       total,
       page: requestedPage,
       pageSize
@@ -1353,24 +1350,7 @@ export async function listBusinessAccounts(request: Request, response: Response)
   }
 
   const accounts = await query.lean().exec();
-  const accountsWithWallets = await includeAvailableWalletBalances(accounts);
-  return response.status(200).json({ success: true, accounts: accountsWithWallets.map(normalizeBusinessAccountSnapshot) });
-}
-
-async function includeAvailableWalletBalances<T extends { _id: mongoose.Types.ObjectId }>(accounts: T[]) {
-  if (!accounts.length) return accounts.map((account) => ({ ...account, walletAvailableBalanceMinor: 0 }));
-  const wallets = await PrepaidAccount.find({ businessAccountId: { $in: accounts.map((account) => account._id) } })
-    .select("businessAccountId cashBalanceMinor reservedBalanceMinor")
-    .lean()
-    .exec();
-  const availableByAccountId = new Map(wallets.map((wallet) => [
-    String(wallet.businessAccountId),
-    Math.max(wallet.cashBalanceMinor - wallet.reservedBalanceMinor, 0)
-  ]));
-  return accounts.map((account) => ({
-    ...account,
-    walletAvailableBalanceMinor: availableByAccountId.get(String(account._id)) ?? 0
-  }));
+  return response.status(200).json({ success: true, accounts: accounts.map(normalizeBusinessAccountSnapshot) });
 }
 
 export async function createBusinessAccount(request: Request, response: Response): Promise<Response> {
@@ -1492,8 +1472,7 @@ export async function getBusinessAccount(request: Request, response: Response): 
     .exec();
 
   if (!account) return response.status(404).json({ success: false, message: "Business account not found" });
-  const [accountWithWallet] = await includeAvailableWalletBalances([account]);
-  return response.status(200).json({ success: true, account: normalizeBusinessAccountSnapshot(accountWithWallet!) });
+  return response.status(200).json({ success: true, account: normalizeBusinessAccountSnapshot(account) });
 }
 
 export async function updateBusinessAccountVolumetricDiscount(request: Request, response: Response): Promise<Response> {

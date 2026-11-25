@@ -1,5 +1,7 @@
 # Prepaid workflow verification and browser guide
 
+> Historical release report. It describes the earlier wallet-based prepaid flow and is superseded by `WALLET_REMOVAL_FINAL_REPORT.md` and `WALLET_REMOVAL_MANUAL_TEST_GUIDE.md`.
+
 Date: 23 November 2026
 
 ## Latest release verification and production audit

@@ -152,6 +152,14 @@ async function deliver(row: IEmailOutbox) {
       ...row.payload,
       labelsAttached: resolution.attachments.some((attachment) => attachment.kind === "LABEL_DOCUMENT"),
       invoiceAttached: resolution.attachments.some((attachment) => attachment.kind === "SHIPMENT_INVOICE_PDF"),
+      customsInvoiceAttached: resolution.attachments.some((attachment) => attachment.kind === "CUSTOMS_INVOICE_PDF"),
+      cashReceiptAttached: resolution.attachments.some((attachment) => attachment.kind === "CASH_RECEIPT_PDF"),
+      swiftlineLabelAttached: resolution.attachments.some((attachment) => (
+        attachment.kind === "LABEL_DOCUMENT" && !attachment.filename.startsWith("DPD-Label-")
+      )),
+      dpdLabelAttached: resolution.attachments.some((attachment) => (
+        attachment.kind === "LABEL_DOCUMENT" && attachment.filename.startsWith("DPD-Label-")
+      )),
       pickupDocumentsAttached: resolution.attachments.filter((attachment) => attachment.kind === "PICKUP_DOCUMENT").length,
       attachmentsDropped: resolution.dropped
     },

@@ -120,7 +120,7 @@ export default function AdminShipmentCancellationDialog({
         <form onSubmit={(event) => void submit(event)}>
           <div className="space-y-4 px-5 py-4">
             <p id="direct-cancellation-summary" className="text-sm leading-6 text-slate-600">
-              Direct cancellation is available only before Warehouse Scan In. Confirm the carrier cancellation and review the settlement below. The portal will process a Razorpay refund to its original payment source or return wallet funds as applicable.
+              Direct cancellation is available only before Warehouse Scan In. Confirm the carrier cancellation and review the settlement below. The portal refunds the original payment method or records an offline refund for cash and staff-paid bookings.
             </p>
 
             <div className="grid gap-3 sm:grid-cols-2">
@@ -291,7 +291,7 @@ function Amount({ label, amountMinor, emphasis = false }: { label: string; amoun
     <div className={`min-w-0 p-3 ${emphasis ? "bg-blue-50" : "bg-white"}`}>
       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
       <p className={`mt-1 truncate text-sm font-bold tabular-nums ${emphasis ? "text-[#0D1282]" : "text-slate-900"}`}>
-        {amountMinor === null ? "—" : currency.format(amountMinor / 100)}
+        {amountMinor === null ? "-" : currency.format(amountMinor / 100)}
       </p>
     </div>
   );

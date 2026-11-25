@@ -16,6 +16,9 @@ const environmentSchema = z.object({
   PORT: z.coerce.number().int().positive().default(5000),
 
   CLIENT_URL: z.string().url(),
+  // Immutable rollout boundary for recognizing labels that predate the prepaid
+  // access policy. Store an explicit UTC timestamp (with a trailing Z).
+  LABEL_PAYMENT_POLICY_ACTIVATED_AT: z.string().datetime().optional(),
   CORS_ORIGINS: z.string().optional(),
   // Operator endpoints stay unavailable until tenant indexes and isolation are deployed.
   OPERATOR_PORTAL_ENABLED: booleanFromEnv.default(false),

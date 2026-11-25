@@ -1,6 +1,7 @@
 import type { EmailContent } from "../layout.js";
 import type { EmailTemplateContext } from "./index.js";
 import { asNumber, asText, formatDateTime, formatMoneyMinor, firstNameOf, toAbsoluteUrl } from "../format.js";
+import { shipmentBookingDocumentFacts } from "./shipmentBooked.js";
 
 function facts(payload: Record<string, unknown>) {
   return [
@@ -16,8 +17,6 @@ function facts(payload: Record<string, unknown>) {
 
 export function operatorShipmentBookedClientTemplate({ payload, recipientName, appUrl }: EmailTemplateContext): EmailContent {
   const trackingNumber = asText(payload.trackingNumber);
-  const invoiceAttached = Boolean(payload.invoiceAttached);
-  const labelsAttached = Boolean(payload.labelsAttached);
   return {
     subject: `Shipment ${trackingNumber} booked`,
     preheader: `Your shipment with ${asText(payload.operatorName)} is booked.`,
@@ -30,13 +29,7 @@ export function operatorShipmentBookedClientTemplate({ payload, recipientName, a
         { label: "Invoice", value: asText(payload.invoiceNumber) },
         { label: "Total", value: formatMoneyMinor(asNumber(payload.invoiceTotalMinor), asText(payload.currency, "INR")) }
       ] },
-      { kind: "paragraph", text: invoiceAttached && labelsAttached
-        ? "Your invoice and internal parcel labels are attached."
-        : invoiceAttached
-          ? "Your invoice is attached. Download your internal parcel labels from the shipment page."
-          : labelsAttached
-            ? "Your internal parcel labels are attached. Download your invoice from the shipment page."
-            : "Download your invoice and internal parcel labels from the shipment page." },
+      shipmentBookingDocumentFacts(payload, "Internal labels"),
       { kind: "button", label: "View shipment", url: toAbsoluteUrl(appUrl, asText(payload.href)) }
     ]
   };
@@ -54,6 +47,12 @@ export function operatorShipmentBookedStaffTemplate({ payload, appUrl }: EmailTe
         { label: "Booked by", value: asText(payload.bookedByName) },
         ...facts(payload)
       ] },
+      { kind: "facts", rows: [
+        { label: "Invoice number", value: asText(payload.invoiceNumber) },
+        { label: "GST", value: payload.taxTreatment === "NO_GST" ? "-" : formatMoneyMinor(asNumber(payload.totalTaxAmountMinor), asText(payload.currency, "INR")) },
+        { label: "Invoice total", value: formatMoneyMinor(asNumber(payload.invoiceTotalMinor), asText(payload.currency, "INR")) }
+      ] },
+      shipmentBookingDocumentFacts(payload, "Internal labels"),
       { kind: "button", label: "Open shipment", url: toAbsoluteUrl(appUrl, asText(payload.href)) }
     ]
   };

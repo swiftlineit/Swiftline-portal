@@ -63,9 +63,10 @@ import {
 } from "../services/shipmentBookingSnapshot.service.js";
 import {
   AmendmentPaymentError,
-  releaseAmendmentWalletPayment,
-  secureAmendmentDirectPayment,
-  secureAmendmentWalletPayment
+  prepareAmendmentRefund,
+  reconcileAmendmentRefund,
+  recordManualAmendmentRefund,
+  secureAmendmentDirectPayment
 } from "../services/prepaid/amendmentFunding.service.js";
 
 const postParcelCollectedStatuses: ShipmentEventStatus[] = [
@@ -192,6 +193,12 @@ class AmendmentReviewError extends Error {
   constructor(public readonly statusCode: number, message: string) {
     super(message);
   }
+}
+
+function savedAmendmentDeltaMinor(amendment: InstanceType<typeof ShipmentAmendment>) {
+  const fundingPreview = amendment.fundingPreview as { deltaAmountMinor?: unknown } | null;
+  const delta = fundingPreview?.deltaAmountMinor;
+  return typeof delta === "number" && Number.isInteger(delta) ? delta : 0;
 }
 
 function getAuthenticatedUserId(request: Request): mongoose.Types.ObjectId | null {
@@ -830,40 +837,6 @@ export async function getPendingShipmentAmendment(request: Request, response: Re
   return response.status(200).json({ success: true, amendment: amendment ? serializeShipmentAmendment(amendment) : null });
 }
 
-export async function fundShipmentAmendmentFromWallet(request: Request, response: Response, audience: "staff" | "client" = "staff"): Promise<Response> {
-  const userId = getAuthenticatedUserId(request);
-  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
-  const amendmentId = getAmendmentId(request);
-  if (!amendmentId) return response.status(404).json({ success: false, message: "Amendment not found" });
-  if (getTenantContext()?.kind === "OPERATOR") {
-    return response.status(409).json({ success: false, message: "Operator amendments use the operator billing policy." });
-  }
-  const amendment = await ShipmentAmendment.findById(amendmentId).select("branchId businessAccountId shipmentDraftId").lean().exec();
-  if (!amendment || (audience === "staff" && !canAccessBranch(request, amendment.branchId))) {
-    return response.status(404).json({ success: false, message: "Amendment not found" });
-  }
-  if (audience === "client") {
-    const draft = await ShipmentDraft.findOne({ _id: amendment.shipmentDraftId, businessAccountId: amendment.businessAccountId }).select("customerType").lean().exec();
-    if (!draft || draft.customerType !== "BUSINESS") return response.status(409).json({ success: false, message: "Only business shipments can use the business wallet for amendments." });
-  }
-  try {
-    const amendment = await secureAmendmentWalletPayment({
-      amendmentId: new mongoose.Types.ObjectId(amendmentId),
-      userId
-    });
-    return response.status(200).json({
-      success: true,
-      message: "Additional amendment payment secured from the wallet.",
-      amendment: serializeShipmentAmendment(amendment)
-    });
-  } catch (error) {
-    if (error instanceof AmendmentPaymentError) {
-      return response.status(error.statusCode).json({ success: false, message: error.message });
-    }
-    throw error;
-  }
-}
-
 async function loadAmendmentForDirectPayment(request: Request, client: boolean) {
   const amendmentId = getAmendmentId(request);
   if (!amendmentId) return null;
@@ -902,9 +875,6 @@ async function createAmendmentDirectPayment(
   const access = await loadAmendmentForDirectPayment(request, client);
   if (!access) return response.status(404).json({ success: false, message: "Amendment not found" });
   const { amendment, shipmentDraft } = access;
-  if (shipmentDraft.customerType === "BUSINESS" && !amendment.paymentReferenceId) {
-    return response.status(409).json({ success: false, message: "Business shipment amendments must be paid from the business wallet. Add wallet funds first." });
-  }
   if (
     !["AWAITING_PAYMENT", "PAYMENT_SECURED"].includes(amendment.status)
     || amendment.paymentAmountMinor <= 0
@@ -1162,6 +1132,33 @@ export async function approveShipmentAmendment(request: Request, response: Respo
     return response.status(400).json({ success: false, message: "Review note is invalid." });
   }
 
+  const operatorTenant = getTenantContext()?.kind === "OPERATOR";
+  let manualRefundRequired = false;
+  if (!operatorTenant) {
+    const pendingRefund = await ShipmentAmendment.findById(amendmentId).select("fundingPreview refundStatus").lean().exec();
+    if (!pendingRefund) return response.status(404).json({ success: false, message: "Amendment not found" });
+    const deltaMinor = savedAmendmentDeltaMinor(pendingRefund as InstanceType<typeof ShipmentAmendment>);
+    if (deltaMinor < 0) {
+      try {
+        await reconcileAmendmentRefund({ amendmentId: new mongoose.Types.ObjectId(amendmentId) });
+        await prepareAmendmentRefund({
+          amendmentId: new mongoose.Types.ObjectId(amendmentId),
+          amountMinor: Math.abs(deltaMinor),
+          reason: "Refund for an approved shipment charge reduction."
+        });
+      } catch (error) {
+        if (!(error instanceof AmendmentPaymentError) || error.code !== "MANUAL_REFUND_REQUIRED") throw error;
+        if (!parsed.data.counterPayment) {
+          return response.status(400).json({
+            success: false,
+            message: "Record how the reduction was refunded before approving this amendment."
+          });
+        }
+        manualRefundRequired = true;
+      }
+    }
+  }
+
   const session = await mongoose.startSession();
   let result: {
     amendment: unknown;
@@ -1183,6 +1180,16 @@ export async function approveShipmentAmendment(request: Request, response: Respo
 
       const shipmentDraft = await ShipmentDraft.findById(amendment.shipmentDraftId).session(session).exec();
       if (!shipmentDraft) throw new AmendmentReviewError(404, "Shipment not found");
+      if (manualRefundRequired && parsed.data.counterPayment) {
+        await recordManualAmendmentRefund({
+          amendmentId: amendment._id as mongoose.Types.ObjectId,
+          reference: parsed.data.counterPayment.reference ?? "",
+          note: parsed.data.counterPayment.note ?? "",
+          createdBy: userId,
+          session
+        });
+        amendment.refundStatus = "CASH_REFUND_RECORDED";
+      }
       if (getTenantContext()?.kind !== "OPERATOR" && amendment.status === "AWAITING_PAYMENT") {
         throw new AmendmentReviewError(402, "Secure the additional amendment payment before approval.");
       }
@@ -1278,7 +1285,6 @@ export async function approveShipmentAmendment(request: Request, response: Respo
       // the revised invoice. `deltaAmountMinor` carries the direction: positive
       // means the customer paid more, negative means money went
       // back to them.
-      const operatorTenant = getTenantContext()?.kind === "OPERATOR";
       const requiresCounterMovement = operatorTenant || billingAdjustment.deltaAmountMinor < 0;
       if (
         shipmentDraft.customerType === "INDIVIDUAL"
@@ -1374,8 +1380,6 @@ export async function approveShipmentAmendment(request: Request, response: Respo
       }
       if (billingAdjustment.deltaAmountMinor < 0 && shipmentDraft.customerType === "INDIVIDUAL") {
         amendment.refundStatus = "CASH_REFUND_RECORDED";
-      } else if (billingAdjustment.deltaAmountMinor < 0 && getTenantContext()?.kind !== "OPERATOR") {
-        amendment.refundStatus = "CREDITED_TO_WALLET";
       }
       await amendment.save({ session });
 
@@ -1434,7 +1438,6 @@ export async function approveShipmentAmendment(request: Request, response: Respo
     dpdShipmentId: mongoose.Types.ObjectId;
   };
   let documentWarning = "";
-  const operatorTenant = getTenantContext()?.kind === "OPERATOR";
   try {
     await regenerateShipmentLabels(approvalResult.dpdShipmentId, userId);
   } catch (error) {
@@ -1473,23 +1476,6 @@ export async function rejectShipmentAmendment(request: Request, response: Respon
   }
   let expectedPaymentStatus = amendment.paymentStatus;
 
-  if (amendment.paymentStatus === "SECURED" && amendment.paymentSource === "BUSINESS_WALLET") {
-    try {
-      await releaseAmendmentWalletPayment({
-        amendmentId: amendment._id as mongoose.Types.ObjectId,
-        userId,
-        reason: "Reserved amendment funds released after the amendment was rejected."
-      });
-      amendment.paymentStatus = "RELEASED";
-      expectedPaymentStatus = "RELEASED";
-    } catch (error) {
-      if (error instanceof AmendmentPaymentError) {
-        return response.status(error.statusCode).json({ success: false, message: error.message });
-      }
-      throw error;
-    }
-  }
-
   if (amendment.paymentStatus === "SECURED" && amendment.paymentSource === "DIRECT_RAZORPAY") {
     if (!amendment.paymentReferenceId) {
       return response.status(409).json({ success: false, message: "The secured Razorpay payment reference is missing." });
@@ -1518,7 +1504,7 @@ export async function rejectShipmentAmendment(request: Request, response: Respon
   }
 
   // Prevent a stale reviewer from overwriting a concurrent payment capture or
-  // approval. Wallet release already changes paymentStatus in its transaction.
+  // approval. A direct refund already changes paymentStatus before this save.
   amendment.$where = {
     status: amendment.status,
     paymentStatus: expectedPaymentStatus

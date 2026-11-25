@@ -11,6 +11,8 @@ import { CarrierTrackingEvent } from "../models/carrierTrackingEvent.model.js";
 import { allowedBranchIds, canAccessBranch } from "../middleware/branchAccess.middleware.js";
 import { labelContentType, labelFileExtension } from "../services/labelStorage.service.js";
 import { isVisibleShipmentLabel } from "../services/als/alsLabelClassification.js";
+import { isDpdLabelDestination } from "../services/als/alsPayload.service.js";
+import { isDpdBookingEnabled } from "../services/bookingPause.service.js";
 import {
   ShipmentEvent,
   shipmentEventStatusValues,
@@ -73,7 +75,11 @@ import {
   type TrackingJourney
 } from "../services/shipmentJourney.service.js";
 import { buildTrackingPosition } from "../services/shipmentPosition.service.js";
-import { isShipmentPaymentCompleted } from "../services/prepaid/shipmentFunding.service.js";
+import {
+  canAccessShipmentLabel,
+  SHIPMENT_LABEL_PAYMENT_REQUIRED_MESSAGE,
+  type LabelPolicyShipment
+} from "../services/prepaid/shipmentLabelAccessPolicy.service.js";
 import { refundUnallocatedShipmentDirectPayment } from "../services/prepaid/shipmentDirectPayments.service.js";
 import { loadShipmentHubReceipt } from "../services/shipmentHubReceipt.service.js";
 import { resolveTrackingGatewayCode } from "../services/shipmentGateway.service.js";
@@ -167,7 +173,7 @@ const operationsScanSchema = z.object({
 // accepted price to check against.
 const acceptedPricingSchema = z.object({
   acceptedPricingHash: z.string().trim().min(1).max(128).optional(),
-  paymentSource: z.enum(["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT"]).optional(),
+  paymentSource: z.enum(["DIRECT_RAZORPAY", "CASH_RECEIPT"]).optional(),
   fundingReferenceId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid payment.").optional(),
   // Set only after the booker has been shown a DPD failure and chosen to go
   // ahead without the carrier label. Never defaulted true.
@@ -641,6 +647,13 @@ export async function buildStoredLabelAccess(params: {
   }).lean().exec();
   if (!label) return null;
 
+  const shipment = await DpdShipment.findById(params.dpdShipmentId)
+    .select("shipmentDraftId createdAt labelPaymentPolicy")
+    .lean()
+    .exec();
+  if (!shipment) return null;
+  if (!await canAccessShipmentLabel({ shipment, label })) return { paymentRequired: true as const };
+
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
   const tenantContext = getTenantContext();
   const token = createLabelAccessToken({
@@ -669,16 +682,21 @@ async function sendStoredLabel(params: {
   userId: mongoose.Types.ObjectId;
   response: Response;
   dpdShipmentId: string;
+  shipment?: LabelPolicyShipment;
   accessMode: "authenticated" | "signed";
   disposition?: "inline" | "attachment";
 }): Promise<Response | void> {
   const { label, userId, response, dpdShipmentId, accessMode } = params;
 
-  const shipment = await DpdShipment.findById(dpdShipmentId).select("shipmentDraftId").lean().exec();
-  if (!shipment || !await isShipmentPaymentCompleted(shipment.shipmentDraftId as mongoose.Types.ObjectId)) {
+  const shipment = params.shipment ?? await DpdShipment.findById(dpdShipmentId)
+    .select("shipmentDraftId createdAt labelPaymentPolicy")
+    .lean()
+    .exec();
+  if (!shipment) return response.status(404).json({ success: false, message: "Label not found" });
+  if (!await canAccessShipmentLabel({ shipment, label })) {
     return response.status(402).json({
       success: false,
-      message: "Shipment payment must be completed before its label can be accessed."
+      message: SHIPMENT_LABEL_PAYMENT_REQUIRED_MESSAGE
     });
   }
 
@@ -751,7 +769,10 @@ export async function createShipment(
   // captured at booking. The draft decides the payment source: it cannot be
   // chosen by the caller, so a business shipment can never be booked as a counter
   // sale and skip its credit reservation.
-  const draft = await ShipmentDraft.findById(shipmentDraftId).select("customerType branchId").lean().exec();
+  const draft = await ShipmentDraft.findById(shipmentDraftId)
+    .select("customerType branchId consigneeEnteredAddress.countryCode")
+    .lean()
+    .exec();
   if (!draft) return response.status(404).json({ success: false, message: "Shipment draft not found" });
   // Booking is the heaviest write on a draft, so it is held to the same branch
   // scope as editing one. Admin is unrestricted; operations books only for the
@@ -763,9 +784,9 @@ export async function createShipment(
 
   const acceptedPricing = acceptedPricingSchema.safeParse(request.body ?? {});
   if (!acceptedPricing.success) {
-    return response.status(400).json({ success: false, message: "Select a valid prepaid payment option.", errors: acceptedPricing.error.format() });
+    return response.status(400).json({ success: false, message: "Select a valid payment option.", errors: acceptedPricing.error.format() });
   }
-  const paymentSource = acceptedPricing.data.paymentSource ?? (isIndividual ? "DIRECT_RAZORPAY" : "BUSINESS_WALLET");
+  const paymentSource = acceptedPricing.data.paymentSource ?? "DIRECT_RAZORPAY";
   if (isIndividual && paymentSource !== "DIRECT_RAZORPAY") {
     return response.status(400).json({ success: false, message: "Individual shipments must be paid through Razorpay before booking." });
   }
@@ -777,6 +798,23 @@ export async function createShipment(
   }
   if (["DIRECT_RAZORPAY", "CASH_RECEIPT"].includes(paymentSource) && !acceptedPricing.data.fundingReferenceId) {
     return response.status(402).json({ success: false, message: "A verified payment reference is required before booking this shipment." });
+  }
+
+  const requestsDpdLabel = isDpdLabelDestination(draft.consigneeEnteredAddress?.countryCode)
+    && acceptedPricing.data.skipDpdLabel !== true;
+  if (requestsDpdLabel && !await isDpdBookingEnabled()) {
+    if (paymentSource === "DIRECT_RAZORPAY" && acceptedPricing.data.fundingReferenceId) {
+      await refundUnallocatedShipmentDirectPayment({
+        paymentIntentId: new mongoose.Types.ObjectId(acceptedPricing.data.fundingReferenceId),
+        shipmentDraftId: new mongoose.Types.ObjectId(shipmentDraftId),
+        reason: "DPD label booking was unavailable before the shipment could be created."
+      });
+    }
+    return response.status(423).json({
+      success: false,
+      code: "DPD_BOOKING_DISABLED",
+      message: "DPD label booking is temporarily unavailable. Create this shipment without a DPD label or try again later."
+    });
   }
 
   try {
@@ -1019,6 +1057,9 @@ export async function createDpdLabelAccessUrl(request: Request, response: Respon
     disposition: request.query.disposition === "attachment" ? "attachment" : "inline"
   });
   if (!access) return response.status(404).json({ success: false, message: "Label not found" });
+  if ("paymentRequired" in access) {
+    return response.status(402).json({ success: false, message: SHIPMENT_LABEL_PAYMENT_REQUIRED_MESSAGE });
+  }
 
   return response.status(200).json({
     success: true,
@@ -2054,7 +2095,7 @@ export async function downloadDpdLabelWithToken(request: Request, response: Resp
   return runWithTenantContext(tenantContext, async () => {
     const shipmentId = new mongoose.Types.ObjectId(dpdShipmentId);
     const shipment = await DpdShipment.findOne({ _id: shipmentId, tenantId: tenantContext.tenantId })
-      .select("_id shipmentDraftId")
+      .select("_id shipmentDraftId createdAt labelPaymentPolicy")
       .lean()
       .exec();
     if (!shipment) return response.status(404).json({ success: false, message: "Label not found" });
@@ -2078,6 +2119,7 @@ export async function downloadDpdLabelWithToken(request: Request, response: Resp
       userId: tokenPayload.userId,
       response,
       dpdShipmentId,
+      shipment,
       accessMode: "signed",
       disposition: request.query.disposition === "attachment" ? "attachment" : "inline"
     });

@@ -173,48 +173,58 @@ test("business account volumetric discount previews the rule and saves through t
   await expect(page.getByRole("spinbutton", { name: "Volumetric excess discount percentage" })).toHaveValue("50");
 });
 
-test("business account ledger switches between all payments and wallet movements", async ({ page }) => {
+test("business account payments ledger shows online, cash and refund activity", async ({ page }) => {
   await mockPortal(page, "operations");
-  const views: string[] = [];
-  await page.route(`**/api/v1/prepaid-accounts/${alphaId}/ledger**`, async (route) => {
-    const url = new URL(route.request().url());
-    const view = url.searchParams.get("view") || "all";
-    views.push(view);
-    const walletView = view === "wallet";
+  const ledgerRequests: string[] = [];
+  await page.route(`**/api/v1/business-accounts/${alphaId}/payments-ledger**`, async (route) => {
+    ledgerRequests.push(new URL(route.request().url()).search);
     return route.fulfill({ json: {
       success: true,
       account: { id: alphaId, accountId: account.accountId, companyName: "Alpha Logistics", branchId: "branch-alpha" },
-      wallet: { status: "ACTIVE", currency: "INR", cashBalanceMinor: 5_000_000, reservedBalanceMinor: 1_000_000, availableBalanceMinor: 4_000_000 },
-      transactions: [{
-        _id: walletView ? "wallet-entry" : "gateway-entry",
-        createdAt: "2026-11-23T08:00:00.000Z",
-        transactionType: walletView ? "SHIPMENT_PAYMENT_COMPLETED" : "RAZORPAY_BOOKING_PAYMENT",
-        direction: walletView ? "DEBIT" : "CREDIT",
-        amountMinor: 10_000,
-        currency: "INR",
-        description: walletView ? "Wallet-funded shipment booking" : "Razorpay booking payment",
-        paymentSource: walletView ? "WALLET" : "RAZORPAY",
-        status: "ALLOCATED",
-        reference: walletView ? "wallet_tx_booking" : "pay_razorpay_booking",
-        shipmentDraftId: "ledger-shipment",
-        shipmentNumber: "SLC-LEDGER-001"
-      }],
-      pagination: { page: 1, limit: 50, total: 1, totalPages: 1 }
+      transactions: [
+        {
+          _id: "gateway-entry",
+          createdAt: "2026-11-23T08:00:00.000Z",
+          transactionType: "RAZORPAY_BOOKING_PAYMENT",
+          direction: "CREDIT",
+          paymentSource: "RAZORPAY",
+          status: "ALLOCATED",
+          amountMinor: 10_000,
+          currency: "INR",
+          description: "Online booking payment",
+          reference: "pay_razorpay_booking",
+          shipmentDraftId: "ledger-shipment",
+          shipmentNumber: "SLC-LEDGER-001"
+        },
+        {
+          _id: "cash-entry",
+          createdAt: "2026-11-23T09:00:00.000Z",
+          transactionType: "CASH_RECEIPT_RECORDED",
+          direction: "CREDIT",
+          paymentSource: "CASH_RECEIPT",
+          status: "FINALIZED",
+          amountMinor: 5_000,
+          currency: "INR",
+          description: "Cash receipt recorded",
+          reference: "CR-QA-001"
+        }
+      ],
+      pagination: { page: 1, limit: 50, total: 2, totalPages: 1 }
     } });
   });
 
-  await page.goto("/dashboard/business-accounts/BA-2026-757526#ledger");
-  await expect(page.getByText("pay_razorpay_booking", { exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Open shipment SLC-LEDGER-001" })).toBeVisible();
-  await expect(page.getByText("Available to book", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Wallet ledger", exact: true }).click();
-  await expect(page.getByText("wallet_tx_booking", { exact: true })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Method / status" })).toHaveCount(0);
-  expect(views).toContain("all");
-  expect(views).toContain("wallet");
+  await page.goto("/dashboard/business-accounts/BA-2026-757526?tab=ledger");
+  const ledger = page.getByRole("region", { name: "Business account payments ledger" });
+  await expect(ledger.getByRole("heading", { name: "Payments ledger" })).toBeVisible();
+  await expect(ledger.getByText("pay_razorpay_booking", { exact: true })).toBeVisible();
+  await expect(ledger.getByText("CR-QA-001", { exact: true })).toBeVisible();
+  await expect(ledger.getByRole("link", { name: "Open shipment SLC-LEDGER-001" })).toBeVisible();
+  await expect(ledger.getByRole("columnheader", { name: "Method / status" })).toBeVisible();
+  await expect(page.getByText(/Available to book|Wallet total|Wallet ledger/i)).toHaveCount(0);
+  expect(ledgerRequests.length).toBeGreaterThan(0);
 });
 
-test("business account list shows the available wallet balance", async ({ page }) => {
+test("business account list does not show an available wallet balance", async ({ page }) => {
   await mockPortal(page, "operations");
   await page.route("**/api/v1/business-accounts**", async (route) => {
     const url = new URL(route.request().url());
@@ -229,8 +239,8 @@ test("business account list shows the available wallet balance", async ({ page }
   });
 
   await page.goto("/dashboard/business-accounts");
-  await expect(page.getByRole("columnheader", { name: "Available wallet" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "₹12,345.00" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: /available wallet/i })).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "₹12,345.00" })).toHaveCount(0);
 });
 
 test("sharing a rate card is one step and includes every rate and route charge", async ({ page }, info) => {

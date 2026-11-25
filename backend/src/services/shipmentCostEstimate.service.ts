@@ -5,7 +5,6 @@ import type { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { getCreditBalances } from "./creditAccount.service.js";
 import { allocateBookingAmount } from "./creditBooking.service.js";
 import { getCreditRestrictionState } from "./creditOverdue.service.js";
-import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import { getTenantContext } from "./tenantScope.service.js";
 import {
   buildPricingInputFromDraft,
@@ -26,10 +25,10 @@ export const PRICE_LOCK_TTL_MS = 15 * 60 * 1000;
 /**
  * How the shipment will be paid for.
  *
- * Swiftline bookings use wallet funds or an exact Razorpay payment. Operator
+ * Swiftline bookings use an exact online payment or receipted cash. Operator
  * workspaces keep their existing credit and counter policy.
  */
-export type ShipmentFundingMode = "BUSINESS_ACCOUNT" | "BUSINESS_WALLET" | "PREPAID" | "COUNTER";
+export type ShipmentFundingMode = "BUSINESS_ACCOUNT" | "DIRECT_RAZORPAY" | "COUNTER";
 
 export type ShipmentFundingPreview = {
   mode: ShipmentFundingMode;
@@ -118,29 +117,15 @@ async function previewBusinessAccountFunding(input: {
   session?: mongoose.ClientSession;
 }): Promise<ShipmentFundingPreview> {
   if (getTenantContext()?.kind !== "OPERATOR") {
-    const empty = {
-      mode: "BUSINESS_WALLET" as const,
+    return {
+      mode: "DIRECT_RAZORPAY",
       totalPayableMinor: input.totalMinor,
       advanceDeductionMinor: 0,
       creditUsageMinor: 0,
       availableAdvanceMinor: 0,
-      availableCreditMinor: 0
-    };
-    const walletQuery = PrepaidAccount.findOne({ businessAccountId: input.businessAccountId });
-    if (input.session) walletQuery.session(input.session);
-    const wallet = await walletQuery.lean().exec();
-    const availableAdvanceMinor = wallet?.status === "ACTIVE"
-      ? Math.max(wallet.cashBalanceMinor - wallet.reservedBalanceMinor, 0)
-      : 0;
-    const walletCovers = availableAdvanceMinor >= input.totalMinor;
-    return {
-      ...empty,
-      advanceDeductionMinor: walletCovers ? input.totalMinor : 0,
-      availableAdvanceMinor,
+      availableCreditMinor: 0,
       canFund: true,
-      message: walletCovers
-        ? "Your business wallet covers this shipment. You can also pay the full amount securely now."
-        : `Your wallet is short by INR ${((input.totalMinor - availableAdvanceMinor) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. Add funds or pay the full amount securely now.`
+      message: "Pay the full amount online when you book this shipment."
     };
   }
 
@@ -252,7 +237,7 @@ export async function buildShipmentCostEstimate(input: {
   const funding: ShipmentFundingPreview = input.draft.customerType === "INDIVIDUAL"
     && getTenantContext()?.kind !== "OPERATOR"
     ? {
-      mode: "PREPAID",
+      mode: "DIRECT_RAZORPAY",
       totalPayableMinor: totalMinor,
       advanceDeductionMinor: 0,
       creditUsageMinor: 0,

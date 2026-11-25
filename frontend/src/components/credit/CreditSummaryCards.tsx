@@ -36,7 +36,7 @@ export default function CreditSummaryCards({ account }: { account: CreditAccount
       value: money(account.availableAdvanceMinor),
       // Advance is spent before credit on every booking, which is not obvious
       // from the number alone.
-      detail: "Prepaid funds, spent first"
+      detail: "Customer advance funds, spent first"
     }
   ];
 

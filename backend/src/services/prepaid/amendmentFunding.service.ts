@@ -1,16 +1,12 @@
 import mongoose from "mongoose";
-import { PrepaidAccount } from "../../models/prepaidAccount.model.js";
 import { ShipmentDirectPayment } from "../../models/shipmentDirectPayment.model.js";
 import { ShipmentAmendment } from "../../models/shipmentAmendment.model.js";
-import { ShipmentDraft } from "../../models/shipmentDraft.model.js";
 import type { AmendmentBillingAdjustment } from "../amendmentBilling.service.js";
-import { createLedgerEntry } from "./ledger.service.js";
-import { notifyLowWalletIfNeeded } from "./shipmentFunding.service.js";
-import { ensurePrepaidAccount } from "./topups.service.js";
 import { refundCapturedShipmentDirectPayment } from "./shipmentDirectPayments.service.js";
+import { fetchRazorpayRefund } from "../razorpay/client.js";
 
 export class AmendmentPaymentError extends Error {
-  constructor(public readonly statusCode: number, message: string) {
+  constructor(public readonly statusCode: number, message: string, public readonly code = "AMENDMENT_PAYMENT_ERROR") {
     super(message);
   }
 }
@@ -140,104 +136,125 @@ function storedDeltaMinor(amendment: InstanceType<typeof ShipmentAmendment>) {
   return delta;
 }
 
-export async function secureAmendmentWalletPayment(input: {
-  amendmentId: mongoose.Types.ObjectId;
-  userId: mongoose.Types.ObjectId;
-}) {
-  const session = await mongoose.startSession();
-  try {
-    let result: InstanceType<typeof ShipmentAmendment> | null = null;
-    await session.withTransaction(async () => {
-      const amendment = await ShipmentAmendment.findById(input.amendmentId).session(session).exec();
-      if (!amendment) throw new AmendmentPaymentError(404, "Amendment not found.");
-      if (amendment.paymentStatus === "SECURED" || amendment.paymentStatus === "COMPLETED") {
-        result = amendment;
-        return;
-      }
-      if (amendment.status !== "AWAITING_PAYMENT" || amendment.paymentStatus !== "AWAITING_PAYMENT") {
-        throw new AmendmentPaymentError(409, "This amendment is not awaiting payment.");
-      }
-      const amountMinor = storedDeltaMinor(amendment);
-      if (amountMinor <= 0 || amendment.paymentAmountMinor !== amountMinor) {
-        throw new AmendmentPaymentError(409, "This amendment does not require an additional payment.");
-      }
-
-      const draft = await ShipmentDraft.findById(amendment.shipmentDraftId)
-        .select("customerType")
-        .session(session)
-        .lean()
-        .exec();
-      if (!draft || draft.customerType === "INDIVIDUAL") {
-        throw new AmendmentPaymentError(409, "Individual shipment amendments must be paid and recorded by Swiftline staff.");
-      }
-
-      const account = await ensurePrepaidAccount({ businessAccountId: amendment.businessAccountId }, session);
-      if (account.status !== "ACTIVE") throw new AmendmentPaymentError(409, "The business wallet is not active.");
-      const availableMinor = account.cashBalanceMinor - account.reservedBalanceMinor;
-      if (availableMinor < amountMinor) {
-        const shortfall = amountMinor - availableMinor;
-        throw new AmendmentPaymentError(
-          402,
-          `Your wallet needs INR ${(shortfall / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} more to secure this amendment.`
-        );
-      }
-
-      const updated = await PrepaidAccount.findOneAndUpdate(
-        {
-          _id: account._id,
-          status: "ACTIVE",
-          version: account.version,
-          $expr: { $gte: [{ $subtract: ["$cashBalanceMinor", "$reservedBalanceMinor"] }, amountMinor] }
-        },
-        { $inc: { reservedBalanceMinor: amountMinor, version: 1 } },
-        { returnDocument: "after", runValidators: true, session }
-      ).exec();
-      if (!updated) throw new AmendmentPaymentError(409, "Wallet balance changed while payment was being secured. Please try again.");
-
-      await createLedgerEntry({
-        businessAccountId: amendment.businessAccountId,
-        branchId: amendment.branchId,
-        transactionType: "AMENDMENT_PAYMENT_RESERVED",
-        direction: "NONE",
-        amountMinor,
-        currency: "INR",
-        referenceType: "SHIPMENT_AMENDMENT",
-        referenceId: amendment._id as mongoose.Types.ObjectId,
-        idempotencyKey: `AMENDMENT_PAYMENT_RESERVED:${String(amendment._id)}`,
-        paymentSource: "BUSINESS_WALLET",
-        before: { cashBalanceMinor: updated.cashBalanceMinor, reservedBalanceMinor: updated.reservedBalanceMinor - amountMinor },
-        after: { cashBalanceMinor: updated.cashBalanceMinor, reservedBalanceMinor: updated.reservedBalanceMinor },
-        description: "Wallet funds reserved for a shipment amendment.",
-        createdBy: input.userId
-      }, session);
-
-      result = await ShipmentAmendment.findOneAndUpdate(
-        {
-          _id: amendment._id,
-          status: "AWAITING_PAYMENT",
-          paymentStatus: "AWAITING_PAYMENT"
-        },
-        {
-          $set: {
-            status: "PAYMENT_SECURED",
-            paymentStatus: "SECURED",
-            paymentSource: "BUSINESS_WALLET",
-            paymentReferenceId: amendment._id,
-            paymentSecuredAt: new Date()
-          }
-        },
-        { returnDocument: "after", runValidators: true, session }
-      ).exec();
-      if (!result) throw new AmendmentPaymentError(409, "The amendment changed while payment was being secured.");
-    });
-    if (!result) throw new AmendmentPaymentError(409, "Amendment payment could not be secured.");
-    return result;
-  } finally {
-    await session.endSession();
-  }
+function settledRefundStatus(payment: InstanceType<typeof ShipmentDirectPayment>) {
+  return payment.paymentPurpose === "SHIPMENT_AMENDMENT" ? "ALLOCATED" as const : "SETTLED" as const;
 }
 
-export async function applyPrepaidAmendmentMovement(input: {
+/**
+ * Starts a gateway refund for an approved reduction. When no captured gateway
+ * payment remains, the caller must record a manual refund instead.
+ */
+export async function prepareAmendmentRefund(input: {
+  amendmentId: mongoose.Types.ObjectId;
+  amountMinor: number;
+  reason: string;
+}) {
+  const amendment = await ShipmentAmendment.findById(input.amendmentId).exec();
+  if (!amendment) throw new AmendmentPaymentError(404, "Amendment not found.");
+  if (input.amountMinor <= 0) return amendment;
+  if (["REFUNDED", "CASH_REFUND_RECORDED"].includes(amendment.refundStatus)) return amendment;
+
+  const payment = await ShipmentDirectPayment.findOne({
+    shipmentDraftId: amendment.shipmentDraftId,
+    businessAccountId: amendment.businessAccountId,
+    branchId: amendment.branchId,
+    paymentPurpose: { $in: ["SHIPMENT_BOOKING", "SHIPMENT_AMENDMENT"] },
+    status: { $in: ["CAPTURED", "SETTLED", "ALLOCATED", "REFUND_PENDING"] },
+    razorpayPaymentId: { $ne: "" },
+    $expr: { $lt: ["$razorpayRefundAmountMinor", "$amountMinor"] }
+  }).sort({ createdAt: -1 }).exec();
+
+  if (!payment) {
+    throw new AmendmentPaymentError(
+      409,
+      "No captured online payment can cover this reduction. Record a manual refund before approval.",
+      "MANUAL_REFUND_REQUIRED"
+    );
+  }
+
+  const targetRefundMinor = (payment.razorpayRefundAmountMinor ?? 0) + input.amountMinor;
+  const refunded = await refundCapturedShipmentDirectPayment({
+    paymentIntentId: payment._id as mongoose.Types.ObjectId,
+    amountMinor: input.amountMinor,
+    reason: input.reason
+  });
+  const completed = Boolean(refunded?.razorpayRefundId)
+    && (refunded?.razorpayRefundAmountMinor ?? 0) >= targetRefundMinor
+    && refunded?.status !== "REFUND_PENDING";
+
+  amendment.refundReferenceId = payment._id as mongoose.Types.ObjectId;
+  amendment.refundRequestedAt = new Date();
+  amendment.refundStatus = completed ? "REFUNDED" : "REFUND_PENDING";
+  amendment.refundMetadata = {
+    amountMinor: input.amountMinor,
+    cumulativeRefundAmountMinor: refunded?.razorpayRefundAmountMinor ?? targetRefundMinor,
+    razorpayRefundId: refunded?.razorpayRefundId ?? "",
+    providerStatus: refunded?.status ?? "REFUND_PENDING"
+  };
+  await amendment.save();
+  return amendment;
+}
+
+/** Refreshes a pending gateway refund before the revised invoice is allowed through. */
+export async function reconcileAmendmentRefund(input: {
+  amendmentId: mongoose.Types.ObjectId;
+}) {
+  const amendment = await ShipmentAmendment.findById(input.amendmentId).exec();
+  if (!amendment || amendment.refundStatus !== "REFUND_PENDING" || !amendment.refundReferenceId) return amendment;
+  const payment = await ShipmentDirectPayment.findById(amendment.refundReferenceId).exec();
+  if (!payment?.razorpayRefundId) return amendment;
+  const refund = await fetchRazorpayRefund(payment.razorpayRefundId);
+  if (refund.status !== "processed") return amendment;
+
+  const targetRefundMinor = payment.razorpayRefundAmountMinor;
+  await ShipmentDirectPayment.updateOne(
+    { _id: payment._id, status: "REFUND_PENDING" },
+    {
+      $set: {
+        status: targetRefundMinor >= payment.amountMinor ? "REFUNDED" : settledRefundStatus(payment),
+        razorpayRefundedAt: targetRefundMinor >= payment.amountMinor ? new Date() : payment.razorpayRefundedAt ?? null,
+        failureDescription: "Gateway refund completed."
+      }
+    },
+    { runValidators: true }
+  ).exec();
+  amendment.refundStatus = "REFUNDED";
+  amendment.refundCompletedAt = new Date();
+  amendment.refundMetadata = {
+    ...(amendment.refundMetadata ?? {}),
+    razorpayRefundId: refund.id,
+    providerStatus: refund.status
+  };
+  await amendment.save();
+  return amendment;
+}
+
+export async function recordManualAmendmentRefund(input: {
+  amendmentId: mongoose.Types.ObjectId;
+  reference: string;
+  note: string;
+  createdBy: mongoose.Types.ObjectId;
+  session: mongoose.ClientSession;
+}) {
+  const amendment = await ShipmentAmendment.findById(input.amendmentId).session(input.session).exec();
+  if (!amendment) throw new AmendmentPaymentError(404, "Amendment not found.");
+  amendment.refundStatus = "CASH_REFUND_RECORDED";
+  amendment.refundCompletedAt = new Date();
+  amendment.refundMetadata = {
+    method: "CASH",
+    reference: input.reference,
+    note: input.note,
+    recordedBy: String(input.createdBy)
+  };
+  await amendment.save({ session: input.session });
+  return amendment;
+}
+
+/**
+ * Settles a secured increase or verifies that a reduction has already been
+ * refunded. Approved amendments never create or consume wallet funds.
+ */
+export async function applyAmendmentPaymentMovement(input: {
   amendmentId: mongoose.Types.ObjectId;
   adjustment: AmendmentBillingAdjustment;
   createdBy: mongoose.Types.ObjectId;
@@ -246,88 +263,38 @@ export async function applyPrepaidAmendmentMovement(input: {
   const amendment = await ShipmentAmendment.findById(input.amendmentId).session(input.session).exec();
   if (!amendment) throw new AmendmentPaymentError(404, "Amendment not found.");
   const delta = input.adjustment.deltaAmountMinor;
+
   if (delta > 0) {
-    const draft = await ShipmentDraft.findById(amendment.shipmentDraftId)
-      .select("customerType")
-      .session(input.session)
-      .lean()
-      .exec();
-    if (!draft) throw new AmendmentPaymentError(404, "Shipment not found.");
-    if (amendment.paymentSource === "DIRECT_RAZORPAY") {
-      if (
-        amendment.status !== "PAYMENT_SECURED"
-        || amendment.paymentStatus !== "SECURED"
-        || amendment.paymentAmountMinor !== delta
-        || !amendment.paymentReferenceId
-      ) throw new AmendmentPaymentError(402, "Complete the Razorpay amendment payment before approval.");
-      const payment = await ShipmentDirectPayment.findOne({
-        _id: amendment.paymentReferenceId,
+    if (
+      amendment.paymentSource !== "DIRECT_RAZORPAY"
+      || amendment.status !== "PAYMENT_SECURED"
+      || amendment.paymentStatus !== "SECURED"
+      || amendment.paymentAmountMinor !== delta
+      || !amendment.paymentReferenceId
+    ) throw new AmendmentPaymentError(402, "Complete the online amendment payment before approval.");
+
+    const payment = await ShipmentDirectPayment.findOne({
+      _id: amendment.paymentReferenceId,
+      amendmentId: amendment._id,
+      paymentPurpose: "SHIPMENT_AMENDMENT",
+      status: "ALLOCATED",
+      amountMinor: delta
+    }).session(input.session).exec();
+    if (!payment) throw new AmendmentPaymentError(402, "The secured online payment could not be found.");
+    const settledPayment = await ShipmentDirectPayment.findOneAndUpdate(
+      {
+        _id: payment._id,
         amendmentId: amendment._id,
         paymentPurpose: "SHIPMENT_AMENDMENT",
         status: "ALLOCATED",
         amountMinor: delta
-      }).session(input.session).exec();
-      if (!payment) throw new AmendmentPaymentError(402, "The secured Razorpay payment could not be found.");
-      const settledPayment = await ShipmentDirectPayment.findOneAndUpdate(
-        {
-          _id: payment._id,
-          amendmentId: amendment._id,
-          paymentPurpose: "SHIPMENT_AMENDMENT",
-          status: "ALLOCATED",
-          amountMinor: delta
-        },
-        { $set: { status: "SETTLED" } },
-        { returnDocument: "after", runValidators: true, session: input.session }
-      ).exec();
-      if (!settledPayment) throw new AmendmentPaymentError(409, "The amendment payment changed while approval was being applied.");
-      const updatedAmendment = await ShipmentAmendment.updateOne(
-        { _id: amendment._id, paymentStatus: "SECURED", paymentSource: "DIRECT_RAZORPAY" },
-        { $set: { paymentStatus: "COMPLETED", paymentCompletedAt: new Date() } },
-        { runValidators: true, session: input.session }
-      ).exec();
-      if (!updatedAmendment.matchedCount) throw new AmendmentPaymentError(409, "The amendment payment could not be completed.");
-      return { paymentStatus: "COMPLETED" as const, refundStatus: amendment.refundStatus };
-    }
-    if (draft.customerType === "INDIVIDUAL") {
-      throw new AmendmentPaymentError(402, "Individual amendment increases must be paid through Razorpay before approval.");
-    }
-    if (
-      amendment.status !== "PAYMENT_SECURED"
-      || amendment.paymentStatus !== "SECURED"
-      || amendment.paymentSource !== "BUSINESS_WALLET"
-      || amendment.paymentAmountMinor !== delta
-    ) throw new AmendmentPaymentError(402, "Pay the additional amendment amount before approval.");
-
-    const account = await PrepaidAccount.findOneAndUpdate(
-      {
-        businessAccountId: amendment.businessAccountId,
-        status: "ACTIVE",
-        cashBalanceMinor: { $gte: delta },
-        reservedBalanceMinor: { $gte: delta }
       },
-      { $inc: { cashBalanceMinor: -delta, reservedBalanceMinor: -delta, version: 1 } },
+      { $set: { status: "SETTLED" } },
       { returnDocument: "after", runValidators: true, session: input.session }
     ).exec();
-    if (!account) throw new AmendmentPaymentError(409, "Reserved wallet funds could not be completed.");
-    await createLedgerEntry({
-      businessAccountId: amendment.businessAccountId,
-      branchId: amendment.branchId,
-      transactionType: "AMENDMENT_PAYMENT_COMPLETED",
-      direction: "DEBIT",
-      amountMinor: delta,
-      currency: "INR",
-      referenceType: "SHIPMENT_AMENDMENT",
-      referenceId: amendment._id as mongoose.Types.ObjectId,
-      idempotencyKey: `AMENDMENT_PAYMENT_COMPLETED:${String(amendment._id)}`,
-      paymentSource: "BUSINESS_WALLET",
-      before: { cashBalanceMinor: account.cashBalanceMinor + delta, reservedBalanceMinor: account.reservedBalanceMinor + delta },
-      after: { cashBalanceMinor: account.cashBalanceMinor, reservedBalanceMinor: account.reservedBalanceMinor },
-      description: "Additional shipment amendment charge completed from the wallet.",
-      createdBy: input.createdBy
-    }, input.session);
-    await notifyLowWalletIfNeeded(account, input.session);
+    if (!settledPayment) throw new AmendmentPaymentError(409, "The amendment payment changed while approval was being applied.");
     await ShipmentAmendment.updateOne(
-      { _id: amendment._id, paymentStatus: "SECURED" },
+      { _id: amendment._id, paymentStatus: "SECURED", paymentSource: "DIRECT_RAZORPAY" },
       { $set: { paymentStatus: "COMPLETED", paymentCompletedAt: new Date() } },
       { runValidators: true, session: input.session }
     ).exec();
@@ -335,95 +302,13 @@ export async function applyPrepaidAmendmentMovement(input: {
   }
 
   if (delta < 0) {
-    const draft = await ShipmentDraft.findById(amendment.shipmentDraftId)
-      .select("customerType")
-      .session(input.session)
-      .lean()
-      .exec();
-    if (!draft) throw new AmendmentPaymentError(404, "Shipment not found.");
-    if (draft.customerType === "INDIVIDUAL") {
-      return { paymentStatus: amendment.paymentStatus, refundStatus: "CASH_REFUND_RECORDED" as const };
+    if (amendment.refundStatus === "REFUND_PENDING") {
+      throw new AmendmentPaymentError(409, "The amendment refund is still processing. Approval will reopen after it completes.");
     }
-
-    const amountMinor = Math.abs(delta);
-    const current = await ensurePrepaidAccount({ businessAccountId: amendment.businessAccountId }, input.session);
-    const account = await PrepaidAccount.findOneAndUpdate(
-      { _id: current._id, version: current.version, status: "ACTIVE" },
-      { $inc: { cashBalanceMinor: amountMinor, version: 1 } },
-      { returnDocument: "after", runValidators: true, session: input.session }
-    ).exec();
-    if (!account) throw new AmendmentPaymentError(409, "Wallet balance changed while the amendment adjustment was being credited.");
-    await createLedgerEntry({
-      businessAccountId: amendment.businessAccountId,
-      branchId: amendment.branchId,
-      transactionType: "AMENDMENT_ADJUSTMENT_CREDITED",
-      direction: "CREDIT",
-      amountMinor,
-      currency: "INR",
-      referenceType: "SHIPMENT_AMENDMENT",
-      referenceId: amendment._id as mongoose.Types.ObjectId,
-      idempotencyKey: `AMENDMENT_ADJUSTMENT_CREDITED:${String(amendment._id)}`,
-      paymentSource: "BUSINESS_WALLET",
-      before: { cashBalanceMinor: account.cashBalanceMinor - amountMinor, reservedBalanceMinor: account.reservedBalanceMinor },
-      after: { cashBalanceMinor: account.cashBalanceMinor, reservedBalanceMinor: account.reservedBalanceMinor },
-      description: "Approved shipment amendment reduction credited to the business wallet.",
-      createdBy: input.createdBy
-    }, input.session);
-    await ShipmentAmendment.updateOne(
-      { _id: amendment._id },
-      { $set: { refundStatus: "CREDITED_TO_WALLET" } },
-      { runValidators: true, session: input.session }
-    ).exec();
-    return { paymentStatus: amendment.paymentStatus, refundStatus: "CREDITED_TO_WALLET" as const };
+    if (!["REFUNDED", "CASH_REFUND_RECORDED"].includes(amendment.refundStatus)) {
+      throw new AmendmentPaymentError(402, "Record the amendment refund before approval.");
+    }
   }
 
   return { paymentStatus: amendment.paymentStatus, refundStatus: amendment.refundStatus };
-}
-
-export async function releaseAmendmentWalletPayment(input: {
-  amendmentId: mongoose.Types.ObjectId;
-  userId: mongoose.Types.ObjectId;
-  reason: string;
-}) {
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      const amendment = await ShipmentAmendment.findOne({
-        _id: input.amendmentId,
-        paymentStatus: "SECURED",
-        paymentSource: "BUSINESS_WALLET"
-      }).session(session).exec();
-      if (!amendment) return;
-      const amountMinor = amendment.paymentAmountMinor;
-      const account = await PrepaidAccount.findOneAndUpdate(
-        { businessAccountId: amendment.businessAccountId, reservedBalanceMinor: { $gte: amountMinor } },
-        { $inc: { reservedBalanceMinor: -amountMinor, version: 1 } },
-        { returnDocument: "after", runValidators: true, session }
-      ).exec();
-      if (!account) throw new AmendmentPaymentError(409, "Reserved amendment funds could not be released.");
-      await createLedgerEntry({
-        businessAccountId: amendment.businessAccountId,
-        branchId: amendment.branchId,
-        transactionType: "AMENDMENT_PAYMENT_RELEASED",
-        direction: "NONE",
-        amountMinor,
-        currency: "INR",
-        referenceType: "SHIPMENT_AMENDMENT",
-        referenceId: amendment._id as mongoose.Types.ObjectId,
-        idempotencyKey: `AMENDMENT_PAYMENT_RELEASED:${String(amendment._id)}`,
-        paymentSource: "BUSINESS_WALLET",
-        before: { cashBalanceMinor: account.cashBalanceMinor, reservedBalanceMinor: account.reservedBalanceMinor + amountMinor },
-        after: { cashBalanceMinor: account.cashBalanceMinor, reservedBalanceMinor: account.reservedBalanceMinor },
-        description: input.reason,
-        createdBy: input.userId
-      }, session);
-      await ShipmentAmendment.updateOne(
-        { _id: amendment._id, paymentStatus: "SECURED" },
-        { $set: { paymentStatus: "RELEASED" } },
-        { runValidators: true, session }
-      ).exec();
-    });
-  } finally {
-    await session.endSession();
-  }
 }

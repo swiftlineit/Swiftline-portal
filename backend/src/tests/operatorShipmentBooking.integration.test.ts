@@ -51,6 +51,7 @@ import { localStorageDriver } from "../services/storage/localDriver.js";
 import { runWithTenantContext } from "../services/tenantScope.service.js";
 import { buildPricingHash } from "../services/shipmentCostEstimate.service.js";
 import { buildPricingInputFromDraft, calculateShipmentPricingEstimate } from "../services/shipmentPricing.service.js";
+import { getStates } from "../services/reference/geography.service.js";
 
 const databasePrefix = "sl_operator_booking_";
 const databaseName = `${databasePrefix}${Date.now()}`;
@@ -299,6 +300,8 @@ test("operator booking, amendment, reviewed cancellation and manifest remain ten
       billingCycle: "MONTHLY"
     });
 
+    const validUkState = getStates("GB")[0]?.name;
+    assert.ok(validUkState, "GB reference states must be available for this test");
     const draft = await ShipmentDraft.create({
       creationSource: "MANUAL",
       businessAccountId: account._id,
@@ -317,7 +320,7 @@ test("operator booking, amendment, reviewed cancellation and manifest remain ten
         postcode: "SW1A 2AA",
         addressLine1: "10 Downing Street",
         townOrCity: "London",
-        county: "Greater London"
+        county: validUkState
       },
       consigneeValidatedAddress: {
         companyName: "Operator Client Receiver",
@@ -330,7 +333,7 @@ test("operator booking, amendment, reviewed cancellation and manifest remain ten
         postcode: "SW1A 2AA",
         addressLine1: "10 Downing Street",
         townOrCity: "London",
-        county: "Greater London"
+        county: validUkState
       },
       addressValidationStatus: "VALIDATED",
       addressValidationResult: { outcome: "VALID" },
@@ -437,11 +440,21 @@ test("operator booking, amendment, reviewed cancellation and manifest remain ten
   const bookingEmails = await runWithTenantContext(context, () => EmailOutbox.find({
     notificationType: "SHIPMENT_BOOKED", "payload.shipmentDraftId": draft._id
   }).lean().exec());
-  assert.deepEqual(new Set(bookingEmails.map((email) => String(email.recipientUserId))), new Set([String(userId), String(ownerId)]));
+  assert.deepEqual(new Set(bookingEmails.filter((email) => email.recipientUserId).map((email) => String(email.recipientUserId))), new Set([String(userId), String(ownerId)]));
   assert.ok(bookingEmails.every((email) => String(email.recipientUserId) !== String(swiftlineAdminId)));
   assert.ok(bookingEmails.every((email) => String(email.recipientUserId) !== String(unusedBookerId)));
-  assert.equal(bookingEmails.find((email) => email.templateKey === "OPERATOR_SHIPMENT_BOOKED_CLIENT")?.attachmentRefs.length, 2);
-  assert.equal(bookingEmails.find((email) => email.templateKey === "OPERATOR_SHIPMENT_BOOKED_STAFF")?.attachmentRefs.length, 0);
+  const consignorEmail = bookingEmails.find((email) => email.toEmail === consignor.email.toLowerCase());
+  assert.ok(consignorEmail);
+  assert.equal(consignorEmail.recipientUserId, null);
+  const clientBookingEmails = bookingEmails.filter((email) => email.templateKey === "OPERATOR_SHIPMENT_BOOKED_CLIENT");
+  const staffBookingEmails = bookingEmails.filter((email) => email.templateKey === "OPERATOR_SHIPMENT_BOOKED_STAFF");
+  assert.equal(clientBookingEmails.length, 2);
+  assert.equal(staffBookingEmails.length, 1);
+  assert.ok([...clientBookingEmails, ...staffBookingEmails].every((email) => (
+    email.attachmentRefs.map((ref) => ref.kind).includes("SHIPMENT_INVOICE_PDF")
+    && email.attachmentRefs.map((ref) => ref.kind).includes("CUSTOMS_INVOICE_PDF")
+    && email.attachmentRefs.map((ref) => ref.kind).includes("LABEL_DOCUMENT")
+  )));
 
   const operatorRequestContext = {
     tenantId: context.tenantId,

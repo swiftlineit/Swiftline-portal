@@ -27,6 +27,15 @@ export const maxCreditLimitMinor = maxCreditLimitRupees * 100;
  */
 export const maxCreditLimitLabel = `INR ${maxCreditLimitRupees.toLocaleString("en-IN")}`;
 
+export function formatMinorRupees(amountMinor: number) {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amountMinor / 100);
+}
+
 export function isMinorUnitInteger(value: unknown) {
   return Number.isInteger(value);
 }

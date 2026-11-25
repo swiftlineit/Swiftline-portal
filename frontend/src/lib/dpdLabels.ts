@@ -338,7 +338,7 @@ export type ShipmentAmendmentBillingAdjustment = {
 };
 
 export type ShipmentAmendmentFundingPreview = {
-  billingMode: "BUSINESS_ACCOUNT" | "PREPAID" | "DIRECT" | "TEST";
+  billingMode: "BUSINESS_ACCOUNT" | "DIRECT" | "TEST";
   previousAmountMinor: number;
   amendedAmountMinor: number;
   deltaAmountMinor: number;
@@ -415,7 +415,7 @@ export type ShipmentAmendment = {
   } | null;
   status: "AWAITING_PAYMENT" | "PAYMENT_SECURED" | "REQUESTED" | "APPROVED" | "REJECTED" | "APPLIED";
   paymentStatus?: "NOT_REQUIRED" | "AWAITING_PAYMENT" | "SECURED" | "COMPLETED" | "RELEASED";
-  paymentSource?: "" | "BUSINESS_WALLET" | "CASH_RECEIPT" | "DIRECT_RAZORPAY";
+  paymentSource?: "" | "CASH_RECEIPT" | "DIRECT_RAZORPAY";
   paymentAmountMinor?: number;
   refundStatus?: "NOT_REQUIRED" | "CREDITED_TO_WALLET" | "CASH_REFUND_RECORDED";
   actorRole: "admin" | "client";
@@ -946,7 +946,7 @@ export async function createShipment(
   acceptedPricingHash?: string,
   skipDpdLabel?: boolean,
   payment?: {
-    paymentSource: "BUSINESS_WALLET" | "DIRECT_RAZORPAY" | "CASH_RECEIPT";
+    paymentSource: "DIRECT_RAZORPAY" | "CASH_RECEIPT";
     fundingReferenceId?: string;
   }
 ) {

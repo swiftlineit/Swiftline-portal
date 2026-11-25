@@ -26,16 +26,10 @@ export default function ClientQuickAccess({
       show: true,
     },
     {
-      label: "Wallet & Payments",
-      description: "View your wallet, add funds and payment history",
+      label: "Payments",
+      description: "Review payments recorded for your business account",
       href: "/client/payments",
       show: financialAccess,
-    },
-    {
-      label: "Get a Quote",
-      description: "Check a rate before creating a shipment",
-      href: "/client/get-quote",
-      show: canRequestQuote(account) && hasQuoteAccess(account),
     },
     {
       label: "Invite Team Members",

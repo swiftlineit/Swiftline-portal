@@ -49,23 +49,50 @@ try {
   await bootstrap.db('admin').command({ replSetInitiate: { _id: 'swiftline-prepaid-test', members: [{ _id: 0, host: `127.0.0.1:${port}` }] } });
   await bootstrap.close();
   const uri = `mongodb://127.0.0.1:${port}/sl_prepaid_offline?replicaSet=swiftline-prepaid-test`;
-  console.log('Running prepaid workflow tests against a temporary local replica set. External service access is blocked.');
+  const paymentOnly = process.argv.includes('--payment-only');
+  const operatorBookingOnly = process.argv.includes('--operator-booking-only');
+  if (paymentOnly && operatorBookingOnly) throw new Error('Choose one offline test mode.');
+  console.log('Running tests against a temporary local replica set. External service access is blocked.');
+  const testFiles = paymentOnly
+    ? [
+        'src/tests/prepaidWorkflow.offline.integration.test.ts',
+        'src/tests/shipmentDirectPayment.controller.test.ts',
+        'src/tests/dpdBookingAvailability.test.ts',
+        'src/tests/shipmentDirectPaymentState.test.ts'
+      ]
+    : operatorBookingOnly
+      ? ['src/tests/operatorShipmentBooking.integration.test.ts']
+      : [
+        'src/tests/prepaidWorkflow.offline.integration.test.ts',
+        'src/tests/prepaidReleaseMigration.test.ts',
+        'src/tests/cashReceiptActiveIndexMigration.test.ts',
+        'src/tests/shipmentPricing.volumetricDiscount.test.ts',
+        'src/tests/shipmentLabels.test.ts',
+        'src/tests/shipmentCancellationRefundPlan.test.ts',
+        'src/tests/shipmentDirectPaymentState.test.ts',
+        'src/tests/amendmentBilling.test.ts',
+        'src/tests/shipmentCancellation.test.ts',
+        'src/tests/publicShipmentBooking.test.ts',
+        'src/tests/shipmentBookingEvent.test.ts',
+        'src/tests/migrationSafety.test.ts',
+        'src/tests/clientDocumentCentre.test.ts'
+      ];
+  const paymentOnlyPattern = [
+    'direct payment order is verified and captured without booking a shipment',
+    'captured unallocated direct payment can be refunded without creating a shipment',
+    'direct payment creation rejects DPD-required shipments before opening checkout',
+    'explicit no-DPD choice passes the ALS preflight without creating an order',
+    'payment verification does not capture an authorized payment if ALS becomes unavailable',
+    'requires the operational switch, ALS switch, and valid ALS configuration',
+    'keeps the existing enabled-by-default behavior when all prerequisites are ready',
+    'reopens the same order while clearing only its failed payment attempt',
+    'ignores a failure event without payment and order identifiers'
+  ].join('|');
   const tests = spawn(process.execPath, [
     '--import', './src/tests/helpers/prepaidOfflineEnvironment.mjs', '--import', 'tsx',
     '--test', '--test-concurrency=1',
-    'src/tests/prepaidWorkflow.offline.integration.test.ts',
-    'src/tests/prepaidReleaseMigration.test.ts',
-    'src/tests/cashReceiptActiveIndexMigration.test.ts',
-    'src/tests/shipmentPricing.volumetricDiscount.test.ts',
-    'src/tests/shipmentLabels.test.ts',
-    'src/tests/shipmentCancellationRefundPlan.test.ts',
-    'src/tests/shipmentDirectPaymentState.test.ts',
-    'src/tests/amendmentBilling.test.ts',
-    'src/tests/shipmentCancellation.test.ts',
-    'src/tests/publicShipmentBooking.test.ts',
-    'src/tests/shipmentBookingEvent.test.ts',
-    'src/tests/migrationSafety.test.ts',
-    'src/tests/clientDocumentCentre.test.ts'
+    ...(paymentOnly ? [`--test-name-pattern=${paymentOnlyPattern}`] : []),
+    ...testFiles
   ], {
     cwd: backendRoot, windowsHide: true, stdio: 'inherit',
     env: { ...process.env, PREPAID_OFFLINE_MONGODB_URI: uri }

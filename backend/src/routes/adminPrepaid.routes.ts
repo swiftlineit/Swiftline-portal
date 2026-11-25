@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { exportAdminPrepaidLedger, getAdminPrepaidLedger } from "../controllers/adminPrepaid.controller.js";
+import { exportBusinessAccountPaymentsLedger, getBusinessAccountPaymentsLedger } from "../controllers/adminPrepaid.controller.js";
 import { attachUser, requireRole } from "../middleware/auth.middleware.js";
 
-export const adminPrepaidRouter = Router();
+export const businessAccountPaymentsRouter = Router();
 
-adminPrepaidRouter.use(attachUser, requireRole("admin", "finance", "operations"));
-adminPrepaidRouter.get("/:businessAccountId/ledger", getAdminPrepaidLedger);
-adminPrepaidRouter.get("/:businessAccountId/ledger/export", exportAdminPrepaidLedger);
+businessAccountPaymentsRouter.use(attachUser, requireRole("admin", "finance", "operations"));
+businessAccountPaymentsRouter.get("/:businessAccountId/payments-ledger", getBusinessAccountPaymentsLedger);
+businessAccountPaymentsRouter.get("/:businessAccountId/payments-ledger/export", exportBusinessAccountPaymentsLedger);

@@ -24,6 +24,7 @@ export type EmailCategory = (typeof emailCategoryValues)[number];
 // services already generate on demand.
 export const emailAttachmentKindValues = [
   "SHIPMENT_INVOICE_PDF",
+  "CUSTOMS_INVOICE_PDF",
   "LABEL_DOCUMENT",
   "SHIPMENT_MANIFEST_PDF",
   "CREDIT_BILLING_STATEMENT_PDF",

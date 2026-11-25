@@ -23,7 +23,7 @@ export type ShipmentCancellation = {
   feeReason: string;
   carrierConfirmed: boolean;
   settlementConfirmed: boolean;
-  paymentRefundStatus: "NOT_REQUIRED" | "CREDITED_TO_WALLET" | "RAZORPAY_REFUNDED" | "CASH_REFUNDED";
+  paymentRefundStatus: "NOT_REQUIRED" | "CREDITED_TO_WALLET" | "RAZORPAY_REFUNDED" | "CASH_REFUNDED" | "MANUAL_REFUNDED";
   paymentRefundAmountMinor: number;
   paymentRefundReference: string;
   paymentRefundedAt: string | null;
@@ -45,7 +45,7 @@ export type ShipmentCancellation = {
   shipmentReference?: string;
   consignee?: string;
   customerType?: "BUSINESS" | "INDIVIDUAL";
-  paymentSource?: "BUSINESS_ACCOUNT" | "BUSINESS_WALLET" | "DIRECT_RAZORPAY" | "CASH_RECEIPT" | "CLIENT_PREPAID" | "ADMIN_DIRECT" | "PUBLIC_RAZORPAY" | "TEST" | "";
+  paymentSource?: "BUSINESS_ACCOUNT" | "DIRECT_RAZORPAY" | "CASH_RECEIPT" | "CLIENT_PREPAID" | "ADMIN_DIRECT" | "PUBLIC_RAZORPAY" | "TEST" | "";
   branch?: { id: string; name: string; code: string } | null;
   businessAccount?: { id: string; accountId: string; companyName: string } | null;
 };
@@ -53,11 +53,13 @@ export type ShipmentCancellation = {
 export function cancellationRefundLabel(status: ShipmentCancellation["paymentRefundStatus"]): string | null {
   switch (status) {
     case "CREDITED_TO_WALLET":
-      return "Returned to business wallet";
+      return "Historical wallet credit recorded";
     case "RAZORPAY_REFUNDED":
       return "Refunded to original payment method";
     case "CASH_REFUNDED":
       return "Cash refund recorded";
+    case "MANUAL_REFUNDED":
+      return "Manual refund recorded";
     case "NOT_REQUIRED":
       return null;
   }

@@ -27,7 +27,7 @@ const labels: Record<string, LedgerLabel> = {
   LIMIT_CHANGED: { label: "Credit limit changed", detail: "Finance revised the approved limit", direction: "neutral" },
   MIGRATION_OPENING_BALANCE: { label: "Opening balance", detail: "Balance carried in when the account was set up", direction: "neutral" },
 
-  CUSTOMER_ADVANCE_RECEIVED: { label: "Advance received", detail: "Money added to the customer's prepaid balance", direction: "credit" },
+  CUSTOMER_ADVANCE_RECEIVED: { label: "Advance received", detail: "Money added to the customer's advance balance", direction: "credit" },
 
   BOOKING_RESERVED: { label: "Shipment booked", detail: "Funds held for a new shipment", direction: "charge" },
   BOOKING_CONVERTED: { label: "Shipment confirmed", detail: "Held funds charged now the shipment is going ahead", direction: "charge" },

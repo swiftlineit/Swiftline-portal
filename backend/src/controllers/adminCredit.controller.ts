@@ -8,7 +8,7 @@ import { BusinessCreditAccount, creditAccountStatusValues, type CreditAccountSta
 import { type CreditLedgerEntryType } from "../models/creditLedgerEntry.model.js";
 import { CreditLimitHistory } from "../models/creditLimitHistory.model.js";
 import { CreditAgreement } from "../models/creditAgreement.model.js";
-import { maxCreditLimitLabel, maxCreditLimitMinor } from "../models/financialTypes.js";
+import { formatMinorRupees, maxCreditLimitLabel, maxCreditLimitMinor } from "../models/financialTypes.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { CreditLimitIncreaseRequest } from "../models/creditLimitIncreaseRequest.model.js";
 import {
@@ -17,7 +17,6 @@ import {
 } from "../services/creditAccount.service.js";
 import { getCreditRestrictionState } from "../services/creditOverdue.service.js";
 import { getCreditBillingSummary } from "../services/creditBilling.summary.service.js";
-import { formatMinorRupees } from "../services/prepaid/dailyTopUpLimit.service.js";
 import { notifyBusinessFinancialMembers } from "../services/portalNotification.service.js";
 import { operationsBranchIds } from "../middleware/operationsBranchAccess.middleware.js";
 import { CreditAgreementServiceError, signCreditAgreement } from "../services/creditAgreement.service.js";
@@ -35,7 +34,7 @@ function blockRetiredSwiftlineCreditFacility(request: Request, response: Respons
   response.status(410).json({
     success: false,
     code: "CREDIT_FACILITY_RETIRED",
-    message: "Swiftline credit facilities are retired. Historical balances remain available for collection; new shipments require prepaid funding."
+    message: "Swiftline credit facilities are retired. Historical balances remain available for collection; new shipments require payment when booking."
   });
   return true;
 }
@@ -232,7 +231,7 @@ export async function approveAdminCreditAccount(request: Request, response: Resp
     return response.status(410).json({
       success: false,
       code: "CREDIT_FACILITY_RETIRED",
-      message: "New Swiftline credit facilities are no longer available. Business accounts use prepaid funding."
+      message: "New Swiftline credit facilities are no longer available. Business accounts pay online or by cash receipt when booking."
     });
   }
   const currentUserId = userId(request);
@@ -401,7 +400,7 @@ export async function activateAdminCreditAccount(request: Request, response: Res
     return response.status(410).json({
       success: false,
       code: "CREDIT_FACILITY_RETIRED",
-      message: "New Swiftline credit facilities are no longer available. Business accounts use prepaid funding."
+      message: "New Swiftline credit facilities are no longer available. Business accounts pay online or by cash receipt when booking."
     });
   }
   const currentUser = (request as Request & { user?: { _id?: unknown; role?: string; name?: string; email?: string } }).user;
@@ -595,7 +594,7 @@ export async function reactivateAdminCreditAccount(request: Request, response: R
     return response.status(410).json({
       success: false,
       code: "CREDIT_FACILITY_RETIRED",
-      message: "Swiftline business accounts use prepaid funding. Historical credit balances remain available for collection."
+      message: "Swiftline business accounts pay online or by cash receipt when booking. Historical credit balances remain available for collection."
     });
   }
   const currentUserId = userId(request);

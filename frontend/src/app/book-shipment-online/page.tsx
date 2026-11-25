@@ -63,8 +63,8 @@ export default function PublicShipmentBookingPage() {
           </h1>
           <p className="mt-3 mb-2 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
             Enter sender and receiver details, declare each parcel, review the
-            complete weight and price breakdown, then pay securely through
-            Razorpay. No account is required.
+            complete weight and price breakdown, then pay securely online. No
+            account is required.
           </p>
         </div>
       </section>

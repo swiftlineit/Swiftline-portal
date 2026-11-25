@@ -1,8 +1,6 @@
 import mongoose from "mongoose";
 import { CashAllocationEvent } from "../../models/cashAllocationEvent.model.js";
 import { CashReceipt } from "../../models/cashReceipt.model.js";
-import { PrepaidAccount } from "../../models/prepaidAccount.model.js";
-import { PrepaidTransaction } from "../../models/prepaidTransaction.model.js";
 import { PublicShipmentPayment } from "../../models/publicShipmentPayment.model.js";
 import { ShipmentCharge } from "../../models/shipmentCharge.model.js";
 import { ShipmentDirectPayment } from "../../models/shipmentDirectPayment.model.js";
@@ -14,32 +12,16 @@ import {
   type ShipmentFundingSource
 } from "../../models/shipmentFunding.model.js";
 import type { ShipmentDraft } from "../../models/shipmentDraft.model.js";
-import { notifyBusinessShipmentMembers, notifyOperationsStaff } from "../portalNotification.service.js";
 import { buildPricingHash } from "../shipmentCostEstimate.service.js";
 import type { ShipmentPricingEstimate } from "../shipmentPricing.service.js";
-import { createLedgerEntry } from "./ledger.service.js";
-import { ensurePrepaidAccount } from "./topups.service.js";
 import { refundCapturedShipmentDirectPayment } from "./shipmentDirectPayments.service.js";
 import { getTenantContext } from "../tenantScope.service.js";
 
 type ShipmentDraftDocument = InstanceType<typeof ShipmentDraft>;
 
-export const INSUFFICIENT_WALLET_CODE = "INSUFFICIENT_WALLET_BALANCE";
-
-export class InsufficientWalletBalanceError extends Error {
-  readonly code = INSUFFICIENT_WALLET_CODE;
-  readonly shortfallMinor: number;
-
-  constructor(shortfallMinor: number) {
-    const rupees = (shortfallMinor / 100).toLocaleString("en-IN", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    });
-    super(`Your available wallet balance is insufficient. Please add INR ${rupees} to confirm this shipment.`);
-    this.name = "InsufficientWalletBalanceError";
-    this.shortfallMinor = shortfallMinor;
-  }
-}
+// Wallet rows are historical only. They are still recognised when deciding
+// whether an already-booked shipment can display its labels.
+const RECOGNISED_FUNDING_SOURCES = ["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"];
 
 function toMinor(pricing: ShipmentPricingEstimate) {
   const amountMinor = Math.round(pricing.totalAmount * 100);
@@ -165,80 +147,6 @@ async function createFundingAndCharge(input: {
   return funding;
 }
 
-export async function secureWalletShipmentFunding(input: {
-  draft: ShipmentDraftDocument;
-  pricing: ShipmentPricingEstimate;
-  bookingAttemptId: string;
-  createdBy: mongoose.Types.ObjectId;
-}) {
-  if (input.draft.customerType === "INDIVIDUAL") {
-    throw new Error("Individual shipments must be paid through Razorpay before booking.");
-  }
-  const amountMinor = toMinor(input.pricing);
-  const hash = buildPricingHash(input.pricing);
-  const existing = await ShipmentFunding.findOne({ shipmentDraftId: input.draft._id }).exec();
-  if (existing && existing.status !== "RELEASED") {
-    assertFundingMatches(existing, {
-      draft: input.draft,
-      amountMinor,
-      pricingHash: hash,
-      source: "BUSINESS_WALLET"
-    });
-    return { funding: existing, reserved: false as const };
-  }
-
-  const session = await mongoose.startSession();
-  try {
-    let funding: InstanceType<typeof ShipmentFunding> | null = null;
-    await session.withTransaction(async () => {
-      const account = await ensurePrepaidAccount({ businessAccountId: input.draft.businessAccountId }, session);
-      const availableMinor = account.cashBalanceMinor - account.reservedBalanceMinor;
-      if (account.status !== "ACTIVE") throw new Error("The business wallet is not active.");
-      if (availableMinor < amountMinor) throw new InsufficientWalletBalanceError(amountMinor - availableMinor);
-
-      const updated = await PrepaidAccount.findOneAndUpdate(
-        {
-          _id: account._id,
-          status: "ACTIVE",
-          version: account.version,
-          $expr: { $gte: [{ $subtract: ["$cashBalanceMinor", "$reservedBalanceMinor"] }, amountMinor] }
-        },
-        { $inc: { reservedBalanceMinor: amountMinor, version: 1 } },
-        { returnDocument: "after", runValidators: true, session }
-      ).exec();
-      if (!updated) throw new Error("Wallet balance changed while the shipment was being confirmed. Please try again.");
-
-      funding = await createFundingAndCharge({
-        ...input,
-        pricingHash: hash,
-        source: "BUSINESS_WALLET",
-        session
-      });
-
-      await createLedgerEntry({
-        businessAccountId: input.draft.businessAccountId,
-        branchId: input.draft.branchId,
-        transactionType: "SHIPMENT_PAYMENT_RESERVED",
-        direction: "NONE",
-        amountMinor,
-        currency: "INR",
-        referenceType: "SHIPMENT_FUNDING",
-        referenceId: funding._id as mongoose.Types.ObjectId,
-        idempotencyKey: `SHIPMENT_FUNDING_RESERVE:${String(input.draft._id)}:${funding.version}`,
-        paymentSource: "BUSINESS_WALLET",
-        before: { cashBalanceMinor: updated.cashBalanceMinor, reservedBalanceMinor: updated.reservedBalanceMinor - amountMinor },
-        after: { cashBalanceMinor: updated.cashBalanceMinor, reservedBalanceMinor: updated.reservedBalanceMinor },
-        description: "Wallet funds reserved for shipment confirmation.",
-        createdBy: input.createdBy
-      }, session);
-    });
-    if (!funding) throw new Error("Shipment funding could not be secured.");
-    return { funding, reserved: true as const };
-  } finally {
-    await session.endSession();
-  }
-}
-
 export async function securePaidShipmentFunding(input: {
   draft: ShipmentDraftDocument;
   pricing: ShipmentPricingEstimate;
@@ -329,72 +237,6 @@ export async function markShipmentFundingConsuming(input: {
   return existing;
 }
 
-export async function notifyLowWalletIfNeeded(
-  account: InstanceType<typeof PrepaidAccount>,
-  session: mongoose.ClientSession
-) {
-  if (account.fundingCycleSequence <= 0 || account.fundingCycleBaselineMinor <= 0) {
-    const lastFunding = await PrepaidTransaction.findOne({
-      businessAccountId: account.businessAccountId,
-      direction: "CREDIT",
-      transactionType: { $in: ["TOP_UP_SUCCESS", "ADMIN_CREDIT", "OPENING_BALANCE_TRANSFER"] }
-    }).sort({ createdAt: -1, _id: -1 }).session(session).lean().exec();
-    const baselineMinor = lastFunding
-      ? Math.max(lastFunding.cashBalanceAfterMinor - lastFunding.reservedBalanceAfterMinor, 0)
-      : 0;
-    if (baselineMinor > 0) {
-      const sequence = Math.max(account.fundingCycleSequence, 1);
-      const initialized = await PrepaidAccount.findOneAndUpdate(
-        { _id: account._id, fundingCycleBaselineMinor: { $lte: 0 }, fundingCycleSequence: { $lte: 0 } },
-        { $set: { fundingCycleSequence: sequence, fundingCycleBaselineMinor: baselineMinor, lowBalanceAlertedCycle: null } },
-        { returnDocument: "after", runValidators: true, session }
-      ).exec();
-      if (initialized) {
-        account.fundingCycleSequence = initialized.fundingCycleSequence;
-        account.fundingCycleBaselineMinor = initialized.fundingCycleBaselineMinor;
-        account.lowBalanceAlertedCycle = initialized.lowBalanceAlertedCycle;
-      }
-    }
-  }
-  const availableMinor = account.cashBalanceMinor - account.reservedBalanceMinor;
-  const thresholdMinor = Math.floor(account.fundingCycleBaselineMinor * 0.2);
-  if (
-    account.fundingCycleSequence <= 0
-    || account.fundingCycleBaselineMinor <= 0
-    || availableMinor > thresholdMinor
-    || account.lowBalanceAlertedCycle === account.fundingCycleSequence
-  ) return;
-
-  const marked = await PrepaidAccount.findOneAndUpdate(
-    {
-      _id: account._id,
-      fundingCycleSequence: account.fundingCycleSequence,
-      lowBalanceAlertedCycle: { $ne: account.fundingCycleSequence }
-    },
-    { $set: { lowBalanceAlertedCycle: account.fundingCycleSequence } },
-    { returnDocument: "after", session }
-  ).exec();
-  if (!marked) return;
-
-  const format = (minor: number) => `INR ${(minor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const notification = {
-    type: "WALLET_LOW_BALANCE" as const,
-    title: "Wallet balance is running low",
-    message: `${format(availableMinor)} remains from the ${format(account.fundingCycleBaselineMinor)} funding-cycle baseline. The 20% alert threshold is ${format(thresholdMinor)}. Add money before the next booking.`,
-    href: "/client/payments#add-money",
-    idempotencyKey: `WALLET_LOW_BALANCE:${String(account._id)}:${account.fundingCycleSequence}`,
-    businessAccountId: account.businessAccountId,
-    metadata: {
-      availableMinor,
-      baselineMinor: account.fundingCycleBaselineMinor,
-      thresholdMinor,
-      fundingCycleSequence: account.fundingCycleSequence
-    }
-  };
-  await notifyBusinessShipmentMembers(account.businessAccountId, notification, session);
-  await notifyOperationsStaff({ ...notification, href: `/dashboard/business-accounts/${String(account.businessAccountId)}` }, session);
-}
-
 export async function completeShipmentFunding(input: {
   shipmentDraftId: mongoose.Types.ObjectId;
   dpdShipmentId: mongoose.Types.ObjectId;
@@ -412,41 +254,6 @@ export async function completeShipmentFunding(input: {
       }
       if (!(["SECURED", "CONSUMING"] as const).includes(funding.status as "SECURED" | "CONSUMING")) {
         throw new Error("Shipment payment cannot be completed from its current state.");
-      }
-
-      if (funding.source === "BUSINESS_WALLET") {
-        const account = await PrepaidAccount.findOneAndUpdate(
-          {
-            businessAccountId: funding.businessAccountId,
-            status: "ACTIVE",
-            cashBalanceMinor: { $gte: funding.amountMinor },
-            reservedBalanceMinor: { $gte: funding.amountMinor }
-          },
-          { $inc: { cashBalanceMinor: -funding.amountMinor, reservedBalanceMinor: -funding.amountMinor, version: 1 } },
-          { returnDocument: "after", runValidators: true, session }
-        ).exec();
-        if (!account) throw new Error("Reserved wallet funds could not be committed.");
-
-        await createLedgerEntry({
-          businessAccountId: funding.businessAccountId,
-          branchId: funding.branchId,
-          transactionType: "SHIPMENT_PAYMENT_COMPLETED",
-          direction: "DEBIT",
-          amountMinor: funding.amountMinor,
-          currency: "INR",
-          referenceType: "SHIPMENT_FUNDING",
-          referenceId: funding._id as mongoose.Types.ObjectId,
-          idempotencyKey: `SHIPMENT_FUNDING_COMPLETE:${String(funding._id)}:${funding.version}`,
-          paymentSource: "BUSINESS_WALLET",
-          before: {
-            cashBalanceMinor: account.cashBalanceMinor + funding.amountMinor,
-            reservedBalanceMinor: account.reservedBalanceMinor + funding.amountMinor
-          },
-          after: { cashBalanceMinor: account.cashBalanceMinor, reservedBalanceMinor: account.reservedBalanceMinor },
-          description: "Wallet payment completed for booked shipment.",
-          createdBy: input.createdBy
-        }, session);
-        await notifyLowWalletIfNeeded(account, session);
       }
 
       result = await ShipmentFunding.findOneAndUpdate(
@@ -487,30 +294,7 @@ export async function releaseShipmentFunding(input: {
         throw new Error("Completed or uncertain shipment funding requires an explicit reconciliation action.");
       }
 
-      if (funding.source === "BUSINESS_WALLET") {
-        const account = await PrepaidAccount.findOneAndUpdate(
-          { businessAccountId: funding.businessAccountId, reservedBalanceMinor: { $gte: funding.amountMinor } },
-          { $inc: { reservedBalanceMinor: -funding.amountMinor, version: 1 } },
-          { returnDocument: "after", runValidators: true, session }
-        ).exec();
-        if (!account) throw new Error("Reserved wallet funds could not be released.");
-        await createLedgerEntry({
-          businessAccountId: funding.businessAccountId,
-          branchId: funding.branchId,
-          transactionType: "SHIPMENT_PAYMENT_RELEASED",
-          direction: "NONE",
-          amountMinor: funding.amountMinor,
-          currency: "INR",
-          referenceType: "SHIPMENT_FUNDING",
-          referenceId: funding._id as mongoose.Types.ObjectId,
-          idempotencyKey: `SHIPMENT_FUNDING_RELEASE:${String(funding._id)}:${funding.version}`,
-          paymentSource: "BUSINESS_WALLET",
-          before: { cashBalanceMinor: account.cashBalanceMinor, reservedBalanceMinor: account.reservedBalanceMinor + funding.amountMinor },
-          after: { cashBalanceMinor: account.cashBalanceMinor, reservedBalanceMinor: account.reservedBalanceMinor },
-          description: input.reason,
-          createdBy: input.createdBy
-        }, session);
-      } else if (funding.source === "CASH_RECEIPT" && funding.sourceReferenceId) {
+      if (funding.source === "CASH_RECEIPT" && funding.sourceReferenceId) {
         await CashAllocationEvent.create([{
           cashReceiptId: funding.sourceReferenceId,
           businessAccountId: funding.businessAccountId,
@@ -608,7 +392,7 @@ export async function completedShipmentDraftIds(
       if (fundingByDraft.get(key) === "COMPLETED") completed.add(key);
       return false;
     }
-    return !["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"].includes(sourceByDraft.get(key) ?? "");
+    return !RECOGNISED_FUNDING_SOURCES.includes(sourceByDraft.get(key) ?? "");
   });
   if (legacyCandidateIds.length) {
     const invoices = await ShipmentInvoice.find({ shipmentDraftId: { $in: legacyCandidateIds } })
@@ -635,6 +419,30 @@ export async function completedShipmentDraftIds(
 export async function isShipmentPaymentCompleted(shipmentDraftId: mongoose.Types.ObjectId, session?: mongoose.ClientSession) {
   const completed = await completedShipmentDraftIds([shipmentDraftId], session);
   return completed.has(String(shipmentDraftId));
+}
+
+/**
+ * Label access under the prepaid policy must be backed by the canonical
+ * completed funding record. Unlike completedShipmentDraftIds, this deliberately
+ * does not accept legacy invoice settlement as a fallback.
+ */
+export async function isShipmentFundingRecordCompleted(shipmentDraftId: mongoose.Types.ObjectId) {
+  const funding = await ShipmentFunding.findOne({ shipmentDraftId })
+    .select("status source")
+    .lean()
+    .exec();
+  if (
+    funding?.status !== "COMPLETED"
+    || !RECOGNISED_FUNDING_SOURCES.includes(funding.source)
+  ) return false;
+
+  const pendingIncrease = await ShipmentAmendment.findOne({
+    shipmentDraftId,
+    status: { $nin: ["REJECTED", "APPLIED"] },
+    paymentAmountMinor: { $gt: 0 },
+    paymentStatus: { $ne: "COMPLETED" }
+  }).select("_id").lean().exec();
+  return !pendingIncrease;
 }
 
 export async function assertShipmentFundingCompleted(shipmentDraftId: mongoose.Types.ObjectId, session?: mongoose.ClientSession) {

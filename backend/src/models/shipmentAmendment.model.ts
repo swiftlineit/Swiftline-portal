@@ -36,7 +36,11 @@ export interface IShipmentAmendment extends mongoose.Document, TenantOwnedFields
   paymentSecuredAt?: Date | null;
   paymentCompletedAt?: Date | null;
   paymentMetadata?: Record<string, unknown> | null;
-  refundStatus: "NOT_REQUIRED" | "CREDITED_TO_WALLET" | "CASH_REFUND_RECORDED";
+  refundReferenceId?: mongoose.Types.ObjectId | null;
+  refundRequestedAt?: Date | null;
+  refundCompletedAt?: Date | null;
+  refundMetadata?: Record<string, unknown> | null;
+  refundStatus: "NOT_REQUIRED" | "REFUND_PENDING" | "REFUNDED" | "CREDITED_TO_WALLET" | "CASH_REFUND_RECORDED";
   reason: string;
   reviewNote?: string;
   requestedChanges: Record<string, unknown>;
@@ -120,7 +124,11 @@ const shipmentAmendmentSchema = new mongoose.Schema<IShipmentAmendment>(
     paymentSecuredAt: { type: Date, default: null },
     paymentCompletedAt: { type: Date, default: null },
     paymentMetadata: { type: mongoose.Schema.Types.Mixed, default: null },
-    refundStatus: { type: String, enum: ["NOT_REQUIRED", "CREDITED_TO_WALLET", "CASH_REFUND_RECORDED"], default: "NOT_REQUIRED" },
+    refundStatus: { type: String, enum: ["NOT_REQUIRED", "REFUND_PENDING", "REFUNDED", "CREDITED_TO_WALLET", "CASH_REFUND_RECORDED"], default: "NOT_REQUIRED" },
+    refundReferenceId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
+    refundRequestedAt: { type: Date, default: null },
+    refundCompletedAt: { type: Date, default: null },
+    refundMetadata: { type: mongoose.Schema.Types.Mixed, default: null },
     reason: { type: String, trim: true, maxlength: 500, default: "" },
     reviewNote: { type: String, trim: true, maxlength: 500, default: "" },
     requestedChanges: { type: mongoose.Schema.Types.Mixed, required: true },

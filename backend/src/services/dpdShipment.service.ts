@@ -72,7 +72,6 @@ import { isBookingPaused } from "./bookingPause.service.js";
 import { runWithConcurrency } from "../utils/runWithConcurrency.js";
 import { getTenantContext } from "./tenantScope.service.js";
 import { getOperatorShipmentEligibilityError } from "./operatorShipmentPolicy.service.js";
-import { InsufficientWalletBalanceError } from "./prepaid/shipmentFunding.service.js";
 import { refundCapturedShipmentDirectPayment } from "./prepaid/shipmentDirectPayments.service.js";
 import { finalizeCashReceiptForBooking } from "./prepaid/cashReceipts.service.js";
 import {
@@ -206,14 +205,14 @@ type DpdLabelChoice = { skipDpdLabel?: boolean };
 
 type LabelPaymentContext =
   | ({
-      // Staff booking requires secured wallet, gateway or receipted cash funds.
+      // Staff booking requires a captured gateway payment or receipted cash.
       // TEST is an internal fixture source and cannot run in production.
       actor: "admin";
-      paymentSource?: Extract<PaymentSource, "BUSINESS_WALLET" | "DIRECT_RAZORPAY" | "CASH_RECEIPT" | "TEST">;
+      paymentSource?: Extract<PaymentSource, "DIRECT_RAZORPAY" | "CASH_RECEIPT" | "TEST">;
     } & AcceptedPricing & DpdLabelChoice & FundingReference)
   | ({
       actor: "client";
-      paymentSource: Extract<PaymentSource, "BUSINESS_WALLET" | "DIRECT_RAZORPAY">;
+      paymentSource: Extract<PaymentSource, "DIRECT_RAZORPAY">;
     } & AcceptedPricing & DpdLabelChoice & FundingReference)
   | ({
       actor: "operator";
@@ -229,7 +228,7 @@ type LabelPaymentContext =
     } & AcceptedPricing & DpdLabelChoice & FundingReference);
 
 function normalizePaymentContext(context?: LabelPaymentContext): LabelPaymentContext {
-  return context ?? { actor: "admin", paymentSource: "BUSINESS_WALLET" };
+  return context ?? { actor: "admin", paymentSource: "DIRECT_RAZORPAY" };
 }
 
 /** One label per parcel, always: they are rendered locally from the snapshot. */
@@ -260,13 +259,6 @@ export function hasCompleteInternalLabelSet(input: {
 
 function toPaymentError(error: unknown) {
   if (!(error instanceof Error)) return null;
-
-  if (error instanceof InsufficientWalletBalanceError) {
-    return new DpdShipmentServiceError(error.message, 402, {
-      code: error.code,
-      shortfallMinor: error.shortfallMinor
-    });
-  }
 
   if (
     error.message.startsWith("Payment verification is pending")
@@ -577,7 +569,7 @@ export async function createLabelForShipmentDraft(
       outcome,
       shipmentDraftId,
       actor: paymentContext.actor,
-      paymentSource: paymentContext.paymentSource ?? "BUSINESS_WALLET",
+      paymentSource: paymentContext.paymentSource ?? "DIRECT_RAZORPAY",
       ...roundedTimings(timings),
       totalMs: roundedDuration(operationStartedAt)
     });
@@ -913,7 +905,7 @@ async function createLabelForShipmentDraftInternal(
   let advanceAmountMinor = 0;
   let creditAmountMinor = Math.round(pricing.totalAmount * 100);
   try {
-    if (usesLegacyBusinessBilling || paymentContext.paymentSource === "BUSINESS_WALLET") {
+    if (usesLegacyBusinessBilling) {
       const reservationResult = await measureShipmentBookingStage(
         timings,
         "billingMs",
@@ -1000,6 +992,7 @@ async function createLabelForShipmentDraftInternal(
         parcelNumbers: input.docket?.parcelNumbers ?? [],
         swiftlineTrackingNumber: input.trackingNumber,
         paymentSource: paymentContext.paymentSource ?? "BUSINESS_ACCOUNT",
+        ...(usesManagedFunding ? { labelPaymentPolicy: "PAYMENT_REQUIRED" as const } : {}),
         status: input.status
       },
       { returnDocument: "after", upsert: true, runValidators: true, setDefaultsOnInsert: true }

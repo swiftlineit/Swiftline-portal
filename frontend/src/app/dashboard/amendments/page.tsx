@@ -138,8 +138,6 @@ function AmendmentReviewModal({
   const paymentNotSecured = (amendment.paymentAmountMinor ?? 0) > 0
     && !["SECURED", "COMPLETED"].includes(amendment.paymentStatus ?? "NOT_REQUIRED");
 
-  // The root staff queue records payouts for individual price reductions. Positive
-  // differences must already be secured through Razorpay or the business wallet.
   const counterDeltaMinor = amendment.customerType === "INDIVIDUAL" && requestReducesCharge
     ? amendment.fundingPreview?.deltaAmountMinor ?? 0
     : 0;
@@ -244,51 +242,29 @@ function AmendmentReviewModal({
               <h3 className="text-sm font-semibold text-slate-950">Funding at Request</h3>
               {amendment.fundingPreview.billingMode === "TEST" ? (
                 <p className="mt-3 border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-                  This is a test shipment. Approval does not change wallet balances or payment records.
+                  This is a test shipment. Approval does not change payment records or customer balances.
                 </p>
               ) : (
-                amendment.fundingPreview.billingMode === "PREPAID" || amendment.fundingPreview.billingMode === "DIRECT" ? (
-                  <div className="mt-3 grid gap-3 border border-slate-200 bg-slate-50 rounded-2xl p-4 sm:grid-cols-3">
-                    <FundingMetric
-                      label={amendment.fundingPreview.billingMode === "PREPAID" ? "Wallet Available at Request" : "Payment Source"}
-                      value={amendment.fundingPreview.billingMode === "PREPAID"
-                        ? formatMinorAmount(amendment.fundingPreview.availableBookingCapacityMinor)
-                        : "Razorpay"}
-                    />
-                    <FundingMetric
-                      label={requestIncreasesCharge ? "Additional Payment" : requestReducesCharge ? "Charge Reduction" : "Charge Difference"}
-                      value={formatMinorAmount(Math.abs(amendment.fundingPreview.deltaAmountMinor))}
-                    />
-                    <FundingMetric
-                      label="Payment Status"
-                      value={amendment.paymentStatus === "SECURED" || amendment.paymentStatus === "COMPLETED"
-                        ? "Verified"
-                        : requestIncreasesCharge ? "Awaiting payment" : "No payment due"}
-                    />
-                  </div>
-                ) : (
-                  <div className="mt-3 grid gap-3 border border-slate-200 bg-slate-50 rounded-2xl p-4 sm:grid-cols-3">
-                    <FundingMetric label="Available Capacity at Request" value={formatMinorAmount(amendment.fundingPreview.availableBookingCapacityMinor)} />
-                    <FundingMetric
-                      label={requestReducesCharge ? "Wallet credit after approval" : "Wallet charge"}
-                      value={formatMinorAmount(requestReducesCharge
-                        ? Math.abs(amendment.fundingPreview.deltaAmountMinor)
-                        : amendment.fundingPreview.deltaAmountMinor)}
-                    />
-                    <FundingMetric
-                      label="Payment status"
-                      value={amendment.paymentStatus === "SECURED" || amendment.paymentStatus === "COMPLETED"
-                        ? "Verified"
-                        : requestIncreasesCharge ? "Awaiting wallet payment" : "No payment due"}
-                    />
-                  </div>
-                )
+                <div className="mt-3 grid gap-3 border border-slate-200 bg-slate-50 rounded-2xl p-4 sm:grid-cols-3">
+                  <FundingMetric
+                    label="Payment Source"
+                    value={amendment.fundingPreview.billingMode === "DIRECT" ? "Online payment" : "Business account"}
+                  />
+                  <FundingMetric
+                    label={requestIncreasesCharge ? "Additional Payment" : requestReducesCharge ? "Charge Reduction" : "Charge Difference"}
+                    value={formatMinorAmount(Math.abs(amendment.fundingPreview.deltaAmountMinor))}
+                  />
+                  <FundingMetric
+                    label="Payment Status"
+                    value={amendment.paymentStatus === "SECURED" || amendment.paymentStatus === "COMPLETED"
+                      ? "Verified"
+                      : requestIncreasesCharge ? "Awaiting payment" : "No payment due"}
+                  />
+                </div>
               )}
               {requestIncreasesCharge && paymentNotSecured ? (
                 <p className="mt-3 border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-                  {amendment.customerType === "BUSINESS"
-                    ? "For a business price increase, confirm the wallet payment is secured before approval. Rejecting releases the held wallet funds."
-                    : "For an individual price increase, confirm the Razorpay payment is verified before approval. Rejecting starts its refund. For a price decrease, record the customer refund before approving."}
+                  For a price increase, confirm the online payment is verified before approval. Rejecting starts a refund to the original payment method. For a price decrease, record the customer refund before approving.
                 </p>
               ) : null}
               {!amendment.fundingPreview.canFund ? (
@@ -304,9 +280,7 @@ function AmendmentReviewModal({
               <h3 className="text-sm font-semibold text-slate-950">Applied Billing Adjustment</h3>
               <div className="mt-3 grid gap-3 border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2  rounded-2xl lg:grid-cols-4">
                 <FundingMetric
-                  label={amendment.fundingPreview?.billingMode === "PREPAID"
-                    ? amendment.billingAdjustment.deltaAmountMinor < 0 ? "Wallet credit" : "Wallet charge"
-                    : "Amount paid or returned"}
+                  label="Amount paid or returned"
                   value={formatMinorAmount(amendment.billingAdjustment.deltaAmountMinor < 0
                     ? Math.abs(amendment.billingAdjustment.deltaAmountMinor)
                     : amendment.billingAdjustment.deltaAmountMinor)}

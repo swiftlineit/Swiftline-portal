@@ -94,7 +94,7 @@ export default function ShipmentCancellationPanel({
             <div className="grid gap-4 lg:grid-cols-2">
               <DocumentActions
                 title="Invoice cancellation adjustment"
-                description="This document reverses the original shipment invoice and applicable GST. It does not add wallet funds."
+                description="This document reverses the original shipment invoice and applicable GST."
                 type="credit-note"
                 busy={documentBusy}
                 onAction={openDocument}
@@ -143,7 +143,7 @@ export default function ShipmentCancellationPanel({
               ? "Cancellation is available before parcel collection."
               : "An admin exception is available until Warehouse Scan In."}
             {" An INR 700 fee plus 18% GST applies."}
-            {" After approval and carrier confirmation, prepaid refunds return to the original payment method or, for business-wallet bookings, to the wallet. Staff records refunds for cash bookings."}
+            {" After approval and carrier confirmation, online refunds return to the original payment method. Staff records refunds for cash bookings."}
           </p>
           {!canRequest ? (
             <p className="mt-3 flex items-start gap-2 text-sm font-medium text-amber-800">

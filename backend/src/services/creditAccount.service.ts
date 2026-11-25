@@ -23,16 +23,16 @@ const roleCreditPermissions: Record<BusinessAccountMemberRole, CreditPermission[
 };
 
 export const fallbackPaymentTerms = {
-  version: "2026-11-prepaid-v1",
-  title: "Swiftline Prepaid Payment Terms",
-  effectiveFrom: new Date("2026-11-21T00:00:00.000Z"),
+  version: "2026-11-direct-payment-v1",
+  title: "Swiftline Direct Payment Terms",
+  effectiveFrom: new Date("2026-11-24T00:00:00.000Z"),
   sections: [
-    { heading: "Wallet top-ups", content: "Wallet funds are available after Razorpay confirms the payment. A checkout that is cancelled, failed, or still pending does not add spendable funds." },
-    { heading: "Shipment booking", content: "Every new shipment must be paid in full before it is booked. A business shipment can use available wallet funds, Razorpay payment at booking, or a staff-recorded cash receipt. A shipment is not created until the payment is verified or the receipt is finalized." },
-    { heading: "Wallet reservations", content: "When wallet funds are used for booking, the amount is held while the booking is being completed. A failed booking releases the hold. The wallet activity shows confirmed top-ups, charges, refunds, and holds." },
-    { heading: "Amendments", content: "A business account pays an increased shipment charge from its wallet. Add enough wallet funds before paying if the available balance is short. Individual and public shipment amendments are paid directly through Razorpay." },
-    { heading: "Cash receipts", content: "Only Swiftline staff can record offline cash received for a business shipment. The receipt is tied to that shipment and does not add money to the business wallet. Standalone cash receipts also do not change wallet funds." },
-    { heading: "Invoices and assistance", content: "Each booked shipment keeps its shipment invoice. Contact your assigned Swiftline branch if a payment, wallet entry, receipt, or invoice appears incorrect." }
+    { heading: "Online payment", content: "Business shipments are paid in full through Razorpay at booking. A checkout that is cancelled, failed, or still pending does not create a shipment." },
+    { heading: "Shipment booking", content: "Every new shipment must be paid in full before it is booked. Staff may instead record a cash receipt against that shipment, and the shipment is created only after the receipt is finalized." },
+    { heading: "Payments ledger", content: "The business payments ledger shows confirmed online payments, gateway refunds, and finalized cash receipts. Historical wallet entries are retained only as archived audit records." },
+    { heading: "Amendments", content: "An increased shipment charge is paid directly through Razorpay. A reduction is refunded to the original online payment; where no gateway payment exists, staff must record a manual refund before approval." },
+    { heading: "Cash receipts", content: "Only Swiftline staff can record offline cash received for a business shipment. The receipt is tied to that shipment and appears in the business payments ledger." },
+    { heading: "Invoices and assistance", content: "Each booked shipment keeps its shipment invoice. Contact your assigned Swiftline branch if a payment, receipt, refund, or invoice appears incorrect." }
   ]
 };
 

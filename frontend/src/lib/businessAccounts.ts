@@ -181,7 +181,6 @@ export type BusinessAccount = {
   rateCardBand?: RateCardBand | null;
   privateRateCardVersion?: number;
   privateRateCardReady?: boolean;
-  walletAvailableBalanceMinor?: number;
   volumetricDiscountPercent?: number;
   volumetricDiscountVersion?: number;
   volumetricDiscountUpdatedAt?: string | null;

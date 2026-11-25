@@ -42,9 +42,9 @@ const reviewSchema = z.object({
   settlementConfirmed: z.literal(true, { error: "Confirm the cancellation settlement before approval." }),
   carrierReference: z.string().trim().max(120).optional().default(""),
   reviewNote: z.string().trim().max(500).optional().default(""),
-  // Only sent for walk-in shipments, where the refund is paid back outside the
-  // portal. The service decides whether it was required and rejects the approval
-  // when a counter sale is refundable but no payout was recorded.
+  // Sent when a refund is paid outside the portal. The service decides whether
+  // it was required and rejects approval when an offline refund is refundable
+  // but no payout was recorded.
   refundPayout: z.object({
     method: z.enum(counterPaymentMethodValues),
     reference: z.string().trim().max(80).optional(),

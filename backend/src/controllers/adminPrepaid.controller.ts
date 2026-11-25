@@ -1,7 +1,6 @@
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { BusinessAccount } from "../models/businessAccount.model.js";
-import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import { listAccountLedger } from "../services/prepaid/accountLedger.service.js";
 import { canAccessBranch } from "../middleware/branchAccess.middleware.js";
 import { getTenantContext, getTenantIdForWrite } from "../services/tenantScope.service.js";
@@ -36,20 +35,24 @@ async function loadAccount(request: Request) {
   return { account, businessAccountId: new mongoose.Types.ObjectId(businessAccountId), tenantId };
 }
 
-export async function getAdminPrepaidLedger(request: Request, response: Response): Promise<Response> {
+export async function getBusinessAccountPaymentsLedger(request: Request, response: Response): Promise<Response> {
   if (!userId(request)) return response.status(401).json({ success: false, message: "Unauthorized" });
   const loaded = await loadAccount(request);
   if (!loaded) return response.status(404).json({ success: false, message: "Business account was not found." });
   const dateRange = parseDateRange(request);
   if (!dateRange) return response.status(400).json({ success: false, message: "Choose a valid ledger date range." });
-  const view = request.query.view;
-  if (view !== undefined && view !== "all" && view !== "wallet") return response.status(400).json({ success: false, message: "Choose a valid ledger view." });
   const pageValue = Number(request.query.page ?? 1);
   const limitValue = Number(request.query.limit ?? 20);
   const limit = Number.isFinite(limitValue) ? Math.min(Math.max(Math.trunc(limitValue), 1), 100) : 20;
   const requestedPage = Number.isFinite(pageValue) ? Math.max(Math.trunc(pageValue), 1) : 1;
-  const wallet = await PrepaidAccount.findOne({ tenantId: loaded.tenantId, businessAccountId: loaded.businessAccountId }).lean().exec();
-  const ledger = await listAccountLedger({ tenantId: loaded.tenantId, businessAccountId: loaded.businessAccountId, page: requestedPage, limit, from: dateRange.$gte, to: dateRange.$lte, includeStandalone: true, walletOnly: view === "wallet" });
+  const ledger = await listAccountLedger({
+    tenantId: loaded.tenantId,
+    businessAccountId: loaded.businessAccountId,
+    page: requestedPage,
+    limit,
+    from: dateRange.$gte,
+    to: dateRange.$lte
+  });
   return response.status(200).json({
     success: true,
     account: {
@@ -57,19 +60,6 @@ export async function getAdminPrepaidLedger(request: Request, response: Response
       accountId: loaded.account.accountId,
       companyName: loaded.account.company?.companyName || loaded.account.accountId,
       branchId: String(loaded.account.assignedBranch)
-    },
-    wallet: wallet ? {
-      status: wallet.status,
-      currency: wallet.currency,
-      cashBalanceMinor: wallet.cashBalanceMinor,
-      reservedBalanceMinor: wallet.reservedBalanceMinor,
-      availableBalanceMinor: Math.max(wallet.cashBalanceMinor - wallet.reservedBalanceMinor, 0)
-    } : {
-      status: "ACTIVE",
-      currency: "INR",
-      cashBalanceMinor: 0,
-      reservedBalanceMinor: 0,
-      availableBalanceMinor: 0
     },
     ...ledger
   });
@@ -80,13 +70,13 @@ function csv(value: unknown) {
   return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }
 
-export async function exportAdminPrepaidLedger(request: Request, response: Response): Promise<Response> {
+export async function exportBusinessAccountPaymentsLedger(request: Request, response: Response): Promise<Response> {
   if (!userId(request)) return response.status(401).json({ success: false, message: "Unauthorized" });
   const loaded = await loadAccount(request);
   if (!loaded) return response.status(404).json({ success: false, message: "Business account was not found." });
   const dateRange = parseDateRange(request);
   if (!dateRange) return response.status(400).json({ success: false, message: "Choose a valid ledger date range." });
-  const filename = 'account-ledger-' + loaded.account.accountId.replace(/[^A-Za-z0-9_-]/g, '-') + '.csv';
+  const filename = 'payments-ledger-' + loaded.account.accountId.replace(/[^A-Za-z0-9_-]/g, '-') + '.csv';
   response.setHeader('Content-Type', 'text/csv; charset=utf-8');
   response.setHeader('Content-Disposition', 'attachment; filename="' + filename + '"');
   response.setHeader('Cache-Control', 'private, no-store');
@@ -94,7 +84,14 @@ export async function exportAdminPrepaidLedger(request: Request, response: Respo
   let page = 1;
   let totalPages = 1;
   do {
-    const ledger = await listAccountLedger({ tenantId: loaded.tenantId, businessAccountId: loaded.businessAccountId, page, limit: 100, from: dateRange.$gte, to: dateRange.$lte, includeStandalone: true });
+    const ledger = await listAccountLedger({
+      tenantId: loaded.tenantId,
+      businessAccountId: loaded.businessAccountId,
+      page,
+      limit: 100,
+      from: dateRange.$gte,
+      to: dateRange.$lte
+    });
     totalPages = ledger.pagination.totalPages;
     for (const row of ledger.transactions) {
       const values = [row.createdAt.toISOString(), row.transactionType.replaceAll('_', ' '), row.paymentSource, row.status, row.direction, (row.amountMinor / 100).toFixed(2), row.shipmentNumber ?? '', row.reference, row.description];
