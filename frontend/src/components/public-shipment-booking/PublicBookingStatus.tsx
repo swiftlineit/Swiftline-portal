@@ -6,10 +6,10 @@ import { loadPublicBooking, type PublicBooking } from "@/lib/publicShipmentBooki
 import BookingSuccess from "./BookingSuccess";
 
 const stateMessages: Partial<Record<PublicBooking["state"], string>> = {
-  PAYMENT_PENDING: "Checkout was started but payment is not yet confirmed. You can safely resume the same Razorpay order.",
+  PAYMENT_PENDING: "Payment was started but is not yet confirmed. You can safely resume the same payment.",
   FULFILLING: "Payment received. Your AWB, invoice and Swiftline labels are being created.",
   REVIEW_REQUIRED: "Payment received. Swiftline Operations is reviewing the shipment documents; do not pay or book again.",
-  PAYMENT_REVIEW_REQUIRED: "Your payment needs gateway reconciliation. Swiftline has been notified; do not pay again.",
+  PAYMENT_REVIEW_REQUIRED: "We are verifying your payment. Swiftline has been notified; do not pay again.",
   REFUND_PENDING: "The shipment could not be completed and a refund has been started. Swiftline has been notified.",
   REFUNDED: "The payment was refunded because the shipment could not be created.",
 };

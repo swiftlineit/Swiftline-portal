@@ -84,14 +84,22 @@ test("security lock email does not offer a portal link when access is blocked", 
   assert.doesNotMatch(html, /View business account/);
 });
 
-test("shipment booked client template renders the invoice and shipment facts", () => {
-  const { content, html, text } = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, labelsAttached: true });
+test("shipment booked client template lists shipment and attached document details", () => {
+  const { content, html, text } = render("SHIPMENT_BOOKED_CLIENT", {
+    ...shipmentPayload,
+    invoiceAttached: true,
+    customsInvoiceAttached: true,
+    swiftlineLabelAttached: true,
+    dpdLabelAttached: true
+  });
 
   assert.match(content.subject, /SWL000123456/);
   assert.match(html, /SWL000123456/);
   assert.match(html, /SWL\/2026-27\/000412/);
   // Money must be rendered from minor units, never printed raw.
   assert.match(html, /53,100\.00/);
+  assert.match(html, /Shipment invoice/);
+  assert.match(html, /DPD label/);
   assert.doesNotMatch(html, /5310000/);
   assert.match(html, /https:\/\/portal\.swiftline\.example\/client\/shipments\/665f0b2c1a/);
   assert.match(text, /SWL000123456/);
@@ -104,12 +112,13 @@ test("shipment booked no-GST email calls the attachment an invoice and shows GST
     taxTreatment: "NO_GST",
     totalTaxAmountMinor: 0,
     invoiceTotalMinor: shipmentPayload.taxableValueMinor,
-    labelsAttached: true
+    invoiceAttached: true,
+    customsInvoiceAttached: true
   };
   const client = render("SHIPMENT_BOOKED_CLIENT", noGstPayload);
   const staff = render("SHIPMENT_BOOKED_STAFF", noGstPayload);
-  assert.match(client.html, /your invoice is attached/i);
-  assert.doesNotMatch(client.html, /your tax invoice is attached/i);
+  assert.match(client.html, /Invoice/);
+  assert.doesNotMatch(client.html, /GST tax invoice/);
   assert.match(staff.html, /GST[\s\S]*?-/);
 });
 
@@ -120,20 +129,18 @@ test("email layout escapes an operator brand name", () => {
 });
 
 test("shipment booked client template does not claim labels are attached when they are not", () => {
-  const attached = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, labelsAttached: true });
-  const dropped = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, labelsAttached: false });
+  const attached = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, swiftlineLabelAttached: true });
+  const dropped = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, swiftlineLabelAttached: false });
 
-  assert.match(attached.html, /Swiftline shipping labels are attached/);
-  assert.doesNotMatch(dropped.html, /Swiftline shipping labels are attached/);
-  assert.match(dropped.html, /download from the portal/);
+  assert.match(attached.html, /Swiftline labels[\s\S]*?Attached/);
+  assert.doesNotMatch(dropped.html, /Swiftline labels[\s\S]*?Attached/);
+  assert.match(dropped.html, /Not generated/);
 });
 
-test("shipment booked client template names no carrier but Swiftline", () => {
-  const { html } = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, labelsAttached: true });
+test("shipment booked client template only lists a DPD label when generated", () => {
+  const { html } = render("SHIPMENT_BOOKED_CLIENT", { ...shipmentPayload, swiftlineLabelAttached: true });
 
-  assert.doesNotMatch(html, /DPD/i);
-  // The old carrier flow attached a simulated label that had to be marked
-  // unusable; there is no such label now, so no such warning either.
+  assert.doesNotMatch(html, /DPD label/);
   assert.doesNotMatch(html, /not valid for carriage/);
   assert.match(html, /Swiftline/);
 });
@@ -153,18 +160,19 @@ test("operator booking emails link to one operator workspace and describe only a
     operatorName: "JK Logistics",
     href: "/portal/jk-logistics/shipments/665f0b2c1a",
     invoiceAttached: true,
-    labelsAttached: false
+    customsInvoiceAttached: true,
+    swiftlineLabelAttached: false
   };
   const client = render("OPERATOR_SHIPMENT_BOOKED_CLIENT", payload);
   const staff = render("OPERATOR_SHIPMENT_BOOKED_STAFF", payload);
 
-  assert.match(client.html, /invoice is attached/i);
-  assert.match(client.html, /Download your internal parcel labels/i);
+  assert.match(client.html, /GST tax invoice[\s\S]*?Attached/i);
+  assert.match(client.html, /Internal labels[\s\S]*?Not generated/i);
   assert.doesNotMatch(client.html, /Swiftline shipping labels|\/track\/SWL/);
   assert.match(client.html, /https:\/\/portal\.swiftline\.example\/portal\/jk-logistics\/shipments\/665f0b2c1a/);
   assert.doesNotMatch(client.html, /\/portal\/jk-logistics\/portal\//);
   assert.match(staff.html, /https:\/\/portal\.swiftline\.example\/portal\/jk-logistics\/shipments\/665f0b2c1a/);
-  assert.doesNotMatch(staff.html, /attached/i);
+  assert.match(staff.html, /Shipment invoice/);
 });
 
 test("generic template covers any notification type without a bespoke file", () => {

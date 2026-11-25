@@ -6,7 +6,7 @@ import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember, financialRoles } from "../models/businessAccountMember.model.js";
 import { PaymentTermsAcceptance } from "../models/paymentTerms.model.js";
 import { CreditLimitIncreaseRequest } from "../models/creditLimitIncreaseRequest.model.js";
-import { maxCreditLimitLabel, maxCreditLimitMinor } from "../models/financialTypes.js";
+import { formatMinorRupees, maxCreditLimitLabel, maxCreditLimitMinor } from "../models/financialTypes.js";
 import {
   appendCreditLedgerEntry, ensureCreditAccount, getCurrentPaymentTerms,
   canAccessCreditFinancials, getMemberCreditPermissions, serializeCreditAccount, serializeLimitIncrease
@@ -14,7 +14,6 @@ import {
 import { getCreditRestrictionState } from "../services/creditOverdue.service.js";
 import { getCreditBillingSummary } from "../services/creditBilling.summary.service.js";
 import { notifyCreditFacilityReviewers } from "../services/portalNotification.service.js";
-import { formatMinorRupees } from "../services/prepaid/dailyTopUpLimit.service.js";
 import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 
 function blockNewSwiftlineCreditFacility(request: Request, response: Response) {
@@ -22,7 +21,7 @@ function blockNewSwiftlineCreditFacility(request: Request, response: Response) {
   response.status(410).json({
     success: false,
     code: "CREDIT_FACILITY_RETIRED",
-    message: "New Swiftline credit facilities are no longer available. Fund the prepaid wallet or pay when booking."
+    message: "New Swiftline credit facilities are no longer available. Pay online or record a cash receipt when booking."
   });
   return true;
 }

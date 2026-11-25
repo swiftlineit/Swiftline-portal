@@ -4,7 +4,6 @@ import { requireAadhaarOcrFeatureEnabled } from "../middleware/aadhaarOcrFeature
 import {
   createClientShipmentAmendment,
   createClientShipmentAmendmentDirectPayment,
-  fundClientShipmentAmendmentFromWallet,
   getClientPendingShipmentAmendment,
   downloadClientCustomsInvoicePdf,
   downloadClientCustomsInvoiceWorkbook,
@@ -42,15 +41,7 @@ import {
   getClientShipmentImportBatch,
   updateClientShipmentDraft
 } from "../controllers/client.controller.js";
-import {
-  createClientPrepaidTopUp,
-  getClientPrepaidAccount,
-  getClientPrepaidTopUp,
-  listClientPrepaidTopUps,
-  listClientPrepaidTransactions,
-  getClientAccountLedger,
-  verifyClientPrepaidTopUp
-} from "../controllers/prepaid.controller.js";
+import { getClientAccountLedger } from "../controllers/prepaid.controller.js";
 import {
   autocompleteAddress,
   autocompleteConsignorAddress,
@@ -181,13 +172,7 @@ clientRouter.get("/rate-card-shares/:shareId", getClientRateCardShare);
 clientRouter.get("/rate-card-shares/:shareId/pdf", downloadClientRateCardSharePdf);
 clientRouter.get("/rate-card-shares/:shareId/xlsx", downloadClientRateCardShareWorkbook);
 clientRouter.post("/rate-card-shares/:shareId/read", markClientRateCardShareRead);
-clientRouter.get("/prepaid-account", getClientPrepaidAccount);
-clientRouter.get("/prepaid-transactions", listClientPrepaidTransactions);
 clientRouter.get("/account-ledger", getClientAccountLedger);
-clientRouter.post("/prepaid-topups", createClientPrepaidTopUp);
-clientRouter.post("/prepaid-topups/:id/verify", verifyClientPrepaidTopUp);
-clientRouter.get("/prepaid-topups/:id", getClientPrepaidTopUp);
-clientRouter.get("/prepaid-topups", listClientPrepaidTopUps);
 clientRouter.get("/shipment-imports/template", downloadClientShipmentImportTemplate);
 clientRouter.post("/shipment-imports/batches", shipmentImportUpload, createClientShipmentImportBatch);
 clientRouter.get("/shipment-imports/batches/:batchId", getClientShipmentImportBatch);
@@ -255,7 +240,6 @@ clientRouter.get("/shipment-cancellations/:id/fee-invoice/pdf", getClientCancell
 clientRouter.post("/shipments/:id/amendments/preview", previewClientShipmentAmendment);
 clientRouter.post("/shipments/:id/amendments", createClientShipmentAmendment);
 clientRouter.get("/shipments/:draftId/amendments/pending", getClientPendingShipmentAmendment);
-clientRouter.post("/shipment-amendments/:id/fund-wallet", fundClientShipmentAmendmentFromWallet);
 clientRouter.post("/shipment-amendments/:id/direct-payment", createClientShipmentAmendmentDirectPayment);
 clientRouter.post("/shipment-amendments/:id/direct-payment/verify", verifyClientShipmentAmendmentDirectPayment);
 clientRouter.get("/shipments/:draftId/invoice", getClientShipmentInvoice);

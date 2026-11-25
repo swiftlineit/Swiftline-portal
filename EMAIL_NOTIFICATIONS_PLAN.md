@@ -197,6 +197,8 @@ Domain service (in txn)
 | 48 | Shipment on hold ▲ | `ON_HOLD` | ACTOR, BOPS, OWN | OPS | TXN | **P0** |
 | 49 | Released from hold ▲ | `RELEASED_FROM_HOLD` | ACTOR, BOPS | OPS | TXN | P1 |
 
+Booking emails are sent to active business owners, admins, operations/finance members, active operations staff, and the consignor email entered on the shipment. Attachments include the GST tax invoice and customs shipment invoice, available Swiftline/internal labels, a DPD label when generated, and a finalized cash receipt when present.
+
 ### 4.6 Shipment Tracking Milestones
 > Highest-volume category. **Must be preference-gated and digestible**- a 200-shipment/day client will not tolerate per-parcel emails. Default: opt-in per milestone, with a daily digest alternative.
 

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { FiCreditCard } from "react-icons/fi";
 import type {
   PublicBooking,
   PublicQuote,
@@ -250,15 +251,15 @@ export default function ReviewPaymentStep({
               type="button"
               onClick={onPay}
               disabled={busy}
-              className="mt-5 h-12 w-full rounded-lg bg-[#0D1282] px-4 text-sm font-bold text-white shadow-sm transition hover:bg-[#080d64] disabled:opacity-50"
+              className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#0D1282] px-4 text-sm font-bold text-white shadow-sm transition hover:bg-[#080d64] disabled:opacity-50"
             >
+              <FiCreditCard aria-hidden="true" className="h-4 w-4" />
               {busy
                 ? "Securing payment…"
                 : `Pay ${formatRupees(quote.amountMinor)}`}
             </button>
             <p className="mt-3 text-center text-xs leading-5 text-slate-500">
-              Secure payment by Razorpay. Do not refresh after completing
-              payment.
+              Secure online payment. Do not refresh after completing payment.
             </p>
           </>
         ) : (

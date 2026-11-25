@@ -3,7 +3,6 @@ import mongoose from "mongoose";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
-import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import {
   CounterPayment,
   counterPaymentMethodValues,
@@ -128,7 +127,6 @@ export async function getBranchFinanceSummary(request: Request, response: Respon
       .exec()
   ]);
 
-  const businessAccountIds = businessAccounts.map((account) => account._id);
   const invoiceDate = { $gte: range.fromDate, $lt: range.toExclusive };
   const validInvoice = {
     branchId,
@@ -144,7 +142,7 @@ export async function getBranchFinanceSummary(request: Request, response: Respon
     recordedAt: { $gte: range.fromDate, $lt: range.toExclusive }
   };
 
-  const [businessInvoiceRows, individualShipmentCount, prepaidAccounts, counterTotals, counterMethods, recentPayments] = await Promise.all([
+  const [businessInvoiceRows, individualShipmentCount, counterTotals, counterMethods, recentPayments] = await Promise.all([
     ShipmentInvoice.aggregate<{ shipments: number; invoicedMinor: number }>([
       { $match: businessInvoiceMatch },
       { $group: { _id: null, shipments: { $sum: 1 }, invoicedMinor: { $sum: "$totalAmountMinor" } } }
@@ -152,7 +150,6 @@ export async function getBranchFinanceSummary(request: Request, response: Respon
     individualAccount?._id
       ? ShipmentInvoice.countDocuments({ ...validInvoice, businessAccountId: individualAccount._id }).exec()
       : Promise.resolve(0),
-    PrepaidAccount.find({ businessAccountId: { $in: businessAccountIds } }).lean().exec(),
     CounterPayment.aggregate<{ collectedMinor: number; refundedMinor: number }>([
       { $match: counterMatch },
       {
@@ -180,33 +177,6 @@ export async function getBranchFinanceSummary(request: Request, response: Respon
       .lean()
       .exec()
   ]);
-
-  const accountById = new Map(businessAccounts.map((account) => [String(account._id), account]));
-  const walletRows = prepaidAccounts.map((wallet) => {
-    const account = accountById.get(String(wallet.businessAccountId));
-    const availableBalanceMinor = wallet.status === "ACTIVE"
-      ? Math.max(wallet.cashBalanceMinor - wallet.reservedBalanceMinor, 0)
-      : 0;
-    return {
-      id: String(wallet._id),
-      businessAccountId: String(wallet.businessAccountId),
-      accountId: account?.accountId ?? "",
-      companyName: account?.company?.companyName ?? account?.accountId ?? "",
-      status: wallet.status,
-      walletBalanceMinor: wallet.cashBalanceMinor,
-      reservedBalanceMinor: wallet.reservedBalanceMinor,
-      availableBalanceMinor
-    };
-  });
-
-  const walletTotals = walletRows.reduce(
-    (totals, wallet) => ({
-      walletBalanceMinor: totals.walletBalanceMinor + wallet.walletBalanceMinor,
-      reservedBalanceMinor: totals.reservedBalanceMinor + wallet.reservedBalanceMinor,
-      availableBalanceMinor: totals.availableBalanceMinor + wallet.availableBalanceMinor
-    }),
-    { walletBalanceMinor: 0, reservedBalanceMinor: 0, availableBalanceMinor: 0 }
-  );
 
   const recentDraftIds = recentPayments.map((payment) => payment.shipmentDraftId);
   const [recentDrafts, recentBookings] = await Promise.all([
@@ -248,16 +218,13 @@ export async function getBranchFinanceSummary(request: Request, response: Respon
   return response.status(200).json({
     success: true,
     period: { from: range.from, to: range.to },
-    // Counter payments and prepaid accounts are stored in INR today.
-    // Do not relabel them with a branch profile currency that may differ.
+    // Counter payments are stored in INR today. Do not relabel them with a
+    // branch profile currency that may differ.
     currency: "INR",
     business: {
       shipments: numberValue(businessInvoices?.shipments),
       invoicedMinor: numberValue(businessInvoices?.invoicedMinor),
-      linkedAccounts: businessAccounts.length,
-      walletCount: walletRows.length,
-      ...walletTotals,
-      wallets: walletRows
+      linkedAccounts: businessAccounts.length
     },
     individual: {
       shipments: individualShipmentCount,

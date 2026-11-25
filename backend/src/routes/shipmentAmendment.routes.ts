@@ -2,7 +2,6 @@ import { Router } from "express";
 import {
   approveShipmentAmendment,
   createShipmentAmendmentDirectPayment,
-  fundShipmentAmendmentFromWallet,
   getPendingShipmentAmendment,
   listShipmentAmendments,
   rejectShipmentAmendment,
@@ -17,7 +16,6 @@ shipmentAmendmentRouter.use(requireRole("admin", "operations"));
 
 shipmentAmendmentRouter.get("/", listShipmentAmendments);
 shipmentAmendmentRouter.get("/draft/:draftId/pending", (request, response) => getPendingShipmentAmendment(request, response, "staff"));
-shipmentAmendmentRouter.post("/:id/fund-wallet", (request, response) => fundShipmentAmendmentFromWallet(request, response, "staff"));
 shipmentAmendmentRouter.post("/:id/direct-payment", createShipmentAmendmentDirectPayment);
 shipmentAmendmentRouter.post("/:id/direct-payment/verify", verifyShipmentAmendmentDirectPayment);
 shipmentAmendmentRouter.post("/:id/approve", approveShipmentAmendment);

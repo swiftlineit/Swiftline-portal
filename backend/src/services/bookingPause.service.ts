@@ -1,5 +1,6 @@
 import { BookingPause, deriveBookingPauseStatus, type IBookingPause } from "../models/bookingPause.model.js";
 import { DpdBookingSetting } from "../models/dpdBookingSetting.model.js";
+import { isAlsEnabled, readAlsConfiguration } from "./als/alsClient.service.js";
 import { EUROPE_COUNTRY_SET, normalizeCountryCode } from "./reference/europeCountryCodes.js";
 
 export type BookingPauseCheckResult = {
@@ -65,10 +66,22 @@ export async function getBookingPauseStatusMap(at = new Date()) {
   return deriveBookingPauseStatus;
 }
 
-/** Missing configuration keeps the current production behaviour enabled. */
+/** DPD booking is available only when both the operational and ALS switches are ready. */
+export function isDpdLabelBookingAvailable(input: {
+  bookingEnabled: boolean | undefined;
+  alsEnabled: boolean;
+  alsConfigurationReady: boolean;
+}) {
+  return (input.bookingEnabled ?? true) && input.alsEnabled && input.alsConfigurationReady;
+}
+
 export async function isDpdBookingEnabled(): Promise<boolean> {
   const setting = await DpdBookingSetting.findOne({ key: "GLOBAL" }).select("enabled").lean().exec();
-  return setting?.enabled ?? true;
+  return isDpdLabelBookingAvailable({
+    bookingEnabled: setting?.enabled,
+    alsEnabled: isAlsEnabled(),
+    alsConfigurationReady: readAlsConfiguration().ok
+  });
 }
 
 export { deriveBookingPauseStatus, normalizeCountryCode, EUROPE_COUNTRY_SET };

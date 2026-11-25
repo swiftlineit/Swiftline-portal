@@ -52,7 +52,6 @@ import {
 import {
   createShipmentAmendment,
   createClientAmendmentDirectPayment,
-  fundShipmentAmendmentFromWallet,
   getPendingShipmentAmendment,
   previewShipmentAmendment,
   verifyClientAmendmentDirectPayment
@@ -74,6 +73,7 @@ import {
   listShipmentInvoiceRevisedDocuments
 } from "./shipmentInvoiceRevisedDocument.controller.js";
 import { buildStoredLabelAccess } from "./dpdShipment.controller.js";
+import { SHIPMENT_LABEL_PAYMENT_REQUIRED_MESSAGE } from "../services/prepaid/shipmentLabelAccessPolicy.service.js";
 import {
   DpdLabelUnavailableError,
   DpdShipmentServiceError,
@@ -1460,20 +1460,6 @@ export async function previewClientShipmentAmendment(request: Request, response:
   return previewShipmentAmendment(request, response);
 }
 
-export async function fundClientShipmentAmendmentFromWallet(request: Request, response: Response): Promise<Response> {
-  const userId = getAuthenticatedUserId(request);
-  if (!userId) return response.status(401).json({ success: false, message: "Unauthorized" });
-  const amendmentId = typeof request.params.id === "string" ? request.params.id : "";
-  if (!mongoose.Types.ObjectId.isValid(amendmentId)) {
-    return response.status(404).json({ success: false, message: "Amendment not found" });
-  }
-  const amendment = await ShipmentAmendment.findById(amendmentId).select("shipmentDraftId").lean().exec();
-  if (!amendment || !await clientCanAccessDraft(String(userId), String(amendment.shipmentDraftId))) {
-    return response.status(404).json({ success: false, message: "Amendment not found" });
-  }
-  return fundShipmentAmendmentFromWallet(request, response, "client");
-}
-
 export async function getClientPendingShipmentAmendment(request: Request, response: Response): Promise<Response> {
   const userId = getAuthenticatedUserId(request);
   const draftId = typeof request.params.draftId === "string" ? request.params.draftId : "";
@@ -1584,7 +1570,7 @@ export async function downloadClientCustomsInvoiceWorkbook(request: Request, res
 // The price the customer accepted, as returned by the cost estimate endpoint.
 const clientAcceptedPricingSchema = z.object({
   acceptedPricingHash: z.string().trim().min(1).max(128).optional(),
-  paymentSource: z.enum(["BUSINESS_WALLET", "DIRECT_RAZORPAY"]).optional().default("BUSINESS_WALLET"),
+  paymentSource: z.literal("DIRECT_RAZORPAY").default("DIRECT_RAZORPAY"),
   fundingReferenceId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid payment.").optional(),
   // Set only after the booker has been shown a DPD failure and chosen to go
   // ahead without the carrier label. Never defaulted true.
@@ -1607,7 +1593,7 @@ export async function createClientShipment(
 
   const acceptedPricing = clientAcceptedPricingSchema.safeParse(request.body ?? {});
   if (!acceptedPricing.success) {
-    return response.status(400).json({ success: false, message: "Select a valid prepaid payment option.", errors: acceptedPricing.error.format() });
+    return response.status(400).json({ success: false, message: "Select a valid payment option.", errors: acceptedPricing.error.format() });
   }
   const draftForPayment = await ShipmentDraft.findById(draftId).select("customerType").lean().exec();
   if (!draftForPayment) return response.status(404).json({ success: false, message: "Shipment draft not found" });
@@ -1615,7 +1601,7 @@ export async function createClientShipment(
     return response.status(402).json({ success: false, message: "Individual shipments must be paid securely before booking." });
   }
   if (acceptedPricing.data.paymentSource === "DIRECT_RAZORPAY" && !acceptedPricing.data.fundingReferenceId) {
-    return response.status(402).json({ success: false, message: "Payment verification is pending. Your wallet will be updated after confirmation." });
+    return response.status(402).json({ success: false, message: "Online payment verification is pending. Booking can continue after confirmation." });
   }
 
   const bookingDraft = await ShipmentDraft.findById(draftId)
@@ -1753,6 +1739,9 @@ export async function createClientShipmentLabelAccess(request: Request, response
     disposition: request.query.disposition === "attachment" ? "attachment" : "inline"
   });
   if (!access) return response.status(404).json({ success: false, message: "Shipment label not found" });
+  if ("paymentRequired" in access) {
+    return response.status(402).json({ success: false, message: SHIPMENT_LABEL_PAYMENT_REQUIRED_MESSAGE });
+  }
 
   return response.status(200).json({ success: true, ...access });
 }

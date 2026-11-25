@@ -6,9 +6,11 @@ import mongoose from "mongoose";
 import { env } from "../config/env.js";
 import { buildStoredLabelAccess, downloadDpdLabelWithToken } from "../controllers/dpdShipment.controller.js";
 import { AuditLog } from "../models/auditLog.model.js";
+import { BusinessAccount } from "../models/businessAccount.model.js";
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
 import { OperatorSupportSession } from "../models/operatorSupportSession.model.js";
+import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { Tenant } from "../models/tenant.model.js";
 import { createLabelAccessToken, verifyLabelAccessToken } from "../services/shipmentLabelAccessToken.service.js";
 import { localStorageDriver } from "../services/storage/localDriver.js";
@@ -32,7 +34,9 @@ describe("signed operator label download", () => {
     let labelFilter: unknown;
 
     const labelModel = LabelDocument as unknown as { findOne: (filter: unknown) => unknown };
+    const shipmentModel = DpdShipment as unknown as { findById: (id: unknown) => unknown };
     const previousLabelFindOne = labelModel.findOne;
+    const previousShipmentFindById = shipmentModel.findById;
     const generatedAt = new Date("2026-10-24T08:30:00.000Z");
 
     try {
@@ -47,10 +51,15 @@ describe("signed operator label download", () => {
           labelSize: "A6",
           fileChecksum: "sha256:label",
           generatedAt,
+          createdAt: generatedAt,
           downloadCount: 4,
           lastDownloadedAt: null
         });
       };
+      shipmentModel.findById = () => queryResult({
+        shipmentDraftId: new mongoose.Types.ObjectId(),
+        createdAt: generatedAt
+      });
 
       const access = await runWithTenantContext({
         tenantId,
@@ -65,7 +74,7 @@ describe("signed operator label download", () => {
         disposition: "inline"
       }));
 
-      assert.ok(access);
+      assert.ok(access && !("paymentRequired" in access));
       assert.deepEqual(labelFilter, { _id: labelId, dpdShipmentId: shipmentId });
       assert.equal(access.label.labelType, "INTERNAL");
       assert.equal(access.label.downloadCount, 4);
@@ -85,6 +94,7 @@ describe("signed operator label download", () => {
       assert.match(access.url, /^https:\/\/portal\.example\.test\//);
     } finally {
       labelModel.findOne = previousLabelFindOne;
+      shipmentModel.findById = previousShipmentFindById;
     }
   });
 
@@ -108,16 +118,21 @@ describe("signed operator label download", () => {
     const sessionModel = OperatorSupportSession as unknown as { findOne: (filter: unknown) => unknown };
     const shipmentModel = DpdShipment as unknown as { findOne: (filter: unknown) => unknown };
     const labelModel = LabelDocument as unknown as { findOne: (filter: unknown) => unknown };
+    const draftModel = ShipmentDraft as unknown as { findById: (id: unknown) => unknown };
+    const accountModel = BusinessAccount as unknown as { findById: (id: unknown) => unknown };
     const auditModel = AuditLog as unknown as { create: (document: unknown) => Promise<unknown> };
     const previous = {
       tenantFindOne: tenantModel.findOne,
       sessionFindOne: sessionModel.findOne,
       shipmentFindOne: shipmentModel.findOne,
       labelFindOne: labelModel.findOne,
+      draftFindById: draftModel.findById,
+      accountFindById: accountModel.findById,
       auditCreate: auditModel.create,
       objectExists: localStorageDriver.objectExists,
       getObjectStream: localStorageDriver.getObjectStream,
-      storageDriver: env.STORAGE_DRIVER
+      storageDriver: env.STORAGE_DRIVER,
+      labelPolicyActivation: env.LABEL_PAYMENT_POLICY_ACTIVATED_AT
     };
 
     const label = {
@@ -130,6 +145,8 @@ describe("signed operator label download", () => {
       labelSize: "A6",
       parcelNumber: "OP-TRACK-01",
       downloadCount: 4,
+      createdAt: new Date("2026-10-24T08:30:00.000Z"),
+      generatedAt: new Date("2026-10-24T08:30:00.000Z"),
       async save() { labelSaveCount += 1; }
     };
     currentLabel = label;
@@ -145,8 +162,14 @@ describe("signed operator label download", () => {
       };
       shipmentModel.findOne = (filter) => {
         shipmentFilter = filter;
-        return queryResult({ _id: shipmentId });
+        return queryResult({
+          _id: shipmentId,
+          shipmentDraftId: new mongoose.Types.ObjectId(),
+          createdAt: new Date("2026-10-24T08:30:00.000Z")
+        });
       };
+      draftModel.findById = () => queryResult({ businessAccountId: new mongoose.Types.ObjectId() });
+      accountModel.findById = () => queryResult({ status: "active", suspension: { mode: "" } });
       labelModel.findOne = (filter) => {
         labelFilter = filter;
         return queryResult(currentLabel);
@@ -156,6 +179,7 @@ describe("signed operator label download", () => {
         return [];
       };
       env.STORAGE_DRIVER = "local";
+      env.LABEL_PAYMENT_POLICY_ACTIVATED_AT = "2026-11-01T00:00:00.000Z";
       localStorageDriver.objectExists = async () => true;
       localStorageDriver.getObjectStream = async () => Readable.from([Buffer.from("internal-label")]);
 
@@ -252,10 +276,13 @@ describe("signed operator label download", () => {
       sessionModel.findOne = previous.sessionFindOne;
       shipmentModel.findOne = previous.shipmentFindOne;
       labelModel.findOne = previous.labelFindOne;
+      draftModel.findById = previous.draftFindById;
+      accountModel.findById = previous.accountFindById;
       auditModel.create = previous.auditCreate;
       localStorageDriver.objectExists = previous.objectExists;
       localStorageDriver.getObjectStream = previous.getObjectStream;
       env.STORAGE_DRIVER = previous.storageDriver;
+      env.LABEL_PAYMENT_POLICY_ACTIVATED_AT = previous.labelPolicyActivation;
     }
   });
 });

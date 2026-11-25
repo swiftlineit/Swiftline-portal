@@ -199,12 +199,19 @@ type DetailTab = "overview" | "documents" | "kyc" | "access" | "rate-card" | "le
 
 const detailTabs: DetailTab[] = ["overview", "documents", "kyc", "access", "rate-card", "ledger"];
 
-// Notification links address a tab directly (…/business-accounts/SL-1#kyc), so
-// the fragment picks the starting tab instead of always opening on Overview.
-function tabFromLocationHash(): DetailTab {
+function tabFromLocation(): DetailTab {
   if (typeof window === "undefined") return "overview";
-  const requested = window.location.hash.slice(1) as DetailTab;
-  return detailTabs.includes(requested) ? requested : "overview";
+  const fromQuery = new URLSearchParams(window.location.search).get("tab") as DetailTab | null;
+  if (fromQuery && detailTabs.includes(fromQuery)) return fromQuery;
+  const fromHash = window.location.hash.slice(1) as DetailTab;
+  return detailTabs.includes(fromHash) ? fromHash : "overview";
+}
+
+function updateTabLocation(tab: DetailTab) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("tab");
+  url.hash = tab;
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 export default function BusinessAccountDetailsPage() {
@@ -221,8 +228,8 @@ export default function BusinessAccountDetailsPage() {
 
   // Read after mount so the server render and the first client render agree.
   useEffect(() => {
-    const applyHash = window.setTimeout(() => setActiveTab(tabFromLocationHash()), 0);
-    return () => window.clearTimeout(applyHash);
+    const applyLocation = window.setTimeout(() => setActiveTab(tabFromLocation()), 0);
+    return () => window.clearTimeout(applyLocation);
   }, [params.accountId]);
 
 
@@ -388,7 +395,7 @@ export default function BusinessAccountDetailsPage() {
     { key: "kyc", label: "KYC Review" },
     { key: "access", label: "Users & Access" },
     { key: "rate-card", label: "Rate Card" },
-    { key: "ledger", label: "Ledger" },
+    { key: "ledger", label: "Payments ledger" },
   ];
 
   const companyName = account.company?.companyName?.trim();
@@ -439,7 +446,7 @@ export default function BusinessAccountDetailsPage() {
               <button
                 key={tab.key}
                 type="button"
-                onClick={() => { void requestLeave().then((canLeave) => { if (canLeave) { setActiveTab(tab.key); window.history.replaceState(null, "", `#${tab.key}`); } }); }}
+                onClick={() => { void requestLeave().then((canLeave) => { if (canLeave) { setActiveTab(tab.key); updateTabLocation(tab.key); } }); }}
                 className={`relative inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
                   isActive
                     ? "bg-[#0D1282]/80 text-white shadow-sm shadow-[#0D1282]/25"

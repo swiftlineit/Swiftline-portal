@@ -4,7 +4,7 @@ import type { RazorpayPublicConfig } from "@/lib/clientDashboard";
 import type { ShipmentAmendment } from "@/lib/dpdLabels";
 
 export type ShipmentPaymentAudience = "client" | "staff";
-export type ShipmentPaymentSource = "BUSINESS_WALLET" | "DIRECT_RAZORPAY" | "CASH_RECEIPT";
+export type ShipmentPaymentSource = "DIRECT_RAZORPAY" | "CASH_RECEIPT";
 
 export type ShipmentPaymentIntent = {
   id: string;
@@ -103,6 +103,7 @@ export async function createDirectShipmentPayment(input: {
   audience: ShipmentPaymentAudience;
   shipmentDraftId: string;
   acceptedPricingHash: string;
+  skipDpdLabel?: boolean;
 }) {
   const response = await authenticatedFetch(`${route(input.audience, input.shipmentDraftId)}/direct-payment`, {
     method: "POST",
@@ -110,7 +111,10 @@ export async function createDirectShipmentPayment(input: {
       "Content-Type": "application/json",
       "Idempotency-Key": stableIdempotencyKey(input.shipmentDraftId, input.acceptedPricingHash)
     },
-    body: JSON.stringify({ acceptedPricingHash: input.acceptedPricingHash })
+    body: JSON.stringify({
+      acceptedPricingHash: input.acceptedPricingHash,
+      skipDpdLabel: input.skipDpdLabel === true
+    })
   });
   return json<{
     success: true;
@@ -126,6 +130,7 @@ export async function verifyDirectShipmentPayment(input: {
   razorpay_order_id: string;
   razorpay_payment_id: string;
   razorpay_signature: string;
+  skipDpdLabel?: boolean;
 }) {
   const response = await authenticatedFetch(`${route(input.audience, input.shipmentDraftId)}/direct-payment/verify`, {
     method: "POST",
@@ -133,7 +138,8 @@ export async function verifyDirectShipmentPayment(input: {
     body: JSON.stringify({
       razorpay_order_id: input.razorpay_order_id,
       razorpay_payment_id: input.razorpay_payment_id,
-      razorpay_signature: input.razorpay_signature
+      razorpay_signature: input.razorpay_signature,
+      skipDpdLabel: input.skipDpdLabel === true
     })
   });
   return json<{ success: true; message: string; payment: ShipmentPaymentIntent }>(response, "Shipment payment could not be verified.");
@@ -142,16 +148,6 @@ export async function verifyDirectShipmentPayment(input: {
 function amendmentRoute(audience: ShipmentPaymentAudience, amendmentId: string) {
   const prefix = audience === "client" ? "/api/v1/client/shipment-amendments" : "/api/v1/shipment-amendments";
   return `${prefix}/${encodeURIComponent(amendmentId)}`;
-}
-
-export async function fundShipmentAmendmentFromWallet(input: {
-  audience: ShipmentPaymentAudience;
-  amendmentId: string;
-}) {
-  const response = await authenticatedFetch(`${amendmentRoute(input.audience, input.amendmentId)}/fund-wallet`, {
-    method: "POST"
-  });
-  return json<{ success: true; message: string }>(response, "Amendment could not be funded from the business wallet.");
 }
 
 export async function createDirectShipmentAmendmentPayment(input: {
@@ -278,9 +274,9 @@ export async function openShipmentRazorpayCheckout(input: {
   payment: ShipmentPaymentIntent;
   prefill?: { name?: string; email?: string; contact?: string };
 }) {
-  if (!input.razorpay.keyId) throw new Error("Razorpay is not configured for online shipment payments.");
+  if (!input.razorpay.keyId) throw new Error("Online payment is not available right now.");
   if (!await loadRazorpayCheckout() || !window.Razorpay) {
-    throw new Error("Razorpay checkout could not be loaded in this browser.");
+    throw new Error("Secure payment could not be opened in this browser.");
   }
   return new Promise<RazorpayCheckoutResponse>((resolve, reject) => {
     const checkout = new window.Razorpay!({

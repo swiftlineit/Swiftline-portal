@@ -269,58 +269,6 @@ export type ClientShipmentDetails = {
   hubReceipt?: import("@/lib/shipmentTracking").ShipmentHubReceipt | null;
 };
 
-export type ClientPrepaidAccount = {
-  businessAccountId: string;
-  currency: string;
-  cashBalanceMinor: number;
-  reservedBalanceMinor: number;
-  availableBalanceMinor: number;
-  status: string;
-  minimumBalanceWarningMinor: number;
-  // Optional because a backend older than the top-up limits does not send them.
-  // The server is the authority on both, so the UI simply omits its own hint and
-  // pre-check when they are absent rather than assuming a shape.
-  minTopUpMinor?: number;
-  maxTopUpMinor?: number;
-  /** Today's allowance for this business account, resetting at IST midnight. */
-  dailyTopUp?: {
-    usedMinor: number;
-    limitMinor: number;
-    remainingMinor: number;
-    resetsAt: string;
-  };
-};
-
-export type ClientPrepaidTransaction = {
-  shipmentDraftId?: string | null;
-  shipmentNumber?: string | null;
-  _id: string;
-  transactionType: string;
-  direction: string;
-  amountMinor: number;
-  currency: string;
-  cashBalanceBeforeMinor: number;
-  cashBalanceAfterMinor: number;
-  reservedBalanceBeforeMinor: number;
-  reservedBalanceAfterMinor: number;
-  description: string;
-  createdAt: string;
-};
-
-export type ClientPrepaidTopUp = {
-  id: string;
-  businessAccountId: string;
-  amountMinor: number;
-  currency: string;
-  purpose: "CUSTOMER_ADVANCE" | "SECURITY_DEPOSIT";
-  internalReference: string;
-  razorpayOrderId: string;
-  razorpayPaymentId: string;
-  status: string;
-  createdAt?: string;
-  updatedAt?: string;
-};
-
 export type RazorpayPublicConfig = {
   keyId: string;
   currency: string;
@@ -383,83 +331,7 @@ export async function getClientShipments(input: {
   }>(response);
 }
 
-export async function getClientPrepaidAccount(businessAccountId?: string) {
-  const url = new URL(apiUrl("/api/v1/client/prepaid-account"));
-  if (businessAccountId) url.searchParams.set("businessAccountId", businessAccountId);
-  const response = await fetchWithAuth(url.toString());
-
-  return parseApiResponse<{ success: true; prepaidAccount: ClientPrepaidAccount }>(response);
-}
-
 export type PaymentPagination = { page: number; limit: number; total: number; totalPages: number };
-
-export async function getClientPrepaidTransactions(businessAccountId?: string, page = 1) {
-  const url = new URL(apiUrl("/api/v1/client/prepaid-transactions"));
-  if (businessAccountId) url.searchParams.set("businessAccountId", businessAccountId);
-  url.searchParams.set("page", String(page));
-  const response = await fetchWithAuth(url.toString());
-
-  return parseApiResponse<{ success: true; transactions: ClientPrepaidTransaction[]; pagination: PaymentPagination }>(response);
-}
-
-export async function getClientPrepaidTopUps(businessAccountId?: string, page = 1) {
-  const url = new URL(apiUrl("/api/v1/client/prepaid-topups"));
-  if (businessAccountId) url.searchParams.set("businessAccountId", businessAccountId);
-  url.searchParams.set("page", String(page));
-  const response = await fetchWithAuth(url.toString());
-
-  return parseApiResponse<{ success: true; topUps: ClientPrepaidTopUp[]; pagination: PaymentPagination }>(response);
-}
-
-export async function createClientPrepaidTopUp(input: {
-  businessAccountId?: string;
-  amountMinor: number;
-  purpose?: "CUSTOMER_ADVANCE" | "SECURITY_DEPOSIT";
-  idempotencyKey: string;
-}) {
-  const response = await fetchWithAuth(apiUrl("/api/v1/client/prepaid-topups"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Idempotency-Key": input.idempotencyKey
-    },
-    body: JSON.stringify({
-      businessAccountId: input.businessAccountId,
-      amountMinor: input.amountMinor,
-      purpose: input.purpose
-    })
-  });
-
-  return parseApiResponse<{
-    success: true;
-    duplicate: boolean;
-    razorpay: RazorpayPublicConfig;
-    topUp: ClientPrepaidTopUp;
-  }>(response);
-}
-
-export async function verifyClientPrepaidTopUp(input: {
-  topUpId: string;
-  razorpay_order_id: string;
-  razorpay_payment_id: string;
-  razorpay_signature: string;
-}) {
-  const response = await fetchWithAuth(apiUrl(`/api/v1/client/prepaid-topups/${input.topUpId}/verify`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      razorpay_order_id: input.razorpay_order_id,
-      razorpay_payment_id: input.razorpay_payment_id,
-      razorpay_signature: input.razorpay_signature
-    })
-  });
-
-  return parseApiResponse<{
-    success: true;
-    message: string;
-    topUp: ClientPrepaidTopUp;
-  }>(response);
-}
 
 export async function createClientManualShipmentDraft(branchId: string) {
   const response = await fetchWithAuth(apiUrl("/api/v1/client/dpd-labels/drafts/manual"), {
@@ -542,7 +414,7 @@ export async function createClientShipment(
   shipmentDraftId: string,
   acceptedPricingHash?: string,
   skipDpdLabel?: boolean,
-  payment?: { paymentSource: "BUSINESS_WALLET" | "DIRECT_RAZORPAY"; fundingReferenceId?: string }
+  payment?: { paymentSource: "DIRECT_RAZORPAY"; fundingReferenceId?: string }
 ) {
   const response = await fetchWithAuth(apiUrl(`/api/v1/client/dpd-labels/drafts/${shipmentDraftId}/create-shipment`), {
     method: "POST",

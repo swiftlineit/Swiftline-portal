@@ -1,7 +1,6 @@
 "use client";
 
 import { FiChevronDown } from "react-icons/fi";
-import { formatPaymentMoney } from "@/lib/paymentPresentation";
 import {
   BusinessAccount,
   BusinessAccountOperationalAction,
@@ -20,7 +19,7 @@ const lifecycleActions: { label: string; status: BusinessAccountStatus }[] = [
 ];
 
 const operationalActions: { label: string; action: BusinessAccountOperationalAction }[] = [
-  { label: "Account Ledger", action: "ledger_viewed" }
+  { label: "Payments Ledger", action: "ledger_viewed" }
 ];
 
 export function formatAccountStatus(status: string) {
@@ -78,7 +77,6 @@ export function BusinessAccountsTable({
           <tr>
             <th className="px-4 py-3.5 font-semibold">Company</th>
             <th className="px-4 py-3.5 font-semibold">Status</th>
-            <th className="px-4 py-3.5 font-semibold">Available wallet</th>
             <th className="px-4 py-3.5 font-semibold">Branch</th>
             <th className="px-4 py-3.5 font-semibold">KYC</th>
             <th className="px-4 py-3.5 font-semibold">Actions</th>
@@ -86,9 +84,9 @@ export function BusinessAccountsTable({
         </thead>
         <tbody className="divide-y divide-slate-100">
           {loading ? (
-            <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">Loading accounts...</td></tr>
+            <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-500">Loading accounts...</td></tr>
           ) : accounts.length === 0 ? (
-            <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">{emptyMessage}</td></tr>
+            <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-500">{emptyMessage}</td></tr>
           ) : accounts.map((account) => {
             const assignedBranch = getAssignedBranch(account);
             const isUpdating = updatingAccountId === account.accountId;
@@ -106,9 +104,6 @@ export function BusinessAccountsTable({
                   <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${getStatusBadgeClasses(account.status)}`}>
                     {formatAccountStatus(account.status)}
                   </span>
-                </td>
-                <td className="whitespace-nowrap px-4 py-3.5 font-semibold tabular-nums text-slate-900">
-                  {formatPaymentMoney(account.walletAvailableBalanceMinor ?? 0, "INR")}
                 </td>
                 <td className="px-4 py-3.5">
                   {assignedBranch ? (

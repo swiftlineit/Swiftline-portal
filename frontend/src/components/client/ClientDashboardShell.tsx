@@ -213,7 +213,7 @@ const clientNavigation: Array<
     icon: BsCurrencyRupee,
     items: [
       {
-        label: "Wallet & Payments",
+        label: "Payments",
         href: "/client/payments",
         icon: FiCreditCard,
         access: "financial",

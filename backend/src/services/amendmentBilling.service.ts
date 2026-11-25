@@ -7,11 +7,10 @@ import { DpdShipment } from "../models/dpdShipment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { ShipmentCharge } from "../models/shipmentCharge.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
-import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import { getCreditBalances, isCreditWindowOpen } from "./creditAccount.service.js";
 import { getCreditRestrictionState } from "./creditOverdue.service.js";
 import { getTenantContext } from "./tenantScope.service.js";
-import { applyPrepaidAmendmentMovement } from "./prepaid/amendmentFunding.service.js";
+import { applyAmendmentPaymentMovement } from "./prepaid/amendmentFunding.service.js";
 import type { ShipmentPricingEstimate } from "./shipmentPricing.service.js";
 
 export class AmendmentBillingError extends Error {
@@ -43,7 +42,7 @@ export type AmendmentBillingAdjustment = {
 };
 
 export type AmendmentFundingPreview = {
-  billingMode: "BUSINESS_ACCOUNT" | "PREPAID" | "DIRECT" | "TEST";
+  billingMode: "BUSINESS_ACCOUNT" | "DIRECT" | "TEST";
   previousAmountMinor: number;
   amendedAmountMinor: number;
   deltaAmountMinor: number;
@@ -57,7 +56,9 @@ function toMinor(amount: number) {
   return Math.round(amount * 100);
 }
 
-const prepaidPaymentSources = new Set(["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"]);
+// Legacy wallet-funded shipments are still included so they can be amended with
+// the current online-payment workflow instead of reviving wallet billing.
+const paidShipmentSources = new Set(["BUSINESS_WALLET", "DIRECT_RAZORPAY", "CASH_RECEIPT", "PUBLIC_RAZORPAY"]);
 const rootDirectPaymentSources = new Set(["ADMIN_DIRECT", "DIRECT_RAZORPAY", "PUBLIC_RAZORPAY"]);
 
 function calculatePrepaidAdjustment(invoice: InstanceType<typeof ShipmentInvoice>, amendedAmountMinor: number) {
@@ -233,32 +234,23 @@ export async function previewAmendmentFunding(input: {
   if (
     getTenantContext()?.kind !== "OPERATOR"
     && (
-      prepaidPaymentSources.has(charge.paymentSource)
+      paidShipmentSources.has(charge.paymentSource)
       || rootDirectAmendmentPayment
       || (customerType === "BUSINESS" && input.purpose === "AMENDMENT")
     )
   ) {
     const adjustment = calculatePrepaidAdjustment(invoice, amendedAmountMinor);
-    const accountQuery = PrepaidAccount.findOne({ businessAccountId: input.businessAccountId });
-    if (input.session) accountQuery.session(input.session);
-    const account = await accountQuery.lean().exec();
-    const availableMinor = account?.status === "ACTIVE"
-      ? Math.max(account.cashBalanceMinor - account.reservedBalanceMinor, 0)
-      : 0;
-    const canFund = adjustment.deltaAmountMinor <= 0 || availableMinor >= adjustment.deltaAmountMinor;
     return {
-      billingMode: "PREPAID",
+      billingMode: "DIRECT",
       previousAmountMinor: invoice.totalAmountMinor,
       amendedAmountMinor,
       deltaAmountMinor: adjustment.deltaAmountMinor,
-      availableBookingCapacityMinor: availableMinor,
-      canFund,
+      availableBookingCapacityMinor: 0,
+      canFund: true,
       message: adjustment.deltaAmountMinor > 0
-        ? canFund
-          ? "The additional amount will be reserved from the business wallet before staff approval."
-          : "Add money to the business wallet to cover this increase, then submit the amendment."
+        ? "Complete the additional online payment before staff approval."
         : adjustment.deltaAmountMinor < 0
-          ? "The approved reduction will be credited to the business wallet."
+          ? "The reduction will be refunded to the original online payment before the revised invoice is issued."
           : "No additional payment is required.",
       adjustment
     };
@@ -419,11 +411,11 @@ async function applyShipmentBillingAdjustment(input: {
     && input.purpose === "AMENDMENT";
   if (
     getTenantContext()?.kind !== "OPERATOR"
-    && (prepaidPaymentSources.has(charge.paymentSource) || rootBusinessAmendment)
+    && (paidShipmentSources.has(charge.paymentSource) || rootBusinessAmendment)
   ) {
     const adjustment = calculatePrepaidAdjustment(invoice, amendedAmountMinor);
     if (input.purpose === "AMENDMENT") {
-      await applyPrepaidAmendmentMovement({
+      await applyAmendmentPaymentMovement({
         amendmentId: input.referenceId,
         adjustment,
         createdBy: input.createdBy,

@@ -19,6 +19,7 @@ import { getTenantContext } from "../tenantScope.service.js";
 import type { OutboundAttachment } from "./transport.js";
 import { CashReceipt } from "../../models/cashReceipt.model.js";
 import { renderCashReceiptPdf } from "../cashReceiptPdf.service.js";
+import { customsInvoiceFileName, renderCustomsInvoicePdf } from "../customsInvoice/customsInvoice.service.js";
 
 export type ResolvedAttachment = OutboundAttachment & { kind: EmailAttachmentKind };
 
@@ -72,6 +73,19 @@ async function resolveShipmentInvoicePdf(ref: IEmailAttachmentRef): Promise<Reso
     kind: "SHIPMENT_INVOICE_PDF",
     filename: safeFilename(ref.filename || `${invoice.invoiceNumber}-Invoice-${revision}.pdf`),
     content,
+    contentType: "application/pdf"
+  };
+}
+
+async function resolveCustomsInvoicePdf(ref: IEmailAttachmentRef): Promise<ResolvedAttachment | null> {
+  const { invoice, buffer } = await renderCustomsInvoicePdf({
+    shipmentDraftId: String(ref.refId)
+  });
+
+  return {
+    kind: "CUSTOMS_INVOICE_PDF",
+    filename: safeFilename(ref.filename || customsInvoiceFileName(invoice, "pdf")),
+    content: buffer,
     contentType: "application/pdf"
   };
 }
@@ -164,6 +178,7 @@ async function resolveCashReceiptPdf(ref: IEmailAttachmentRef): Promise<Resolved
 
 const resolvers: Partial<Record<EmailAttachmentKind, (ref: IEmailAttachmentRef) => Promise<ResolvedAttachment | null>>> = {
   SHIPMENT_INVOICE_PDF: resolveShipmentInvoicePdf,
+  CUSTOMS_INVOICE_PDF: resolveCustomsInvoicePdf,
   LABEL_DOCUMENT: resolveLabelDocument,
   SHIPMENT_MANIFEST_PDF: resolveShipmentManifestPdf,
   RATE_CARD_SHARE_PDF: resolveRateCardSharePdf,
@@ -177,8 +192,10 @@ const resolvers: Partial<Record<EmailAttachmentKind, (ref: IEmailAttachmentRef) 
 // have an explicit tenant owner and tenant-scoped access path.
 const operatorAttachmentKinds = new Set<EmailAttachmentKind>([
   "SHIPMENT_INVOICE_PDF",
+  "CUSTOMS_INVOICE_PDF",
   "LABEL_DOCUMENT",
-  "SHIPMENT_MANIFEST_PDF"
+  "SHIPMENT_MANIFEST_PDF",
+  "CASH_RECEIPT_PDF"
 ]);
 
 /**

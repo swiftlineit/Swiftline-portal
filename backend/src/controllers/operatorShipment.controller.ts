@@ -13,6 +13,7 @@ import { LabelDocument } from "../models/labelDocument.model.js";
 import { counterPaymentMethodValues } from "../models/counterPayment.model.js";
 import { getOperatorContext } from "../middleware/operatorContext.middleware.js";
 import { buildStoredLabelAccess } from "./dpdShipment.controller.js";
+import { SHIPMENT_LABEL_PAYMENT_REQUIRED_MESSAGE } from "../services/prepaid/shipmentLabelAccessPolicy.service.js";
 import {
   createBlankShipmentDraft,
   createIndividualShipmentDraft,
@@ -570,6 +571,9 @@ export async function createOperatorShipmentLabelAccess(request: Request, respon
     disposition: request.query.disposition === "attachment" ? "attachment" : "inline"
   });
   if (!access) return response.status(404).json({ success: false, message: "Shipment label not found." });
+  if ("paymentRequired" in access) {
+    return response.status(402).json({ success: false, message: SHIPMENT_LABEL_PAYMENT_REQUIRED_MESSAGE });
+  }
   return response.status(200).json({ success: true, ...access });
 }
 

@@ -37,39 +37,48 @@ function invoiceFacts(payload: Record<string, unknown>) {
   };
 }
 
+export function shipmentBookingDocumentFacts(payload: Record<string, unknown>, label = "Swiftline labels") {
+  return {
+    kind: "facts" as const,
+    rows: [
+      { label: payload.taxTreatment === "NO_GST" ? "Invoice" : "GST tax invoice", value: payload.invoiceAttached ? "Attached" : "Available in portal" },
+      { label: "Shipment invoice", value: payload.customsInvoiceAttached ? "Attached" : "Available in portal" },
+      { label, value: payload.swiftlineLabelAttached ? "Attached" : "Not generated" },
+      ...(payload.dpdLabelAttached ? [{ label: "DPD label", value: "Attached" }] : []),
+      ...(payload.cashReceiptAttached ? [{ label: "Cash receipt", value: "Attached" }] : [])
+    ]
+  };
+}
+
 export function shipmentBookedClientTemplate(context: EmailTemplateContext): EmailContent {
   const { payload, appUrl, recipientName } = context;
   const trackingNumber = asText(payload.trackingNumber, "");
   const parcelCount = asNumber(payload.parcelCount);
-  const labelsAttached = Boolean(payload.labelsAttached);
-  const hasDpdLabel = Boolean(payload.hasDpdLabel);
   const invoiceLabel = payload.taxTreatment === "NO_GST" ? "invoice" : "tax invoice";
 
   return {
     subject: trackingNumber
       ? `Shipment ${trackingNumber} booked successfully`
       : "Your shipment has been booked",
-    preheader: `${parcelCount} parcel${parcelCount === 1 ? "" : "s"} booked. Invoice and labels are attached.`,
+    preheader: `${parcelCount} parcel${parcelCount === 1 ? "" : "s"} booked. Your shipment documents are ready.`,
     heading: "Your shipment is booked",
     blocks: [
       { kind: "paragraph", text: `Hello ${firstNameOf(recipientName)},` },
       {
         kind: "paragraph",
-        text: `Your shipment has been booked successfully. The details are below and your ${invoiceLabel} is attached to this email.`
+        text: "Your shipment has been booked successfully. The booking details and attached documents are listed below."
       },
       { kind: "facts", rows: shipmentFacts(payload) },
-      { kind: "callout", tone: "success", text: `${invoiceLabel === "invoice" ? "Invoice" : "Tax invoice"} ${asText(payload.invoiceNumber)} for ${formatMoneyMinor(asNumber(payload.invoiceTotalMinor), asText(payload.currency, "INR"))} is attached as a PDF.` },
-      ...(labelsAttached
-        ? [{
-          kind: "paragraph" as const,
-          text: hasDpdLabel
-            ? "Your shipping labels are attached: the DPD carrier label the parcel travels on, and a Swiftline label for each box. Print and affix both before handover."
-            : "Your Swiftline shipping labels are attached. Print one label per parcel and affix it before handover."
-        }]
-        : [{
-          kind: "paragraph" as const,
-          text: "Your shipping labels are ready to download from the portal. Print one label per parcel and affix it before handover."
-        }]),
+      { kind: "callout", tone: "success", text: `${invoiceLabel === "invoice" ? "Invoice" : "GST tax invoice"} ${asText(payload.invoiceNumber)} totals ${formatMoneyMinor(asNumber(payload.invoiceTotalMinor), asText(payload.currency, "INR"))}.` },
+      shipmentBookingDocumentFacts(payload),
+      {
+        kind: "note",
+        text: payload.dpdLabelAttached
+          ? "Print and affix the Swiftline and DPD labels before handover."
+          : payload.swiftlineLabelAttached
+            ? "Print and affix the Swiftline label to each parcel before handover."
+            : "Available documents can be downloaded from the shipment page."
+      },
       { kind: "button", label: "View shipment", url: toAbsoluteUrl(appUrl, asText(payload.href, "/client/shipments")) },
       // "View shipment" needs a session, so it is only useful to the account
       // holder receiving this email. The consignee has no account and holds
@@ -102,7 +111,7 @@ export function shipmentBookedStaffTemplate(context: EmailTemplateContext): Emai
     blocks: [
       {
         kind: "paragraph",
-        text: `${asText(payload.businessAccountName, "A client")} booked a shipment through ${asText(payload.branchName, "the portal")}. Invoice and labels are attached for the operations record.`
+        text: `${asText(payload.businessAccountName, "A client")} booked a shipment through ${asText(payload.branchName, "the portal")}. Booking documents are listed below.`
       },
       {
         kind: "facts",
@@ -114,6 +123,7 @@ export function shipmentBookedStaffTemplate(context: EmailTemplateContext): Emai
         ]
       },
       invoiceFacts(payload),
+      shipmentBookingDocumentFacts(payload),
       { kind: "button", label: "Open shipment", url: toAbsoluteUrl(appUrl, asText(payload.staffHref, "/dashboard/shipments")) }
     ]
   };

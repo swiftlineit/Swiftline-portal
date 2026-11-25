@@ -3,15 +3,16 @@ import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { BusinessAccountMember } from "../models/businessAccountMember.model.js";
 import type { IDpdShipment } from "../models/dpdShipment.model.js";
-import type { IEmailAttachmentRef } from "../models/emailOutbox.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import type { IShipmentInvoice } from "../models/shipmentInvoice.model.js";
+import { CashReceipt } from "../models/cashReceipt.model.js";
 import { Tenant } from "../models/tenant.model.js";
 import { TenantMembership } from "../models/tenantMembership.model.js";
 import { User } from "../models/user.model.js";
 import { notifyPortalUsers } from "./portalNotification.service.js";
 import { getTenantContext } from "./tenantScope.service.js";
+import { buildShipmentBookedAttachmentRefs } from "./shipmentBookedAttachments.service.js";
 
 type OperatorBookingNoticeInput = {
   shipmentDraftId: mongoose.Types.ObjectId;
@@ -26,7 +27,7 @@ export async function notifyOperatorShipmentBooked(input: OperatorBookingNoticeI
     const context = getTenantContext();
     if (!context || context.kind !== "OPERATOR") throw new Error("An operator tenant is required for booking notices.");
 
-    const [tenant, draft, accountMembers, staffMemberships, clientMemberships, labels, booker] = await Promise.all([
+    const [tenant, draft, accountMembers, staffMemberships, clientMemberships, labels, cashReceipt, booker] = await Promise.all([
       Tenant.findById(context.tenantId).select("slug companyName").lean().exec(),
       ShipmentDraft.findById(input.shipmentDraftId).exec(),
       BusinessAccountMember.find({
@@ -38,8 +39,10 @@ export async function notifyOperatorShipmentBooked(input: OperatorBookingNoticeI
         .select("userId").lean().exec(),
       TenantMembership.find({ tenantId: context.tenantId, status: "ACTIVE", role: "CLIENT" })
         .select("userId").lean().exec(),
-      LabelDocument.find({ dpdShipmentId: input.dpdShipment._id, labelType: "INTERNAL", voidedAt: null })
-        .select("_id parcelNumber format storageKey").sort({ parcelNumber: 1 }).lean().exec(),
+      LabelDocument.find({ dpdShipmentId: input.dpdShipment._id, voidedAt: null })
+        .select("_id labelType parcelNumber format storageKey").sort({ labelType: -1, parcelNumber: 1 }).lean().exec(),
+      CashReceipt.findOne({ shipmentDraftId: input.shipmentDraftId, status: "FINALIZED" })
+        .select("_id receiptNumber").lean().exec(),
       User.findById(input.bookedBy).select("name firstName lastName").lean().exec()
     ]);
     if (!tenant?.slug || !draft || String(draft.businessAccountId) !== String(input.shipmentInvoice.businessAccountId)) {
@@ -82,25 +85,22 @@ export async function notifyOperatorShipmentBooked(input: OperatorBookingNoticeI
       totalWeightKg: draft.parcelList.reduce((total, parcel) => total + (parcel.weightKg || 0), 0),
       invoiceNumber: input.shipmentInvoice.invoiceNumber,
       invoiceTotalMinor: input.shipmentInvoice.totalAmountMinor,
+      taxableValueMinor: input.shipmentInvoice.taxableValueMinor,
+      totalTaxAmountMinor: input.shipmentInvoice.totalTaxAmountMinor,
+      taxTreatment: input.shipmentInvoice.taxTreatment,
       currency: input.shipmentInvoice.currency,
       bookedAt: input.dpdShipment.createdAt,
       href
     };
-    const uniqueLabels = labels.filter((label, index) => labels.findIndex((other) => other.storageKey === label.storageKey) === index);
-    const attachments: IEmailAttachmentRef[] = [
-      {
-        kind: "SHIPMENT_INVOICE_PDF",
-        refId: input.shipmentInvoice._id as mongoose.Types.ObjectId,
-        revision: input.shipmentInvoice.revision,
-        filename: `${input.shipmentInvoice.invoiceNumber.replaceAll("/", "-")}-Invoice.pdf`
-      },
-      ...uniqueLabels.map((label) => ({
-        kind: "LABEL_DOCUMENT" as const,
-        refId: label._id,
-        revision: null,
-        filename: `Internal-Label-${label.parcelNumber}.${label.format.toLowerCase()}`
-      }))
-    ];
+    const attachments = buildShipmentBookedAttachmentRefs({
+      shipmentDraftId: input.shipmentDraftId,
+      trackingNumber,
+      shipmentInvoice: input.shipmentInvoice,
+      labels,
+      cashReceipt
+    });
+    const consignorEmail = draft.consignorAddress?.email?.trim() || "";
+    const consignorName = draft.consignorAddress?.contactName || draft.consignorAddress?.companyName || "";
     const idempotencyKey = `OPERATOR_SHIPMENT_BOOKED:${String(input.dpdShipment._id)}`;
     const metadata = { shipmentDraftId: input.shipmentDraftId, dpdShipmentId: input.dpdShipment._id, trackingNumber };
     const results = await Promise.allSettled([
@@ -112,7 +112,12 @@ export async function notifyOperatorShipmentBooked(input: OperatorBookingNoticeI
         idempotencyKey: `${idempotencyKey}:CLIENT`,
         businessAccountId: draft.businessAccountId,
         metadata,
-        email: { templateKey: "OPERATOR_SHIPMENT_BOOKED_CLIENT", payload, attachmentRefs: attachments }
+        email: {
+          templateKey: "OPERATOR_SHIPMENT_BOOKED_CLIENT",
+          payload,
+          attachmentRefs: attachments,
+          ...(consignorEmail ? { extraRecipients: [{ email: consignorEmail, name: consignorName }] } : {})
+        }
       }),
       notifyPortalUsers(staff, {
         type: "SHIPMENT_BOOKED",
@@ -122,7 +127,7 @@ export async function notifyOperatorShipmentBooked(input: OperatorBookingNoticeI
         idempotencyKey: `${idempotencyKey}:STAFF`,
         businessAccountId: draft.businessAccountId,
         metadata,
-        email: { templateKey: "OPERATOR_SHIPMENT_BOOKED_STAFF", payload }
+        email: { templateKey: "OPERATOR_SHIPMENT_BOOKED_STAFF", payload, attachmentRefs: attachments }
       })
     ]);
     if (results.some((result) => result.status === "rejected")) {

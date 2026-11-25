@@ -268,7 +268,7 @@ export default function CancellationReview({
               {requiresManualRefund && (amounts?.refundMinor ?? 0) > 0 ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
                   <p className="text-sm font-semibold text-amber-900">
-                    Record refund payout —{" "}
+                    Record refund payout -{" "}
                     {money.format((amounts?.refundMinor ?? 0) / 100)}
                   </p>
                   <p className="mt-1 text-sm text-amber-800">
@@ -315,14 +315,9 @@ export default function CancellationReview({
                   </div>
                 </div>
               ) : null}
-              {(amounts?.refundMinor ?? 0) > 0 && cancellation.paymentSource === "BUSINESS_WALLET" ? (
-                <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-                  The refundable amount will be returned to the business prepaid wallet as part of approval.
-                </p>
-              ) : null}
               {(amounts?.refundMinor ?? 0) > 0 && ["DIRECT_RAZORPAY", "PUBLIC_RAZORPAY"].includes(cancellation.paymentSource ?? "") ? (
                 <p className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950">
-                  The refund will go to the original Razorpay payment method. Approval completes after Razorpay confirms the refund.
+                  The refund will go to the original payment method. Approval completes after the refund is confirmed.
                 </p>
               ) : null}
               {amounts?.capped ? (
@@ -453,7 +448,7 @@ function CompletedReview({
         <div className="grid gap-4 sm:grid-cols-2">
           <Document
             title="Invoice cancellation adjustment"
-            description="Reverses the original shipment invoice and applicable GST; it does not add wallet funds."
+            description="Reverses the original shipment invoice and applicable GST."
             type="credit-note"
             busy={busy}
             onDocument={onDocument}

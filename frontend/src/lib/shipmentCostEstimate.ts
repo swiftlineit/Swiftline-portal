@@ -126,7 +126,7 @@ export type ShipmentPricing = {
 };
 
 export type ShipmentFundingPreview = {
-  mode: "BUSINESS_ACCOUNT" | "BUSINESS_WALLET" | "PREPAID" | "COUNTER";
+  mode: "BUSINESS_ACCOUNT" | "DIRECT_RAZORPAY" | "COUNTER";
   totalPayableMinor: number;
   advanceDeductionMinor: number;
   creditUsageMinor: number;

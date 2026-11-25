@@ -33,11 +33,9 @@ import { apiUrl } from "@/lib/api";
 import { getAccessToken, logout, refreshAccessToken } from "@/lib/auth";
 import {
   ClientDashboardAccount,
-  ClientPrepaidAccount,
   ClientRecentShipment,
   ClientShipmentSummary,
-  getClientDashboard,
-  getClientPrepaidAccount
+  getClientDashboard
 } from "@/lib/clientDashboard";
 import {
   loadClientExtras,
@@ -93,7 +91,6 @@ export default function ClientDashboardPage() {
   const [user, setUser] = useState<ClientShellUser | null>(null);
   const [accounts, setAccounts] = useState<ClientDashboardAccount[]>([]);
   const [operatorWorkspaces, setOperatorWorkspaces] = useState<OperatorWorkspace[]>([]);
-  const [walletsByAccountId, setWalletsByAccountId] = useState<Record<string, ClientPrepaidAccount>>({});
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedBranchId, setSelectedBranchId] = useState("");
   const [extras, setExtras] = useState<ClientExtras>(emptyExtras);
@@ -153,17 +150,6 @@ export default function ClientDashboardPage() {
           ? listOperatorWorkspaces().catch(() => ({ workspaces: [] as OperatorWorkspace[] }))
           : Promise.resolve({ workspaces: [] as OperatorWorkspace[] })
       ]);
-      const walletEntries = await Promise.all(
-        dashboard.accounts.map(async (item) => {
-          try {
-            const wallet = await getClientPrepaidAccount(item.account.id);
-            return [item.account.id, wallet.prepaidAccount] as const;
-          } catch {
-            return null;
-          }
-        })
-      );
-
       const nextSelectedAccount = dashboard.accounts.find((item) => item.account.id === selectedAccountIdRef.current)
         ?? dashboard.accounts.find((item) => item.dashboardAccess.state === "READY")
         ?? dashboard.accounts[0]
@@ -180,7 +166,6 @@ export default function ClientDashboardPage() {
       setUser(currentUser);
       setAccounts(dashboard.accounts);
       setOperatorWorkspaces(workspaces.workspaces);
-      setWalletsByAccountId(Object.fromEntries(walletEntries.filter((entry): entry is readonly [string, ClientPrepaidAccount] => Boolean(entry))));
       setExtras(nextExtras);
       selectedAccountIdRef.current = nextSelectedAccount?.account.id ?? "";
       selectedBranchIdRef.current = nextSelectedBranch?._id ?? "";
@@ -258,7 +243,6 @@ export default function ClientDashboardPage() {
   if (loading || !user) return <ClientDashboardLoading />;
 
   const selectedSummary = selectedShipmentSummary ?? emptyShipmentSummary();
-  const selectedWallet = selectedAccount ? walletsByAccountId[selectedAccount.account.id] : undefined;
   const shipmentCreationAllowed = selectedAccount ? canCreateShipment(selectedAccount) : false;
   const operationalHold = selectedAccount?.account.status === "suspended"
     && selectedAccount.account.suspensionMode !== "SECURITY_LOCK";
@@ -310,9 +294,7 @@ export default function ClientDashboardPage() {
           <>
             <ClientRateCardNotice account={selectedAccount} />
 
-            <ClientBookingCapacityNotice
-              wallet={selectedWallet}
-            />
+            <ClientBookingCapacityNotice />
 
 
 

@@ -6,23 +6,29 @@ import { canAccessBranch } from "../middleware/branchAccess.middleware.js";
 import { BusinessAccountMember, shipmentBookingRoles } from "../models/businessAccountMember.model.js";
 import { ShipmentDirectPayment } from "../models/shipmentDirectPayment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
-import { getRazorpayPublicConfig } from "../services/razorpay/client.js";
+import { isDpdBookingEnabled } from "../services/bookingPause.service.js";
+import { isDpdLabelDestination } from "../services/als/alsPayload.service.js";
+import { fetchRazorpayPayment, getRazorpayPublicConfig } from "../services/razorpay/client.js";
 import { verifyRazorpayCheckoutSignature } from "../services/razorpay/signatures.js";
 import { buildPricingHash } from "../services/shipmentCostEstimate.service.js";
 import { buildPricingInputFromDraft, calculateShipmentPricingEstimate } from "../services/shipmentPricing.service.js";
 import {
   createShipmentDirectPayment,
+  recordCapturedShipmentDirectPayment,
+  refundUnallocatedShipmentDirectPayment,
   reconcileShipmentDirectPayment
 } from "../services/prepaid/shipmentDirectPayments.service.js";
 
 const createSchema = z.object({
-  acceptedPricingHash: z.string().trim().min(1).max(128)
+  acceptedPricingHash: z.string().trim().min(1).max(128),
+  skipDpdLabel: z.boolean().optional()
 });
 
 const verifySchema = z.object({
   razorpay_order_id: z.string().trim().min(1).max(120),
   razorpay_payment_id: z.string().trim().min(1).max(120),
-  razorpay_signature: z.string().trim().min(1).max(256)
+  razorpay_signature: z.string().trim().min(1).max(256),
+  skipDpdLabel: z.boolean().optional()
 });
 
 function userIdFrom(request: Request) {
@@ -83,6 +89,15 @@ async function createPayment(request: Request, response: Response, client: boole
   if (!parsed.success) return response.status(400).json({ success: false, errors: parsed.error.format() });
   const access = await loadDraftForPayment(request, client);
   if (!access) return response.status(404).json({ success: false, message: "Shipment draft not found" });
+  const requestsDpdLabel = isDpdLabelDestination(access.draft.consigneeEnteredAddress?.countryCode)
+    && parsed.data.skipDpdLabel !== true;
+  if (requestsDpdLabel && !await isDpdBookingEnabled()) {
+    return response.status(423).json({
+      success: false,
+      code: "DPD_BOOKING_DISABLED",
+      message: "DPD label booking is temporarily unavailable. Choose to book without a DPD label or try again later."
+    });
+  }
 
   const idempotencyKey = request.header("Idempotency-Key")?.trim() ?? "";
   if (!idempotencyKey || idempotencyKey.length > 160) {
@@ -153,6 +168,44 @@ async function verifyPayment(request: Request, response: Response, client: boole
   if (!verified) return response.status(400).json({ success: false, message: "Invalid Razorpay signature." });
 
   try {
+    const requestsDpdLabel = isDpdLabelDestination(access.draft.consigneeEnteredAddress?.countryCode)
+      && parsed.data.skipDpdLabel !== true;
+    if (requestsDpdLabel && !await isDpdBookingEnabled()) {
+      const gatewayPayment = await fetchRazorpayPayment(parsed.data.razorpay_payment_id);
+      if (
+        gatewayPayment.order_id !== intent.razorpayOrderId
+        || gatewayPayment.amount !== intent.amountMinor
+        || gatewayPayment.currency !== intent.currency
+      ) {
+        return response.status(409).json({ success: false, message: "Razorpay payment details do not match this shipment payment." });
+      }
+      if (gatewayPayment.status === "captured") {
+        await recordCapturedShipmentDirectPayment({
+          paymentIntentId: intent._id as mongoose.Types.ObjectId,
+          razorpayPaymentId: gatewayPayment.id,
+          razorpaySignature: parsed.data.razorpay_signature,
+          expectedOrderId: gatewayPayment.order_id,
+          expectedAmountMinor: gatewayPayment.amount,
+          expectedCurrency: gatewayPayment.currency
+        });
+        await refundUnallocatedShipmentDirectPayment({
+          paymentIntentId: intent._id as mongoose.Types.ObjectId,
+          shipmentDraftId: access.draft._id as mongoose.Types.ObjectId,
+          clientUserId: client ? access.userId : null,
+          reason: "DPD label booking became unavailable during payment verification."
+        });
+      }
+      return response.status(423).json({
+        success: false,
+        code: "DPD_BOOKING_DISABLED",
+        message: gatewayPayment.status === "captured"
+          ? "DPD label booking became unavailable during payment. A refund has been started; check the payment status before retrying."
+          : gatewayPayment.status === "authorized"
+            ? "DPD label booking became unavailable before payment capture. Your bank may show a temporary authorization; choose to book without a DPD label or try again later."
+            : "DPD label booking became unavailable before payment capture. Choose to book without a DPD label or try again later."
+      });
+    }
+
     const result = await reconcileShipmentDirectPayment({
       paymentIntentId: intent._id as mongoose.Types.ObjectId,
       razorpayPaymentId: parsed.data.razorpay_payment_id,

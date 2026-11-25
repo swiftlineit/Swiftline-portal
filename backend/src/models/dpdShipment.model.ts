@@ -16,6 +16,8 @@ export const dpdShipmentStatusValues = [
 ] as const;
 
 export type DpdShipmentStatus = (typeof dpdShipmentStatusValues)[number];
+export const labelPaymentPolicyValues = ["PAYMENT_REQUIRED"] as const;
+export type LabelPaymentPolicy = (typeof labelPaymentPolicyValues)[number];
 
 export interface IDpdShipment extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
@@ -35,6 +37,8 @@ export interface IDpdShipment extends mongoose.Document, TenantOwnedFields {
   requestSnapshot: Record<string, unknown>;
   responseSnapshot: Record<string, unknown>;
   paymentSource: PaymentSource;
+  /** Set on bookings created under prepaid policy; absent on legacy bookings. */
+  labelPaymentPolicy?: LabelPaymentPolicy;
   status: DpdShipmentStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -64,6 +68,7 @@ const dpdShipmentSchema = new mongoose.Schema<IDpdShipment>(
     requestSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} },
     responseSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} },
     paymentSource: { type: String, enum: paymentSourceValues, default: "ADMIN_DIRECT", required: true },
+    labelPaymentPolicy: { type: String, enum: labelPaymentPolicyValues },
     status: { type: String, enum: dpdShipmentStatusValues, default: "DPD_CREATING", index: true }
   },
   { timestamps: true }

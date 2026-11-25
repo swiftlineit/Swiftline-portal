@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { FiCreditCard } from "react-icons/fi";
 import { toast } from "react-toastify";
 import {
   ShipmentAddress,
@@ -29,8 +29,7 @@ type Props = {
   canAmend: boolean;
   blockedReason: string;
   busy: boolean;
-  prepaidPaymentRequired?: boolean;
-  walletTopUpHref?: string;
+  paymentRequired?: boolean;
   onPreview: (input: ShipmentAmendmentInput) => Promise<ShipmentAmendmentPreview>;
   onSubmit: (input: ShipmentAmendmentInput) => Promise<ShipmentAmendment | void>;
   onSecurePayment?: (amendment: ShipmentAmendment, preview: ShipmentAmendmentPreview) => Promise<void>;
@@ -91,8 +90,7 @@ export default function ShipmentAmendmentPanel({
   canAmend,
   blockedReason,
   busy,
-  prepaidPaymentRequired = false,
-  walletTopUpHref,
+  paymentRequired = false,
   onPreview,
   onSubmit,
   onSecurePayment,
@@ -288,7 +286,7 @@ export default function ShipmentAmendmentPanel({
       if (!input) return;
       const amendment = await onSubmit(input);
       if (amendment) setActiveAmendment(amendment);
-      if (prepaidPaymentRequired && preview.fundingPreview.deltaAmountMinor > 0) {
+      if (paymentRequired && preview.fundingPreview.deltaAmountMinor > 0) {
         if (!amendment || !onSecurePayment) {
           throw new Error("The amendment request was saved, but payment could not be started. Refresh and contact your Swiftline team.");
         }
@@ -302,7 +300,7 @@ export default function ShipmentAmendmentPanel({
       setOpen(false);
       setReason("");
       setPreview(null);
-      toast.success(prepaidPaymentRequired && preview.fundingPreview.deltaAmountMinor > 0
+      toast.success(paymentRequired && preview.fundingPreview.deltaAmountMinor > 0
         ? "Amendment payment secured. The request is waiting for staff review."
         : "Amendment request submitted successfully.");
     } catch (error) {
@@ -327,8 +325,9 @@ export default function ShipmentAmendmentPanel({
           type="button"
           onClick={() => setOpen((current) => !current)}
           disabled={!canAmend || busy || Boolean(activeAmendment && activeAmendment.status !== "AWAITING_PAYMENT")}
-          className="h-10 rounded-4xl bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
         >
+          {pendingPaymentAmendment ? <FiCreditCard aria-hidden="true" className="h-4 w-4" /> : null}
           {pendingPaymentAmendment ? "Secure payment" : activeAmendment ? "Request in progress" : open ? "Close" : "Request Amendment"}
         </button>
       </div>
@@ -336,7 +335,7 @@ export default function ShipmentAmendmentPanel({
       {activeAmendment ? (
         <div className="border-b border-blue-100 bg-blue-50 px-5 py-3 text-sm text-blue-950" role="status">
           {activeAmendment.status === "AWAITING_PAYMENT"
-            ? "This amendment is waiting for payment. Add wallet funds first if the available balance is too low."
+            ? "This amendment is waiting for online payment. Complete payment to continue."
             : activeAmendment.status === "PAYMENT_SECURED"
               ? "Payment is secured. This amendment is waiting for staff review."
               : "An amendment request is already waiting for staff review."}
@@ -354,11 +353,6 @@ export default function ShipmentAmendmentPanel({
               {pendingPaymentAmountMinor > 0
                 ? `${formatMinorAmount(pendingPaymentAmountMinor)} is due for this saved amendment. This payment will not change if you edit the form.`
                 : "This amendment is saved and waiting for review."}
-              {pendingPaymentAmountMinor > 0 && walletTopUpHref ? (
-                <Link href={walletTopUpHref} className="ml-1 underline underline-offset-2">
-                  Add wallet funds
-                </Link>
-              ) : null}
             </div>
           ) : null}
           <label className="block">
@@ -457,16 +451,14 @@ export default function ShipmentAmendmentPanel({
                 <ChargeMetric
                   label={preview.fundingPreview.billingMode === "TEST"
                     ? "Billing Mode"
-                    : preview.fundingPreview.billingMode === "PREPAID"
-                      ? "Available Wallet"
-                      : preview.fundingPreview.billingMode === "DIRECT" && preview.fundingPreview.deltaAmountMinor > 0
-                        ? "Payment Due"
-                        : "Available Capacity Now"}
+                    : preview.fundingPreview.billingMode === "DIRECT" && preview.fundingPreview.deltaAmountMinor > 0
+                      ? "Payment Due"
+                      : "Available Capacity Now"}
                   value={preview.fundingPreview.billingMode === "TEST"
                     ? "Test - no account charge"
                     : preview.fundingPreview.billingMode === "DIRECT" && preview.fundingPreview.deltaAmountMinor > 0
                       ? formatMinorAmount(preview.fundingPreview.deltaAmountMinor)
-                    : formatMinorAmount(preview.fundingPreview.availableBookingCapacityMinor)}
+                      : formatMinorAmount(preview.fundingPreview.availableBookingCapacityMinor)}
                 />
               </div>
 
@@ -474,16 +466,12 @@ export default function ShipmentAmendmentPanel({
                 <p className="border-t border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
                   This legacy test shipment does not update Customer Advance or Credit balances.
                 </p>
-              ) : preview.fundingPreview.billingMode === "PREPAID" || preview.fundingPreview.billingMode === "DIRECT" ? (
+              ) : preview.fundingPreview.billingMode === "DIRECT" ? (
                 <p className="border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                   {preview.fundingPreview.deltaAmountMinor > 0
-                    ? preview.fundingPreview.billingMode === "PREPAID"
-                      ? "The additional amount is reserved from the business wallet. Staff approval completes the charge; rejection releases the reserved amount."
-                      : "Pay the additional amount through Razorpay before approval."
+                    ? "Pay the additional amount online before approval."
                     : preview.fundingPreview.deltaAmountMinor < 0
-                      ? preview.fundingPreview.billingMode === "PREPAID"
-                        ? "Only the price difference will be credited to the business wallet."
-                        : "The approved reduction must be refunded before the amendment is applied."
+                      ? "The approved reduction must be refunded before the amendment is applied."
                       : "No additional payment is required."}
                 </p>
               ) : preview.fundingPreview.adjustment ? (
@@ -505,13 +493,6 @@ export default function ShipmentAmendmentPanel({
               {!preview.fundingPreview.canFund ? (
                 <div className="border-t border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
                   <p>{preview.fundingPreview.message}</p>
-                  {preview.fundingPreview.billingMode === "PREPAID" && walletTopUpHref ? (
-                    <Link href={walletTopUpHref} className="mt-1 inline-block text-blue-900 underline underline-offset-2">
-                      Go to Payments to add wallet funds
-                    </Link>
-                  ) : preview.fundingPreview.billingMode === "PREPAID" ? (
-                    <p className="mt-1 font-medium">Ask the business account client to add wallet funds, then check the charges again.</p>
-                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -532,9 +513,12 @@ export default function ShipmentAmendmentPanel({
               type="button"
               onClick={() => void submitAmendment()}
               disabled={busy || previewBusy || (!pendingPaymentAmendment && (!preview || !preview.fundingPreview.canFund))}
-              className="h-10 rounded-lg bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
-              {busy ? "Saving..." : pendingPaymentAmendment ? "Retry Payment" : prepaidPaymentRequired && (preview?.fundingPreview.deltaAmountMinor ?? 0) > 0 ? "Submit and Pay" : "Submit Request"}
+              {pendingPaymentAmendment || (paymentRequired && (preview?.fundingPreview.deltaAmountMinor ?? 0) > 0) ? (
+                <FiCreditCard aria-hidden="true" className="h-4 w-4" />
+              ) : null}
+              {busy ? "Saving..." : pendingPaymentAmendment ? "Retry Payment" : paymentRequired && (preview?.fundingPreview.deltaAmountMinor ?? 0) > 0 ? "Submit and Pay" : "Submit Request"}
             </button>
             <button
               type="button"

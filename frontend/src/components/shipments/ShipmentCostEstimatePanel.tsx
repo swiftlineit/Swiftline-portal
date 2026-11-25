@@ -193,23 +193,15 @@ function ChargeRow({ line }: { line: ShipmentChargeLine }) {
  * credit facility is never a surprise discovered on a statement.
  */
 function FundingBreakdown({ funding }: { funding: ShipmentCostEstimate["funding"] }) {
-  if (funding.mode === "PREPAID") {
-    return <p className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-900">{funding.message}</p>;
-  }
-
-  if (funding.mode === "BUSINESS_WALLET") {
+  if (funding.mode === "DIRECT_RAZORPAY" || funding.mode === "COUNTER") {
     return (
-      <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-        <div className="flex items-center justify-between gap-3 text-xs">
-          <span className="font-medium text-slate-600">Wallet available</span>
-          <span className="font-semibold tabular-nums text-slate-950">{formatEstimateMoney(funding.availableAdvanceMinor)}</span>
-        </div>
-        <p className={`mt-1.5 text-xs font-medium ${funding.availableAdvanceMinor >= funding.totalPayableMinor ? "text-emerald-700" : "text-slate-600"}`}>{funding.message}</p>
-      </div>
+      <p className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-900">
+        {funding.message}
+      </p>
     );
   }
 
-  if (funding.mode === "COUNTER") {
+  if (funding.mode !== "BUSINESS_ACCOUNT") {
     return (
       <p className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600">
         {funding.message}

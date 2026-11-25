@@ -2,5 +2,5 @@
 
 export default async function StaffCreditStatementPage({ params }: { params: Promise<{ businessAccountId: string }> }) {
   const { businessAccountId } = await params;
-  redirect(`/dashboard/prepaid-accounts/${encodeURIComponent(businessAccountId)}#wallet-ledger`);
+  redirect(`/dashboard/business-accounts/${encodeURIComponent(businessAccountId)}?tab=ledger#payments-ledger`);
 }

@@ -13,11 +13,11 @@ import {
 } from "react";
 import {
   FiCheckCircle,
+  FiCreditCard,
   FiMapPin,
   FiPackage,
   FiSave,
   FiSearch,
-  FiTruck,
 } from "react-icons/fi";
 import { toast } from "react-toastify";
 import {
@@ -556,7 +556,7 @@ export default function DpdLabelDraftPage() {
     useState(false);
   const [result, setResult] = useState<DpdShipmentResult | null>(null);
   const [staffPaymentSource, setStaffPaymentSource] = useState<
-    "BUSINESS_WALLET" | "DIRECT_RAZORPAY" | "CASH_RECEIPT"
+    "DIRECT_RAZORPAY" | "CASH_RECEIPT"
   >("DIRECT_RAZORPAY");
   const [cashCustodyReference, setCashCustodyReference] = useState("");
   const [cashReceiptDraft, setCashReceiptDraft] =
@@ -1510,7 +1510,7 @@ export default function DpdLabelDraftPage() {
       const response = await saveStaffCashReceiptDraft({ shipmentDraftId: draft._id, acceptedPricingHash: costEstimate.pricingHash, totalReceivedMinor: amountMinor, customerName: cashReceiptCustomerName.trim(), receiptDate: cashReceiptDate, cashCustodyReference: cashCustodyReference.trim() });
       setCashReceiptDraft(response.receipt);
       setCashReceiptModalOpen(false);
-      toast.success("Receipt details saved. Choose Book shipment or Book without DPD label to finish.");
+      toast.success("Receipt details saved. Choose Book Using Cash Receipt or Book Without DPD Label to finish.");
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Receipt details could not be saved.";
       setError(message);
@@ -1748,13 +1748,7 @@ export default function DpdLabelDraftPage() {
         : staffPaymentSource;
       let fundingReferenceId: string | undefined;
 
-      if (paymentSource === "BUSINESS_WALLET") {
-        if (costEstimate.funding.availableAdvanceMinor < totalPayableMinor) {
-          throw new Error(
-            "The business wallet does not cover this shipment. Add funds or choose Razorpay or a recorded cash receipt.",
-          );
-        }
-      } else if (paymentSource === "DIRECT_RAZORPAY") {
+      if (paymentSource === "DIRECT_RAZORPAY") {
         let payment =
           capturedDirectPayment?.pricingHash === pricingHash &&
           ["CAPTURED", "ALLOCATED"].includes(capturedDirectPayment.status)
@@ -1767,6 +1761,7 @@ export default function DpdLabelDraftPage() {
             audience: "staff",
             shipmentDraftId: draftForValidation._id,
             acceptedPricingHash: pricingHash,
+            skipDpdLabel,
           });
           if (["CAPTURED", "ALLOCATED"].includes(order.payment.status)) {
             payment = order.payment;
@@ -1789,6 +1784,7 @@ export default function DpdLabelDraftPage() {
               audience: "staff",
               shipmentDraftId: draftForValidation._id,
               ...checkoutResponse,
+              skipDpdLabel,
             });
             if (!["CAPTURED", "ALLOCATED"].includes(verified.payment.status)) {
               throw new Error(
@@ -1805,7 +1801,7 @@ export default function DpdLabelDraftPage() {
       } else {
         if (isIndividual) {
           throw new Error(
-            "Individual shipments must be paid with Razorpay before booking.",
+            "Individual shipments must be paid online before booking.",
           );
         }
         const cashAmountMinor = Math.round(
@@ -2605,21 +2601,14 @@ export default function DpdLabelDraftPage() {
                   <div className="flex items-start gap-2">
                     <div>
                       <h3 className="text-xs font-semibold uppercase tracking-wide text-blue-950">
-                        {draft.customerType === "INDIVIDUAL"
-                          ? "Prepaid booking"
-                          : "Payment before booking"}
+                        Payment method
                       </h3>
-                      <p className="mt-1 text-xs leading-5 text-blue-900">
-                        {draft.customerType === "INDIVIDUAL"
-                          ? "Collect the full shipment amount through Razorpay before creating the shipment."
-                          : "Use available wallet funds, collect the full amount through Razorpay, or record cash already received by Swiftline."}
-                      </p>
                     </div>
                   </div>
 
                   {draft.customerType === "INDIVIDUAL" ? (
                     <p className="mt-3 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-medium text-blue-900">
-                      Razorpay will collect INR{" "}
+                      Secure online payment will collect INR{" "}
                       {(
                         (costEstimate?.funding.totalPayableMinor ?? 0) / 100
                       ).toLocaleString("en-IN", {
@@ -2634,45 +2623,6 @@ export default function DpdLabelDraftPage() {
                       role="radiogroup"
                       aria-label="Shipment payment method"
                     >
-                      {costEstimate?.funding.mode === "BUSINESS_WALLET" ? (
-                        <label
-                          className={`flex cursor-pointer items-start gap-2 rounded-lg border bg-white px-3 py-2.5 ${staffPaymentSource === "BUSINESS_WALLET" ? "border-blue-700 ring-1 ring-blue-700" : "border-slate-200"}`}
-                        >
-                          <input
-                            type="radio"
-                            name="staff-shipment-payment"
-                            value="BUSINESS_WALLET"
-                            checked={staffPaymentSource === "BUSINESS_WALLET"}
-                            onChange={() =>
-                              setStaffPaymentSource("BUSINESS_WALLET")
-                            }
-                            disabled={busy}
-                            className="mt-0.5 accent-blue-800"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-xs font-semibold text-slate-950">
-                              Business wallet
-                            </span>
-                            <span className="mt-0.5 block text-[11px] text-slate-600">
-                              Available: INR{" "}
-                              {(
-                                (costEstimate.funding.availableAdvanceMinor ??
-                                  0) / 100
-                              ).toLocaleString("en-IN", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}
-                            </span>
-                          </span>
-                          {(costEstimate.funding.availableAdvanceMinor ?? 0) >=
-                          (costEstimate.funding.totalPayableMinor ?? 0) ? (
-                            <FiCheckCircle
-                              aria-hidden="true"
-                              className="mt-0.5 h-4 w-4 text-emerald-700"
-                            />
-                          ) : null}
-                        </label>
-                      ) : null}
                       <label
                         className={`flex cursor-pointer items-start gap-2 rounded-lg border bg-white px-3 py-2.5 ${staffPaymentSource === "DIRECT_RAZORPAY" ? "border-blue-700 ring-1 ring-blue-700" : "border-slate-200"}`}
                       >
@@ -2689,7 +2639,7 @@ export default function DpdLabelDraftPage() {
                         />
                         <span>
                           <span className="block text-xs font-semibold text-slate-950">
-                            Pay with Razorpay
+                            Pay online
                           </span>
                           <span className="mt-0.5 block text-[11px] text-slate-600">
                             Collect the full amount securely now
@@ -2734,6 +2684,7 @@ export default function DpdLabelDraftPage() {
                   disabled.
                 </div>
               ) : null}
+              <div className="space-y-2.5 rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
               <button
                 type="button"
                 onClick={() =>
@@ -2751,17 +2702,14 @@ export default function DpdLabelDraftPage() {
                 }
                 className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
               >
-                <FiTruck aria-hidden="true" className="h-4 w-4" />
+                {staffPaymentSource !== "CASH_RECEIPT" ? <FiCreditCard aria-hidden="true" className="h-4 w-4" /> : null}
                 {pendingAction === "PAYMENT"
                   ? "Confirming payment..."
                   : pendingAction === "BOOKING"
                     ? "Creating..."
                     : staffPaymentSource === "CASH_RECEIPT"
-                      ? cashReceiptDraft ? "Book shipment" : "Enter cash receipt details"
-                      : draft?.customerType === "INDIVIDUAL" ||
-                          staffPaymentSource === "DIRECT_RAZORPAY"
-                        ? "Pay and Create Shipment"
-                        : "Create Shipment"}
+                      ? "Book Using Cash Receipt"
+                      : "Pay & Book Shipment"}
               </button>
               {/* Staff-only by virtue of the page: admin and operations are the only
                   roles that reach it, and the server guards the booking route with the
@@ -2786,12 +2734,11 @@ export default function DpdLabelDraftPage() {
                       ? "Booking paused for this destination"
                       : undefined
                   }
-                  className="mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-500 bg-amber-50 px-4 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-amber-800"
+                  className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-white px-4 text-sm font-semibold text-amber-900 transition hover:border-amber-500 hover:bg-amber-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-amber-800"
                 >
-                  {/* <FiTruck aria-hidden="true" className="h-4 w-4" /> */}
                   {pendingAction === "BOOKING_NO_DPD"
                     ? "Creating..."
-                    : "Create Shipment Without DPD Label"}
+                    : "Book Without DPD Label"}
                 </button>
               ) : null}
               <ShipperDeclarationAcceptance
@@ -2836,7 +2783,7 @@ export default function DpdLabelDraftPage() {
                 disabled={
                   busy || !draftChanged || draftAutosaveStatus === "saving"
                 }
-                className="mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:border-slate-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
               >
                 <FiSave aria-hidden="true" className="h-4 w-4" />
                 {pendingAction === "DRAFT" ? "Saving..." : "Save as Draft"}
@@ -2858,6 +2805,7 @@ export default function DpdLabelDraftPage() {
                   Draft saved automatically.
                 </p>
               ) : null}
+              </div>
               <ShipmentCostEstimatePanel
                 estimate={costEstimate}
                 loading={costEstimateLoading}

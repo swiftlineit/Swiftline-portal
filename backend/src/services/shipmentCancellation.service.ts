@@ -15,7 +15,6 @@ import { ShipmentCharge } from "../models/shipmentCharge.model.js";
 import { ShipmentDirectPayment } from "../models/shipmentDirectPayment.model.js";
 import { ShipmentFunding } from "../models/shipmentFunding.model.js";
 import { PublicShipmentPayment } from "../models/publicShipmentPayment.model.js";
-import { PrepaidAccount } from "../models/prepaidAccount.model.js";
 import { CounterPayment, type CounterPaymentMethod } from "../models/counterPayment.model.js";
 import { OperatorCounterPayment } from "../models/operatorCounterPayment.model.js";
 import { ShipmentCreditNote } from "../models/shipmentCreditNote.model.js";
@@ -35,7 +34,6 @@ import {
   terminalOperatorShipmentStatuses
 } from "./operatorShipmentCancellationPolicy.service.js";
 import { suspensionMessage } from "./businessAccountSuspension.service.js";
-import { createLedgerEntry } from "./prepaid/ledger.service.js";
 import { ensureCancellationGatewayRefund } from "./prepaid/cancellationRefunds.service.js";
 
 // The default fee and threshold for requiring an additional-fee reason; lower
@@ -397,7 +395,9 @@ export async function getShipmentCancellationPreview(
     ShipmentCharge.exists({ shipmentDraftId: draft._id, paymentSource: "ADMIN_DIRECT" })
   ]);
 
-  const manualRefundSource = funding?.source === "CASH_RECEIPT" || Boolean(counterCharge);
+  const manualRefundSource = funding?.source === "CASH_RECEIPT"
+    || funding?.source === "BUSINESS_WALLET"
+    || Boolean(counterCharge);
   return {
     ...amounts,
     originalAmountMinor: invoice.totalAmountMinor,
@@ -477,9 +477,9 @@ export async function approveShipmentCancellation(input: {
   reviewNote: string;
   portalSlug?: string;
   /**
-   * How the refund was paid back to a walk-in customer. Required only when the
-   * shipment was a counter sale with something to refund; account-backed
-   * cancellations settle through the credit ledger instead.
+   * How an offline refund was paid back. Required for counter sales, cash
+   * receipts, and legacy wallet-funded shipments with something to refund.
+   * Account-backed cancellations settle through the credit ledger instead.
    */
   refundPayout?: {
     method: CounterPaymentMethod;
@@ -598,6 +598,7 @@ export async function approveShipmentCancellation(input: {
         shipmentDraftId: cancellation.shipmentDraftId,
         status: "COMPLETED"
       }).session(session).exec();
+      const legacyWalletFunding = prepaidFunding?.source === "BUSINESS_WALLET";
       const businessCharge = await ShipmentCharge.exists({
         shipmentDraftId: cancellation.shipmentDraftId,
         paymentSource: "BUSINESS_ACCOUNT"
@@ -623,7 +624,7 @@ export async function approveShipmentCancellation(input: {
         if (!cashReceipt) throw new ShipmentCancellationError(409, "The original cash receipt could not be found for refund reconciliation.");
       }
 
-      if ((counterCharge || cashReceipt) && amounts.refundableAmountMinor > 0) {
+      if ((counterCharge || cashReceipt || legacyWalletFunding) && amounts.refundableAmountMinor > 0) {
         if (!input.refundPayout) {
           throw new ShipmentCancellationError(
             400,
@@ -656,7 +657,7 @@ export async function approveShipmentCancellation(input: {
           } else {
             await CounterPayment.create([refundPayment], { session });
           }
-        } else {
+        } else if (cashReceipt) {
           await CashAllocationEvent.create([{
             cashReceiptId: cashReceipt!._id as mongoose.Types.ObjectId,
             businessAccountId: cancellation.businessAccountId,
@@ -673,34 +674,7 @@ export async function approveShipmentCancellation(input: {
 
       let paymentRefundStatus: IShipmentCancellation["paymentRefundStatus"] = "NOT_REQUIRED";
       let paymentRefundReference = "";
-      if (amounts.refundableAmountMinor > 0 && prepaidFunding?.source === "BUSINESS_WALLET") {
-        const wallet = await PrepaidAccount.findOne({ businessAccountId: cancellation.businessAccountId }).session(session).exec();
-        if (!wallet) throw new ShipmentCancellationError(409, "The prepaid wallet could not be found for cancellation refund.");
-        const updatedWallet = await PrepaidAccount.findOneAndUpdate(
-          { _id: wallet._id, version: wallet.version },
-          { $inc: { cashBalanceMinor: amounts.refundableAmountMinor, version: 1 } },
-          { returnDocument: "after", runValidators: true, session }
-        ).exec();
-        if (!updatedWallet) throw new ShipmentCancellationError(409, "Wallet balance changed during cancellation refund. Try again.");
-        await createLedgerEntry({
-          businessAccountId: cancellation.businessAccountId,
-          branchId: cancellation.branchId,
-          transactionType: "SHIPMENT_CANCELLATION_REFUND",
-          direction: "CREDIT",
-          amountMinor: amounts.refundableAmountMinor,
-          currency: "INR",
-          referenceType: "SHIPMENT_CANCELLATION",
-          referenceId: cancellation._id as mongoose.Types.ObjectId,
-          idempotencyKey: `SHIPMENT_CANCELLATION_REFUND:${String(cancellation._id)}`,
-          paymentSource: "BUSINESS_WALLET",
-          before: { cashBalanceMinor: updatedWallet.cashBalanceMinor - amounts.refundableAmountMinor, reservedBalanceMinor: updatedWallet.reservedBalanceMinor },
-          after: { cashBalanceMinor: updatedWallet.cashBalanceMinor, reservedBalanceMinor: updatedWallet.reservedBalanceMinor },
-          description: "Shipment cancellation refund credited to the prepaid wallet.",
-          createdBy: input.reviewedBy
-        }, session);
-        paymentRefundStatus = "CREDITED_TO_WALLET";
-        paymentRefundReference = `SHIPMENT_CANCELLATION_REFUND:${String(cancellation._id)}`;
-      } else if (amounts.refundableAmountMinor > 0 && prepaidFunding?.source === "DIRECT_RAZORPAY") {
+      if (amounts.refundableAmountMinor > 0 && prepaidFunding?.source === "DIRECT_RAZORPAY") {
         const plan = cancellation.gatewayRefundPlan as {
           amountMinor?: number;
           allocations?: Array<{ source?: string; paymentId?: string; amountMinor?: number }>;
@@ -760,6 +734,10 @@ export async function approveShipmentCancellation(input: {
         if (!payment?.razorpayRefundId) throw new ShipmentCancellationError(409, "The public Razorpay refund has not completed yet.");
         paymentRefundStatus = "RAZORPAY_REFUNDED";
         paymentRefundReference = payment.razorpayRefundId;
+      } else if (amounts.refundableAmountMinor > 0 && legacyWalletFunding) {
+        paymentRefundStatus = "MANUAL_REFUNDED";
+        paymentRefundReference = input.refundPayout?.reference?.trim()
+          || `${input.refundPayout?.method ?? "MANUAL"}_LEGACY_WALLET_REFUND`;
       } else if (amounts.refundableAmountMinor > 0 && cashReceipt) {
         paymentRefundStatus = "CASH_REFUNDED";
         paymentRefundReference = input.refundPayout?.reference?.trim() || cashReceipt.receiptNumber;
@@ -996,7 +974,9 @@ export async function approveShipmentCancellation(input: {
           feeTotalMinor: amounts.feeTotalMinor,
           refundableAmountMinor: amounts.refundableAmountMinor,
           paymentRefundStatus,
-          paymentRefundReference
+          paymentRefundReference,
+          manualRefundMethod: legacyWalletFunding ? input.refundPayout?.method ?? null : null,
+          manualRefundNote: legacyWalletFunding ? input.refundPayout?.note?.trim() || null : null
         }
       }], { session });
       const clientHref = operatorCancellation && input.portalSlug

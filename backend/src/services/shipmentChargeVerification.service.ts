@@ -27,7 +27,7 @@ import {
   type ShipmentPricingEstimate
 } from "./shipmentPricing.service.js";
 import { normalizeParcelItems } from "./parcelItems.service.js";
-import { formatMinorRupees } from "./prepaid/dailyTopUpLimit.service.js";
+import { formatMinorRupees } from "../models/financialTypes.js";
 import { notifyBusinessShipmentMembers } from "./portalNotification.service.js";
 
 /**

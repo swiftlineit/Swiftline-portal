@@ -2,14 +2,13 @@ import mongoose from "mongoose";
 import { Branch } from "../models/branch.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { LabelDocument } from "../models/labelDocument.model.js";
-import { isVisibleShipmentLabel } from "./als/alsLabelClassification.js";
 import { User } from "../models/user.model.js";
-import type { IEmailAttachmentRef } from "../models/emailOutbox.model.js";
 import type { IDpdShipment } from "../models/dpdShipment.model.js";
 import type { IShipmentDraft } from "../models/shipmentDraft.model.js";
 import type { IShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { notifyBranchOperationsStaff, notifyBusinessShipmentMembers, notifyOperationsStaff } from "./portalNotification.service.js";
 import { CashReceipt } from "../models/cashReceipt.model.js";
+import { buildShipmentBookedAttachmentRefs } from "./shipmentBookedAttachments.service.js";
 
 type ShipmentBookedInput = {
   draft: IShipmentDraft;
@@ -60,7 +59,7 @@ function buildPayload(input: ShipmentBookedInput, context: {
 
 /**
  * Notifies the client and the operations desk that a shipment is booked, with
- * the tax invoice and labels attached.
+ * the GST tax invoice, shipment invoice and labels attached.
  *
  * Delivery is best effort. The shipment, its labels and its invoice are already
  * persisted by the time this runs, so a notification failure must never
@@ -76,12 +75,9 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
       User.findById(input.bookedBy).select("name firstName lastName").lean().exec(),
       LabelDocument.find({
         dpdShipmentId: dpdShipment._id,
-        voidedAt: null,
-        ...(draft.creationSource === "PUBLIC_ONLINE" ? { labelType: "SWIFTLINE" } : {}),
+        voidedAt: null
       })
         .select("_id labelType parcelNumber format storageKey")
-        // labelType descending puts SWIFTLINE after DPD, which is the order the
-        // attachments are wanted in - see the size-budget note below.
         .sort({ labelType: -1, parcelNumber: 1 })
         .lean()
         .exec(),
@@ -95,45 +91,16 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
         || `${bookedByUser?.firstName ?? ""} ${bookedByUser?.lastName ?? ""}`.trim()
     });
 
-    const invoiceAttachment: IEmailAttachmentRef = {
-      kind: "SHIPMENT_INVOICE_PDF",
-      refId: shipmentInvoice._id as mongoose.Types.ObjectId,
-      revision: shipmentInvoice.revision,
-      filename: `${shipmentInvoice.invoiceNumber.replaceAll("/", "-")}-Invoice.pdf`
-    };
-
-    const labelAttachment = (label: {
-      _id: mongoose.Types.ObjectId;
-      labelType?: string;
-      parcelNumber: string;
-      format: string;
-    }): IEmailAttachmentRef => ({
-      kind: "LABEL_DOCUMENT",
-      refId: label._id,
-      revision: null,
-      filename: label.labelType === "DPD"
-        ? `DPD-Label-${label.parcelNumber}.${label.format.toLowerCase()}`
-        : `Swiftline-Labels-${dpdShipment.swiftlineTrackingNumber}.${label.format.toLowerCase()}`
+    const attachments = buildShipmentBookedAttachmentRefs({
+      shipmentDraftId: draft._id as mongoose.Types.ObjectId,
+      trackingNumber: dpdShipment.swiftlineTrackingNumber || "",
+      shipmentInvoice,
+      labels,
+      cashReceipt
     });
-
-    // Client and staff receive the same documents: the label is what the parcel
-    // travels on, so withholding it from the client leaves them unable to hand
-    // over. The invoice leads the list so that if the size budget runs out it is
-    // labels that get dropped, never the document needed for accounts.
-    const visibleLabels = labels.filter(isVisibleShipmentLabel);
-    const printableLabels = visibleLabels.filter((label, index) => (
-      visibleLabels.findIndex((candidate) => candidate.storageKey === label.storageKey) === index
-    ));
-    const receiptAttachment: IEmailAttachmentRef[] = cashReceipt ? [{
-      kind: "CASH_RECEIPT_PDF",
-      refId: cashReceipt._id,
-      filename: `CASH-RECEIPT-${cashReceipt.receiptNumber}.pdf`
-    }] : [];
-    const clientAttachments = [invoiceAttachment, ...receiptAttachment, ...printableLabels.map(labelAttachment)];
-    const staffAttachments = [invoiceAttachment, ...receiptAttachment, ...printableLabels.map(labelAttachment)];
-    // Drives the wording in the booked email: a UK shipment travels on the DPD
-    // label, so the message must not tell the customer to affix only ours.
-    const hasDpdLabel = printableLabels.some((label) => label.labelType === "DPD");
+    const hasDpdLabel = attachments.some((attachment) => attachment.filename?.startsWith("DPD-Label-"));
+    const consignorEmail = draft.creationSource === "PUBLIC_ONLINE" ? "" : draft.consignorAddress?.email?.trim() || "";
+    const consignorName = draft.consignorAddress?.contactName || draft.consignorAddress?.companyName || "";
 
     const trackingNumber = payload.trackingNumber || String(draft._id);
     const idempotencyKey = `SHIPMENT_BOOKED:${String(dpdShipment._id)}`;
@@ -155,7 +122,8 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
       email: {
         templateKey: "SHIPMENT_BOOKED_CLIENT",
         payload: { ...payload, hasDpdLabel },
-        attachmentRefs: clientAttachments
+        attachmentRefs: attachments,
+        ...(consignorEmail ? { extraRecipients: [{ email: consignorEmail, name: consignorName }] } : {})
       }
     });
 
@@ -179,7 +147,7 @@ export async function notifyShipmentBooked(input: ShipmentBookedInput) {
       email: {
         templateKey: "SHIPMENT_BOOKED_STAFF",
         payload: { ...payload, hasDpdLabel },
-        attachmentRefs: staffAttachments
+        attachmentRefs: attachments
       }
     });
 

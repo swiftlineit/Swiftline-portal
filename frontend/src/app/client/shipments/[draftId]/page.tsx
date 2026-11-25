@@ -35,12 +35,11 @@ import {
 } from "@/lib/clientDashboard";
 import { formatDashboardDate, formatDashboardDateTime } from "@/lib/dateFormat";
 import { formatCsbType } from "@/lib/csbType";
-import { ShipmentAmendment, ShipmentAmendmentInput, ShipmentAmendmentPreview } from "@/lib/dpdLabels";
+import { ShipmentAmendment, ShipmentAmendmentInput } from "@/lib/dpdLabels";
 import {
   createDirectShipmentAmendmentPayment,
   downloadClientCashReceipt,
   getClientShipmentCashReceipt,
-  fundShipmentAmendmentFromWallet,
   getPendingShipmentAmendment,
   openShipmentRazorpayCheckout,
   verifyDirectShipmentAmendmentPayment,
@@ -331,36 +330,32 @@ export default function ClientShipmentDetailsPage() {
     }
   }
 
-  async function handleSecureAmendmentPayment(amendment: ShipmentAmendment, preview: ShipmentAmendmentPreview) {
+  async function handleSecureAmendmentPayment(amendment: ShipmentAmendment) {
     setAmendmentBusy(true);
     setError("");
     try {
-      if (preview.fundingPreview.billingMode === "PREPAID") {
-        await fundShipmentAmendmentFromWallet({ audience: "client", amendmentId: amendment.id });
-      } else {
-        const order = await createDirectShipmentAmendmentPayment({ audience: "client", amendmentId: amendment.id });
-        let payment = order.payment;
-        if (!["CAPTURED", "ALLOCATED"].includes(payment.status)) {
-          if (!payment.razorpayOrderId) throw new Error("The amendment payment order is still processing. Retry in a moment.");
-          const checkout = await openShipmentRazorpayCheckout({
-            razorpay: order.razorpay,
-            payment,
-            prefill: {
-              name: user?.name,
-              email: user?.email,
-              contact: shipment?.shipmentDraft.consignee.mobileNumber
-            }
-          });
-          const verified = await verifyDirectShipmentAmendmentPayment({
-            audience: "client",
-            amendmentId: amendment.id,
-            ...checkout
-          });
-          payment = verified.payment;
-        }
-        if (!["CAPTURED", "ALLOCATED"].includes(payment.status)) {
-          throw new Error("Payment confirmation is pending. Retry after Razorpay confirms the amendment payment.");
-        }
+      const order = await createDirectShipmentAmendmentPayment({ audience: "client", amendmentId: amendment.id });
+      let payment = order.payment;
+      if (!["CAPTURED", "ALLOCATED"].includes(payment.status)) {
+        if (!payment.razorpayOrderId) throw new Error("The amendment payment order is still processing. Retry in a moment.");
+        const checkout = await openShipmentRazorpayCheckout({
+          razorpay: order.razorpay,
+          payment,
+          prefill: {
+            name: user?.name,
+            email: user?.email,
+            contact: shipment?.shipmentDraft.consignee.mobileNumber
+          }
+        });
+        const verified = await verifyDirectShipmentAmendmentPayment({
+          audience: "client",
+          amendmentId: amendment.id,
+          ...checkout
+        });
+        payment = verified.payment;
+      }
+      if (!["CAPTURED", "ALLOCATED"].includes(payment.status)) {
+        throw new Error("Payment confirmation is pending. Retry after the amendment payment is confirmed.");
       }
 
       const data = await getClientShipmentDetails(params.draftId);
@@ -565,8 +560,7 @@ export default function ClientShipmentDetailsPage() {
                   : "Shipment must be booked before amendments can be applied."
               }
               busy={amendmentBusy}
-              prepaidPaymentRequired
-              walletTopUpHref="/client/payments#add-money"
+              paymentRequired
               onPreview={handleAmendmentPreview}
               onSubmit={handleAmendment}
               onSecurePayment={handleSecureAmendmentPayment}
