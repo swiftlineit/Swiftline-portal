@@ -143,6 +143,8 @@ if (env.OPERATOR_PORTAL_ENABLED) {
 }
 app.use("/api/v1/users", userRouter);
 app.use("/api/v1/profile", profileRouter);
+// This specific ledger route must precede the generic /:accountId business-account routes.
+app.use("/api/v1/business-accounts", businessAccountPaymentsRouter);
 app.use("/api/v1/business-accounts", businessAccountRouter);
 app.use("/api/v1/branches", branchRouter);
 app.use("/api/v1/addresses", addressRouter);
@@ -188,7 +190,6 @@ app.use("/api/v1/driver/pickups", pickupDriverRouter);
 app.use("/api/v1/pod", podManagementRouter);
 app.use("/api/v1/driver/deliveries", podDeliveryRouter);
 app.use("/api/v1/cash-receipts", standaloneCashReceiptRouter);
-app.use("/api/v1/business-accounts", businessAccountPaymentsRouter);
 app.use("/api/v1/profitability", profitabilityRouter);
 app.use("/api/v1/notifications", notificationRouter);
 app.use("/api/v1/dashboard-banner", dashboardBannerRouter);
