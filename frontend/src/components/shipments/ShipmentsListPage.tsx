@@ -541,10 +541,10 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
 
   const createShipmentHref = audience === "client" ? "/client/dpd-labels" : "/dashboard/dpd-labels";
   const shipmentPagePath = audience === "client" ? "/client/shipments" : "/dashboard/shipments";
-  // Staff table only, and only for an administrator. Operations and delivery
-  // work this list daily but do not remove rows from it.
+  // Only administrators may delete. Administrators and operations may cancel
+  // non-terminal shipments through the confirmed cancellation workflow.
   const canDelete = audience === "admin" && role === "admin";
-  const canCancel = audience === "admin" && role === "admin";
+  const canCancel = audience === "admin" && (role === "admin" || role === "operations");
   // Rebook is staff-only: admin and operations may rebook any booked shipment
   // into a new EDITABLE draft preserving its businessAccountId + branchId
   // (individual shipments keep their original branch). Delivery/finance see no button.
@@ -2183,7 +2183,9 @@ export default function ShipmentsListPage({ audience, role }: { audience: Shipme
                         options={getShipmentRowActionOptions({
                           canRebook,
                           canDelete,
-                          canCancel: canCancel && shipment.status !== "SHIPMENT_CANCELLED",
+                          canCancel: canCancel && ![
+                            "SHIPMENT_CANCELLED", "DELIVERED", "RETURNED", "LOST", "DAMAGED"
+                          ].includes(shipment.status),
                           hasDpdLabel: shipment.dpdLabelStatus === "AVAILABLE"
                         })}
                         disabled={rebookingId === shipment.id

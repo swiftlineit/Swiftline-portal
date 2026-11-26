@@ -14,6 +14,8 @@ export type CancellationGatewayRefundPlan = {
 
 export const shipmentCancellationStatusValues = ["REQUESTED", "COMPLETED", "REJECTED"] as const;
 export type ShipmentCancellationStatus = (typeof shipmentCancellationStatusValues)[number];
+export const cancellationFinancialTreatmentValues = ["STANDARD", "LEGACY_CREDIT_NO_SETTLEMENT"] as const;
+export type CancellationFinancialTreatment = (typeof cancellationFinancialTreatmentValues)[number];
 
 export interface IShipmentCancellation extends mongoose.Document, TenantOwnedFields {
   shipmentDraftId: mongoose.Types.ObjectId;
@@ -27,6 +29,7 @@ export interface IShipmentCancellation extends mongoose.Document, TenantOwnedFie
   reason: string;
   shipmentStatusAtRequest: string;
   status: ShipmentCancellationStatus;
+  financialTreatment: CancellationFinancialTreatment;
   originalAmountMinor: number;
   taxTreatment: ShipmentInvoiceTaxTreatment;
   requestedFeeBaseMinor: number;
@@ -81,6 +84,7 @@ const shipmentCancellationSchema = new mongoose.Schema<IShipmentCancellation>({
   reason: { type: String, required: true, trim: true, minlength: 5, maxlength: 500 },
   shipmentStatusAtRequest: { type: String, required: true, trim: true, maxlength: 60 },
   status: { type: String, enum: shipmentCancellationStatusValues, default: "REQUESTED", required: true, index: true },
+  financialTreatment: { type: String, enum: cancellationFinancialTreatmentValues, default: "STANDARD", required: true },
   originalAmountMinor: { type: Number, required: true, min: 0, validate: isMinorUnitInteger },
   taxTreatment: { type: String, enum: ["GST_APPLICABLE", "NO_GST"], required: true, default: "GST_APPLICABLE" },
   requestedFeeBaseMinor: { type: Number, required: true, min: 0, validate: isMinorUnitInteger },

@@ -64,6 +64,7 @@ try {
       ? ['src/tests/operatorShipmentBooking.integration.test.ts']
       : [
         'src/tests/prepaidWorkflow.offline.integration.test.ts',
+        'src/tests/shipmentCancellation.integration.test.ts',
         'src/tests/prepaidReleaseMigration.test.ts',
         'src/tests/cashReceiptActiveIndexMigration.test.ts',
         'src/tests/shipmentPricing.volumetricDiscount.test.ts',

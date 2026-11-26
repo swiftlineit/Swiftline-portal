@@ -10,7 +10,11 @@ import { CreditBillingStatement } from "../models/creditBillingStatement.model.j
 import { DpdShipment } from "../models/dpdShipment.model.js";
 import { BusinessAccount } from "../models/businessAccount.model.js";
 import { ShipmentAmendment } from "../models/shipmentAmendment.model.js";
-import { ShipmentCancellation, type IShipmentCancellation } from "../models/shipmentCancellation.model.js";
+import {
+  ShipmentCancellation,
+  type CancellationFinancialTreatment,
+  type IShipmentCancellation
+} from "../models/shipmentCancellation.model.js";
 import { ShipmentCharge } from "../models/shipmentCharge.model.js";
 import { ShipmentDirectPayment } from "../models/shipmentDirectPayment.model.js";
 import { ShipmentFunding } from "../models/shipmentFunding.model.js";
@@ -48,7 +52,7 @@ const afterBookingStatuses: ShipmentEventStatus[] = [
   "DELIVERY_PARTNER_TRANSFERRED", "DELIVERY_HUB_ARRIVED", "IN_TRANSIT", "OUT_FOR_DELIVERY",
   "DELIVERED", "RETURNED", "LOST", "DAMAGED"
 ];
-const warehouseAndLaterStatuses: ShipmentEventStatus[] = afterBookingStatuses.slice(1);
+const terminalStatuses: ShipmentEventStatus[] = ["DELIVERED", "RETURNED", "LOST", "DAMAGED"];
 
 export class ShipmentCancellationError extends Error {
   constructor(public readonly statusCode: number, message: string) {
@@ -99,7 +103,38 @@ export type ShipmentCancellationPreview = ReturnType<typeof calculateCancellatio
   taxTreatment: "GST_APPLICABLE" | "NO_GST";
   manualRefundRequired: boolean;
   manualRefundSource: boolean;
+  legacyCreditOnly: boolean;
 };
+
+export function isLegacyCreditOnlyFunding(input: {
+  tenantKind?: string;
+  chargePaymentSource?: string | null;
+  fundingSource?: string | null;
+}) {
+  return input.tenantKind === "SWIFTLINE"
+    && input.chargePaymentSource === "BUSINESS_ACCOUNT"
+    && !input.fundingSource;
+}
+
+async function cancellationFinancialTreatment(
+  shipmentDraftId: mongoose.Types.ObjectId,
+  session?: mongoose.ClientSession
+): Promise<CancellationFinancialTreatment> {
+  const tenantContext = getTenantContext();
+  if (tenantContext?.kind !== "SWIFTLINE") return "STANDARD";
+  const ownerFilter = { tenantId: tenantContext.tenantId };
+  const [charge, funding] = await Promise.all([
+    ShipmentCharge.findOne({ shipmentDraftId, ...ownerFilter })
+      .select("paymentSource").session(session ?? null).lean().exec(),
+    ShipmentFunding.findOne({ shipmentDraftId, ...ownerFilter })
+      .select("source").session(session ?? null).lean().exec()
+  ]);
+  return isLegacyCreditOnlyFunding({
+    tenantKind: tenantContext.kind,
+    chargePaymentSource: charge?.paymentSource,
+    fundingSource: funding?.source
+  }) ? "LEGACY_CREDIT_NO_SETTLEMENT" : "STANDARD";
+}
 
 export function calculateCancellationSettlement(input: {
   originalAmountMinor: number;
@@ -136,7 +171,7 @@ export function getCancellationEligibility(input: {
   requesterType: "CLIENT" | "ADMIN";
   hasBooked: boolean;
   hasParcelCollectedOrLater: boolean;
-  hasWarehouseScanOrLater: boolean;
+  hasTerminalStatus: boolean;
   alreadyCancelled: boolean;
 }) {
   if (input.alreadyCancelled) return { allowed: false, message: "This shipment has already been cancelled." };
@@ -144,8 +179,8 @@ export function getCancellationEligibility(input: {
   if (input.requesterType === "CLIENT" && input.hasParcelCollectedOrLater) {
     return { allowed: false, message: "Cancellation is no longer available because the parcel has been collected. Contact your assigned branch." };
   }
-  if (input.requesterType === "ADMIN" && input.hasWarehouseScanOrLater) {
-    return { allowed: false, message: "Cancellation is blocked after Warehouse Scan In." };
+  if (input.requesterType === "ADMIN" && input.hasTerminalStatus) {
+    return { allowed: false, message: "Delivered, returned, lost, or damaged shipments cannot be cancelled." };
   }
   return { allowed: true, message: "" };
 }
@@ -176,7 +211,7 @@ async function cancellationGate(
     requesterType,
     hasBooked: statuses.has("SHIPMENT_BOOKED"),
     hasParcelCollectedOrLater: Boolean(receivedParcel) || afterBookingStatuses.some((status) => statuses.has(status)),
-    hasWarehouseScanOrLater: Boolean(receivedParcel) || warehouseAndLaterStatuses.some((status) => statuses.has(status)),
+    hasTerminalStatus: terminalStatuses.some((status) => statuses.has(status)),
     alreadyCancelled: statuses.has("SHIPMENT_CANCELLED")
   });
 }
@@ -210,7 +245,10 @@ function feeTaxSplit(feeGstMinor: number, taxType: "CGST_SGST" | "IGST") {
   return { cgstAmountMinor, sgstAmountMinor: feeGstMinor - cgstAmountMinor, igstAmountMinor: 0 };
 }
 
-export function serializeShipmentCancellation(cancellation: IShipmentCancellation) {
+export function serializeShipmentCancellation(
+  cancellation: IShipmentCancellation,
+  financialTreatment: CancellationFinancialTreatment = cancellation.financialTreatment ?? "STANDARD"
+) {
   return {
     id: String(cancellation._id),
     shipmentDraftId: String(cancellation.shipmentDraftId),
@@ -222,6 +260,7 @@ export function serializeShipmentCancellation(cancellation: IShipmentCancellatio
     reason: cancellation.reason,
     shipmentStatusAtRequest: cancellation.shipmentStatusAtRequest,
     status: cancellation.status,
+    financialTreatment,
     originalAmountMinor: cancellation.originalAmountMinor,
     taxTreatment: cancellation.taxTreatment ?? "GST_APPLICABLE",
     requestedFeeBaseMinor: cancellation.requestedFeeBaseMinor,
@@ -251,7 +290,9 @@ export function serializeShipmentCancellation(cancellation: IShipmentCancellatio
 
 export async function getShipmentCancellation(shipmentDraftId: mongoose.Types.ObjectId) {
   const cancellation = await ShipmentCancellation.findOne({ shipmentDraftId }).sort({ requestedAt: -1 }).exec();
-  return cancellation ? serializeShipmentCancellation(cancellation) : null;
+  if (!cancellation) return null;
+  const financialTreatment = await cancellationFinancialTreatment(shipmentDraftId);
+  return serializeShipmentCancellation(cancellation, financialTreatment);
 }
 
 export async function requestShipmentCancellation(input: {
@@ -289,6 +330,7 @@ export async function requestShipmentCancellation(input: {
   }
   const existing = await ShipmentCancellation.findOne({ shipmentDraftId: draft._id, status: "REQUESTED" }).exec();
   if (existing) return existing;
+  const financialTreatment = await cancellationFinancialTreatment(draft._id as mongoose.Types.ObjectId);
 
   const latestEvent = await ShipmentEvent.findOne({ shipmentDraftId: draft._id })
     .sort({ eventAt: -1, createdAt: -1 })
@@ -306,10 +348,12 @@ export async function requestShipmentCancellation(input: {
     reason: input.reason,
     shipmentStatusAtRequest: latestEvent?.status ?? "SHIPMENT_BOOKED",
     status: "REQUESTED",
+    financialTreatment,
     originalAmountMinor: invoice.totalAmountMinor,
     taxTreatment: invoice.taxTreatment ?? (invoice.gstRatePercent === 0 ? "NO_GST" : "GST_APPLICABLE"),
-    requestedFeeBaseMinor: input.requestedFeeBaseMinor
-      ?? (tenantContext?.kind === "OPERATOR" ? 0 : DEFAULT_CANCELLATION_FEE_BASE_MINOR),
+    requestedFeeBaseMinor: financialTreatment === "LEGACY_CREDIT_NO_SETTLEMENT"
+      ? 0
+      : input.requestedFeeBaseMinor ?? (tenantContext?.kind === "OPERATOR" ? 0 : DEFAULT_CANCELLATION_FEE_BASE_MINOR),
     feeReason: input.feeReason?.trim() ?? "",
     carrierConfirmationRequired: tenantContext?.kind !== "OPERATOR",
     requestedAt: new Date()
@@ -389,11 +433,32 @@ export async function getShipmentCancellationPreview(
   }
 
   const taxTreatment = invoice.taxTreatment ?? (invoice.gstRatePercent === 0 ? "NO_GST" : "GST_APPLICABLE");
-  const amounts = calculateCancellationAmounts(invoice.totalAmountMinor, requestedFeeBaseMinor, taxTreatment);
-  const [funding, counterCharge] = await Promise.all([
-    ShipmentFunding.findOne({ shipmentDraftId: draft._id, status: "COMPLETED" }).select("source").lean().exec(),
-    ShipmentCharge.exists({ shipmentDraftId: draft._id, paymentSource: "ADMIN_DIRECT" })
+  const [funding, anyFunding, counterCharge, charge] = await Promise.all([
+    ShipmentFunding.findOne({ shipmentDraftId: draft._id, status: "COMPLETED", ...ownerFilter }).select("source").lean().exec(),
+    ShipmentFunding.findOne({ shipmentDraftId: draft._id, ...ownerFilter }).select("source").lean().exec(),
+    ShipmentCharge.exists({ shipmentDraftId: draft._id, paymentSource: "ADMIN_DIRECT", ...ownerFilter }),
+    ShipmentCharge.findOne({ shipmentDraftId: draft._id, ...ownerFilter }).select("paymentSource").lean().exec()
   ]);
+  const legacyCreditOnly = isLegacyCreditOnlyFunding({
+    tenantKind: tenantContext?.kind,
+    chargePaymentSource: charge?.paymentSource,
+    fundingSource: anyFunding?.source
+  });
+  if (legacyCreditOnly) {
+    return {
+      feeBaseMinor: 0,
+      feeGstMinor: 0,
+      feeTotalMinor: 0,
+      refundableAmountMinor: 0,
+      feeWasCapped: false,
+      originalAmountMinor: invoice.totalAmountMinor,
+      taxTreatment,
+      manualRefundSource: false,
+      manualRefundRequired: false,
+      legacyCreditOnly: true
+    };
+  }
+  const amounts = calculateCancellationAmounts(invoice.totalAmountMinor, requestedFeeBaseMinor, taxTreatment);
 
   const manualRefundSource = funding?.source === "CASH_RECEIPT"
     || funding?.source === "BUSINESS_WALLET"
@@ -403,7 +468,8 @@ export async function getShipmentCancellationPreview(
     originalAmountMinor: invoice.totalAmountMinor,
     taxTreatment,
     manualRefundSource,
-    manualRefundRequired: amounts.refundableAmountMinor > 0 && manualRefundSource
+    manualRefundRequired: amounts.refundableAmountMinor > 0 && manualRefundSource,
+    legacyCreditOnly: false
   };
 }
 
@@ -466,6 +532,139 @@ export async function assertNoPendingShipmentCancellation(
   }
 }
 
+async function completeLegacyCreditCancellation(input: {
+  cancellationId: mongoose.Types.ObjectId;
+  reviewedBy: mongoose.Types.ObjectId;
+  carrierConfirmed: boolean;
+  carrierReference: string;
+  reviewNote: string;
+}) {
+  const tenantContext = getTenantContext();
+  const ownerFilter = tenantContext ? { tenantId: tenantContext.tenantId } : {};
+  const session = await mongoose.startSession();
+  try {
+    return await session.withTransaction(async () => {
+      const cancellation = await ShipmentCancellation.findById(input.cancellationId).session(session).exec();
+      if (!cancellation) throw new ShipmentCancellationError(404, "Cancellation request not found.");
+      if (cancellation.status === "COMPLETED") return cancellation;
+      if (cancellation.status !== "REQUESTED") {
+        throw new ShipmentCancellationError(409, "Only pending cancellation requests can be approved.");
+      }
+      if (
+        cancellation.gatewayRefundPlan
+        || cancellation.paymentRefundStatus !== "NOT_REQUIRED"
+        || cancellation.paymentRefundAmountMinor > 0
+        || cancellation.creditNoteId
+        || cancellation.cancellationFeeInvoiceId
+      ) {
+        throw new ShipmentCancellationError(
+          409,
+          "A refund or financial document is already recorded for this cancellation. Reconcile it before completing the legacy cancellation."
+        );
+      }
+      if (
+        cancellation.carrierConfirmationRequired !== false
+        && !input.carrierConfirmed
+      ) {
+        throw new ShipmentCancellationError(400, "Confirm carrier cancellation before completing the cancellation.");
+      }
+      if (cancellation.carrierConfirmationRequired === false && tenantContext?.kind !== "OPERATOR") {
+        throw new ShipmentCancellationError(404, "Cancellation request not found.");
+      }
+      if (await cancellationFinancialTreatment(cancellation.shipmentDraftId, session) !== "LEGACY_CREDIT_NO_SETTLEMENT") {
+        throw new ShipmentCancellationError(409, "The shipment funding changed. Review the cancellation settlement again.");
+      }
+
+      const gate = await cancellationGate(cancellation.shipmentDraftId, "ADMIN", session);
+      if (!gate.allowed) throw new ShipmentCancellationError(409, gate.message);
+      const pendingAmendment = await ShipmentAmendment.exists({
+        shipmentDraftId: cancellation.shipmentDraftId,
+        status: { $in: ["REQUESTED", "AWAITING_PAYMENT", "PAYMENT_SECURED"] }
+      }).session(session);
+      if (pendingAmendment) {
+        throw new ShipmentCancellationError(409, "Approve or reject the pending amendment before completing cancellation.");
+      }
+      const invoice = await ShipmentInvoice.findOne({
+        _id: cancellation.shipmentInvoiceId,
+        shipmentDraftId: cancellation.shipmentDraftId,
+        paymentStatus: { $ne: "VOID" },
+        ...ownerFilter
+      }).session(session).exec();
+      if (!invoice) throw new ShipmentCancellationError(409, "The active shipment invoice could not be found.");
+      if (invoice.totalAmountMinor !== cancellation.originalAmountMinor) {
+        throw new ShipmentCancellationError(409, "The shipment invoice changed after cancellation was requested. Reject this request and create a new one.");
+      }
+
+      const completedAt = new Date();
+      const financialNote = "Legacy credit shipment cancelled without refund, wallet credit, fee, or financial documents; historical invoice and statement unchanged.";
+      await ShipmentEvent.create([{
+        shipmentDraftId: cancellation.shipmentDraftId,
+        dpdShipmentId: cancellation.dpdShipmentId,
+        status: "SHIPMENT_CANCELLED",
+        note: financialNote,
+        customerVisible: true,
+        createdBy: input.reviewedBy,
+        eventAt: completedAt
+      }], { session });
+
+      cancellation.status = "COMPLETED";
+      cancellation.financialTreatment = "LEGACY_CREDIT_NO_SETTLEMENT";
+      cancellation.requestedFeeBaseMinor = 0;
+      cancellation.approvedFeeBaseMinor = 0;
+      cancellation.feeGstMinor = 0;
+      cancellation.feeTotalMinor = 0;
+      cancellation.refundableAmountMinor = 0;
+      cancellation.feeReason = "";
+      cancellation.carrierConfirmed = input.carrierConfirmed;
+      cancellation.settlementConfirmed = true;
+      cancellation.paymentRefundStatus = "NOT_REQUIRED";
+      cancellation.paymentRefundAmountMinor = 0;
+      cancellation.paymentRefundReference = "";
+      cancellation.paymentRefundedAt = null;
+      cancellation.carrierReference = input.carrierReference;
+      cancellation.reviewNote = [financialNote, input.reviewNote.trim()].filter(Boolean).join(" ").slice(0, 500);
+      cancellation.reviewedBy = input.reviewedBy;
+      cancellation.reviewedAt = completedAt;
+      cancellation.completedAt = completedAt;
+      cancellation.settlement = {
+        originalCreditReversedMinor: 0,
+        cancellationFeeCreditMinor: 0,
+        netCreditReleasedMinor: 0,
+        statementCreditAppliedMinor: 0,
+        customerAdvanceCreditedMinor: 0
+      };
+      cancellation.creditNoteId = null;
+      cancellation.cancellationFeeInvoiceId = null;
+      await cancellation.save({ session });
+
+      await AuditLog.create([{
+        action: "SHIPMENT_CANCELLATION_COMPLETED",
+        entityType: "SHIPMENT_CANCELLATION",
+        entityId: cancellation._id,
+        performedBy: input.reviewedBy,
+        performedAt: completedAt,
+        metadata: {
+          shipmentDraftId: cancellation.shipmentDraftId,
+          financialTreatment: "LEGACY_CREDIT_NO_SETTLEMENT",
+          refundAmountMinor: 0,
+          feeTotalMinor: 0,
+          historicalInvoiceAndStatementChanged: false
+        }
+      }], { session });
+      await notifyBusinessFinancialMembers(cancellation.businessAccountId, {
+        type: "SHIPMENT_CANCELLATION_COMPLETED",
+        title: "Shipment cancellation completed",
+        message: "This legacy credit-ledger shipment was cancelled without a refund, wallet credit, cancellation fee, or changes to its historical invoice and statement.",
+        href: `/client/shipments/${String(cancellation.shipmentDraftId)}#shipment-cancellation`,
+        idempotencyKey: `SHIPMENT_CANCELLATION_COMPLETED:${String(cancellation._id)}`
+      }, session);
+      return cancellation;
+    });
+  } finally {
+    await session.endSession();
+  }
+}
+
 export async function approveShipmentCancellation(input: {
   cancellationId: mongoose.Types.ObjectId;
   reviewedBy: mongoose.Types.ObjectId;
@@ -491,14 +690,6 @@ export async function approveShipmentCancellation(input: {
     throw new ShipmentCancellationError(400, "Confirm the cancellation settlement before completing the refund.");
   }
   const tenantContext = getTenantContext();
-  if (tenantContext?.kind === "OPERATOR") {
-    if (input.feeBaseMinor > 0 && input.feeReason.trim().length < 5) {
-      throw new ShipmentCancellationError(400, "Explain the operator cancellation fee.");
-    }
-  } else if (input.feeBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR && input.feeReason.trim().length < 5) {
-    throw new ShipmentCancellationError(400, "Explain the additional carrier or handling fee.");
-  }
-
   const preflightCancellation = await ShipmentCancellation.findById(input.cancellationId).exec();
   if (!preflightCancellation) throw new ShipmentCancellationError(404, "Cancellation request not found.");
   if (preflightCancellation.status === "COMPLETED") return preflightCancellation;
@@ -510,6 +701,25 @@ export async function approveShipmentCancellation(input: {
   }
   if (preflightCancellation.carrierConfirmationRequired === false && tenantContext?.kind !== "OPERATOR") {
     throw new ShipmentCancellationError(404, "Cancellation request not found.");
+  }
+  if (
+    preflightCancellation.financialTreatment === "LEGACY_CREDIT_NO_SETTLEMENT"
+    || await cancellationFinancialTreatment(preflightCancellation.shipmentDraftId) === "LEGACY_CREDIT_NO_SETTLEMENT"
+  ) {
+    return completeLegacyCreditCancellation({
+      cancellationId: preflightCancellation._id as mongoose.Types.ObjectId,
+      reviewedBy: input.reviewedBy,
+      carrierConfirmed: input.carrierConfirmed,
+      carrierReference: input.carrierReference,
+      reviewNote: input.reviewNote
+    });
+  }
+  if (tenantContext?.kind === "OPERATOR") {
+    if (input.feeBaseMinor > 0 && input.feeReason.trim().length < 5) {
+      throw new ShipmentCancellationError(400, "Explain the operator cancellation fee.");
+    }
+  } else if (input.feeBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR && input.feeReason.trim().length < 5) {
+    throw new ShipmentCancellationError(400, "Explain the additional carrier or handling fee.");
   }
   const preflightGate = await cancellationGate(preflightCancellation.shipmentDraftId, "ADMIN");
   if (!preflightGate.allowed) throw new ShipmentCancellationError(409, preflightGate.message);
@@ -1006,6 +1216,7 @@ export async function approveShipmentCancellation(input: {
 export async function cancelShipmentDirectly(input: {
   shipmentDraftId: mongoose.Types.ObjectId;
   requestedBy: mongoose.Types.ObjectId;
+  requesterRole: "admin" | "operations";
   reason: string;
   feeBaseMinor: number;
   feeReason: string;
@@ -1031,14 +1242,16 @@ export async function cancelShipmentDirectly(input: {
   if (!Number.isSafeInteger(input.feeBaseMinor) || input.feeBaseMinor < 0) {
     throw new ShipmentCancellationError(400, "The cancellation fee must be a non-negative amount.");
   }
+  const preview = await getShipmentCancellationPreview(input.shipmentDraftId, input.feeBaseMinor);
   if (
-    input.feeBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR
+    !preview.legacyCreditOnly
+    && input.feeBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR
     && input.feeReason.trim().length < 5
   ) {
     throw new ShipmentCancellationError(400, "Explain the additional carrier or handling fee.");
   }
-
-  const preview = await getShipmentCancellationPreview(input.shipmentDraftId, input.feeBaseMinor);
+  const feeBaseMinor = preview.legacyCreditOnly ? 0 : input.feeBaseMinor;
+  const feeReason = preview.legacyCreditOnly ? "" : input.feeReason.trim();
   if (preview.manualRefundRequired && !input.refundPayout) {
     throw new ShipmentCancellationError(400, "Record the offline refund payout before completing this cancellation.");
   }
@@ -1050,18 +1263,18 @@ export async function cancelShipmentDirectly(input: {
     shipmentDraftId: input.shipmentDraftId,
     requestedBy: input.requestedBy,
     requesterType: "ADMIN",
-    requesterRole: "admin",
+    requesterRole: input.requesterRole,
     reason: input.reason,
-    requestedFeeBaseMinor: input.feeBaseMinor,
-    feeReason: input.feeReason.trim(),
+    requestedFeeBaseMinor: feeBaseMinor,
+    feeReason,
     notifyReviewers: false
   });
   if (
     cancellation.requesterType !== "ADMIN"
     || String(cancellation.requestedBy) !== String(input.requestedBy)
     || cancellation.reason !== input.reason
-    || cancellation.requestedFeeBaseMinor !== input.feeBaseMinor
-    || cancellation.feeReason !== input.feeReason.trim()
+    || cancellation.requestedFeeBaseMinor !== feeBaseMinor
+    || cancellation.feeReason !== feeReason
   ) {
     throw new ShipmentCancellationError(409, "A different cancellation request or fee is already active for this shipment.");
   }
@@ -1070,19 +1283,21 @@ export async function cancelShipmentDirectly(input: {
     const approvedCancellation = await approveShipmentCancellation({
       cancellationId: cancellation._id as mongoose.Types.ObjectId,
       reviewedBy: input.requestedBy,
-      feeBaseMinor: input.feeBaseMinor,
-      feeReason: input.feeReason.trim(),
+      feeBaseMinor,
+      feeReason,
       carrierConfirmed: true,
       settlementConfirmed: true,
       carrierReference: input.carrierReference,
-      reviewNote: "Completed directly by an administrator from the shipment list.",
+      reviewNote: `Completed directly by ${input.requesterRole === "admin" ? "an administrator" : "an operations user"} from the shipment list.`,
       ...(preview.manualRefundRequired ? { refundPayout: input.refundPayout } : {})
     });
     return {
       cancellation: approvedCancellation,
       completed: approvedCancellation.status === "COMPLETED",
       message: approvedCancellation.status === "COMPLETED"
-        ? "Shipment cancellation completed."
+        ? preview.legacyCreditOnly
+          ? "Legacy credit shipment cancelled without refund, credit, fee, or financial-document changes."
+          : "Shipment cancellation completed."
         : "Cancellation is still pending review."
     };
   } catch (error) {

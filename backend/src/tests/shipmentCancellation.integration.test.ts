@@ -20,6 +20,7 @@ import { ShipmentEvent } from "../models/shipmentEvent.model.js";
 import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { closeCreditBillingCycle } from "../services/creditBillingCycle.service.js";
 import { approveShipmentCancellation, cancelShipmentDirectly } from "../services/shipmentCancellation.service.js";
+import { runWithTenantContext } from "../services/tenantScope.service.js";
 
 const databaseName = `sl_shipment_cancellation_${Date.now()}`;
 
@@ -189,6 +190,32 @@ async function createCancellationFixture(input: {
   return { account, cancellation, draft, invoice, statement, createdBy };
 }
 
+async function createBusinessAccountFixture(input: {
+  businessAccountId: mongoose.Types.ObjectId;
+  createdBy: mongoose.Types.ObjectId;
+  companyName: string;
+}) {
+  return BusinessAccount.create({
+    _id: input.businessAccountId,
+    accountId: `BA-CANCEL-${String(input.businessAccountId)}`,
+    status: "active",
+    contact: {
+      firstName: "Cancellation",
+      lastName: "Test",
+      email: `cancellation-${String(input.businessAccountId)}@example.com`,
+      mobileType: "mobile",
+      countryCode: "+91",
+      mobileNumber: `91${String(input.businessAccountId).slice(-8)}`
+    },
+    company: {
+      registrationCountry: "India",
+      companyName: input.companyName,
+      operatingCountries: ["India"]
+    },
+    createdBy: input.createdBy
+  });
+}
+
 describe("shipment cancellation financial transaction", () => {
   test("rejects an above-standard direct fee without a reason before creating a request", async () => {
     const fixture = await createCancellationFixture({
@@ -199,11 +226,17 @@ describe("shipment cancellation financial transaction", () => {
       billed: false
     });
     await ShipmentCancellation.deleteOne({ _id: fixture.cancellation._id }).exec();
+    await createBusinessAccountFixture({
+      businessAccountId: fixture.account.businessAccountId as mongoose.Types.ObjectId,
+      createdBy: fixture.createdBy,
+      companyName: "Fee Validation Test Ltd"
+    });
 
     await assert.rejects(
       cancelShipmentDirectly({
         shipmentDraftId: fixture.draft._id as mongoose.Types.ObjectId,
         requestedBy: fixture.createdBy,
+        requesterRole: "admin",
         reason: "Customer cancelled the shipment before warehouse intake.",
         feeBaseMinor: 80_000,
         feeReason: "",
@@ -223,30 +256,23 @@ describe("shipment cancellation financial transaction", () => {
       billed: false
     });
     await ShipmentCancellation.deleteOne({ _id: fixture.cancellation._id }).exec();
-    await BusinessAccount.create({
-      _id: fixture.account.businessAccountId,
-      accountId: `BA-CANCEL-${String(fixture.account.businessAccountId)}`,
-      status: "active",
-      contact: {
-        firstName: "Direct",
-        lastName: "Cancellation",
-        email: `direct-cancel-${String(fixture.account.businessAccountId)}@example.com`,
-        mobileType: "mobile",
-        countryCode: "+91",
-        mobileNumber: `91${String(fixture.account.businessAccountId).slice(-8)}`
-      },
-      company: {
-        registrationCountry: "India",
-        companyName: "Direct Cancellation Test Ltd",
-        operatingCountries: ["India"]
-      },
-      createdBy: fixture.createdBy
+    await createBusinessAccountFixture({
+      businessAccountId: fixture.account.businessAccountId as mongoose.Types.ObjectId,
+      createdBy: fixture.createdBy,
+      companyName: "Direct Cancellation Test Ltd"
     });
 
+    await ShipmentEvent.create({
+      shipmentDraftId: fixture.draft._id,
+      status: "WAREHOUSE_SCAN_IN",
+      note: "Received at warehouse",
+      createdBy: fixture.createdBy
+    });
     const input = {
       shipmentDraftId: fixture.draft._id as mongoose.Types.ObjectId,
       requestedBy: fixture.createdBy,
-      reason: "Customer cancelled the shipment before warehouse intake.",
+      requesterRole: "operations" as const,
+      reason: "Operations cancelled after warehouse intake.",
       feeBaseMinor: 80_000,
       feeReason: "Carrier cancellation and additional handling charge",
       carrierReference: "CARRIER-CANCEL-DIRECT-1"
@@ -256,6 +282,8 @@ describe("shipment cancellation financial transaction", () => {
 
     assert.equal(first.completed, true);
     assert.equal(first.cancellation.status, "COMPLETED");
+    assert.equal(first.cancellation.requesterRole, "operations");
+    assert.equal(first.cancellation.shipmentStatusAtRequest, "WAREHOUSE_SCAN_IN");
     assert.equal(first.cancellation.approvedFeeBaseMinor, 80_000);
     assert.equal(first.cancellation.feeTotalMinor, 94_400);
     assert.equal(first.cancellation.refundableAmountMinor, 105_600);
@@ -268,6 +296,65 @@ describe("shipment cancellation financial transaction", () => {
       action: "SHIPMENT_CANCELLATION_COMPLETED",
       entityId: first.cancellation._id
     }), 1);
+  });
+
+  test("cancels legacy Swiftline credit bookings without changing any financial records", async () => {
+    const context = { tenantId: new mongoose.Types.ObjectId(), kind: "SWIFTLINE" as const };
+    const fixture = await runWithTenantContext(context, () => createCancellationFixture({
+      originalAmountMinor: 200_000,
+      invoiceCreditOutstandingMinor: 200_000,
+      accountUnbilledMinor: 200_000,
+      accountInvoicedMinor: 0,
+      billed: false
+    }));
+
+    await runWithTenantContext(context, async () => {
+      await createBusinessAccountFixture({
+        businessAccountId: fixture.account.businessAccountId as mongoose.Types.ObjectId,
+        createdBy: fixture.createdBy,
+        companyName: "Legacy Cancellation Test Ltd"
+      });
+
+      const before = {
+        account: await BusinessCreditAccount.findById(fixture.account._id).lean().orFail().exec(),
+        invoice: await ShipmentInvoice.findById(fixture.invoice._id).lean().orFail().exec(),
+        charge: await ShipmentCharge.findOne({ shipmentDraftId: fixture.draft._id }).lean().orFail().exec()
+      };
+      await ShipmentCancellation.deleteOne({ _id: fixture.cancellation._id }).exec();
+      const result = await cancelShipmentDirectly({
+        shipmentDraftId: fixture.draft._id as mongoose.Types.ObjectId,
+        requestedBy: fixture.createdBy,
+        requesterRole: "operations",
+        reason: "Operations cancelled this legacy credit shipment.",
+        feeBaseMinor: 70_000,
+        feeReason: "",
+        carrierReference: "LEGACY-CARRIER-REF"
+      });
+
+      const [accountAfter, invoiceAfter, chargeAfter, cancellation] = await Promise.all([
+        BusinessCreditAccount.findById(fixture.account._id).lean().orFail().exec(),
+        ShipmentInvoice.findById(fixture.invoice._id).lean().orFail().exec(),
+        ShipmentCharge.findOne({ shipmentDraftId: fixture.draft._id }).lean().orFail().exec(),
+        ShipmentCancellation.findById(result.cancellation._id).orFail().exec()
+      ]);
+      assert.equal(result.completed, true);
+      assert.equal(cancellation.financialTreatment, "LEGACY_CREDIT_NO_SETTLEMENT");
+      assert.equal(cancellation.refundableAmountMinor, 0);
+      assert.equal(cancellation.feeTotalMinor, 0);
+      assert.equal(accountAfter.unbilledCreditMinor, before.account.unbilledCreditMinor);
+      assert.equal(accountAfter.invoicedOutstandingMinor, before.account.invoicedOutstandingMinor);
+      assert.equal(invoiceAfter.paymentStatus, before.invoice.paymentStatus);
+      assert.equal(invoiceAfter.status, before.invoice.status);
+      assert.equal(chargeAfter.customerChargeStatus, before.charge.customerChargeStatus);
+      assert.equal(chargeAfter.customerChargeMinor, before.charge.customerChargeMinor);
+      assert.equal(await ShipmentCreditNote.countDocuments({ cancellationId: cancellation._id }), 0);
+      assert.equal(await CancellationFeeInvoice.countDocuments({ cancellationId: cancellation._id }), 0);
+      assert.equal(await CreditLedgerEntry.countDocuments({ businessAccountId: fixture.account.businessAccountId }), 0);
+      assert.equal(await ShipmentEvent.countDocuments({
+        shipmentDraftId: fixture.draft._id,
+        status: "SHIPMENT_CANCELLED"
+      }), 1);
+    });
   });
 
   test("replaces an unbilled shipment charge with the cancellation fee", async () => {

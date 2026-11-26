@@ -13,6 +13,7 @@ export type ShipmentCancellation = {
   reason: string;
   shipmentStatusAtRequest: string;
   status: "REQUESTED" | "COMPLETED" | "REJECTED";
+  financialTreatment: "STANDARD" | "LEGACY_CREDIT_NO_SETTLEMENT";
   originalAmountMinor: number;
   taxTreatment: "GST_APPLICABLE" | "NO_GST";
   requestedFeeBaseMinor: number;
@@ -75,6 +76,7 @@ export type AdminShipmentCancellationPreview = {
   feeWasCapped: boolean;
   manualRefundRequired: boolean;
   manualRefundSource: boolean;
+  legacyCreditOnly: boolean;
 };
 
 export const DEFAULT_CANCELLATION_FEE_BASE_MINOR = 70_000;

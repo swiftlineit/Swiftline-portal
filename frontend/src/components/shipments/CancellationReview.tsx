@@ -55,14 +55,24 @@ export default function CancellationReview({
   const [refundPending, setRefundPending] = useState(Boolean(cancellation.gatewayRefundStarted && cancellation.status === "REQUESTED"));
 
   const requiresManualRefund = ["CASH_RECEIPT", "ADMIN_DIRECT"].includes(cancellation.paymentSource ?? "");
+  const legacyCreditOnly = cancellation.financialTreatment === "LEGACY_CREDIT_NO_SETTLEMENT";
 
   const amounts = useMemo(
-    () => calculateCancellationFeeAmounts(
-      cancellation.originalAmountMinor,
-      cancellation.taxTreatment,
-      feeRupees
-    ),
-    [cancellation.originalAmountMinor, cancellation.taxTreatment, feeRupees]
+    () => legacyCreditOnly
+      ? {
+          requestedBaseMinor: 0,
+          feeBaseMinor: 0,
+          feeGstMinor: 0,
+          feeTotalMinor: 0,
+          refundMinor: 0,
+          capped: false
+        }
+      : calculateCancellationFeeAmounts(
+          cancellation.originalAmountMinor,
+          cancellation.taxTreatment,
+          feeRupees
+        ),
+    [cancellation.originalAmountMinor, cancellation.taxTreatment, legacyCreditOnly, feeRupees]
   );
 
   async function approve() {
@@ -70,7 +80,7 @@ export default function CancellationReview({
       return setError(
         "Enter a valid cancellation fee of INR 0.00 or more before any applicable GST.",
       );
-    if (amounts.requestedBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR && feeReason.trim().length < 5) {
+    if (!legacyCreditOnly && amounts.requestedBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR && feeReason.trim().length < 5) {
       return setError("Explain the additional carrier or handling fee.");
     }
     if (!carrierConfirmed || !settlementConfirmed) {
@@ -80,7 +90,7 @@ export default function CancellationReview({
     }
     // The server rejects the approval without this, so catch it here rather than
     // letting the reviewer lose the form to a failed request.
-    const refundRequired = requiresManualRefund && amounts.refundMinor > 0;
+    const refundRequired = !legacyCreditOnly && requiresManualRefund && amounts.refundMinor > 0;
     if (refundRequired && !refundReference.trim() && refundMethod !== "CASH") {
       return setError(
         "Enter the reference for the refund payment, or select cash.",
@@ -90,8 +100,8 @@ export default function CancellationReview({
     setError("");
     try {
       await approveShipmentCancellation(cancellation.id, {
-        feeBaseMinor: amounts.requestedBaseMinor,
-        feeReason,
+        feeBaseMinor: legacyCreditOnly ? 0 : amounts.requestedBaseMinor,
+        feeReason: legacyCreditOnly ? "" : feeReason,
         carrierConfirmed: true,
         settlementConfirmed: true,
         carrierReference,
@@ -214,8 +224,13 @@ export default function CancellationReview({
 
           {mode === "approve" ? (
             <div className="space-y-5">
+                {legacyCreditOnly ? (
+                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
+                    Legacy credit-ledger shipment: cancellation only. No refund, wallet credit, fee, or financial documents will be created, and historical invoices and statements will not be changed.
+                  </p>
+                ) : null}
               <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Cancellation Fee Before GST (INR)">
+                  {!legacyCreditOnly ? <Field label="Cancellation Fee Before GST (INR)">
                   <input
                     type="text"
                     inputMode="decimal"
@@ -226,7 +241,7 @@ export default function CancellationReview({
                     }}
                     className="field"
                   />
-                </Field>
+                </Field> : null}
                 <Field label="Carrier Cancellation Reference">
                   <input
                     value={carrierReference}
@@ -239,7 +254,7 @@ export default function CancellationReview({
                   />
                 </Field>
               </div>
-              {amounts?.requestedBaseMinor &&
+              {!legacyCreditOnly && amounts?.requestedBaseMinor &&
               amounts.requestedBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR ? (
                 <Field label="Reason For Additional Fee">
                   <textarea
@@ -252,7 +267,7 @@ export default function CancellationReview({
                   />
                 </Field>
               ) : null}
-              <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-slate-200 sm:grid-cols-4">
+              {!legacyCreditOnly ? <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-slate-200 sm:grid-cols-4">
                 <Amount
                   label={cancellation.taxTreatment === "NO_GST" ? "Cancellation Fee" : "Fee Before GST"}
                   value={amounts?.feeBaseMinor ?? 0}
@@ -264,7 +279,7 @@ export default function CancellationReview({
                   value={amounts?.refundMinor ?? 0}
                   emphasis
                 />
-              </div>
+              </div> : null}
               {requiresManualRefund && (amounts?.refundMinor ?? 0) > 0 ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
                   <p className="text-sm font-semibold text-amber-900">
@@ -345,7 +360,9 @@ export default function CancellationReview({
               <Confirmation
                 checked={settlementConfirmed}
                 onChange={setSettlementConfirmed}
-                text={`I confirm the fee of ${money.format((amounts?.feeTotalMinor ?? 0) / 100)} and refund of ${money.format((amounts?.refundMinor ?? 0) / 100)}.`}
+                text={legacyCreditOnly
+                  ? "I confirm no refund, credit, fee, or financial document will be issued."
+                  : `I confirm the fee of ${money.format((amounts?.feeTotalMinor ?? 0) / 100)} and refund of ${money.format((amounts?.refundMinor ?? 0) / 100)}.`}
               />
               {error ? <ErrorMessage message={error} /> : null}
               {refundPending ? <p role="status" className="text-sm text-blue-900">The refund is processing. Check its status shortly to finish the cancellation.</p> : null}
@@ -406,6 +423,11 @@ function CompletedReview({
 }) {
   return (
     <div className="space-y-5">
+      {cancellation.financialTreatment === "LEGACY_CREDIT_NO_SETTLEMENT" ? (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
+          This legacy credit-ledger shipment was cancelled without a refund, wallet credit, fee, or financial documents. Its historical invoice and statement were left unchanged.
+        </p>
+      ) : null}
       <div className="grid gap-4 sm:grid-cols-3">
         <Value
           label="Cancellation Fee"

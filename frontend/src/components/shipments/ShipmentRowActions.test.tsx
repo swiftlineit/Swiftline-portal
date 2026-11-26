@@ -77,7 +77,8 @@ describe("shipment row action options", () => {
         refundableAmountMinor: 117_400,
         feeWasCapped: false,
         manualRefundRequired: false,
-        manualRefundSource: false
+        manualRefundSource: false,
+        legacyCreditOnly: false
       },
       busy: false,
       error: "",
@@ -91,5 +92,38 @@ describe("shipment row action options", () => {
     assert.match(html, /cancelled this shipment with the carrier/);
     assert.match(html, /confirm the settlement/);
     assert.match(html, /Complete cancellation/);
+  });
+
+  test("explains legacy credit cancellation without offering a fee or refund", () => {
+    const shipment = {
+      id: "draft-legacy",
+      swiftlineTrackingNumber: "SL-LEGACY-001",
+      shipmentReference: "REF-LEGACY-001",
+      businessAccountName: "Legacy business"
+    } as ShipmentListItem;
+    const html = renderToStaticMarkup(createElement(AdminShipmentCancellationDialog, {
+      shipment,
+      preview: {
+        originalAmountMinor: 200_000,
+        taxTreatment: "GST_APPLICABLE",
+        feeBaseMinor: 0,
+        feeGstMinor: 0,
+        feeTotalMinor: 0,
+        refundableAmountMinor: 0,
+        feeWasCapped: false,
+        manualRefundRequired: false,
+        manualRefundSource: false,
+        legacyCreditOnly: true
+      },
+      busy: false,
+      error: "",
+      onClose: () => undefined,
+      onSubmit: async () => undefined
+    }));
+
+    assert.match(html, /legacy credit-ledger shipment will be cancelled operationally only/);
+    assert.match(html, /no refund, credit, fee, or financial document will be issued/i);
+    assert.doesNotMatch(html, /Cancellation fee before GST \(INR\)/);
+    assert.doesNotMatch(html, /Record the offline refund payout/);
   });
 });

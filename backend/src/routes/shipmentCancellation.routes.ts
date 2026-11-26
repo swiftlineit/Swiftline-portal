@@ -19,9 +19,9 @@ shipmentCancellationRouter.use(requireRole("admin", "operations"));
 
 shipmentCancellationRouter.get("/", listShipmentCancellations);
 shipmentCancellationRouter.get("/drafts/:draftId", getAdminShipmentCancellation);
-shipmentCancellationRouter.get("/drafts/:draftId/direct-preview", requireRole("admin"), getAdminShipmentCancellationPreview);
+shipmentCancellationRouter.get("/drafts/:draftId/direct-preview", getAdminShipmentCancellationPreview);
 shipmentCancellationRouter.post("/drafts/:draftId", requestAdminShipmentCancellation);
-shipmentCancellationRouter.post("/drafts/:draftId/direct", requireRole("admin"), cancelAdminShipmentDirectly);
+shipmentCancellationRouter.post("/drafts/:draftId/direct", cancelAdminShipmentDirectly);
 shipmentCancellationRouter.post("/:id/approve", approveCancellationRequest);
 shipmentCancellationRouter.post("/:id/reject", rejectCancellationRequest);
 shipmentCancellationRouter.get("/:id/credit-note/pdf", getAdminCancellationCreditNotePdf);

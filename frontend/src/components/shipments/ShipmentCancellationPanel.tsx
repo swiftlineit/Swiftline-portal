@@ -50,6 +50,7 @@ export default function ShipmentCancellationPanel({
   }
 
   if (cancellation) {
+    const legacyCreditOnly = cancellation.financialTreatment === "LEGACY_CREDIT_NO_SETTLEMENT";
     const statusTone = cancellation.status === "COMPLETED"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
       : cancellation.status === "REJECTED"
@@ -60,7 +61,7 @@ export default function ShipmentCancellationPanel({
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
           <div>
             <h2 className="font-semibold text-slate-950">Shipment Cancellation</h2>
-            <p className="mt-1 text-sm text-slate-500">Swiftline review, refund, and financial document history.</p>
+            <p className="mt-1 text-sm text-slate-500">Cancellation, refund, and financial document history.</p>
           </div>
           <span className={"border px-2.5 py-1 text-xs rounded-4xl font-semibold uppercase " + statusTone}>
             {cancellation.status}
@@ -81,7 +82,9 @@ export default function ShipmentCancellationPanel({
         </div>
         {cancellation.status === "REQUESTED" ? (
           <div className="border-t border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
-            Amendments and shipment progression are paused while Swiftline reviews this request.
+            {legacyCreditOnly
+              ? "This legacy credit-ledger shipment will be cancelled without a refund, wallet credit, fee, or financial documents. Its historical invoice and statement will remain unchanged."
+              : "Amendments and shipment progression are paused while Swiftline reviews this request."}
           </div>
         ) : null}
         {cancellation.status === "REJECTED" && cancellation.reviewNote ? (
@@ -90,7 +93,11 @@ export default function ShipmentCancellationPanel({
           </div>
         ) : null}
         {cancellation.status === "COMPLETED" ? (
-          <div className="border-t border-slate-200 p-5">
+          legacyCreditOnly ? (
+            <div className="border-t border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-950">
+              This legacy credit-ledger shipment was cancelled without a refund, wallet credit, fee, or financial documents. Its historical invoice and statement were left unchanged.
+            </div>
+          ) : <div className="border-t border-slate-200 p-5">
             <div className="grid gap-4 lg:grid-cols-2">
               <DocumentActions
                 title="Invoice cancellation adjustment"
