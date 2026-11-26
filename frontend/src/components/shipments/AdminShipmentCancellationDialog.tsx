@@ -50,14 +50,25 @@ export default function AdminShipmentCancellationDialog({
   });
 
   const amounts = useMemo(
-    () => calculateCancellationFeeAmounts(preview.originalAmountMinor, preview.taxTreatment, feeRupees),
-    [preview.originalAmountMinor, preview.taxTreatment, feeRupees]
+    () => preview.legacyCreditOnly
+      ? {
+          requestedBaseMinor: 0,
+          feeBaseMinor: 0,
+          feeGstMinor: 0,
+          feeTotalMinor: 0,
+          refundMinor: 0,
+          capped: false
+        }
+      : calculateCancellationFeeAmounts(preview.originalAmountMinor, preview.taxTreatment, feeRupees),
+    [preview.originalAmountMinor, preview.taxTreatment, preview.legacyCreditOnly, feeRupees]
   );
   const manualRefundRequired = Boolean(amounts?.refundMinor && preview.manualRefundSource);
   const trimmedReason = reason.trim();
   const trimmedFeeReason = feeReason.trim();
   const feeReasonRequired = Boolean(
-    amounts && amounts.requestedBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR
+    !preview.legacyCreditOnly
+    && amounts
+    && amounts.requestedBaseMinor > DEFAULT_CANCELLATION_FEE_BASE_MINOR
   );
   const refundReferenceRequired = manualRefundRequired && refundMethod !== "CASH";
   const canSubmit = Boolean(amounts)
@@ -79,8 +90,8 @@ export default function AdminShipmentCancellationDialog({
       : undefined;
     await onSubmit({
       reason: trimmedReason,
-      feeBaseMinor: amounts.requestedBaseMinor,
-      feeReason: feeReasonRequired ? trimmedFeeReason : "",
+      feeBaseMinor: preview.legacyCreditOnly ? 0 : amounts.requestedBaseMinor,
+      feeReason: !preview.legacyCreditOnly && feeReasonRequired ? trimmedFeeReason : "",
       carrierConfirmed: true,
       settlementConfirmed: true,
       carrierReference: carrierReference.trim(),
@@ -120,10 +131,13 @@ export default function AdminShipmentCancellationDialog({
         <form onSubmit={(event) => void submit(event)}>
           <div className="space-y-4 px-5 py-4">
             <p id="direct-cancellation-summary" className="text-sm leading-6 text-slate-600">
-              Direct cancellation is available only before Warehouse Scan In. Confirm the carrier cancellation and review the settlement below. The portal refunds the original payment method or records an offline refund for cash and staff-paid bookings.
+              {preview.legacyCreditOnly
+                ? "This legacy credit-ledger shipment will be cancelled operationally only. No refund, wallet credit, cancellation fee, or financial document will be created, and historical invoices and statements will remain unchanged."
+                : "Staff can cancel a shipment after Warehouse Scan In, but not after delivery, return, loss, or damage. Confirm the carrier cancellation and review the settlement below. The portal refunds the original payment method or records an offline refund for cash and staff-paid bookings."}
             </p>
 
             <div className="grid gap-3 sm:grid-cols-2">
+              {!preview.legacyCreditOnly ? (
               <label className="block text-sm font-semibold text-slate-700">
                 Cancellation fee before GST (INR)
                 <input
@@ -143,6 +157,7 @@ export default function AdminShipmentCancellationDialog({
                   Defaults to ₹700. Enter ₹0 or more; fees above ₹700 need a reason.
                 </span>
               </label>
+              ) : null}
 
               <label className="block text-sm font-semibold text-slate-700">
                 Carrier cancellation reference <span className="font-normal text-slate-500">(optional)</span>
@@ -156,7 +171,7 @@ export default function AdminShipmentCancellationDialog({
               </label>
             </div>
 
-            {feeReasonRequired ? (
+            {!preview.legacyCreditOnly && feeReasonRequired ? (
               <label className="block text-sm font-semibold text-slate-700">
                 Reason for fee above ₹700 <span className="text-red-600">*</span>
                 <textarea
@@ -172,7 +187,7 @@ export default function AdminShipmentCancellationDialog({
               </label>
             ) : null}
 
-            <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-slate-200 bg-white sm:grid-cols-4">
+            {!preview.legacyCreditOnly ? <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-slate-200 bg-white sm:grid-cols-4">
               <Amount
                 label={preview.taxTreatment === "NO_GST" ? "Cancellation fee" : "Fee before GST"}
                 amountMinor={amounts?.feeBaseMinor ?? null}
@@ -183,7 +198,7 @@ export default function AdminShipmentCancellationDialog({
               />
               <Amount label="Fee total" amountMinor={amounts?.feeTotalMinor ?? null} />
               <Amount label="Refundable" amountMinor={amounts?.refundMinor ?? null} emphasis />
-            </div>
+            </div> : null}
             {amounts?.capped ? (
               <p className="text-xs leading-5 text-slate-600">The fee and applicable GST exceed the shipment total, so the fee is capped at the amount paid.</p>
             ) : null}
@@ -254,7 +269,9 @@ export default function AdminShipmentCancellationDialog({
                   onChange={(event) => setSettlementConfirmed(event.target.checked)}
                   className="mt-0.5 size-4 shrink-0 accent-[#0D1282]"
                 />
-                <span>I reviewed the fee and refund amount above and confirm the settlement.</span>
+                <span>{preview.legacyCreditOnly
+                  ? "I confirm no refund, credit, fee, or financial document will be issued."
+                  : "I reviewed the fee and refund amount above and confirm the settlement."}</span>
               </label>
             </div>
 

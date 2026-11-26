@@ -14,14 +14,19 @@ import {
   type ShipmentCancellationStatus
 } from "../models/shipmentCancellation.model.js";
 import { ShipmentCreditNote } from "../models/shipmentCreditNote.model.js";
+import { ShipmentCharge } from "../models/shipmentCharge.model.js";
+import { ShipmentFunding } from "../models/shipmentFunding.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
 import { suspensionMode } from "../services/businessAccountSuspension.service.js";
+import { getTenantContext } from "../services/tenantScope.service.js";
 import { dateRangeCondition, dateRangeParams } from "../utils/dateRangeFilter.js";
+import { canAccessBranch } from "../middleware/branchAccess.middleware.js";
 import {
   approveShipmentCancellation,
   cancelShipmentDirectly,
   getShipmentCancellation,
   getShipmentCancellationPreview,
+  isLegacyCreditOnlyFunding,
   rejectShipmentCancellation,
   requestShipmentCancellation,
   serializeShipmentCancellation,
@@ -80,6 +85,18 @@ function objectId(value: unknown) {
     : null;
 }
 
+async function loadStaffShipmentDraft(request: Request, draftId: mongoose.Types.ObjectId) {
+  const tenantContext = getTenantContext();
+  const draft = await ShipmentDraft.findOne({
+    _id: draftId,
+    ...(tenantContext ? { tenantId: tenantContext.tenantId } : {})
+  }).select("branchId").lean().exec();
+  if (!draft) return null;
+  const role = (request as Request & { user?: { role?: string } }).user?.role;
+  if (role !== "admin" && !canAccessBranch(request, draft.branchId)) return null;
+  return draft;
+}
+
 async function clientMembershipForDraft(currentUserId: mongoose.Types.ObjectId, draftId: mongoose.Types.ObjectId) {
   const draft = await ShipmentDraft.findById(draftId).select("businessAccountId branchId").lean().exec();
   if (!draft) return null;
@@ -122,7 +139,7 @@ export async function getClientShipmentCancellation(request: Request, response: 
 
 export async function getAdminShipmentCancellation(request: Request, response: Response): Promise<Response> {
   const draftId = objectId(request.params.draftId);
-  if (!draftId || !await ShipmentDraft.exists({ _id: draftId })) {
+  if (!draftId || !await loadStaffShipmentDraft(request, draftId)) {
     return response.status(404).json({ success: false, message: "Shipment not found." });
   }
   return response.status(200).json({ success: true, canRequest: true, cancellation: await getShipmentCancellation(draftId) });
@@ -130,7 +147,9 @@ export async function getAdminShipmentCancellation(request: Request, response: R
 
 export async function getAdminShipmentCancellationPreview(request: Request, response: Response): Promise<Response> {
   const draftId = objectId(request.params.draftId);
-  if (!draftId) return response.status(404).json({ success: false, message: "Shipment not found." });
+  if (!draftId || !await loadStaffShipmentDraft(request, draftId)) {
+    return response.status(404).json({ success: false, message: "Shipment not found." });
+  }
   try {
     const preview = await getShipmentCancellationPreview(draftId);
     return response.status(200).json({ success: true, preview });
@@ -178,7 +197,9 @@ export async function requestClientShipmentCancellation(request: Request, respon
 export async function requestAdminShipmentCancellation(request: Request, response: Response): Promise<Response> {
   const currentUserId = userId(request);
   const draftId = objectId(request.params.draftId);
-  if (!currentUserId || !draftId) return response.status(404).json({ success: false, message: "Shipment not found." });
+  if (!currentUserId || !draftId || !await loadStaffShipmentDraft(request, draftId)) {
+    return response.status(404).json({ success: false, message: "Shipment not found." });
+  }
   const parsed = requestSchema.safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ success: false, message: parsed.error.issues[0]?.message ?? "Cancellation reason is invalid." });
@@ -200,7 +221,13 @@ export async function requestAdminShipmentCancellation(request: Request, respons
 export async function cancelAdminShipmentDirectly(request: Request, response: Response): Promise<Response> {
   const currentUserId = userId(request);
   const draftId = objectId(request.params.draftId);
-  if (!currentUserId || !draftId) return response.status(404).json({ success: false, message: "Shipment not found." });
+  const requesterRole = (request as Request & { user?: { role?: unknown } }).user?.role;
+  if (
+    !currentUserId
+    || !draftId
+    || (requesterRole !== "admin" && requesterRole !== "operations")
+    || !await loadStaffShipmentDraft(request, draftId)
+  ) return response.status(404).json({ success: false, message: "Shipment not found." });
   const parsed = directCancellationSchema.safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({
@@ -212,6 +239,7 @@ export async function cancelAdminShipmentDirectly(request: Request, response: Re
     const result = await cancelShipmentDirectly({
       shipmentDraftId: draftId,
       requestedBy: currentUserId,
+      requesterRole,
       ...parsed.data
     });
     return response.status(result.completed ? 200 : 202).json({
@@ -245,19 +273,24 @@ export async function listShipmentCancellations(request: Request, response: Resp
     .limit(limit)
     .exec();
   const draftIds = cancellations.map((item) => item.shipmentDraftId);
-  const [drafts, shipments, branches, accounts] = await Promise.all([
+  const [drafts, shipments, branches, accounts, charges, fundings] = await Promise.all([
     ShipmentDraft.find({ _id: { $in: draftIds } })
       .select("consigneeEnteredAddress businessAccountId branchId customerType consignorAddress.contactName")
       .lean()
       .exec(),
     DpdShipment.find({ shipmentDraftId: { $in: draftIds } }).select("shipmentDraftId dpdShipmentId swiftlineTrackingNumber paymentSource").lean().exec(),
     Branch.find({ _id: { $in: cancellations.map((item) => item.branchId) } }).select("name code").lean().exec(),
-    BusinessAccount.find({ _id: { $in: cancellations.map((item) => item.businessAccountId) } }).select("accountId company.companyName").lean().exec()
+    BusinessAccount.find({ _id: { $in: cancellations.map((item) => item.businessAccountId) } }).select("accountId company.companyName").lean().exec(),
+    ShipmentCharge.find({ shipmentDraftId: { $in: draftIds } }).select("shipmentDraftId paymentSource").lean().exec(),
+    ShipmentFunding.find({ shipmentDraftId: { $in: draftIds } }).select("shipmentDraftId source").lean().exec()
   ]);
   const draftMap = new Map(drafts.map((item) => [String(item._id), item]));
   const shipmentMap = new Map(shipments.map((item) => [String(item.shipmentDraftId), item]));
   const branchMap = new Map(branches.map((item) => [String(item._id), item]));
   const accountMap = new Map(accounts.map((item) => [String(item._id), item]));
+  const chargeMap = new Map(charges.map((item) => [String(item.shipmentDraftId), item]));
+  const fundingMap = new Map(fundings.map((item) => [String(item.shipmentDraftId), item]));
+  const tenantContext = getTenantContext();
   return response.status(200).json({
     success: true,
     cancellations: cancellations.map((item) => {
@@ -265,9 +298,15 @@ export async function listShipmentCancellations(request: Request, response: Resp
       const shipment = shipmentMap.get(String(item.shipmentDraftId));
       const branch = branchMap.get(String(item.branchId));
       const account = accountMap.get(String(item.businessAccountId));
+      const charge = chargeMap.get(String(item.shipmentDraftId));
+      const funding = fundingMap.get(String(item.shipmentDraftId));
       const isIndividual = draft?.customerType === "INDIVIDUAL";
       return {
-        ...serializeShipmentCancellation(item),
+        ...serializeShipmentCancellation(item, isLegacyCreditOnlyFunding({
+          tenantKind: tenantContext?.kind,
+          chargePaymentSource: charge?.paymentSource,
+          fundingSource: funding?.source
+        }) ? "LEGACY_CREDIT_NO_SETTLEMENT" : item.financialTreatment),
         customerType: draft?.customerType ?? "BUSINESS",
         paymentSource: shipment?.paymentSource ?? "",
         shipmentReference: shipment?.swiftlineTrackingNumber || "AWB Pending",
@@ -310,7 +349,9 @@ export async function approveCancellationRequest(request: Request, response: Res
     });
     return response.status(200).json({
       success: true,
-      message: "Shipment cancellation completed and financial documents generated.",
+      message: cancellation.financialTreatment === "LEGACY_CREDIT_NO_SETTLEMENT"
+        ? "Legacy credit shipment cancelled without refund, credit, fee, or financial-document changes."
+        : "Shipment cancellation completed and financial documents generated.",
       cancellation: serializeShipmentCancellation(cancellation)
     });
   } catch (error) {

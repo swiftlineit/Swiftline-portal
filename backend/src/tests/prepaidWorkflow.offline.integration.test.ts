@@ -676,6 +676,7 @@ test("legacy wallet cancellations require a manual refund before the invoice is 
   const directCancellation = {
     shipmentDraftId: f.draft._id as mongoose.Types.ObjectId,
     requestedBy: staffId,
+    requesterRole: "admin" as const,
     reason: "Cancel legacy wallet shipment",
     feeBaseMinor: 0,
     feeReason: "",

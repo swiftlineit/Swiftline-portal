@@ -3,11 +3,35 @@ import { describe, test } from "node:test";
 import {
   calculateCancellationAmounts,
   calculateCancellationSettlement,
-  getCancellationEligibility
+  getCancellationEligibility,
+  isLegacyCreditOnlyFunding
 } from "../services/shipmentCancellation.service.js";
 import { getOperatorCancellationEligibility } from "../services/operatorShipmentCancellationPolicy.service.js";
 
 describe("shipment cancellation financial rules", () => {
+  test("classifies only Swiftline BUSINESS_ACCOUNT charges without funding records as legacy credit", () => {
+    assert.equal(isLegacyCreditOnlyFunding({
+      tenantKind: "SWIFTLINE",
+      chargePaymentSource: "BUSINESS_ACCOUNT",
+      fundingSource: null
+    }), true);
+    assert.equal(isLegacyCreditOnlyFunding({
+      tenantKind: "SWIFTLINE",
+      chargePaymentSource: "BUSINESS_ACCOUNT",
+      fundingSource: "PREPAID"
+    }), false);
+    assert.equal(isLegacyCreditOnlyFunding({
+      tenantKind: "OPERATOR",
+      chargePaymentSource: "BUSINESS_ACCOUNT",
+      fundingSource: null
+    }), false);
+    assert.equal(isLegacyCreditOnlyFunding({
+      tenantKind: "SWIFTLINE",
+      chargePaymentSource: "DIRECT_RAZORPAY",
+      fundingSource: null
+    }), false);
+  });
+
   test("a zero fee preserves the full booked amount as refundable", () => {
     assert.deepEqual(calculateCancellationAmounts(100_000, 0), {
       feeBaseMinor: 0,
@@ -53,19 +77,33 @@ describe("shipment cancellation financial rules", () => {
 });
 
 describe("cancellation eligibility stays separate by tenant workflow", () => {
-  test("Swiftline retains its collection and warehouse restrictions", () => {
+  test("clients retain their collection restriction while staff can cancel post-warehouse", () => {
+    assert.equal(getCancellationEligibility({
+      requesterType: "CLIENT",
+      hasBooked: true,
+      hasParcelCollectedOrLater: false,
+      hasTerminalStatus: false,
+      alreadyCancelled: false
+    }).allowed, true);
     assert.equal(getCancellationEligibility({
       requesterType: "CLIENT",
       hasBooked: true,
       hasParcelCollectedOrLater: true,
-      hasWarehouseScanOrLater: true,
+      hasTerminalStatus: false,
       alreadyCancelled: false
     }).allowed, false);
     assert.equal(getCancellationEligibility({
       requesterType: "ADMIN",
       hasBooked: true,
       hasParcelCollectedOrLater: true,
-      hasWarehouseScanOrLater: true,
+      hasTerminalStatus: false,
+      alreadyCancelled: false
+    }).allowed, true);
+    assert.equal(getCancellationEligibility({
+      requesterType: "ADMIN",
+      hasBooked: true,
+      hasParcelCollectedOrLater: true,
+      hasTerminalStatus: true,
       alreadyCancelled: false
     }).allowed, false);
   });

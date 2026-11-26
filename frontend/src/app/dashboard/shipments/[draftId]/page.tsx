@@ -212,15 +212,11 @@ function hasMovedPastParcelCollected(history: DpdShipmentHistoryItem | null) {
   return Boolean(history?.events.some((event) => blockedStatuses.has(event.status)));
 }
 
-function hasReachedWarehouse(history: DpdShipmentHistoryItem | null) {
-  const blockedStatuses = new Set([
-    "WAREHOUSE_SCAN_IN", "ORIGIN_HUB_PROCESSED", "READY_FOR_EXPORT", "ORIGIN_HUB_DISPATCHED",
-    "EXPORT_CUSTOMS_CLEARED", "FLIGHT_ASSIGNED", "FLIGHT_DEPARTED", "DESTINATION_ARRIVED",
-    "IMPORT_CUSTOMS_CLEARANCE", "IMPORT_CUSTOMS_CLEARED", "DELIVERY_PARTNER_TRANSFERRED",
-    "DELIVERY_HUB_ARRIVED", "OUT_FOR_DELIVERY", "DELIVERED",
-    "RETURNED", "LOST", "DAMAGED"
+function hasTerminalCancellationStatus(history: DpdShipmentHistoryItem | null) {
+  const terminalStatuses = new Set([
+    "SHIPMENT_CANCELLED", "DELIVERED", "RETURNED", "LOST", "DAMAGED"
   ]);
-  return Boolean(history?.events.some((event) => blockedStatuses.has(event.status)));
+  return Boolean(history?.events.some((event) => terminalStatuses.has(event.status)));
 }
 
 export default function AdminShipmentDetailsPage() {
@@ -1137,9 +1133,9 @@ export default function AdminShipmentDetailsPage() {
 
             <ShipmentCancellationPanel
               cancellation={cancellation}
-              canRequest={Boolean(history?.dpdShipment) && !hasReachedWarehouse(history)}
+              canRequest={Boolean(history?.dpdShipment) && !hasTerminalCancellationStatus(history)}
               blockedReason={history?.dpdShipment
-                ? "Admin cancellation is blocked after Warehouse Scan In."
+                ? "Delivered, returned, lost, damaged, or already-cancelled shipments cannot be cancelled."
                 : "Shipment must be booked before cancellation can be requested."}
               audience="admin"
               busy={cancellationBusy}
