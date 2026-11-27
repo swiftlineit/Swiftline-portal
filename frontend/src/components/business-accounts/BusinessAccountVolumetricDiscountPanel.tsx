@@ -68,74 +68,76 @@ export default function BusinessAccountVolumetricDiscountPanel({
     }
   }
 
-  return (
-    <section id="business-volumetric-discount-panel" role="tabpanel" aria-labelledby="business-volumetric-discount-tab" className="space-y-5">
-      <div className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-        <div className="flex items-start gap-3">
-          <span className="rounded-lg bg-blue-50 p-2.5 text-blue-900"><FiPercent aria-hidden="true" className="h-5 w-5" /></span>
-          <div>
-            <h2 className="text-base font-semibold text-slate-950">Volumetric excess discount</h2>
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-              This discount applies only to volumetric weight above actual weight. Actual weight stays fully chargeable, and the saved percentage is applied by the server to future shipment prices for this business account.
-            </p>
-          </div>
-        </div>
+  const fieldClass = "min-w-0 rounded-lg border-2 border-slate-700 px-3 pb-1 focus-within:border-blue-900";
+  const legendClass = "ml-3 px-2 text-xs font-semibold leading-4 text-slate-700";
+  const inputClass = "h-10 w-full min-w-0 bg-transparent px-1 text-base font-semibold tabular-nums text-slate-950 outline-none disabled:text-slate-500";
 
-        <form onSubmit={saveDiscount} className="mt-5 flex flex-wrap items-end gap-3 border-t border-slate-100 pt-5">
-          <label className="block w-full max-w-xs">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Discount on excess volumetric weight</span>
-            <span className="relative mt-1.5 block">
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.01"
-                inputMode="decimal"
-                value={percent}
-                onChange={(event) => changePercent(event.target.value)}
-                disabled={!canEdit || saving}
-                aria-label="Volumetric excess discount percentage"
-                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 pr-9 text-sm font-semibold text-slate-950 outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-900/10 disabled:bg-slate-50 disabled:text-slate-500"
-              />
-              <span aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">%</span>
-            </span>
-          </label>
+  return (
+    <section id="business-volumetric-discount-panel" role="tabpanel" aria-labelledby="business-volumetric-discount-tab" className="max-w-3xl rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
+      <div>
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950">
+            <FiPercent aria-hidden="true" className="h-4 w-4 shrink-0 text-blue-900" />
+            Volumetric excess discount
+          </h2>
+          {account.volumetricDiscountUpdatedAt ? (
+            <p className="text-sm font-semibold text-green-700">Last updated {formatDashboardDateTime(account.volumetricDiscountUpdatedAt)}</p>
+          ) : null}
+        </div>
+        <p className="mt-3 text-sm leading-6 text-slate-600">
+          This discount applies only to volumetric weight above actual weight. Actual weight stays fully chargeable, and the saved percentage is applied by the server to future shipment prices for this business account.
+        </p>
+
+        <form onSubmit={saveDiscount} className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem] sm:gap-4">
+          <fieldset className={`${fieldClass} ${canEdit ? "" : "bg-slate-50"}`}>
+            <legend className={legendClass}>Discount %</legend>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              inputMode="decimal"
+              value={percent}
+              onChange={(event) => changePercent(event.target.value)}
+              disabled={!canEdit || saving}
+              aria-label="Volumetric excess discount percentage"
+              className={inputClass}
+            />
+          </fieldset>
           {canEdit ? (
-            <button type="submit" disabled={saving || !validPercent} className="inline-flex h-11 items-center justify-center rounded-lg bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="submit" disabled={saving || !validPercent} className="inline-flex min-h-12 items-center justify-center rounded-lg bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:mt-2">
               {saving ? "Saving…" : "Save discount"}
             </button>
-          ) : <p className="pb-2 text-sm text-slate-500">Only admin and operations users can change this discount.</p>}
-          {account.volumetricDiscountUpdatedAt ? (
-            <p className="pb-2 text-xs text-slate-500">Last updated {formatDashboardDateTime(account.volumetricDiscountUpdatedAt)}</p>
-          ) : null}
+          ) : <p className="self-center text-sm text-slate-500 sm:pt-2">Only admin and operations users can change this discount.</p>}
         </form>
-      </div>
 
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 sm:p-6">
-        <div>
+        <div className="mt-8">
           <h3 className="text-sm font-semibold text-slate-950">Try an example</h3>
           <p className="mt-1 text-sm text-slate-600">Change the sample weights to preview the adjusted chargeable weight.</p>
         </div>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(15rem,1.2fr)] lg:items-end">
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Actual weight</span>
-            <span className="relative mt-1.5 block"><input type="number" min="0" step="0.01" value={actualWeight} onChange={(event) => setActualWeight(event.target.value)} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-950" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">kg</span></span>
-          </label>
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Volumetric weight</span>
-            <span className="relative mt-1.5 block"><input type="number" min="0" step="0.01" value={volumetricWeight} onChange={(event) => setVolumetricWeight(event.target.value)} className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-950" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">kg</span></span>
-          </label>
-          <div className="rounded-lg border border-blue-200 bg-white px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Chargeable weight after discount</p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums text-blue-950">{formatKg(previewWeight)}</p>
-            <p className="mt-1 text-xs leading-5 text-slate-600">
-              {volumeExcessKg > 0
-                ? `${formatKg(volumeExcessKg)} excess · ${formatKg(discountedExcessKg)} discounted at ${previewPercent}%`
-                : "No volumetric excess to discount; actual weight applies."}
-            </p>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_12rem]">
+          <div className="grid min-w-0 gap-3">
+            <fieldset className={fieldClass}>
+              <legend className={legendClass}>Actual weight</legend>
+              <label className="flex items-center gap-2">
+                <input type="number" min="0" step="0.01" value={actualWeight} onChange={(event) => setActualWeight(event.target.value)} aria-label="Actual weight" className={inputClass} />
+                <span className="text-sm text-slate-500">kg</span>
+              </label>
+            </fieldset>
+            <fieldset className={fieldClass}>
+              <legend className={legendClass}>Volumetric weight</legend>
+              <label className="flex items-center gap-2">
+                <input type="number" min="0" step="0.01" value={volumetricWeight} onChange={(event) => setVolumetricWeight(event.target.value)} aria-label="Volumetric weight" className={inputClass} />
+                <span className="text-sm text-slate-500">kg</span>
+              </label>
+            </fieldset>
+          </div>
+          <div aria-live="polite" className="flex flex-col justify-center rounded-lg border-2 border-slate-700 p-4 sm:mt-2">
+            <p className="break-words text-3xl font-semibold tabular-nums text-slate-950">{formatKg(previewWeight)}</p>
+            <p className="mt-3 text-sm font-medium leading-5 text-slate-600">Chargeable weight after discount</p>
           </div>
         </div>
-        <p className="mt-4 text-xs leading-5 text-slate-500">Example: 20 kg actual, 25 kg volumetric, and 50% off the 5 kg excess gives 22.5 kg chargeable. Accounts with no discount keep the existing whole-kilogram rounding.</p>
       </div>
     </section>
   );

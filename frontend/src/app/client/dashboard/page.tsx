@@ -294,7 +294,7 @@ export default function ClientDashboardPage() {
           <>
             <ClientRateCardNotice account={selectedAccount} />
 
-            <ClientBookingCapacityNotice />
+            {/* <ClientBookingCapacityNotice /> */}
 
 
 

@@ -41,6 +41,7 @@ import { cancelShipmentDirectly, getShipmentCancellationPreview } from "../servi
 import { reserveShipmentBookingCharge } from "../services/shipmentBookingBilling.service.js";
 import { createLabelForShipmentDraft } from "../services/dpdShipment.service.js";
 import { saveCashReceiptDraft, finalizeCashReceiptForBooking } from "../services/prepaid/cashReceipts.service.js";
+import { createStandaloneCashReceipt } from "../services/prepaid/standaloneCashReceipts.service.js";
 import { buildPricingHash } from "../services/shipmentCostEstimate.service.js";
 import { buildPricingInputFromDraft, calculateShipmentPricingEstimate } from "../services/shipmentPricing.service.js";
 import type { ShipmentPricingEstimate } from "../services/shipmentPricing.service.js";
@@ -463,6 +464,40 @@ test("a staff cash receipt funds a business booking and appears in the payments 
   assert.equal(cashRows[0]?.amountMinor, f.amountMinor);
   assert.equal(ledger.transactions.some((row) => row.reference === "STANDALONE-LEGACY"), false);
   assert.equal(ledger.transactions.some((row) => row.transactionType === "STANDALONE_CASH_RECEIPT"), false);
+}));
+
+test("standalone cash receipts support manual entry with an editable phone number", () => root(async () => {
+  // Booking fixtures ensure the test branch exists without coupling this test
+  // to an account-based receipt.
+  await bookingFixture();
+  const input = {
+    idempotencyKey: `manual-receipt-${crypto.randomUUID()}`,
+    branchId,
+    staffUserId: staffId,
+    customerName: "Walk-in Customer",
+    mobileNumber: "+91 98765 43210",
+    receiptDate: new Date("2026-11-27T12:00:00+05:30"),
+    amountMinor: 12_345,
+    paymentReference: "CASH-MANUAL-1"
+  };
+
+  const first = await createStandaloneCashReceipt(input);
+  assert.equal(first.created, true);
+  assert.equal(first.receipt.customerType, "INDIVIDUAL");
+  assert.equal(first.receipt.businessAccountId ?? null, null);
+  assert.equal(first.receipt.accountIdSnapshot, "");
+  assert.equal(first.receipt.businessMobileNumberSnapshot, "+91 98765 43210");
+
+  const duplicate = await createStandaloneCashReceipt(input);
+  assert.equal(duplicate.created, false);
+  assert.equal(String(duplicate.receipt._id), String(first.receipt._id));
+
+  // The phone is part of the receipt snapshot, so a retry with a different
+  // phone must not silently return the earlier receipt.
+  await assert.rejects(
+    () => createStandaloneCashReceipt({ ...input, mobileNumber: "+91 11111 11111" }),
+    /already used for different details/
+  );
 }));
 
 test("direct payment refunds are cumulative, idempotent and reject over-refunds", () => root(async () => {

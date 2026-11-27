@@ -13,11 +13,14 @@ import { serializeCashReceipt } from "./cashReceipt.controller.js";
 type CashReceiptFilter = QueryFilter<ICashReceipt>;
 
 const createSchema = z.object({
-  businessAccountId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid business account."),
+  // Manual receipts omit the account; the branch is still required because
+  // every standalone receipt is scoped to the branch that collected the cash.
+  businessAccountId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid business account.").optional(),
   branchId: z.string().refine((value) => mongoose.Types.ObjectId.isValid(value), "Select a valid branch."),
   customerName: z.string().trim().min(1).max(200),
   gstin: z.string().trim().max(15).optional().default(""),
   address: z.string().trim().max(500).optional().default(""),
+  mobileNumber: z.string().trim().max(32).optional().default(""),
   receiptDate: z.iso.date(),
   amountMinor: z.number().int().positive(),
   paymentReference: z.string().trim().min(2).max(160),
@@ -94,25 +97,30 @@ export async function createStandaloneCashReceiptHandler(request: Request, respo
   const idempotencyKey = request.header("Idempotency-Key")?.trim() ?? "";
   if (!idempotencyKey || idempotencyKey.length > 128) return response.status(400).json({ success: false, message: "A valid receipt request reference is required." });
 
-  const businessAccountId = new mongoose.Types.ObjectId(parsed.data.businessAccountId);
   const branchId = new mongoose.Types.ObjectId(parsed.data.branchId);
-  if (!canAccessBranch(request, branchId)) return response.status(404).json({ success: false, message: "Business account was not found." });
+  if (!canAccessBranch(request, branchId)) return response.status(404).json({ success: false, message: "Branch was not found." });
+  const businessAccountId = parsed.data.businessAccountId
+    ? new mongoose.Types.ObjectId(parsed.data.businessAccountId)
+    : null;
   const tenantId = await currentTenantId();
-  const account = await BusinessAccount.findOne({ _id: businessAccountId, tenantId, assignedBranch: branchId })
-    .select("_id")
-    .lean()
-    .exec();
-  if (!account) return response.status(404).json({ success: false, message: "Business account was not found." });
+  if (businessAccountId) {
+    const account = await BusinessAccount.findOne({ _id: businessAccountId, tenantId, assignedBranch: branchId })
+      .select("_id")
+      .lean()
+      .exec();
+    if (!account) return response.status(404).json({ success: false, message: "Business account was not found." });
+  }
 
   try {
     const result = await createStandaloneCashReceipt({
       idempotencyKey,
-      businessAccountId,
+      ...(businessAccountId ? { businessAccountId } : {}),
       branchId,
       staffUserId,
       customerName: parsed.data.customerName,
       gstin: parsed.data.gstin,
       address: parsed.data.address,
+      mobileNumber: parsed.data.mobileNumber,
       receiptDate: new Date(`${parsed.data.receiptDate}T12:00:00+05:30`),
       amountMinor: parsed.data.amountMinor,
       paymentReference: parsed.data.paymentReference,
@@ -163,13 +171,14 @@ export async function exportStandaloneCashReceipts(request: Request, response: R
     ...(Object.keys(dateRange).length ? { receiptDate: dateRange as CashReceiptFilter["receiptDate"] } : {})
   };
   const receipts = await CashReceipt.find(filters).sort({ receiptDate: -1, createdAt: -1 }).limit(10_000).lean().exec();
-  const fields = ["Receipt", "Date", "Business account", "Received from", "Amount INR", "Payment reference", "Destination", "Service", "Pieces", "Weight kg", "Recorded by"];
+  const fields = ["Receipt", "Date", "Business account", "Received from", "Phone", "Amount INR", "Payment reference", "Destination", "Service", "Pieces", "Weight kg", "Recorded by"];
   const escape = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
   const rows = receipts.map((receipt) => [
     receipt.receiptNumber,
     receipt.receiptDate?.toISOString().slice(0, 10),
-    receipt.accountIdSnapshot,
+    receipt.businessAccountId ? receipt.accountIdSnapshot : "Manual",
     receipt.customerNameSnapshot,
+    receipt.businessMobileNumberSnapshot || "",
     (receipt.totalReceivedMinor / 100).toFixed(2),
     receipt.cashCustodyReference,
     receipt.destinationSnapshot,

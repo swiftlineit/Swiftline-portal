@@ -40,7 +40,8 @@ export function serializeCashReceipt(receipt: InstanceType<typeof CashReceipt>) 
     receiptType: receipt.receiptType ?? "SHIPMENT",
     status: receipt.status,
     customerType: receipt.customerType,
-    businessAccountId: String(receipt.businessAccountId),
+    // Manual standalone receipts have no linked account.
+    businessAccountId: receipt.businessAccountId ? String(receipt.businessAccountId) : null,
     branchId: String(receipt.branchId),
     shipmentDraftId: receipt.shipmentDraftId ? String(receipt.shipmentDraftId) : null,
     pricingHash: receipt.pricingHash,
@@ -56,6 +57,7 @@ export function serializeCashReceipt(receipt: InstanceType<typeof CashReceipt>) 
     customerName: receipt.customerNameSnapshot,
     gstin: receipt.gstinSnapshot || "",
     address: receipt.addressSnapshot || "",
+    mobileNumber: receipt.businessMobileNumberSnapshot || "",
     receiptDate: (receipt.receiptDate ?? receipt.issuedAt ?? receipt.createdAt).toISOString(),
     accountId: receipt.accountIdSnapshot,
     destination: receipt.destinationSnapshot,

@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { AuditLog } from "../../models/auditLog.model.js";
+import { Branch } from "../../models/branch.model.js";
 import { BusinessAccount } from "../../models/businessAccount.model.js";
 import { CashReceipt } from "../../models/cashReceipt.model.js";
 import { User } from "../../models/user.model.js";
@@ -8,12 +9,15 @@ import { getTenantContext, getTenantIdForWrite } from "../tenantScope.service.js
 
 export type StandaloneCashReceiptInput = {
   idempotencyKey: string;
-  businessAccountId: mongoose.Types.ObjectId;
+  // Omitted for walk-in/manual receipts. Account-based receipts keep the id so
+  // the receipt remains linked to the customer's ledger identity.
+  businessAccountId?: mongoose.Types.ObjectId | null;
   branchId: mongoose.Types.ObjectId;
   staffUserId: mongoose.Types.ObjectId;
   customerName: string;
   gstin?: string;
   address?: string;
+  mobileNumber?: string;
   receiptDate: Date;
   amountMinor: number;
   paymentReference: string;
@@ -24,12 +28,30 @@ export type StandaloneCashReceiptInput = {
   weightKg?: number;
 };
 
-function sameReceiptRequest(receipt: InstanceType<typeof CashReceipt>, input: StandaloneCashReceiptInput) {
-  return String(receipt.businessAccountId) === String(input.businessAccountId)
-    && String(receipt.branchId) === String(input.branchId)
+type ResolvedStandaloneDetails = {
+  businessAccountId: string;
+  branchId: string;
+  gstin: string;
+  address: string;
+  mobileNumber: string;
+};
+
+/**
+ * Idempotency checks compare the final snapshot, not the raw request, so an
+ * account-based retry with no explicit address/GSTIN/phone still matches the
+ * values that were auto-filled from the account on the first attempt.
+ */
+function sameReceiptRequest(
+  receipt: InstanceType<typeof CashReceipt>,
+  input: StandaloneCashReceiptInput,
+  resolved: ResolvedStandaloneDetails
+) {
+  return (receipt.businessAccountId ? String(receipt.businessAccountId) : "") === resolved.businessAccountId
+    && String(receipt.branchId) === resolved.branchId
     && receipt.customerNameSnapshot === input.customerName.trim()
-    && receipt.gstinSnapshot === (input.gstin?.trim().toUpperCase() ?? "")
-    && receipt.addressSnapshot === (input.address?.trim() ?? "")
+    && receipt.gstinSnapshot === resolved.gstin
+    && receipt.addressSnapshot === resolved.address
+    && (receipt.businessMobileNumberSnapshot ?? "") === resolved.mobileNumber
     && receipt.receiptDate.getTime() === input.receiptDate.getTime()
     && receipt.totalReceivedMinor === input.amountMinor
     && receipt.cashCustodyReference === input.paymentReference.trim()
@@ -52,17 +74,48 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
   if (getTenantContext()?.kind === "OPERATOR") throw new Error("Standalone cash receipts are only available in Swiftline Operations.");
 
   const tenantId = await getTenantIdForWrite();
-  const [account, staff] = await Promise.all([
-    BusinessAccount.findOne({
-      _id: input.businessAccountId,
-      tenantId,
-      assignedBranch: input.branchId,
-      accountKind: { $ne: "INDIVIDUAL_SENTINEL" }
-    }).select("accountId company.gstin company.registeredAddress company.addressLine2 company.city company.stateOrProvince company.postalCode company.addressCountry contact.countryCode contact.mobileNumber").lean().exec(),
-    User.findOne({ _id: input.staffUserId, userStatus: "active" }).select("name firstName lastName").lean().exec()
+  const [account, staff, branchExists] = await Promise.all([
+    input.businessAccountId
+      ? BusinessAccount.findOne({
+          _id: input.businessAccountId,
+          tenantId,
+          assignedBranch: input.branchId,
+          accountKind: { $ne: "INDIVIDUAL_SENTINEL" }
+        }).select("accountId company.gstin company.registeredAddress company.addressLine2 company.city company.stateOrProvince company.postalCode company.addressCountry contact.countryCode contact.mobileNumber").lean().exec()
+      : Promise.resolve(null),
+    User.findOne({ _id: input.staffUserId, userStatus: "active" }).select("name firstName lastName").lean().exec(),
+    // Manual receipts do not go through the account/branch pairing check, so
+    // verify the branch explicitly before writing a tenant-scoped receipt.
+    Branch.exists({ _id: input.branchId, tenantId }).exec()
   ]);
-  if (!account) throw new Error("Select an active business account assigned to this branch.");
+  if (input.businessAccountId && !account) throw new Error("Select an active business account assigned to this branch.");
+  if (!branchExists) throw new Error("Select a valid branch for this receipt.");
   if (!staff) throw new Error("The signed-in staff account could not be verified.");
+
+  const staffName = staff.name || `${staff.firstName ?? ""} ${staff.lastName ?? ""}`.trim() || "Swiftline Staff";
+  const accountMobileNumber = [account?.contact?.countryCode, account?.contact?.mobileNumber]
+    .filter((part): part is string => Boolean(part?.trim()))
+    .map((part) => part.trim())
+    .join(" ");
+  const accountGstin = account?.company?.gstin?.trim().toUpperCase() || "";
+  const accountAddress = [
+    account?.company?.registeredAddress,
+    account?.company?.addressLine2,
+    account?.company?.city,
+    account?.company?.stateOrProvince,
+    account?.company?.postalCode,
+    account?.company?.addressCountry
+  ].filter((part): part is string => Boolean(part?.trim())).map((part) => part.trim()).join(", ");
+  const gstin = input.gstin?.trim().toUpperCase() || accountGstin;
+  const address = input.address?.trim() || accountAddress;
+  const mobileNumber = input.mobileNumber?.trim() || accountMobileNumber;
+  const resolved: ResolvedStandaloneDetails = {
+    businessAccountId: input.businessAccountId ? String(input.businessAccountId) : "",
+    branchId: String(input.branchId),
+    gstin,
+    address,
+    mobileNumber
+  };
 
   const existing = await CashReceipt.findOne({
     tenantId,
@@ -70,26 +123,10 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
     standaloneIdempotencyKey: input.idempotencyKey.trim()
   }).exec();
   if (existing) {
-    if (!sameReceiptRequest(existing, input)) throw new Error("This receipt request reference was already used for different details.");
+    if (!sameReceiptRequest(existing, input, resolved)) throw new Error("This receipt request reference was already used for different details.");
     return { receipt: existing, created: false };
   }
 
-  const staffName = staff.name || `${staff.firstName ?? ""} ${staff.lastName ?? ""}`.trim() || "Swiftline Staff";
-  const businessMobileNumber = [account.contact?.countryCode, account.contact?.mobileNumber]
-    .filter((part): part is string => Boolean(part?.trim()))
-    .map((part) => part.trim())
-    .join(" ");
-  const accountGstin = account.company?.gstin?.trim().toUpperCase() || "";
-  const accountAddress = [
-    account.company?.registeredAddress,
-    account.company?.addressLine2,
-    account.company?.city,
-    account.company?.stateOrProvince,
-    account.company?.postalCode,
-    account.company?.addressCountry
-  ].filter((part): part is string => Boolean(part?.trim())).map((part) => part.trim()).join(", ");
-  const gstin = input.gstin?.trim().toUpperCase() || accountGstin;
-  const address = input.address?.trim() || accountAddress;
   const receiptId = new mongoose.Types.ObjectId();
   const receiptDateKey = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"
@@ -105,7 +142,7 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
         standaloneIdempotencyKey: input.idempotencyKey.trim()
       }).session(session).exec();
       if (competing) {
-        if (!sameReceiptRequest(competing, input)) throw new Error("This receipt request reference was already used for different details.");
+        if (!sameReceiptRequest(competing, input, resolved)) throw new Error("This receipt request reference was already used for different details.");
         receipt = competing;
         return;
       }
@@ -116,8 +153,8 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
         receiptType: "STANDALONE",
         standaloneIdempotencyKey: input.idempotencyKey.trim(),
         status: "FINALIZED",
-        customerType: "BUSINESS",
-        businessAccountId: input.businessAccountId,
+        customerType: input.businessAccountId ? "BUSINESS" : "INDIVIDUAL",
+        businessAccountId: input.businessAccountId ?? null,
         branchId: input.branchId,
         shipmentDraftId: null,
         activeShipmentKey: null,
@@ -128,11 +165,11 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
         allocations: [],
         unappliedAmountMinor: 0,
         customerNameSnapshot: input.customerName.trim(),
-        businessMobileNumberSnapshot: businessMobileNumber,
+        businessMobileNumberSnapshot: mobileNumber,
         gstinSnapshot: gstin,
         addressSnapshot: address,
         receiptDate: input.receiptDate,
-        accountIdSnapshot: account.accountId,
+        accountIdSnapshot: account?.accountId ?? "",
         destinationSnapshot: input.destination?.trim() ?? "",
         serviceSnapshot: input.service ?? "",
         piecesSnapshot: input.pieces ?? null,
@@ -160,7 +197,7 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
         performedAt: now,
         metadata: {
           receiptNumber: created.receiptNumber,
-          businessAccountId: input.businessAccountId,
+          businessAccountId: input.businessAccountId ?? null,
           branchId: input.branchId,
           amountMinor: input.amountMinor,
           standalone: true
@@ -174,7 +211,7 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
         receiptType: "STANDALONE",
         standaloneIdempotencyKey: input.idempotencyKey.trim()
       }).exec();
-      if (duplicate && sameReceiptRequest(duplicate, input)) return { receipt: duplicate, created: false };
+      if (duplicate && sameReceiptRequest(duplicate, input, resolved)) return { receipt: duplicate, created: false };
     }
     throw error;
   } finally {
@@ -193,7 +230,7 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
     title: "Standalone cash receipt recorded",
     message: `Cash receipt ${finalizedReceipt.receiptNumber} for INR ${(finalizedReceipt.totalReceivedMinor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} was recorded by ${staffName}.`,
     href: "/dashboard/cash-receipts",
-    businessAccountId: finalizedReceipt.businessAccountId,
+    businessAccountId: finalizedReceipt.businessAccountId ?? null,
     metadata: { cashReceiptId: String(finalizedReceipt._id), receiptNumber: finalizedReceipt.receiptNumber, standalone: true }
   };
   await Promise.allSettled([

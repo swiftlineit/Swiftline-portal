@@ -5,6 +5,7 @@ import { FiChevronDown, FiDownload, FiPlus, FiRefreshCw } from "react-icons/fi";
 import { toast } from "react-toastify";
 import { DashboardLoading } from "@/components/DashboardShell";
 import { listBusinessAccounts, type BusinessAccount } from "@/lib/businessAccounts";
+import { listBranches, type Branch } from "@/lib/branches";
 import {
   createStandaloneCashReceipt,
   downloadStandaloneCashReceipt,
@@ -43,14 +44,24 @@ function accountAddress(account: BusinessAccount) {
   ].filter((part): part is string => Boolean(part?.trim())).map((part) => part.trim()).join(", ");
 }
 
+function accountMobileNumber(account: BusinessAccount) {
+  return [account.contact?.countryCode, account.contact?.mobileNumber]
+    .filter((part): part is string => Boolean(part?.trim()))
+    .map((part) => part.trim())
+    .join(" ");
+}
+
 export default function StandaloneCashReceiptsPage() {
   const { user, loading: userLoading } = useAdminUser(OPERATIONS_AREA);
   const [accounts, setAccounts] = useState<BusinessAccount[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
   const [receipts, setReceipts] = useState<StandaloneCashReceipt[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [manualBranchId, setManualBranchId] = useState("");
   const [customerNameOverride, setCustomerNameOverride] = useState<string | null>(null);
   const [gstinOverride, setGstinOverride] = useState<string | null>(null);
   const [addressOverride, setAddressOverride] = useState<string | null>(null);
+  const [mobileNumberOverride, setMobileNumberOverride] = useState<string | null>(null);
   const [receiptDate, setReceiptDate] = useState(todayInIndia);
   const [amount, setAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
@@ -75,6 +86,19 @@ export default function StandaloneCashReceiptsPage() {
   const customerName = customerNameOverride ?? (selectedAccount ? accountLabel(selectedAccount) : "");
   const gstin = gstinOverride ?? (selectedAccount?.company.gstin?.trim().toUpperCase() ?? "");
   const address = addressOverride ?? (selectedAccount ? accountAddress(selectedAccount) : "");
+  const mobileNumber = mobileNumberOverride ?? (selectedAccount ? accountMobileNumber(selectedAccount) : "");
+
+  // Branch-scoped staff automatically use their assigned branch for manual
+  // receipts. Global admins have no assignment, so they choose from the
+  // branches the API returns for their session.
+  const assignedBranchIds = user?.assignedBranches ?? [];
+  const resolvedManualBranchId = manualBranchId || assignedBranchIds[0] || "";
+  const showManualBranchSelect = assignedBranchIds.length === 0;
+  const effectiveBranchId = selectedAccount ? accountBranchId(selectedAccount) : resolvedManualBranchId;
+  const branchName = branches.find((branch) => branch._id === effectiveBranchId)?.name
+    ?? (selectedAccount && selectedAccount.assignedBranch && typeof selectedAccount.assignedBranch !== "string"
+      ? selectedAccount.assignedBranch.name
+      : "");
 
   const fetchReceipts = useCallback(
     () => listStandaloneCashReceipts({ from: from || undefined, to: to || undefined, page, limit: 5 }),
@@ -112,6 +136,16 @@ export default function StandaloneCashReceiptsPage() {
 
   useEffect(() => {
     let active = true;
+    void listBranches()
+      .then((response) => { if (active) setBranches(response.branches); })
+      .catch((error: unknown) => {
+        if (active) toast.error(error instanceof Error ? error.message : "Branches could not be loaded.");
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
     void fetchReceipts()
       .then((response) => {
         if (!active) return;
@@ -130,8 +164,8 @@ export default function StandaloneCashReceiptsPage() {
 
   async function handleCreateReceipt(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedAccount) {
-      toast.error("Select a business account assigned to your branch.");
+    if (!effectiveBranchId) {
+      toast.error("Choose a branch for this receipt.");
       return;
     }
     const amountMinor = Math.round(Number(amount) * 100);
@@ -154,11 +188,12 @@ export default function StandaloneCashReceiptsPage() {
     try {
       const result = await createStandaloneCashReceipt({
         idempotencyKey: currentKey,
-        businessAccountId: selectedAccount._id,
-        branchId: accountBranchId(selectedAccount),
+        ...(selectedAccount ? { businessAccountId: selectedAccount._id } : {}),
+        branchId: effectiveBranchId,
         customerName,
         gstin: gstin.trim(),
         address: address.trim(),
+        mobileNumber: mobileNumber.trim(),
         receiptDate,
         amountMinor,
         paymentReference,
@@ -177,6 +212,7 @@ export default function StandaloneCashReceiptsPage() {
       setWeightKg("");
       setGstinOverride(null);
       setAddressOverride(null);
+      setMobileNumberOverride(null);
       setLoading(true);
       await loadReceipts();
     } catch (error) {
@@ -209,7 +245,6 @@ export default function StandaloneCashReceiptsPage() {
   }
 
   if (userLoading || !user) return <DashboardLoading />;
-  const branchId = selectedAccount ? accountBranchId(selectedAccount) : "";
 
   return (
     <div className="mx-auto max-w-8xl space-y-6">
@@ -234,12 +269,40 @@ export default function StandaloneCashReceiptsPage() {
             <label className="sm:col-span-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Business account</span>
               <div className="relative mt-1.5">
-                <select value={selectedAccountId} onChange={(event) => { setSelectedAccountId(event.target.value); setCustomerNameOverride(null); setGstinOverride(null); setAddressOverride(null); }} required className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-950">
+                <select
+                  value={selectedAccountId}
+                  onChange={(event) => {
+                    setSelectedAccountId(event.target.value);
+                    setCustomerNameOverride(null);
+                    setGstinOverride(null);
+                    setAddressOverride(null);
+                    setMobileNumberOverride(null);
+                  }}
+                  className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-950"
+                >
+                  <option value="">Manual entry (no business account)</option>
                   {accounts.map((account) => <option key={account._id} value={account._id}>{accountLabel(account)} ({account.accountId})</option>)}
                 </select>
                 <FiChevronDown aria-hidden="true" className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
               </div>
             </label>
+            {!selectedAccount && showManualBranchSelect ? (
+              <label className="sm:col-span-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Branch <span className="font-normal normal-case">(required for manual entry)</span></span>
+                <div className="relative mt-1.5">
+                  <select
+                    value={manualBranchId}
+                    onChange={(event) => setManualBranchId(event.target.value)}
+                    required
+                    className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-950"
+                  >
+                    <option value="">Select a branch</option>
+                    {branches.map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+                  </select>
+                  <FiChevronDown aria-hidden="true" className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                </div>
+              </label>
+            ) : null}
             <label>
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Received from</span>
               <input value={customerName} onChange={(event) => setCustomerNameOverride(event.target.value)} maxLength={200} required className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-950" />
@@ -247,6 +310,16 @@ export default function StandaloneCashReceiptsPage() {
             <label>
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">GSTIN <span className="font-normal normal-case">(optional)</span></span>
               <input value={gstin} onChange={(event) => setGstinOverride(event.target.value.toUpperCase())} maxLength={15} placeholder="e.g. 07ABPCS3159R1ZC" className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-950" />
+            </label>
+            <label>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Phone number <span className="font-normal normal-case">(optional)</span></span>
+              <input
+                value={mobileNumber}
+                onChange={(event) => setMobileNumberOverride(event.target.value)}
+                maxLength={32}
+                placeholder="e.g. +91 98765 43210"
+                className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-950"
+              />
             </label>
             <label className="sm:col-span-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Billing address</span>
@@ -288,9 +361,9 @@ export default function StandaloneCashReceiptsPage() {
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-            <p className="text-xs text-slate-500">Recorded by {user.name || "signed-in staff"}{selectedAccount?.assignedBranch && typeof selectedAccount.assignedBranch !== "string" ? ` · ${selectedAccount.assignedBranch.name}` : ""}</p>
-            <button type="submit" disabled={saving || !accounts.length || !branchId} className="inline-flex h-10 items-center gap-2 rounded-lg bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400">
-              <FiPlus aria-hidden="true" className="h-4 w-4" /> {saving ? "Recording receipt…" : "Generate cash receipt"}
+            <p className="text-xs text-slate-500">Recorded by {user.name || "signed-in staff"}{branchName ? ` at ${branchName}` : ""}</p>
+            <button type="submit" disabled={saving || !effectiveBranchId} className="inline-flex h-10 items-center gap-2 rounded-lg bg-blue-900 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400">
+              <FiPlus aria-hidden="true" className="h-4 w-4" /> {saving ? "Recording receipt..." : "Generate cash receipt"}
             </button>
           </div>
         </form>

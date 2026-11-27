@@ -22,7 +22,9 @@ export interface ICashReceipt extends mongoose.Document, TenantOwnedFields {
   standaloneIdempotencyKey?: string | null;
   status: CashReceiptStatus;
   customerType: "BUSINESS" | "INDIVIDUAL";
-  businessAccountId: mongoose.Types.ObjectId;
+  // Standalone receipts may be issued without a business account; shipment
+  // receipts always point at the account that funded the booking.
+  businessAccountId?: mongoose.Types.ObjectId | null;
   branchId: mongoose.Types.ObjectId;
   shipmentDraftId?: mongoose.Types.ObjectId | null;
   activeShipmentKey?: string | null;
@@ -73,7 +75,15 @@ const cashReceiptSchema = new mongoose.Schema<ICashReceipt>({
   standaloneIdempotencyKey: { type: String, trim: true, maxlength: 128, default: null },
   status: { type: String, enum: cashReceiptStatusValues, required: true, default: "DRAFT", index: true },
   customerType: { type: String, enum: ["BUSINESS", "INDIVIDUAL"], required: true, index: true },
-  businessAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessAccount", required: true, index: true },
+  businessAccountId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "BusinessAccount",
+    default: null,
+    index: true,
+    // Manual/walk-in standalone receipts are not tied to an account; every
+    // shipment receipt still must resolve to one.
+    required: function (this: ICashReceipt): boolean { return this.receiptType !== "STANDALONE"; }
+  },
   branchId: { type: mongoose.Schema.Types.ObjectId, ref: "Branch", required: true, index: true },
   shipmentDraftId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentDraft", default: null, index: true },
   activeShipmentKey: { type: String, trim: true, default: null },

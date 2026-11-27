@@ -47,3 +47,18 @@ test("cash receipt PDF renders a valid PDF with receipt details", async () => {
   assert.ok(pdf.length > 0);
   assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
 });
+
+test("cash receipt PDF renders a manual standalone receipt with a phone number", async () => {
+  const pdf = await renderCashReceiptPdf(receipt({
+    customerType: "INDIVIDUAL",
+    businessAccountId: null,
+    customerNameSnapshot: "Walk-in Customer",
+    addressSnapshot: "",
+    gstinSnapshot: "",
+    accountIdSnapshot: "",
+    businessMobileNumberSnapshot: "+91 98765 43210"
+  }));
+  assert.ok(Buffer.isBuffer(pdf));
+  assert.ok(pdf.length > 0);
+  assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
+});

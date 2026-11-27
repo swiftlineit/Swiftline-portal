@@ -13,6 +13,9 @@ export type AuthenticatedUser = {
   email: string;
   role: PortalRole;
   hasSeenWelcome?: boolean;
+  // Branch-scoped staff get their receipt branch from this list. Admins are
+  // global and normally have no assignments, so they must pick a branch.
+  assignedBranches?: string[];
 };
 
 // A shared empty default: a `[]` literal would be a new value on every render.

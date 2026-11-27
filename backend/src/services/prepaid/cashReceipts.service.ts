@@ -267,7 +267,9 @@ export async function finalizeCashReceiptForBooking(input: {
 
       const events = finalized.allocations.map((allocation, index) => ({
         cashReceiptId: finalized._id,
-        businessAccountId: finalized.businessAccountId,
+        // Shipment receipts are always account-backed; the model only allows a
+        // missing account for standalone manual receipts.
+        businessAccountId: finalized.businessAccountId!,
         branchId: finalized.branchId,
         eventType: "RECEIPT_FINALIZED" as const,
         amountMinor: allocation.amountMinor,
@@ -284,7 +286,7 @@ export async function finalizeCashReceiptForBooking(input: {
         filename: `CASH-RECEIPT-${finalized.receiptNumber}.pdf`
       }];
       const cashMessage = `Cash receipt ${finalized.receiptNumber} for INR ${(finalized.totalReceivedMinor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} is available. Shipment booking is being completed.`;
-      if (finalized.customerType === "BUSINESS") {
+      if (finalized.customerType === "BUSINESS" && finalized.businessAccountId) {
         await notifyBusinessFinancialMembers(finalized.businessAccountId, {
           type: "CASH_RECEIPT_AVAILABLE",
           title: "Cash receipt available",

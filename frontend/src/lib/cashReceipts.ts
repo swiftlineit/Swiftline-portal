@@ -6,13 +6,14 @@ export type StandaloneCashReceipt = {
   receiptNumber: string;
   receiptType: "STANDALONE";
   status: "FINALIZED";
-  businessAccountId: string;
+  businessAccountId: string | null;
   branchId: string;
   shipmentDraftId: null;
   totalReceivedMinor: number;
   customerName: string;
   gstin: string;
   address: string;
+  mobileNumber: string;
   receiptDate: string;
   accountId: string;
   destination: string;
@@ -73,11 +74,12 @@ export async function listStandaloneCashReceipts(input: { from?: string; to?: st
 
 export async function createStandaloneCashReceipt(input: {
   idempotencyKey: string;
-  businessAccountId: string;
+  businessAccountId?: string;
   branchId: string;
   customerName: string;
   gstin?: string;
   address?: string;
+  mobileNumber?: string;
   receiptDate: string;
   amountMinor: number;
   paymentReference: string;
