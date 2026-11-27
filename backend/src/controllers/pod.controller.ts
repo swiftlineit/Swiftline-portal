@@ -30,6 +30,7 @@ import { resolveEvidenceKey } from "../services/storage/legacyKeys.js";
 import { formatSwiftlineParcelNumberForDisplay, resolveStoredSwiftlineParcelNumber } from "../services/swiftlineTracking.service.js";
 import { emailValidationMessage, isValidBusinessContactEmail } from "../services/businessAccountRules.js";
 import { notifyBusinessShipmentMembers, notifyOperationsStaff, notifyPortalUsers } from "../services/portalNotification.service.js";
+import { notifyShipmentDelivered } from "../services/shipmentDeliveredNotification.service.js";
 import {
   describeMissingPrerequisites,
   findMissingPrerequisites,
@@ -467,6 +468,13 @@ export async function submitPod(request: Request, response: Response, next: Next
       ).exec();
     }
     await AuditLog.create({ action: "POD_SUBMITTED", entityType: "POD_REVISION", entityId: revision._id, performedBy: user.id, performedAt: new Date(), metadata: { parcelNumbers: revision.parcelNumbers, correction: correctionExists } });
+    if (complete) {
+      await notifyShipmentDelivered({
+        shipmentDraftId: assignment.shipmentDraftId,
+        dpdShipmentId: assignment.dpdShipmentId,
+        deliveredAt: revision.deliveredAt
+      });
+    }
     await notifyBusinessShipmentMembers(assignment.businessAccountId, { type: "DELIVERY_COMPLETED", title: complete ? "Shipment delivered" : "Shipment partially delivered", message: "Proof of delivery has been submitted and is under review.", href: `/client/shipments/${assignment.shipmentDraftId}`, idempotencyKey: `pod-submitted-client:${revision._id}`, businessAccountId: assignment.businessAccountId });
     await notifyOperationsStaff({ type: "POD_SUBMITTED", title: "POD awaiting review", message: `POD ${assignment.partnerReference} was submitted.`, href: `/dashboard/pod?assignment=${assignment._id}`, idempotencyKey: `pod-submitted-ops:${revision._id}` });
     return response.json({ success: true, message: correctionExists ? "Corrected POD submitted for review." : "POD submitted for review.", assignment: await loadDetail(String(assignment._id)) });
@@ -544,6 +552,13 @@ export async function submitManagedPod(request: Request, response: Response, nex
       performedAt: new Date(),
       metadata: { source: "OPERATIONS_UPLOAD", manualSourceNote: data.manualSourceNote }
     });
+    if (complete) {
+      await notifyShipmentDelivered({
+        shipmentDraftId: assignment.shipmentDraftId,
+        dpdShipmentId: assignment.dpdShipmentId,
+        deliveredAt: revision.deliveredAt
+      });
+    }
     await notifyBusinessShipmentMembers(assignment.businessAccountId, {
       type: "DELIVERY_COMPLETED",
       title: complete ? "Shipment delivered" : "Shipment partially delivered",

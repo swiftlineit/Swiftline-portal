@@ -23,6 +23,7 @@ import { resolveBulkTrackingGatewayCode } from "./shipmentGateway.service.js";
 import { formatShipmentStatusLabel } from "./shipmentListing.service.js";
 import { loadShipmentHubReceiptsByDraftIds } from "./shipmentHubReceipt.service.js";
 import { completedShipmentDraftIds } from "./prepaid/shipmentFunding.service.js";
+import { notifyShipmentDelivered } from "./shipmentDeliveredNotification.service.js";
 
 export type BulkStatusSkip = {
   shipmentDraftId: string;
@@ -491,6 +492,13 @@ export async function bulkRecordOperationalStatus(input: {
       gatewayCode: gateway.gatewayCode,
       location: input.location ?? ""
     });
+    if (input.status === "DELIVERED" && prepared.length) {
+      await Promise.allSettled(prepared.map((item) => notifyShipmentDelivered({
+        shipmentDraftId: item.shipment.shipmentDraftId,
+        dpdShipmentId: item.shipment._id,
+        deliveredAt: item.eventAt
+      })));
+    }
     const updated: BulkStatusUpdate[] = prepared.map((item) => ({
       shipmentDraftId: item.draftId,
       status: input.status,

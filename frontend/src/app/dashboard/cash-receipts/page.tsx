@@ -32,12 +32,25 @@ function accountLabel(account: BusinessAccount) {
   return account.company.companyName || account.accountId;
 }
 
+function accountAddress(account: BusinessAccount) {
+  return [
+    account.company.registeredAddress,
+    account.company.addressLine2,
+    account.company.city,
+    account.company.stateOrProvince,
+    account.company.postalCode,
+    account.company.addressCountry
+  ].filter((part): part is string => Boolean(part?.trim())).map((part) => part.trim()).join(", ");
+}
+
 export default function StandaloneCashReceiptsPage() {
   const { user, loading: userLoading } = useAdminUser(OPERATIONS_AREA);
   const [accounts, setAccounts] = useState<BusinessAccount[]>([]);
   const [receipts, setReceipts] = useState<StandaloneCashReceipt[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [customerNameOverride, setCustomerNameOverride] = useState<string | null>(null);
+  const [gstinOverride, setGstinOverride] = useState<string | null>(null);
+  const [addressOverride, setAddressOverride] = useState<string | null>(null);
   const [receiptDate, setReceiptDate] = useState(todayInIndia);
   const [amount, setAmount] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
@@ -60,6 +73,8 @@ export default function StandaloneCashReceiptsPage() {
     [accounts, selectedAccountId]
   );
   const customerName = customerNameOverride ?? (selectedAccount ? accountLabel(selectedAccount) : "");
+  const gstin = gstinOverride ?? (selectedAccount?.company.gstin?.trim().toUpperCase() ?? "");
+  const address = addressOverride ?? (selectedAccount ? accountAddress(selectedAccount) : "");
 
   const fetchReceipts = useCallback(
     () => listStandaloneCashReceipts({ from: from || undefined, to: to || undefined, page, limit: 5 }),
@@ -142,6 +157,8 @@ export default function StandaloneCashReceiptsPage() {
         businessAccountId: selectedAccount._id,
         branchId: accountBranchId(selectedAccount),
         customerName,
+        gstin: gstin.trim(),
+        address: address.trim(),
         receiptDate,
         amountMinor,
         paymentReference,
@@ -158,6 +175,8 @@ export default function StandaloneCashReceiptsPage() {
       setService("");
       setPieces("");
       setWeightKg("");
+      setGstinOverride(null);
+      setAddressOverride(null);
       setLoading(true);
       await loadReceipts();
     } catch (error) {
@@ -215,7 +234,7 @@ export default function StandaloneCashReceiptsPage() {
             <label className="sm:col-span-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Business account</span>
               <div className="relative mt-1.5">
-                <select value={selectedAccountId} onChange={(event) => { setSelectedAccountId(event.target.value); setCustomerNameOverride(null); }} required className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-950">
+                <select value={selectedAccountId} onChange={(event) => { setSelectedAccountId(event.target.value); setCustomerNameOverride(null); setGstinOverride(null); setAddressOverride(null); }} required className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-950">
                   {accounts.map((account) => <option key={account._id} value={account._id}>{accountLabel(account)} ({account.accountId})</option>)}
                 </select>
                 <FiChevronDown aria-hidden="true" className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
@@ -224,6 +243,14 @@ export default function StandaloneCashReceiptsPage() {
             <label>
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Received from</span>
               <input value={customerName} onChange={(event) => setCustomerNameOverride(event.target.value)} maxLength={200} required className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-950" />
+            </label>
+            <label>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">GSTIN <span className="font-normal normal-case">(optional)</span></span>
+              <input value={gstin} onChange={(event) => setGstinOverride(event.target.value.toUpperCase())} maxLength={15} placeholder="e.g. 07ABPCS3159R1ZC" className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-950" />
+            </label>
+            <label className="sm:col-span-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Billing address</span>
+              <textarea value={address} onChange={(event) => setAddressOverride(event.target.value)} maxLength={500} rows={2} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-950" />
             </label>
             <label>
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Receipt date</span>

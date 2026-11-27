@@ -11,6 +11,8 @@ export type StandaloneCashReceipt = {
   shipmentDraftId: null;
   totalReceivedMinor: number;
   customerName: string;
+  gstin: string;
+  address: string;
   receiptDate: string;
   accountId: string;
   destination: string;
@@ -74,6 +76,8 @@ export async function createStandaloneCashReceipt(input: {
   businessAccountId: string;
   branchId: string;
   customerName: string;
+  gstin?: string;
+  address?: string;
   receiptDate: string;
   amountMinor: number;
   paymentReference: string;

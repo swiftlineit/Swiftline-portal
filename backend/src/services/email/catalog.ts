@@ -19,6 +19,7 @@ type CatalogEntry = {
 const catalog: Record<string, CatalogEntry> = {
   // Shipment lifecycle
   SHIPMENT_BOOKED: { category: "TRANSACTIONAL", priority: 85 },
+  SHIPMENT_DELIVERED: { category: "TRANSACTIONAL", priority: 90 },
   OPERATOR_CONTACT_QUERY_SUBMITTED: { category: "TRANSACTIONAL", priority: 70 },
   SHIPMENT_MANIFEST_GENERATED: { category: "OPERATIONAL", priority: 40 },
   SHIPMENT_CHARGE_VERIFIED: { category: "OPERATIONAL", priority: 50 },

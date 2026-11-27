@@ -7,7 +7,7 @@ import { formatPaymentMoney } from "@/lib/paymentPresentation";
 export type BookingCashReceiptForm = { customerName: string; date: string; amount: string; reference: string };
 type Props = {
   value: BookingCashReceiptForm; onChange: (value: BookingCashReceiptForm) => void;
-  receiptNumber?: string; recordedBy: string; destination: string; service: string; pieces: number; weightKg: number;
+  receiptNumber?: string; recordedBy: string; service: string; pieces: number; weightKg: number;
   totalMinor: number; busy: boolean; loading: boolean; error?: string; onClose: () => void; onSave: () => void;
 };
 
@@ -31,10 +31,9 @@ export default function BookingCashReceiptDialog(props: Props) {
             <label className="text-xs font-semibold text-slate-700">Amount received (INR)<input type="number" min="0.01" step="0.01" value={props.value.amount} onChange={(e) => update("amount", e.target.value)} className={inputClass} /><span className="mt-1 block font-normal text-slate-500">Shipment total {formatPaymentMoney(props.totalMinor)}</span></label>
             <label className="text-xs font-semibold text-slate-700">Payment reference<input value={props.value.reference} onChange={(e) => update("reference", e.target.value)} maxLength={160} className={inputClass} /></label>
           </div>
-          <dl className="grid gap-3 rounded-lg bg-slate-50 p-4 text-sm sm:grid-cols-2">
-            <div><dt className="text-xs text-slate-500">Destination</dt><dd className="mt-1 text-slate-900">{props.destination || "Not entered"}</dd></div>
+          <dl className="grid gap-3 rounded-lg bg-slate-50 p-4 text-sm">
             <div><dt className="text-xs text-slate-500">Service · pieces · weight</dt><dd className="mt-1 text-slate-900">{props.service} · {props.pieces} pcs · {props.weightKg.toFixed(2)} kg</dd></div>
-            <div className="sm:col-span-2"><dt className="text-xs text-slate-500">Recorded by</dt><dd className="mt-1 font-medium text-slate-900">{props.recordedBy}</dd></div>
+            <div><dt className="text-xs text-slate-500">Recorded by</dt><dd className="mt-1 font-medium text-slate-900">{props.recordedBy}</dd></div>
           </dl>
           <p className="text-center text-xs text-slate-500">System generated receipt · issued when booking completes</p>
         </div>
