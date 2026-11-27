@@ -12,6 +12,8 @@ export type StandaloneCashReceiptInput = {
   branchId: mongoose.Types.ObjectId;
   staffUserId: mongoose.Types.ObjectId;
   customerName: string;
+  gstin?: string;
+  address?: string;
   receiptDate: Date;
   amountMinor: number;
   paymentReference: string;
@@ -26,6 +28,8 @@ function sameReceiptRequest(receipt: InstanceType<typeof CashReceipt>, input: St
   return String(receipt.businessAccountId) === String(input.businessAccountId)
     && String(receipt.branchId) === String(input.branchId)
     && receipt.customerNameSnapshot === input.customerName.trim()
+    && receipt.gstinSnapshot === (input.gstin?.trim().toUpperCase() ?? "")
+    && receipt.addressSnapshot === (input.address?.trim() ?? "")
     && receipt.receiptDate.getTime() === input.receiptDate.getTime()
     && receipt.totalReceivedMinor === input.amountMinor
     && receipt.cashCustodyReference === input.paymentReference.trim()
@@ -54,7 +58,7 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
       tenantId,
       assignedBranch: input.branchId,
       accountKind: { $ne: "INDIVIDUAL_SENTINEL" }
-    }).select("accountId").lean().exec(),
+    }).select("accountId company.gstin company.registeredAddress company.addressLine2 company.city company.stateOrProvince company.postalCode company.addressCountry contact.countryCode contact.mobileNumber").lean().exec(),
     User.findOne({ _id: input.staffUserId, userStatus: "active" }).select("name firstName lastName").lean().exec()
   ]);
   if (!account) throw new Error("Select an active business account assigned to this branch.");
@@ -71,6 +75,21 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
   }
 
   const staffName = staff.name || `${staff.firstName ?? ""} ${staff.lastName ?? ""}`.trim() || "Swiftline Staff";
+  const businessMobileNumber = [account.contact?.countryCode, account.contact?.mobileNumber]
+    .filter((part): part is string => Boolean(part?.trim()))
+    .map((part) => part.trim())
+    .join(" ");
+  const accountGstin = account.company?.gstin?.trim().toUpperCase() || "";
+  const accountAddress = [
+    account.company?.registeredAddress,
+    account.company?.addressLine2,
+    account.company?.city,
+    account.company?.stateOrProvince,
+    account.company?.postalCode,
+    account.company?.addressCountry
+  ].filter((part): part is string => Boolean(part?.trim())).map((part) => part.trim()).join(", ");
+  const gstin = input.gstin?.trim().toUpperCase() || accountGstin;
+  const address = input.address?.trim() || accountAddress;
   const receiptId = new mongoose.Types.ObjectId();
   const receiptDateKey = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"
@@ -109,6 +128,9 @@ export async function createStandaloneCashReceipt(input: StandaloneCashReceiptIn
         allocations: [],
         unappliedAmountMinor: 0,
         customerNameSnapshot: input.customerName.trim(),
+        businessMobileNumberSnapshot: businessMobileNumber,
+        gstinSnapshot: gstin,
+        addressSnapshot: address,
         receiptDate: input.receiptDate,
         accountIdSnapshot: account.accountId,
         destinationSnapshot: input.destination?.trim() ?? "",

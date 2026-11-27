@@ -50,7 +50,7 @@ async function buildReceiptContext(input: {
   assertPositiveMinor(shipmentAmountMinor, "Shipment amount");
 
   const account = await BusinessAccount.findById(draft.businessAccountId)
-    .select("accountId company.companyName contact.firstName contact.lastName accountKind")
+    .select("accountId company.companyName company.gstin company.registeredAddress company.addressLine2 company.city company.stateOrProvince company.postalCode company.addressCountry contact.firstName contact.lastName contact.countryCode contact.mobileNumber accountKind")
     .lean()
     .exec();
   if (!account) throw new Error("Business account not found.");
@@ -58,6 +58,19 @@ async function buildReceiptContext(input: {
   const customerName = account.company?.companyName?.trim()
     || [account.contact?.firstName, account.contact?.lastName].filter(Boolean).join(" ").trim()
     || account.accountId;
+  const businessMobileNumber = [account.contact?.countryCode, account.contact?.mobileNumber]
+    .filter((part): part is string => Boolean(part?.trim()))
+    .map((part) => part.trim())
+    .join(" ");
+  const gstin = account.company?.gstin?.trim().toUpperCase() || "";
+  const address = [
+    account.company?.registeredAddress,
+    account.company?.addressLine2,
+    account.company?.city,
+    account.company?.stateOrProvince,
+    account.company?.postalCode,
+    account.company?.addressCountry
+  ].filter((part): part is string => Boolean(part?.trim())).map((part) => part.trim()).join(", ");
   const destination = [
     draft.consigneeEnteredAddress.addressLine1,
     draft.consigneeEnteredAddress.addressLine2,
@@ -73,6 +86,9 @@ async function buildReceiptContext(input: {
     shipmentAmountMinor,
     staffName: staffDisplayName(user),
     customerName,
+    businessMobileNumber,
+    gstin,
+    address,
     accountId: account.accountId,
     destination,
     service: draft.serviceType === "CARGO" ? "Cargo" : "Courier",
@@ -136,6 +152,9 @@ export async function saveCashReceiptDraft(input: {
           pricingHash: context.pricingHash,
           pricingRevision: context.pricingRevision,
           customerNameSnapshot: customerName,
+          businessMobileNumberSnapshot: context.businessMobileNumber,
+          gstinSnapshot: context.gstin,
+          addressSnapshot: context.address,
           receiptDate: input.receiptDate,
           accountIdSnapshot: context.accountId,
           destinationSnapshot: context.destination,
@@ -174,6 +193,9 @@ export async function saveCashReceiptDraft(input: {
     allocations,
     unappliedAmountMinor,
     customerNameSnapshot: customerName,
+    businessMobileNumberSnapshot: context.businessMobileNumber,
+    gstinSnapshot: context.gstin,
+    addressSnapshot: context.address,
     receiptDate: input.receiptDate,
     accountIdSnapshot: context.accountId,
     destinationSnapshot: context.destination,

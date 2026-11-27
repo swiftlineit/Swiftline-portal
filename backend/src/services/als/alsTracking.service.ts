@@ -5,6 +5,7 @@ import { CarrierApiRateBucket } from "../../models/carrierApiRateBucket.model.js
 import { CarrierTrackingEvent } from "../../models/carrierTrackingEvent.model.js";
 import { CarrierTrackingSync } from "../../models/carrierTrackingSync.model.js";
 import { DpdShipment } from "../../models/dpdShipment.model.js";
+import { Tenant } from "../../models/tenant.model.js";
 import {
   ShipmentEvent,
   shipmentMilestoneKey,
@@ -14,6 +15,8 @@ import { runWithConcurrency } from "../../utils/runWithConcurrency.js";
 import { SYSTEM_ACTOR_ID } from "../../utils/systemActor.js";
 import { readShipmentBookingSnapshot } from "../shipmentBookingSnapshot.service.js";
 import { resolveShipmentEventNote } from "../shipmentEventCopy.service.js";
+import { notifyShipmentDelivered } from "../shipmentDeliveredNotification.service.js";
+import { runWithTenantContext } from "../tenantScope.service.js";
 import {
   findMissingPrerequisites,
   findRecordedLaterMilestones,
@@ -259,7 +262,7 @@ export async function ingestAlsEvents(input: {
 }) {
   const [shipment, shipmentEvents] = await Promise.all([
     DpdShipment.findById(input.dpdShipmentId)
-      .select("currentShipmentSnapshot bookingSnapshot")
+      .select("currentShipmentSnapshot bookingSnapshot tenantId")
       .lean()
       .exec(),
     ShipmentEvent.find({ shipmentDraftId: input.shipmentDraftId })
@@ -274,6 +277,7 @@ export async function ingestAlsEvents(input: {
   let applied = 0;
   let reviewRequired = 0;
   let newestEventAt: Date | null = null;
+  let deliveredAt: Date | null = null;
 
   // A review row may no longer be present in ALS's latest response. Retain its
   // original provider key and reconsider it whenever this AWB is polled.
@@ -350,6 +354,7 @@ export async function ingestAlsEvents(input: {
             processingStatus = "APPLIED";
             processingNote = `Applied ${mappedStatus}.`;
             applied += 1;
+            if (mappedStatus === "DELIVERED") deliveredAt = eventAt;
           } catch (error) {
             // Two workers may see the same AWB. The unique milestone index is
             // authoritative; a competing winner is not a failed carrier poll.
@@ -393,6 +398,17 @@ export async function ingestAlsEvents(input: {
       try { await CarrierTrackingEvent.create(rawEvent); }
       catch (error) { if (!isDuplicateKeyError(error)) throw error; }
     }
+  }
+  if (deliveredAt && shipment?.tenantId) {
+    const tenant = await Tenant.findById(shipment.tenantId).select("kind").lean().exec();
+    await runWithTenantContext(
+      { tenantId: shipment.tenantId, kind: tenant?.kind === "OPERATOR" ? "OPERATOR" : "SWIFTLINE" },
+      () => notifyShipmentDelivered({
+        shipmentDraftId: input.shipmentDraftId,
+        dpdShipmentId: input.dpdShipmentId,
+        deliveredAt
+      })
+    );
   }
   return { applied, reviewRequired, newestEventAt, recorded };
 }

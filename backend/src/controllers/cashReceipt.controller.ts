@@ -54,6 +54,8 @@ export function serializeCashReceipt(receipt: InstanceType<typeof CashReceipt>) 
     })),
     unappliedAmountMinor: receipt.unappliedAmountMinor,
     customerName: receipt.customerNameSnapshot,
+    gstin: receipt.gstinSnapshot || "",
+    address: receipt.addressSnapshot || "",
     receiptDate: (receipt.receiptDate ?? receipt.issuedAt ?? receipt.createdAt).toISOString(),
     accountId: receipt.accountIdSnapshot,
     destination: receipt.destinationSnapshot,

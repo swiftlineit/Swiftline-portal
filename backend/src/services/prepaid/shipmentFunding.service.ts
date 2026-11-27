@@ -382,17 +382,30 @@ export async function completedShipmentDraftIds(
   if (!ids.length) return completed;
   const [fundings, shipments] = await Promise.all([
     ShipmentFunding.find({ shipmentDraftId: { $in: ids } }).select("shipmentDraftId status").session(session ?? null).lean().exec(),
-    DpdShipment.find({ shipmentDraftId: { $in: ids } }).select("shipmentDraftId paymentSource").session(session ?? null).lean().exec()
+    DpdShipment.find({ shipmentDraftId: { $in: ids } })
+      .select("shipmentDraftId paymentSource labelPaymentPolicy")
+      .session(session ?? null)
+      .lean()
+      .exec()
   ]);
   const fundingByDraft = new Map(fundings.map((funding) => [String(funding.shipmentDraftId), funding.status]));
-  const sourceByDraft = new Map(shipments.map((shipment) => [String(shipment.shipmentDraftId), shipment.paymentSource]));
+  const shipmentByDraft = new Map(shipments.map((shipment) => [String(shipment.shipmentDraftId), shipment]));
   const legacyCandidateIds = ids.filter((id) => {
     const key = String(id);
     if (fundingByDraft.has(key)) {
       if (fundingByDraft.get(key) === "COMPLETED") completed.add(key);
       return false;
     }
-    return !RECOGNISED_FUNDING_SOURCES.includes(sourceByDraft.get(key) ?? "");
+    const shipment = shipmentByDraft.get(key);
+    if (!shipment) return false;
+    // Pre-policy bookings were made under the previous workflow, including
+    // legacy credit, test shipments, and older public payments. The policy
+    // marker is the boundary: once present, the booking must use prepaid funding.
+    if (!shipment.labelPaymentPolicy) {
+      completed.add(key);
+      return false;
+    }
+    return !RECOGNISED_FUNDING_SOURCES.includes(shipment.paymentSource ?? "");
   });
   if (legacyCandidateIds.length) {
     const invoices = await ShipmentInvoice.find({ shipmentDraftId: { $in: legacyCandidateIds } })
@@ -412,7 +425,10 @@ export async function completedShipmentDraftIds(
     paymentAmountMinor: { $gt: 0 },
     paymentStatus: { $ne: "COMPLETED" }
   }).select("shipmentDraftId").session(session ?? null).lean().exec();
-  pendingIncreases.forEach((amendment) => completed.delete(String(amendment.shipmentDraftId)));
+  pendingIncreases.forEach((amendment) => {
+    const key = String(amendment.shipmentDraftId);
+    if (shipmentByDraft.get(key)?.labelPaymentPolicy) completed.delete(key);
+  });
   return completed;
 }
 

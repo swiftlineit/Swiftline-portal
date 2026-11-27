@@ -1991,7 +1991,6 @@ export default function DpdLabelDraftPage() {
           onChange={(value) => { setCashReceiptCustomerName(value.customerName); setCashReceiptDate(value.date); setCashReceiptAmountRupees(value.amount); setCashCustodyReference(value.reference); setCashReceiptDraft(null); }}
           receiptNumber={cashReceiptDraft?.receiptNumber}
           recordedBy={cashRecordedBy || user.name || user.email}
-          destination={[addressForm.addressLine1, addressForm.addressLine2, addressForm.townOrCity, addressForm.county, addressForm.postcode, addressForm.countryName].filter(Boolean).join(", ")}
           service={draftCorrectionForm.serviceType === "CARGO" ? "Cargo" : "Courier"}
           pieces={parcelForms.length}
           weightKg={parcelForms.reduce((sum, parcel) => sum + (Number(parcel.weightKg) || 0), 0)}

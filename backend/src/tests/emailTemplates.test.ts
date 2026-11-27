@@ -154,6 +154,28 @@ test("shipment booked staff template names the account and the booker", () => {
   assert.match(html, /\/dashboard\/dpd-labels\/665f0b2c1a/);
 });
 
+test("shipment delivered client template confirms delivery and links to public tracking", () => {
+  const { content, html, text } = render("SHIPMENT_DELIVERED_CLIENT", {
+    trackingNumber: "SWL000123456",
+    customerReference: "REF-8891",
+    serviceType: "Courier",
+    destination: "Manchester, United Kingdom",
+    consigneeName: "Northline Receiving",
+    parcelCount: 3,
+    deliveredAt: new Date("2026-07-30T09:15:00.000Z")
+  });
+
+  assert.equal(hasEmailTemplate("SHIPMENT_DELIVERED_CLIENT"), true);
+  assert.equal(getEmailPolicy("SHIPMENT_DELIVERED")?.category, "TRANSACTIONAL");
+  assert.match(content.subject, /SWL000123456/);
+  assert.match(content.subject, /delivered successfully/);
+  assert.match(html, /Northline Receiving/);
+  assert.match(html, /Manchester, United Kingdom/);
+  assert.match(html, /https:\/\/portal\.swiftline\.example\/track\/SWL000123456/);
+  assert.match(text, /delivered successfully/i);
+  assert.doesNotMatch(html, /undefined|NaN/);
+});
+
 test("operator booking emails link to one operator workspace and describe only attached documents", () => {
   const payload = {
     ...shipmentPayload,

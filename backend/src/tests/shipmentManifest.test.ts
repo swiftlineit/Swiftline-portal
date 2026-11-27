@@ -3,7 +3,11 @@ import { describe, it } from "node:test";
 import zlib from "node:zlib";
 import ExcelJS from "exceljs";
 import mongoose from "mongoose";
+import { DpdShipment } from "../models/dpdShipment.model.js";
+import { ShipmentAmendment } from "../models/shipmentAmendment.model.js";
 import { ShipmentDraft } from "../models/shipmentDraft.model.js";
+import { ShipmentFunding } from "../models/shipmentFunding.model.js";
+import { ShipmentInvoice } from "../models/shipmentInvoice.model.js";
 import { ShipmentManifest, type IShipmentManifest, type ShipmentManifestLineSnapshot } from "../models/shipmentManifest.model.js";
 import { ShipmentManifestCounter } from "../models/shipmentManifestCounter.model.js";
 import { classifyShipmentManifestIndexes } from "../scripts/migrateShipmentManifestReuseIndexes.js";
@@ -21,6 +25,7 @@ import {
   shipmentManifestSearchConditions,
   type ManifestPartySnapshot
 } from "../services/shipmentManifest.service.js";
+import { completedShipmentDraftIds } from "../services/prepaid/shipmentFunding.service.js";
 import { buildShipmentManifestHandoverWorkbook } from "../services/shipmentManifestExcel.service.js";
 import { buildShipmentManifestConsignorAadhaarByDraft } from "../services/shipmentManifestConsignorAadhaar.service.js";
 import { encryptShipmentDraftAadhaar } from "../services/shipmentDraftAadhaar.service.js";
@@ -981,5 +986,194 @@ describe("handover manifest", () => {
     const pdf = await buildShipmentManifestPdf(handoverManifest([handoverLine, legacyLine]));
     assert.ok(pdf.length > 1000);
     assert.equal(pdf.subarray(0, 5).toString("latin1"), "%PDF-");
+  });
+});
+
+function fundingQuery<T>(value: T) {
+  return {
+    select() { return this; },
+    session() { return this; },
+    lean() { return this; },
+    exec: async () => value
+  };
+}
+
+type ManifestFundingFixture = {
+  fundings?: Array<{ shipmentDraftId: mongoose.Types.ObjectId; status: string }>;
+  shipments?: Array<{ shipmentDraftId: mongoose.Types.ObjectId; paymentSource: string; labelPaymentPolicy?: string }>;
+  invoices?: Array<{ shipmentDraftId: mongoose.Types.ObjectId; paymentStatus: string; creditOutstandingMinor: number }> | (() => never);
+  amendments?: Array<{ shipmentDraftId: mongoose.Types.ObjectId }>;
+};
+
+function stubManifestFunding(fixture: ManifestFundingFixture) {
+  const originals = {
+    fundingFind: ShipmentFunding.find,
+    shipmentFind: DpdShipment.find,
+    invoiceFind: ShipmentInvoice.find,
+    amendmentFind: ShipmentAmendment.find
+  };
+  (ShipmentFunding as any).find = () => fundingQuery(fixture.fundings ?? []);
+  (DpdShipment as any).find = () => fundingQuery(fixture.shipments ?? []);
+  (ShipmentInvoice as any).find = () => typeof fixture.invoices === "function"
+    ? fixture.invoices()
+    : fundingQuery(fixture.invoices ?? []);
+  (ShipmentAmendment as any).find = () => fundingQuery(fixture.amendments ?? []);
+  return () => {
+    (ShipmentFunding as any).find = originals.fundingFind;
+    (DpdShipment as any).find = originals.shipmentFind;
+    (ShipmentInvoice as any).find = originals.invoiceFind;
+    (ShipmentAmendment as any).find = originals.amendmentFind;
+  };
+}
+
+describe("manifest funding policy for pre-policy bookings", () => {
+  const context = { tenantId: new mongoose.Types.ObjectId(), kind: "SWIFTLINE" as const };
+  const legacyShipment = (shipmentDraftId: mongoose.Types.ObjectId, labelPaymentPolicy?: string) => ({
+    shipmentDraftId,
+    paymentSource: "BUSINESS_ACCOUNT",
+    ...(labelPaymentPolicy ? { labelPaymentPolicy } : {})
+  });
+
+  it("allows a pre-policy booking without consulting invoice settlement", async () => {
+    const shipmentDraftId = new mongoose.Types.ObjectId();
+    const restore = stubManifestFunding({
+      shipments: [legacyShipment(shipmentDraftId)],
+      invoices: () => { throw new Error("pre-policy bookings must not require invoice settlement"); }
+    });
+    try {
+      await runWithTenantContext(context, async () => {
+        const completed = await completedShipmentDraftIds([shipmentDraftId]);
+        assert.equal(completed.has(String(shipmentDraftId)), true);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("allows pre-policy test and public payment bookings without funding", async () => {
+    const testDraftId = new mongoose.Types.ObjectId();
+    const publicDraftId = new mongoose.Types.ObjectId();
+    const restore = stubManifestFunding({
+      shipments: [
+        { shipmentDraftId: testDraftId, paymentSource: "TEST" },
+        { shipmentDraftId: publicDraftId, paymentSource: "PUBLIC_RAZORPAY" }
+      ],
+      invoices: () => { throw new Error("pre-policy bookings must not require invoice settlement"); }
+    });
+    try {
+      await runWithTenantContext(context, async () => {
+        const completed = await completedShipmentDraftIds([testDraftId, publicDraftId]);
+        assert.equal(completed.has(String(testDraftId)), true);
+        assert.equal(completed.has(String(publicDraftId)), true);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not treat a draft without a shipment booking as funded", async () => {
+    const shipmentDraftId = new mongoose.Types.ObjectId();
+    const restore = stubManifestFunding({
+      invoices: () => { throw new Error("a missing shipment must not be funded"); }
+    });
+    try {
+      await runWithTenantContext(context, async () => {
+        const completed = await completedShipmentDraftIds([shipmentDraftId]);
+        assert.equal(completed.has(String(shipmentDraftId)), false);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("allows a pre-policy booking with a pending paid amendment", async () => {
+    const shipmentDraftId = new mongoose.Types.ObjectId();
+    const restore = stubManifestFunding({
+      shipments: [legacyShipment(shipmentDraftId)],
+      invoices: () => { throw new Error("pre-policy bookings must not require invoice settlement"); },
+      amendments: [{ shipmentDraftId }]
+    });
+    try {
+      await runWithTenantContext(context, async () => {
+        const completed = await completedShipmentDraftIds([shipmentDraftId]);
+        assert.equal(completed.has(String(shipmentDraftId)), true);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps a pending paid amendment blocking a policy-marked prepaid booking", async () => {
+    const shipmentDraftId = new mongoose.Types.ObjectId();
+    const restore = stubManifestFunding({
+      fundings: [{ shipmentDraftId, status: "COMPLETED" }],
+      shipments: [legacyShipment(shipmentDraftId, "PAYMENT_REQUIRED")],
+      amendments: [{ shipmentDraftId }]
+    });
+    try {
+      await runWithTenantContext(context, async () => {
+        const completed = await completedShipmentDraftIds([shipmentDraftId]);
+        assert.equal(completed.has(String(shipmentDraftId)), false);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not treat a payment-policy-marked business account as legacy credit", async () => {
+    const shipmentDraftId = new mongoose.Types.ObjectId();
+    const restore = stubManifestFunding({
+      shipments: [legacyShipment(shipmentDraftId, "PAYMENT_REQUIRED")],
+      invoices: [{ shipmentDraftId, paymentStatus: "UNPAID", creditOutstandingMinor: 100 }]
+    });
+    try {
+      await runWithTenantContext(context, async () => {
+        const completed = await completedShipmentDraftIds([shipmentDraftId]);
+        assert.equal(completed.has(String(shipmentDraftId)), false);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps non-completed funding and policy-marked prepaid sources blocked", async () => {
+    const fundedDraftId = new mongoose.Types.ObjectId();
+    const prepaidDraftId = new mongoose.Types.ObjectId();
+    const restore = stubManifestFunding({
+      fundings: [{ shipmentDraftId: fundedDraftId, status: "SECURED" }],
+      shipments: [
+        legacyShipment(fundedDraftId),
+        { shipmentDraftId: prepaidDraftId, paymentSource: "DIRECT_RAZORPAY", labelPaymentPolicy: "PAYMENT_REQUIRED" }
+      ],
+      invoices: [
+        { shipmentDraftId: fundedDraftId, paymentStatus: "UNPAID", creditOutstandingMinor: 100 },
+        { shipmentDraftId: prepaidDraftId, paymentStatus: "UNPAID", creditOutstandingMinor: 100 }
+      ]
+    });
+    try {
+      await runWithTenantContext(context, async () => {
+        const completed = await completedShipmentDraftIds([fundedDraftId, prepaidDraftId]);
+        assert.equal(completed.has(String(fundedDraftId)), false);
+        assert.equal(completed.has(String(prepaidDraftId)), false);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps completed funding as the primary success path", async () => {
+    const shipmentDraftId = new mongoose.Types.ObjectId();
+    const restore = stubManifestFunding({
+      fundings: [{ shipmentDraftId, status: "COMPLETED" }],
+      invoices: () => { throw new Error("completed funding must not require invoice settlement"); }
+    });
+    try {
+      await runWithTenantContext(context, async () => {
+        const completed = await completedShipmentDraftIds([shipmentDraftId]);
+        assert.equal(completed.has(String(shipmentDraftId)), true);
+      });
+    } finally {
+      restore();
+    }
   });
 });

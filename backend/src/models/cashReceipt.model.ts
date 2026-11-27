@@ -33,6 +33,9 @@ export interface ICashReceipt extends mongoose.Document, TenantOwnedFields {
   allocations: CashReceiptAllocation[];
   unappliedAmountMinor: number;
   customerNameSnapshot: string;
+  gstinSnapshot: string;
+  addressSnapshot: string;
+  businessMobileNumberSnapshot?: string;
   receiptDate: Date;
   accountIdSnapshot: string;
   destinationSnapshot: string;
@@ -81,6 +84,9 @@ const cashReceiptSchema = new mongoose.Schema<ICashReceipt>({
   allocations: { type: [cashReceiptAllocationSchema], default: [] },
   unappliedAmountMinor: { type: Number, default: 0, min: 0, validate: { validator: isMinorUnitInteger, message: "unappliedAmountMinor must be an integer minor-unit amount" } },
   customerNameSnapshot: { type: String, required: true, trim: true, maxlength: 200 },
+  gstinSnapshot: { type: String, trim: true, uppercase: true, maxlength: 15, default: "" },
+  addressSnapshot: { type: String, trim: true, maxlength: 500, default: "" },
+  businessMobileNumberSnapshot: { type: String, trim: true, maxlength: 32, default: "" },
   receiptDate: { type: Date, required: true, default: Date.now },
   accountIdSnapshot: { type: String, trim: true, maxlength: 100, default: "" },
   destinationSnapshot: { type: String, trim: true, maxlength: 200, default: "" },

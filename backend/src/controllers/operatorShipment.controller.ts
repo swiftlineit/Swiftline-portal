@@ -32,6 +32,7 @@ import {
 import { markShipmentChargeFinalized } from "../services/shipmentInvoice.service.js";
 import { ensureShipmentBookedEvent } from "../services/shipmentBookingEvent.service.js";
 import { notifyOperatorShipmentBooked } from "../services/operatorShipmentBookedNotification.service.js";
+import { notifyShipmentDelivered } from "../services/shipmentDeliveredNotification.service.js";
 import { buildPricingHash, ShipmentPriceChangedError } from "../services/shipmentCostEstimate.service.js";
 import { RateCardRequiredError } from "../services/shipmentPricing.service.js";
 import { resolveShipmentEventNote } from "../services/shipmentEventCopy.service.js";
@@ -998,6 +999,14 @@ export async function updateOperatorShipmentTracking(request: Request, response:
 
   const createdEvent = createdEventHolder.event;
   if (!createdEvent) throw new Error("OPERATOR_TRACKING_EVENT_NOT_CREATED");
+
+  if (createdEvent.status === "DELIVERED" && createdEvent.dpdShipmentId) {
+    await notifyShipmentDelivered({
+      shipmentDraftId: createdEvent.shipmentDraftId,
+      dpdShipmentId: createdEvent.dpdShipmentId,
+      deliveredAt: createdEvent.eventAt
+    });
+  }
 
   return response.status(201).json({
     success: true,

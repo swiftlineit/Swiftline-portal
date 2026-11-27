@@ -49,6 +49,7 @@ import {
   bulkRecordOperationalStatus
 } from "../services/bulkShipmentStatus.service.js";
 import { resolveShipmentEventNote } from "../services/shipmentEventCopy.service.js";
+import { notifyShipmentDelivered } from "../services/shipmentDeliveredNotification.service.js";
 import {
   DpdLabelUnavailableError,
   DpdShipmentServiceError,
@@ -1913,6 +1914,14 @@ export async function updateDpdShipmentOperationalStatus(request: Request, respo
       eventAt: event.eventAt
     }
   });
+
+  if (parsed.data.status === "DELIVERED") {
+    await notifyShipmentDelivered({
+      shipmentDraftId: shipment.shipmentDraftId,
+      dpdShipmentId: shipment._id,
+      deliveredAt: event.eventAt
+    });
+  }
 
   return response.status(201).json({
     success: true,
