@@ -8,7 +8,6 @@ import {
   ClientShellUser
 } from "@/components/client/ClientDashboardShell";
 import ClientAccessBlocked from "@/components/client/dashboard/ClientAccessBlocked";
-import ClientBookingCapacityNotice from "@/components/client/dashboard/ClientBookingCapacityNotice";
 import ClientDashboardHeader from "@/components/client/dashboard/ClientDashboardHeader";
 import ClientQuickAccess from "@/components/client/dashboard/ClientQuickAccess";
 import ClientRateCardNotice from "@/components/client/dashboard/ClientRateCardNotice";
@@ -293,9 +292,6 @@ export default function ClientDashboardPage() {
         ) : selectedAccount.dashboardAccess.state === "READY" ? (
           <>
             <ClientRateCardNotice account={selectedAccount} />
-
-            {/* <ClientBookingCapacityNotice /> */}
-
 
 
             {/* The control tower answers "where are my shipments, what is
