@@ -46,6 +46,7 @@ import { buildPricingHash } from "../services/shipmentCostEstimate.service.js";
 import { buildPricingInputFromDraft, calculateShipmentPricingEstimate } from "../services/shipmentPricing.service.js";
 import type { ShipmentPricingEstimate } from "../services/shipmentPricing.service.js";
 import { listAccountLedger } from "../services/prepaid/accountLedger.service.js";
+import { attachLedgerShipments } from "../services/prepaid/ledgerReferences.service.js";
 import { deleteObject } from "../services/storage/storage.service.js";
 
 const databaseName = `sl_payments_offline_${Date.now()}`;
@@ -408,6 +409,7 @@ test("wallet reservations are closed and direct payments fund a complete booking
   assert.equal(directRows.length, 1);
   assert.equal(directRows[0]?.amountMinor, f.amountMinor);
   assert.equal(directRows[0]?.shipmentDraftId, String(f.draft._id));
+  assert.ok(directRows[0]?.documents?.some((document) => document.kind === "INVOICE" && document.draftId === String(f.draft._id)));
   assert.equal(directRows[0]?.cashBalanceAfterMinor, undefined);
   assert.equal(ledger.transactions.some((row) => row.paymentSource === "WALLET"), false);
 }));
@@ -462,8 +464,41 @@ test("a staff cash receipt funds a business booking and appears in the payments 
   const cashRows = ledger.transactions.filter((row) => row.transactionType === "SHIPMENT_CASH_RECEIPT");
   assert.equal(cashRows.length, 1);
   assert.equal(cashRows[0]?.amountMinor, f.amountMinor);
+  assert.ok(cashRows[0]?.documents?.some((document) => document.kind === "CASH_RECEIPT" && document.receiptId === String(draft._id)));
+  assert.ok(cashRows[0]?.documents?.some((document) => document.kind === "INVOICE" && document.draftId === String(f.draft._id)));
   assert.equal(ledger.transactions.some((row) => row.reference === "STANDALONE-LEGACY"), false);
   assert.equal(ledger.transactions.some((row) => row.transactionType === "STANDALONE_CASH_RECEIPT"), false);
+
+  const foreignReceipt = await CashReceipt.collection.insertOne({
+    tenantId: rootId,
+    businessAccountId: new mongoose.Types.ObjectId(),
+    branchId,
+    receiptNumber: "FOREIGN-CR",
+    receiptType: "SHIPMENT",
+    status: "FINALIZED",
+    issuedAt: new Date(),
+    totalReceivedMinor: 1000
+  } as never);
+  const attached = await attachLedgerShipments([{ shipmentDraftId: f.draft._id, cashReceiptId: foreignReceipt.insertedId }], f.businessAccountId);
+  assert.equal(attached[0]?.documents?.some((document) => document.kind === "CASH_RECEIPT"), false);
+
+  const { getBusinessAccountCashReceiptPdf } = await import("../controllers/adminPrepaid.controller.js");
+  const documentRequest = {
+    user: { _id: staffId, role: "admin" },
+    params: { businessAccountId: String(f.businessAccountId), receiptId: String(draft._id) }
+  } as unknown as Request;
+  const documentResponse = responseRecorder();
+  await getBusinessAccountCashReceiptPdf(documentRequest, documentResponse.response);
+  assert.equal(documentResponse.status(), 200);
+  assert.ok(Buffer.isBuffer(documentResponse.body()));
+
+  const deniedResponse = responseRecorder();
+  const deniedRequest = {
+    ...documentRequest,
+    params: { businessAccountId: String(f.businessAccountId), receiptId: String(foreignReceipt.insertedId) }
+  } as unknown as Request;
+  await getBusinessAccountCashReceiptPdf(deniedRequest, deniedResponse.response);
+  assert.equal(deniedResponse.status(), 404);
 }));
 
 test("standalone cash receipts support manual entry with an editable phone number", () => root(async () => {

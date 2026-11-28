@@ -2,13 +2,14 @@ import mongoose from "mongoose";
 import { ShipmentDirectPayment } from "../../models/shipmentDirectPayment.model.js";
 import { CashReceipt } from "../../models/cashReceipt.model.js";
 import { CashAllocationEvent } from "../../models/cashAllocationEvent.model.js";
-import { attachLedgerShipments } from "./ledgerReferences.service.js";
+import { attachLedgerShipments, type LedgerDocument } from "./ledgerReferences.service.js";
 import { getDataAccessTenantId } from "../tenantScope.service.js";
 
 export type AccountLedgerRow = {
   _id: string; createdAt: Date; transactionType: string; direction: "CREDIT" | "DEBIT" | "NONE";
   amountMinor: number; currency: string; paymentSource: string; status: string; reference: string;
   description: string; shipmentDraftId?: unknown; shipmentNumber?: string | null;
+  cashReceiptId?: unknown; documents?: LedgerDocument[];
   cashBalanceAfterMinor?: number; reservedBalanceAfterMinor?: number;
 };
 
@@ -37,11 +38,11 @@ export async function listAccountLedger(input: {
     ] } },
     { $unionWith: { coll: CashReceipt.collection.name, pipeline: [
       { $match: { ...scope, status: "FINALIZED", receiptType: { $ne: "STANDALONE" } } },
-      { $project: { _id: { $concat: ["cash:", { $toString: "$_id" }] }, createdAt: "$issuedAt", transactionType: { $literal: "SHIPMENT_CASH_RECEIPT" }, direction: { $literal: "CREDIT" }, amountMinor: "$totalReceivedMinor", currency: 1, shipmentDraftId: 1, reference: "$receiptNumber", paymentSource: { $literal: "CASH" }, status: 1, description: { $literal: "Cash received by Swiftline for this shipment." } } }
+      { $project: { _id: { $concat: ["cash:", { $toString: "$_id" }] }, createdAt: "$issuedAt", transactionType: { $literal: "SHIPMENT_CASH_RECEIPT" }, direction: { $literal: "CREDIT" }, amountMinor: "$totalReceivedMinor", currency: 1, shipmentDraftId: 1, cashReceiptId: "$_id", reference: "$receiptNumber", paymentSource: { $literal: "CASH" }, status: 1, description: { $literal: "Cash received by Swiftline for this shipment." } } }
     ] } },
     { $unionWith: { coll: CashAllocationEvent.collection.name, pipeline: [
       { $match: { ...scope, eventType: "REFUNDED" } },
-      { $project: { _id: { $concat: ["cash-refund:", { $toString: "$_id" }] }, createdAt: 1, transactionType: { $literal: "CASH_REFUND" }, direction: { $literal: "DEBIT" }, amountMinor: 1, currency: { $literal: "INR" }, shipmentDraftId: 1, reference: "$idempotencyKey", paymentSource: { $literal: "CASH" }, status: { $literal: "RECORDED" }, description: "$reason" } }
+      { $project: { _id: { $concat: ["cash-refund:", { $toString: "$_id" }] }, createdAt: 1, transactionType: { $literal: "CASH_REFUND" }, direction: { $literal: "DEBIT" }, amountMinor: 1, currency: { $literal: "INR" }, shipmentDraftId: 1, cashReceiptId: "$cashReceiptId", reference: "$idempotencyKey", paymentSource: { $literal: "CASH" }, status: { $literal: "RECORDED" }, description: "$reason" } }
     ] } },
     ...(input.from || input.to ? [{ $match: { createdAt: { ...(input.from ? { $gte: input.from } : {}), ...(input.to ? { $lte: input.to } : {}) } } }] : []),
     { $sort: { createdAt: -1, _id: -1 } }

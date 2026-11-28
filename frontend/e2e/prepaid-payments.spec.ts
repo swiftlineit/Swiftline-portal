@@ -53,7 +53,8 @@ function paymentRows(populated: boolean, page: number) {
         reference: "pay_qa_booking",
         description: "Online payment captured for booking",
         shipmentDraftId: "qa-shipment",
-        shipmentNumber: "SLC-QA-001"
+        shipmentNumber: "SLC-QA-001",
+        documents: [{ kind: "INVOICE", draftId: "qa-shipment", invoiceNumber: "INV-QA-001" }]
       },
       {
         _id: "ledger-cash",
@@ -65,7 +66,23 @@ function paymentRows(populated: boolean, page: number) {
         amountMinor: 42_500,
         currency: "INR",
         reference: "CR-QA-001",
-        description: "Cash received before booking"
+        description: "Cash received before booking",
+        documents: [
+          { kind: "CASH_RECEIPT", receiptId: "qa-receipt", receiptNumber: "CR-QA-001" },
+          { kind: "INVOICE", draftId: "qa-shipment", invoiceNumber: "INV-QA-001" }
+        ]
+      },
+      {
+        _id: "ledger-reversal",
+        createdAt: "2026-11-21T12:00:00.000Z",
+        transactionType: "CASH_REFUND",
+        direction: "DEBIT" as const,
+        paymentSource: "CASH",
+        status: "RECORDED",
+        amountMinor: 5_000,
+        currency: "INR",
+        reference: "cash-refund-qa",
+        description: "Cash refunded without a linked document"
       }
     ];
   }
@@ -90,6 +107,7 @@ async function mockPayments(page: Page, options: MockOptions = {}) {
   const forbiddenRequests: string[] = [];
   const clientLedgerRequests: string[] = [];
   const staffLedgerRequests: string[] = [];
+  const documentRequests: string[] = [];
   let clientLedgerCalls = 0;
   let cashReceiptUnreadCount = options.documentCentre ? 1 : 0;
 
@@ -162,7 +180,7 @@ async function mockPayments(page: Page, options: MockOptions = {}) {
       return json({
         success: true,
         transactions: paymentRows(Boolean(options.populated), current),
-        pagination: { page: current, limit: 50, total: options.populated ? 3 : 0, totalPages: options.populated ? 2 : 1 }
+        pagination: { page: current, limit: 50, total: options.populated ? 4 : 0, totalPages: options.populated ? 2 : 1 }
       });
     }
     if (path.endsWith("/business-accounts/offline-account")) return json({ success: true, account: qaAccount });
@@ -173,7 +191,7 @@ async function mockPayments(page: Page, options: MockOptions = {}) {
         success: true,
         account: { id: "offline-account", accountId: "BA-QA-001", companyName: "QA Exporters", branchId: "offline-branch" },
         transactions: paymentRows(true, current),
-        pagination: { page: current, limit: 50, total: 3, totalPages: 2 }
+        pagination: { page: current, limit: 50, total: 4, totalPages: 2 }
       });
     }
     if (options.documentCentre && path.endsWith("/client/documents/cash-receipts/unread-count")) {
@@ -194,6 +212,14 @@ async function mockPayments(page: Page, options: MockOptions = {}) {
       cashReceiptUnreadCount = 0;
       return route.fulfill({ status: 200, contentType: "application/pdf", body: "%PDF-1.4 QA receipt" });
     }
+    if (path.includes("/documents/cash-receipts/") && path.includes("/pdf")) {
+      documentRequests.push(path);
+      return route.fulfill({ status: 200, contentType: "application/pdf", body: "%PDF-1.4 QA ledger document" });
+    }
+    if (path.includes("/payments-ledger/documents/cash-receipts/")) {
+      documentRequests.push(path);
+      return route.fulfill({ status: 200, contentType: "application/pdf", body: "%PDF-1.4 QA ledger document" });
+    }
     if (path.endsWith("/notifications")) return json({ success: true, notifications: [], unreadCount: 0 });
     if (path.endsWith("/client/rate-card-shares")) return json({ success: true, shares: [], unreadCount: 0 });
     if (path.endsWith("/client/cash-receipts/unread-count")) return json({ success: true, unreadCount: 1 });
@@ -208,6 +234,7 @@ async function mockPayments(page: Page, options: MockOptions = {}) {
     forbiddenRequests: () => forbiddenRequests,
     clientLedgerRequests: () => clientLedgerRequests,
     staffLedgerRequests: () => staffLedgerRequests,
+    documentRequests: () => documentRequests,
     clientLedgerCalls: () => clientLedgerCalls
   };
 }
@@ -250,6 +277,18 @@ test("payments show online, cash and refund activity without wallet controls", a
   await expect(ledger.getByText("Cash receipt recorded")).toBeVisible();
   await expect(ledger.getByText("pay_qa_booking", { exact: true })).toBeVisible();
   await expect(ledger.getByRole("link", { name: "Open shipment SLC-QA-001" })).toHaveAttribute("href", "/client/shipments/qa-shipment");
+  await expect(ledger.getByRole("columnheader", { name: "Document" })).toBeVisible();
+  const bookingRow = ledger.locator("tr").filter({ hasText: "pay_qa_booking" });
+  await expect(bookingRow.getByRole("link", { name: "View invoice INV-QA-001" })).toHaveAttribute("href", "/client/shipments/qa-shipment/invoice");
+  await expect(bookingRow.getByRole("button", { name: /View cash receipt/ })).toHaveCount(0);
+  const cashRow = ledger.locator("tr").filter({ hasText: "CR-QA-001" });
+  await expect(cashRow.getByRole("button", { name: "View cash receipt CR-QA-001" })).toBeVisible();
+  await expect(cashRow.getByRole("link", { name: "View invoice INV-QA-001" })).toHaveAttribute("href", "/client/shipments/qa-shipment/invoice");
+  const reversalRow = ledger.locator("tr").filter({ hasText: "cash-refund-qa" });
+  await expect(reversalRow.getByRole("link", { name: /View invoice/ })).toHaveCount(0);
+  await expect(reversalRow.getByRole("button", { name: /View cash receipt/ })).toHaveCount(0);
+  await cashRow.getByRole("button", { name: "View cash receipt CR-QA-001" }).click();
+  await expect.poll(() => mock.documentRequests()).toContain("/api/v1/client/documents/cash-receipts/qa-receipt/pdf");
   await expect(page.getByText(/Add wallet funds|Wallet activity|payment terms/i)).toHaveCount(0);
   await expect(page.getByRole("columnheader", { name: /wallet/i })).toHaveCount(0);
 
@@ -276,6 +315,12 @@ test("old prepaid account and credit ledger links land on the staff payments led
   await expect(ledger.getByText("Online booking payment")).toBeVisible();
   await expect(ledger.getByText("pay_qa_booking", { exact: true })).toBeVisible();
   await expect(ledger.getByRole("link", { name: "Open shipment SLC-QA-001" })).toHaveAttribute("href", "/dashboard/shipments/qa-shipment");
+  await expect(ledger.getByRole("columnheader", { name: "Document" })).toBeVisible();
+  const cashRow = ledger.locator("tr").filter({ hasText: "CR-QA-001" });
+  await expect(cashRow.getByRole("button", { name: "View cash receipt CR-QA-001" })).toBeVisible();
+  await expect(cashRow.getByRole("link", { name: "View invoice INV-QA-001" })).toHaveAttribute("href", "/dashboard/shipments/qa-shipment/invoice");
+  await cashRow.getByRole("button", { name: "View cash receipt CR-QA-001" }).click();
+  await expect.poll(() => mock.documentRequests()).toContain("/api/v1/business-accounts/offline-account/payments-ledger/documents/cash-receipts/qa-receipt");
   await expect(page.getByText(/Available to book|Wallet total|Wallet ledger/i)).toHaveCount(0);
   expect(mock.staffLedgerRequests().length).toBeGreaterThan(0);
   expect(mock.forbiddenRequests()).toEqual([]);

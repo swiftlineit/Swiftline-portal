@@ -39,7 +39,7 @@ export default function ClientPaymentLedger({ businessAccountId, initialTransact
         <h2 className="text-base font-semibold text-slate-950">Payments ledger</h2>
         <p className="mt-1 text-xs text-slate-500">Online payments, cash receipts and refunds recorded for this business account.</p>
       </div>
-      {error ? <p role="alert" className="p-5 text-sm text-red-700">{error}</p> : <PaymentLedgerTable rows={rows} audience="client" loading={loading} />}
+      {error ? <p role="alert" className="p-5 text-sm text-red-700">{error}</p> : <PaymentLedgerTable rows={rows} audience="client" businessAccountId={businessAccountId} loading={loading} />}
       <PaymentPagination label="Payments ledger pages" page={page} totalPages={pagination.totalPages} busy={loading} onPageChange={changePage} />
     </section>
   );

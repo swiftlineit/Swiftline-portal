@@ -1,6 +1,10 @@
 import { apiUrl } from "@/lib/api";
 import { getAccessToken, refreshAccessToken } from "@/lib/auth";
 
+export type PaymentsLedgerDocument =
+  | { kind: "INVOICE"; draftId: string; invoiceNumber?: string }
+  | { kind: "CASH_RECEIPT"; receiptId: string; receiptNumber?: string };
+
 export type PaymentsLedgerRow = {
   paymentSource?: string;
   status?: string;
@@ -8,6 +12,7 @@ export type PaymentsLedgerRow = {
   description?: string;
   shipmentDraftId?: string | null;
   shipmentNumber?: string | null;
+  documents?: PaymentsLedgerDocument[];
   _id: string;
   transactionType: string;
   direction: "CREDIT" | "DEBIT" | "NONE";
@@ -55,6 +60,25 @@ async function authenticatedFetch(path: string) {
     response = await send();
   }
   return response;
+}
+
+/** Open an authorized ledger document in a new tab without navigating away from the ledger. */
+export async function openLedgerDocument(path: string) {
+  const openedWindow = window.open("about:blank", "_blank");
+  try {
+    const response = await authenticatedFetch(path);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { message?: string };
+      throw new Error(payload.message || "The document could not be opened.");
+    }
+    if (!openedWindow) throw new Error("Allow pop-ups to open this document.");
+    const url = URL.createObjectURL(await response.blob());
+    openedWindow.location.href = url;
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) {
+    openedWindow?.close();
+    throw error;
+  }
 }
 
 export async function getClientAccountLedger(businessAccountId: string, range: LedgerRange = {}) {

@@ -1,7 +1,9 @@
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { BusinessAccount } from "../models/businessAccount.model.js";
+import { CashReceipt } from "../models/cashReceipt.model.js";
 import { listAccountLedger } from "../services/prepaid/accountLedger.service.js";
+import { renderCashReceiptPdf } from "../services/cashReceiptPdf.service.js";
 import { canAccessBranch } from "../middleware/branchAccess.middleware.js";
 import { getTenantContext, getTenantIdForWrite } from "../services/tenantScope.service.js";
 
@@ -63,6 +65,28 @@ export async function getBusinessAccountPaymentsLedger(request: Request, respons
     },
     ...ledger
   });
+}
+
+/** Staff ledger document view; scoped to the same account and branch as the ledger itself. */
+export async function getBusinessAccountCashReceiptPdf(request: Request, response: Response): Promise<Response> {
+  if (!userId(request)) return response.status(401).json({ success: false, message: "Unauthorized" });
+  const loaded = await loadAccount(request);
+  if (!loaded) return response.status(404).json({ success: false, message: "Business account was not found." });
+  const receiptId = String(request.params.receiptId ?? "");
+  if (!mongoose.Types.ObjectId.isValid(receiptId)) return response.status(404).json({ success: false, message: "Cash receipt not found." });
+  const receipt = await CashReceipt.findOne({
+    _id: receiptId,
+    businessAccountId: loaded.businessAccountId,
+    status: "FINALIZED",
+    receiptType: { $ne: "STANDALONE" },
+    shipmentDraftId: { $ne: null }
+  }).exec();
+  if (!receipt) return response.status(404).json({ success: false, message: "Cash receipt not found." });
+  const pdf = await renderCashReceiptPdf(receipt);
+  response.setHeader("Content-Type", "application/pdf");
+  response.setHeader("Content-Disposition", `inline; filename="cash-receipt-${receipt.receiptNumber}.pdf"`);
+  response.setHeader("Cache-Control", "private, no-store");
+  return response.status(200).send(pdf);
 }
 
 function csv(value: unknown) {

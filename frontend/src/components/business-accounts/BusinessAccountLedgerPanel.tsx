@@ -42,7 +42,7 @@ export default function BusinessAccountLedgerPanel({ businessAccountId }: { busi
           </div>
           {data ? <p className="text-sm text-slate-500">{data.pagination.total} entries</p> : null}
         </div>
-        <PaymentLedgerTable rows={data?.transactions ?? []} audience="staff" loading={loading} />
+        <PaymentLedgerTable rows={data?.transactions ?? []} audience="staff" businessAccountId={businessAccountId} loading={loading} />
         {data ? (
           <div className="flex items-center justify-between border-t border-slate-200 px-5 py-3 text-sm text-slate-600">
             <span>Page {data.pagination.page} of {totalPages}</span>
